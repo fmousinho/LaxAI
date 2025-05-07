@@ -1,0 +1,25 @@
+# Environment
+.venv/
+.env
+token.json
+results*
+.git/
+credentials.json
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.file_cache/
+
+# IDE / Editor specific
+.vscode/ # If you want to exclude VS Code settings
+
+# Log files
+*.log
