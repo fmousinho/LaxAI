@@ -3,7 +3,7 @@ import logging
 import numpy as np
 import cv2
 import ipywidgets as widgets
-from typing import Generator, NamedTuple # Import Generator and NamedTuple
+from typing import Generator, NamedTuple, Callable, Optional # Import Generator and NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +28,7 @@ class BoundingBox(NamedTuple):
         """
         return cls(x1=x1, y1=y1, w=x2 - x1, h=y2 - y1)
     
-    @classmethod
-    def to_xyxy(cls, self) -> tuple:
+    def to_xyxy(self) -> tuple:
         """
         Converts the bounding box to top-left (x1, y1) and bottom-right (x2, y2) coordinates.
 
@@ -136,13 +135,17 @@ class VideoToools:
             cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         return frame
 
-    def draw_tracks(self, frame: np.ndarray, tracks: list) -> np.ndarray:
+    def draw_tracks(self, frame: np.ndarray, tracks: list,
+                    team_id_getter: Optional[Callable[[BoundingBox, np.ndarray], Optional[int]]] = None) -> np.ndarray:
         """
         Draws bounding boxes and track IDs on the frame for tracked objects.
+        Colors tracks based on team ID if team_id_getter is provided.
 
         Args:
-            frame: The input video frame as a numpy array.
+            frame: The input video frame as a numpy array (expected in RGB).
             tracks: A list of Track objects from deep_sort_realtime.
+            team_id_getter: An optional function that takes a BoundingBox and the current frame,
+                            and returns a team ID.
 
         Returns:
             The modified frame with drawn track information.
@@ -157,9 +160,28 @@ class VideoToools:
 
             x1, y1, x2, y2 = map(int, ltrb)
 
-            # You can customize the color for tracks, e.g., blue
-            track_color = (255, 0, 0) # BGR for Blue
+            team_id = None
+            # Try to get team_id using the original detection bounding box
+            if team_id_getter and hasattr(track, 'original_ltwh') and track.original_ltwh is not None:
+                original_ltwh = track.original_ltwh # [x, y, w, h]
+                # Create BoundingBox from original_ltwh (which is x1,y1,w,h)
+                original_detection_bbox = BoundingBox(x1=float(original_ltwh[0]),
+                                                      y1=float(original_ltwh[1]),
+                                                      w=float(original_ltwh[2]),
+                                                      h=float(original_ltwh[3]))
+                team_id = team_id_getter(original_detection_bbox, frame) # Pass current frame
+
+            # Determine color based on team_id
+            if team_id == 0:
+                track_color = (0, 0, 255)   # Red for team 0 (RGB)
+            elif team_id == 1:
+                track_color = (0, 255, 255) # Yellow for team 1 (RGB) - Changed from blue for better contrast if needed
+            else: # Default color if no team or team_id_getter not provided
+                track_color = (0, 255, 0)   # Green for unknown/unassigned (RGB)
 
             frame = cv2.rectangle(frame, (x1, y1), (x2, y2), track_color, 2)
-            frame = cv2.putText(frame, f"ID: {track_id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, track_color, 2)
+            label = f"ID: {track_id}"
+            if team_id is not None:
+                label += f" T: {team_id}"
+            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, track_color, 2)
         return frame

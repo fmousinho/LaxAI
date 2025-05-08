@@ -12,3 +12,4 @@ tensorboard
 wandb
 deep_sort_realtime
 ipywidgets
+matplotlib
