@@ -13,3 +13,6 @@ wandb
 deep_sort_realtime
 ipywidgets
 matplotlib
+transformers
+Pillow
+torchvision

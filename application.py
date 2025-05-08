@@ -30,7 +30,7 @@ def _initialize_team_identifier(
     tools: VideoToools, # Add VideoToools instance
     frame_generator: Generator[np.ndarray, None, None], 
     num_frames_to_sample: int = 20,
-    min_detections_for_sampling_frame: int = 5 # Min detections for a frame to be considered for sampling
+    min_detections_for_sampling_frame: int = 10 # Min detections for a frame to be considered for sampling
 ) -> Callable[[BoundingBox, np.ndarray], Optional[int]]:
     """
     Samples frames from the video, generates detections, and uses them
