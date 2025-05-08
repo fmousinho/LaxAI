@@ -197,7 +197,7 @@ class TeamIdentification:
 
         top_crop_px = int(h * 0.10)
         bottom_crop_px = int(h * 0.40)
-        left_crop_px = int(w * 0.20
+        left_crop_px = int(w * 0.20)
         right_crop_px = int(w * 0.20)
 
         start_y = top_crop_px
