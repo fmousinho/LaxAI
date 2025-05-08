@@ -13,6 +13,7 @@ from typing import Callable, Optional
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D # For 3D scatter plot
 from team_identification import TeamIdentification
+import collections # For deque
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,10 @@ class VideoModel:
         self.device = device
         self.tracker = DeepSort(max_age=30)  # Initialize the tracker with a maximum age of 30 frames
         self.team_identifier = TeamIdentification() # Instantiate TeamIdentification
+        self.track_to_team_map = {} # For smoothed team assignments
+        self.N_HISTORY_FRAMES = 20  # History window for smoothing
+        self.MIN_HISTORY_FOR_CONFIRMATION = 10 # Min observations before a team can be "confirmed"
+        self.CONFIRMATION_THRESHOLD_CERTAINTY = 0.75 # Min certainty to change a confirmed team or initially confirm
 
     def load_from_drive(self, store: Store) -> bool:
         """
@@ -123,3 +128,93 @@ class VideoModel:
         Delegates team identification to the TeamIdentification class.
         """
         return self.team_identifier.identifies_team(sampled_frames_data)
+
+    def update_track_team_assignments(self, tracks: list, frame: np.ndarray, raw_team_id_getter: Callable[[BoundingBox, np.ndarray], Optional[int]]):
+        """
+        Updates the smoothed team assignments for each track based on history.
+
+        Args:
+            tracks: List of current tracks from the tracker.
+            frame: The current video frame (RGB).
+            raw_team_id_getter: The function that provides instantaneous team classification.
+        """
+        for track in tracks:
+            if not track.is_confirmed():
+                continue
+            
+            track_id = track.track_id
+            current_raw_team_classification = None
+
+            if raw_team_id_getter and hasattr(track, 'original_ltwh') and track.original_ltwh is not None:
+                original_ltwh = track.original_ltwh
+                original_detection_bbox = BoundingBox(x1=float(original_ltwh[0]),
+                                                      y1=float(original_ltwh[1]),
+                                                      w=float(original_ltwh[2]),
+                                                      h=float(original_ltwh[3]))
+                current_raw_team_classification = raw_team_id_getter(original_detection_bbox, frame)
+            
+            if track_id not in self.track_to_team_map:
+                self.track_to_team_map[track_id] = {
+                    'team_id': None,
+                    'certainty': 0.0,
+                    'classifications_history': collections.deque(maxlen=self.N_HISTORY_FRAMES),
+                    'confirmed_team_id': None # Add a field for the "stickier" team ID
+                }
+            track_data = self.track_to_team_map[track_id]
+            track_data['classifications_history'].append(current_raw_team_classification)
+            
+            valid_classifications_in_history = [cls for cls in track_data['classifications_history'] if cls is not None]
+            
+            new_assigned_team_id = None
+            current_history_certainty = 0.0 # Certainty based on current history window
+
+            if valid_classifications_in_history:
+                count = collections.Counter(valid_classifications_in_history)
+                if count:
+                    most_common_item = count.most_common(1)[0]
+                    new_assigned_team_id = most_common_item[0]
+                    current_history_certainty = most_common_item[1] / len(valid_classifications_in_history)
+
+            # Logic for "sticky" team assignment
+            old_confirmed_team = track_data['confirmed_team_id']
+            
+            if track_data['confirmed_team_id'] is None:
+                # Try to establish an initial confirmed team
+                if len(valid_classifications_in_history) >= self.MIN_HISTORY_FOR_CONFIRMATION and \
+                   new_assigned_team_id is not None and \
+                   current_history_certainty >= self.CONFIRMATION_THRESHOLD_CERTAINTY:
+                    track_data['confirmed_team_id'] = new_assigned_team_id
+                    track_data['team_id'] = new_assigned_team_id # Update the display team_id as well
+                    track_data['certainty'] = current_history_certainty
+                    logger.info(f"Track {track_id}: Initial team confirmed to {new_assigned_team_id} with certainty {current_history_certainty:.2f}")
+                else:
+                    # Not enough history or certainty yet for initial confirmation, use current smoothed
+                    track_data['team_id'] = new_assigned_team_id 
+                    track_data['certainty'] = current_history_certainty
+            else:
+                # We have a confirmed team, check if we should change it
+                if new_assigned_team_id is not None and \
+                   new_assigned_team_id != track_data['confirmed_team_id'] and \
+                   current_history_certainty >= self.CONFIRMATION_THRESHOLD_CERTAINTY:
+                    track_data['confirmed_team_id'] = new_assigned_team_id
+                    track_data['team_id'] = new_assigned_team_id # Update the display team_id
+                    track_data['certainty'] = current_history_certainty # Update certainty to reflect the new confirmation
+                    logger.info(f"Track {track_id}: Confirmed team CHANGED to {new_assigned_team_id} (was {old_confirmed_team}) with certainty {current_history_certainty:.2f}")
+                else:
+                    # Stick with the confirmed_team_id for display, but update certainty based on current history
+                    # This means 'team_id' (for display) remains the confirmed one,
+                    # but 'certainty' reflects how well the current history supports that confirmed_team_id
+                    if track_data['confirmed_team_id'] in [c for c in count]: # if confirmed team is still in history counts
+                        track_data['certainty'] = count[track_data['confirmed_team_id']] / len(valid_classifications_in_history) if valid_classifications_in_history else 0.0
+                    else: # Confirmed team not even in recent history
+                        track_data['certainty'] = 0.0 
+                    track_data['team_id'] = track_data['confirmed_team_id'] # Ensure display team is the confirmed one
+
+            if old_confirmed_team != track_data['confirmed_team_id'] or \
+               abs(track_data['certainty'] - (current_history_certainty if track_data['confirmed_team_id'] == new_assigned_team_id else track_data['certainty'])) > 0.01 :
+                logger.debug(f"Track {track_id}: Display Team: {track_data['team_id']} (Confirmed: {track_data['confirmed_team_id']}), Certainty: {track_data['certainty']:.2f} (History suggests: {new_assigned_team_id} with {current_history_certainty:.2f})")
+
+    def get_smoothed_team_id_from_map(self, bbox: BoundingBox, current_frame: np.ndarray, track_id_for_lookup: str) -> Optional[int]:
+        if track_id_for_lookup in self.track_to_team_map:
+            return self.track_to_team_map[track_id_for_lookup].get('team_id')
+        return None
