@@ -7,7 +7,7 @@ import torch
 from transformers import ViTModel, ViTImageProcessor
 from PIL import Image
 from videotools import BoundingBox
-import utils # Import the utils module
+import utils 
 
 logger = logging.getLogger(__name__)
 
@@ -182,27 +182,73 @@ class TeamIdentification:
             logger.error(f"Error getting DINO ViT embedding: {e}", exc_info=True)
             return None
 
-    def _get_center_crop(self, image: np.ndarray, crop_ratio: float = 0.5) -> np.ndarray:
+    def _get_center_crop(self, image: np.ndarray) -> np.ndarray:
+        """
+        Extracts a crop of an image.
+
+        Args:
+            image: The input image as a numpy array.
+
+        Returns:
+            The cropped part of the image, or the original image if cropping
+            results in an invalid (e.g., zero or negative dimension) region.
+        """
         h, w = image.shape[:2]
-        crop_h = int(h * crop_ratio)
-        crop_w = int(w * crop_ratio)
-        if h > 0 and crop_h == 0: crop_h = 1
-        if w > 0 and crop_w == 0: crop_w = 1
-        if crop_h <= 0 or crop_w <= 0:
-            logger.debug(f"Original image too small for center crop (h={h}, w={w}). Using full image.")
+
+        top_crop_px = int(h * 0.10)
+        bottom_crop_px = int(h * 0.40)
+        left_crop_px = int(w * 0.20
+        right_crop_px = int(w * 0.20)
+
+        start_y = top_crop_px
+        end_y = h - bottom_crop_px
+        start_x = left_crop_px
+        end_x = w - right_crop_px
+
+        if start_x >= end_x or start_y >= end_y:
+            logger.debug(f"Calculated crop dimensions are invalid (start_x={start_x}, end_x={end_x}, start_y={start_y}, end_y={end_y}). Original image h={h}, w={w}. Using full image.")
             return image
-        start_y = (h - crop_h) // 2
-        end_y = start_y + crop_h
-        start_x = (w - crop_w) // 2
-        end_x = start_x + crop_w
+        
         return image[start_y:end_y, start_x:end_x]
+
+    def _apply_grass_mask(self, image_rgb: np.ndarray) -> np.ndarray:
+        """
+        Applies a mask to an RGB image to exclude common grass colors.
+        Returns the masked RGB image.
+        """
+        image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+        lab_image = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB)
+
+        # --- WILL REQUIRE CAREFUL TUNING for your specific videos. ---
+        # L: Lightness (0-100, but OpenCV scales it to 0-255 for 8-bit images)
+        # a: Green-Red axis (approx -128 to 127, OpenCV maps to 0-255, where ~128 is neutral)
+        # b: Blue-Yellow axis (approx -128 to 127, OpenCV maps to 0-255, where ~128 is neutral)
+        # For green, 'a' should be less than ~128.
+        # Example range for green grass in LAB (NEEDS CAREFUL TUNING!):
+        # These values are for OpenCV's 0-255 scaled LAB.
+        # 'a' channel values below 128 are greenish.
+        lower_lab_grass = np.array([50, 0, 130])    # L_min, a_min (very green), b_min (yellowish)
+        upper_lab_grass = np.array([200, 128, 200])  # L_max, a_max (still green, but less so), b_max (more yellowish)
+
+        grass_mask = cv2.inRange(lab_image, lower_lab_grass, upper_lab_grass)
+        non_grass_mask = cv2.bitwise_not(grass_mask)
+        
+        # Apply the mask to the original RGB image
+        # Where mask is 0, the output will be black.
+        masked_image_rgb = cv2.bitwise_and(image_rgb, image_rgb, mask=non_grass_mask)
+        
+        return masked_image_rgb
 
     def get_dominant_color(self, image: np.ndarray, k: int = 1) -> Optional[np.ndarray]:
         if image is None or image.shape[0] == 0 or image.shape[1] == 0 or image.shape[2] != 3:
             logger.warning(f"get_dominant_color received an invalid image with shape: {image.shape if image is not None else 'None'}.")
             return None
-        image_to_process = self._get_center_crop(image, crop_ratio=0.5)
-        if image_to_process.size == 0:
+        
+        # Apply grass mask first (assuming 'image' is RGB)
+        image_no_grass = self._apply_grass_mask(image)
+        
+        image_to_process = self._get_center_crop(image_no_grass)
+        if image_to_process.size == 0: # If crop after mask is empty, try cropping original
             logger.warning(f"Center crop resulted in an empty image (orig_shape={image.shape}). Using full original image for resize.")
             image_to_process = image 
         try:

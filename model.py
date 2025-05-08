@@ -12,8 +12,8 @@ from sklearn.cluster import KMeans
 from typing import Callable, Optional
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D # For 3D scatter plot
-from team_identification import TeamIdentification # Import the new class
- 
+from team_identification import TeamIdentification
+
 logger = logging.getLogger(__name__)
 
 class VideoModel:

@@ -7,14 +7,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
-def get_dominant_color(image, k=1):
-    """Extract dominant color from an image region (BGR)."""
-    image = cv2.resize(image, (20, 20))  # Speed-up
-    pixels = image.reshape((-1, 3))
-    kmeans = KMeans(n_clusters=k).fit(pixels)
-    return kmeans.cluster_centers_[0]
-
 def plot_team_kmeans_clusters(colors_array: np.ndarray, labels: np.ndarray, centers: np.ndarray, output_filename: str = "team_kmeans_visualization.png"):
     """
     Generates and saves a 3D scatter plot of color clusters.
