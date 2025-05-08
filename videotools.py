@@ -136,7 +136,7 @@ class VideoToools:
         return frame
 
     def draw_tracks(self, frame: np.ndarray, tracks: list,
-                    team_id_getter: Optional[Callable[[BoundingBox, np.ndarray], Optional[int]]] = None) -> np.ndarray:
+                    team_id_getter: Optional[Callable[[BoundingBox, np.ndarray, str], Optional[int]]] = None) -> np.ndarray:
         """
         Draws bounding boxes and track IDs on the frame for tracked objects.
         Colors tracks based on team ID if team_id_getter is provided.
@@ -144,8 +144,8 @@ class VideoToools:
         Args:
             frame: The input video frame as a numpy array (expected in RGB).
             tracks: A list of Track objects from deep_sort_realtime.
-            team_id_getter: An optional function that takes a BoundingBox and the current frame,
-                            and returns a team ID.
+            team_id_getter: An optional function that takes a BoundingBox, the current frame,
+                            and the track_id, and returns a team ID.
 
         Returns:
             The modified frame with drawn track information.
@@ -169,7 +169,7 @@ class VideoToools:
                                                       y1=float(original_ltwh[1]),
                                                       w=float(original_ltwh[2]),
                                                       h=float(original_ltwh[3]))
-                team_id = team_id_getter(original_detection_bbox, frame) # Pass current frame
+                team_id = team_id_getter(original_detection_bbox, frame, track_id) # Pass track_id
 
             # Determine color based on team_id
             if team_id == 0:

@@ -11,6 +11,7 @@ import cv2
 from model import VideoModel
 from deep_sort_realtime.deepsort_tracker import DeepSort
 from typing import Callable, Optional, Generator
+import collections # For deque
 
 VIDEO_FILE = "FCA_Upstate_NY_003.mp4"
 
@@ -107,7 +108,6 @@ def _initialize_team_identifier(
     logger.info(f"Attempting to identify teams using {len(sampled_frames_data)} sampled frames.")
     return video_model.identifies_team(sampled_frames_data)
 
-
 def run_application(store: Store):
 
     # --- Check for GPU availability ---
@@ -134,7 +134,6 @@ def run_application(store: Store):
         setup_frame_generator = tools.get_next_frame() # This generator is for team ID
         team_id_getter = _initialize_team_identifier(video_model, tools, setup_frame_generator)
         
-        
         # --- Pipeline to detect and track players, draw frame ---
      
         main_processing_generator = tools.get_next_frame()
@@ -151,8 +150,13 @@ def run_application(store: Store):
             detections = video_model.generate_detections(frame)
             tracks = video_model.generate_tracks(frame, detections) # Pass RGB frame
             
+            # Update the VideoModel's internal track_to_team_map
+            # The `team_id_getter` here is the one from _initialize_team_identifier (raw classifications)
+            video_model.update_track_team_assignments(tracks, frame, team_id_getter)
+
             # draw_tracks takes RGB frame, and the team_id_getter. It returns an RGB frame.
-            output_frame_rgb = tools.draw_tracks(frame, tracks, team_id_getter)
+            # Pass the new method from VideoModel that uses the smoothed map
+            output_frame_rgb = tools.draw_tracks(frame, tracks, team_id_getter=video_model.get_smoothed_team_id_from_map)
 
             # Convert the final drawn frame to BGR for OpenCV VideoWriter
             output_frame_bgr = cv2.cvtColor(output_frame_rgb, cv2.COLOR_RGB2BGR)
@@ -162,6 +166,7 @@ def run_application(store: Store):
             frame_idx += 1
 
         logger.info(f"Video processing completed.")
+        logger.info(f"Final Track to Team Map: {video_model.track_to_team_map}")
 
     except (FileNotFoundError, IOError) as e:
         logger.error(f"Error initializing VideoTools: {e}")
