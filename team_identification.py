@@ -49,7 +49,6 @@ class TeamIdentification:
             self.dino_processor = None
             self.dino_model = None
 
-
     def get_default_team_getter(self) -> Callable[[BoundingBox, np.ndarray], Optional[int]]:
         """Returns a default team getter function that always returns None."""
         def _default_getter(_bbox: BoundingBox, _current_frame: np.ndarray) -> Optional[int]:
@@ -118,16 +117,32 @@ class TeamIdentification:
                     detection_bboxes.append(bbox)
 
         if len(player_roi_embeddings) < 2: # KMeans needs at least n_clusters (which is 2) samples
-            logger.warning(f"Not enough valid player color ROIs collected ({len(player_roi_embeddings)}) to define two teams. Need at least 2. Defaulting team getter.")
+            logger.warning(f"Not enough player ROIs collected ({len(player_roi_embeddings)}) to attempt team definition. Need at least 2. Defaulting team getter.")
+            return _default_team_getter
+
+        # Convert to numpy array for easier manipulation and checking
+        embeddings_array = np.array(player_roi_embeddings, dtype=np.float32) # Specify dtype for consistency
+
+        # Check for NaNs or Infs in embeddings and filter them out
+        valid_mask = ~np.any(np.isnan(embeddings_array), axis=1) & ~np.any(np.isinf(embeddings_array), axis=1)
+        if not np.all(valid_mask):
+            logger.warning(f"Embeddings contain NaN or Inf values. Filtering them out. Original count: {len(embeddings_array)}")
+            embeddings_array = embeddings_array[valid_mask]
+            # Note: detection_bboxes would also need filtering if used directly with filtered embeddings later.
+            # For now, the primary concern is the KMeans input.
+            logger.info(f"Proceeding with {embeddings_array.shape[0]} valid embeddings after filtering NaN/Inf.")
+
+        if embeddings_array.shape[0] < 2: # Check again after filtering
+            logger.warning(f"Not enough valid (non-NaN/Inf) embeddings remaining ({embeddings_array.shape[0]}) after filtering. Need at least 2 for KMeans. Defaulting team getter.")
             return _default_team_getter
 
         try:
-            kmeans = KMeans(n_clusters=2, random_state=0, n_init='auto').fit(np.array(player_roi_embeddings))
+            kmeans = KMeans(n_clusters=2, random_state=0, n_init='auto').fit(embeddings_array)
             
             # Plotting - only if embeddings are 3D (like dominant color)
-            embeddings_array_for_plot = np.array(player_roi_embeddings)
-            if embeddings_array_for_plot.ndim == 2 and embeddings_array_for_plot.shape[1] == 3:
-                utils.plot_team_kmeans_clusters(embeddings_array_for_plot, kmeans.labels_, kmeans.cluster_centers_)
+            # Use the cleaned embeddings_array for plotting
+            if embeddings_array.ndim == 2 and embeddings_array.shape[1] == 3:
+                utils.plot_team_kmeans_clusters(embeddings_array, kmeans.labels_, kmeans.cluster_centers_)
             else:
                 logger.info("Skipping 3D cluster plot as embeddings are not 3-dimensional (e.g., not RGB colors).")
 
@@ -142,10 +157,15 @@ class TeamIdentification:
                     embedding_for_prediction = self._embedding_fn(frame_roi)
                 
                 if embedding_for_prediction is not None:
+                    # Check the single embedding for prediction as well
+                    embedding_np = np.array([embedding_for_prediction], dtype=np.float32)
+                    if np.any(np.isnan(embedding_np)) or np.any(np.isinf(embedding_np)):
+                        logger.warning(f"Embedding for prediction contains NaN/Inf. Cannot predict team for this ROI.")
+                        return None
                     try:
-                        return kmeans.predict(np.array([embedding_for_prediction]))[0]
+                        return kmeans.predict(embedding_np)[0]
                     except Exception as e:
-                        logger.warning(f"KMeans prediction failed for embedding: {e}")
+                        logger.warning(f"KMeans prediction failed for ROI embedding: {e}")
                         return None
                 return None # If embedding is None or prediction fails
             return get_team_id_for_bbox
@@ -197,8 +217,8 @@ class TeamIdentification:
 
         top_crop_px = int(h * 0.10)
         bottom_crop_px = int(h * 0.50)
-        left_crop_px = int(w * 0.0)
-        right_crop_px = int(w * 0.0)
+        left_crop_px = int(w * 0.1)
+        right_crop_px = int(w * 0.1)
 
         start_y = top_crop_px
         end_y = h - bottom_crop_px
@@ -249,10 +269,15 @@ class TeamIdentification:
         
         image_to_process = self._get_center_crop(image_no_grass)
         if image_to_process.size == 0: # If crop after mask is empty, try cropping original
-            logger.warning(f"Center crop resulted in an empty image (orig_shape={image.shape}). Using full original image for resize.")
-            image_to_process = image 
+            logger.debug(f"Center crop of masked image resulted in an empty image (orig_shape={image.shape}). Trying crop on original.")
+            image_to_process = self._get_center_crop(image) # Try cropping the original image
+            if image_to_process.size == 0:
+                logger.warning(f"Center crop of original image also resulted in an empty image. Using full original image for resize.")
+                image_to_process = image # Fallback to full original image
+
         try:
             resized_image = cv2.resize(image_to_process, (20, 20))
+            # Ensure resized_image is not empty and has 3 channels
             if resized_image.shape[0] == 0 or resized_image.shape[1] == 0:
                 logger.warning(f"Image became invalid after resizing in get_dominant_color. Original shape: {image.shape}")
                 return None
@@ -260,11 +285,22 @@ class TeamIdentification:
             logger.warning(f"cv2.resize error in get_dominant_color: {e}. Original image shape: {image.shape}")
             return None
         pixels = resized_image.reshape((-1, 3))
+
+        # Check for NaN/Inf in pixels (e.g. if image_to_process had issues)
+        if np.any(np.isnan(pixels)) or np.any(np.isinf(pixels)):
+            logger.warning("Pixel data contains NaN or Inf values before KMeans in get_dominant_color. Skipping.")
+            return None
+
+        # Check for sufficient variance if all pixels are nearly identical (e.g., all black)
+        if pixels.shape[0] > 0 and np.all(np.std(pixels, axis=0) < 1e-5): # Small threshold for variance
+            logger.debug(f"Pixels have near-zero variance in get_dominant_color (std: {np.std(pixels, axis=0)}). Using average color.")
+            return np.mean(pixels, axis=0, keepdims=True) # Return the average color as the "dominant" one
+
         if pixels.shape[0] < k: 
             logger.warning(f"Not enough pixels ({pixels.shape[0]}) to form {k} cluster(s) in get_dominant_color.")
             return None
         try:
-            kmeans = KMeans(n_clusters=k, n_init='auto', random_state=0).fit(pixels)
+            kmeans = KMeans(n_clusters=k, n_init='auto', random_state=0).fit(pixels.astype(np.float32)) # Ensure float32 for KMeans
             return kmeans.cluster_centers_
         except Exception as e:
             logger.error(f"KMeans clustering failed in get_dominant_color: {e}", exc_info=True)

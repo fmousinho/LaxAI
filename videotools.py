@@ -110,6 +110,30 @@ class VideoToools:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             yield frame
 
+    def get_frame_by_index(self, frame_index: int) -> Optional[np.ndarray]:
+        """
+        Retrieves a specific frame from the video by its index.
+
+        Args:
+            frame_index: The 0-based index of the frame to retrieve.
+
+        Returns:
+            The frame as a numpy array in RGB format, or None if the index is
+            out of bounds or an error occurs.
+        """
+        if not self.cap or not self.cap.isOpened():
+            logger.error("Video capture is not initialized or opened for get_frame_by_index.")
+            return None
+        if not (0 <= frame_index < self.in_n_frames):
+            logger.error(f"Frame index {frame_index} is out of bounds (0-{self.in_n_frames - 1}).")
+            return None
+
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+        ret, frame_bgr = self.cap.read() # Read frame in BGR
+        if not ret:
+            logger.error(f"Failed to read frame at index {frame_index}.")
+            return None
+        return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB) # Convert to RGB
 
     def draw_detections(self, frame: np.ndarray, detections: list) -> np.ndarray:
         """
