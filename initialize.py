@@ -1,7 +1,7 @@
 import sys
 import os
 import logging
-import constants as const
+from . import constants as const
 import importlib.metadata
 from packaging.requirements import Requirement, InvalidRequirement
 from packaging.version import Version
