@@ -6,8 +6,8 @@ from typing import Callable, Optional
 import torch
 from transformers import ViTModel, ViTImageProcessor
 from PIL import Image
-from videotools import BoundingBox
-import utils 
+from .videotools import BoundingBox
+from . import utils
 
 logger = logging.getLogger(__name__)
 
@@ -196,9 +196,9 @@ class TeamIdentification:
         h, w = image.shape[:2]
 
         top_crop_px = int(h * 0.10)
-        bottom_crop_px = int(h * 0.40)
-        left_crop_px = int(w * 0.10)
-        right_crop_px = int(w * 0.10)
+        bottom_crop_px = int(h * 0.50)
+        left_crop_px = int(w * 0.0)
+        right_crop_px = int(w * 0.0)
 
         start_y = top_crop_px
         end_y = h - bottom_crop_px
@@ -227,7 +227,7 @@ class TeamIdentification:
         # Example range for green grass in LAB (NEEDS CAREFUL TUNING!):
         # These values are for OpenCV's 0-255 scaled LAB.
         # 'a' channel values below 128 are greenish.
-        lower_lab_grass = np.array([50, 0, 130])    # L_min, a_min (very green), b_min (yellowish)
+        lower_lab_grass = np.array([60, 20, 130])    # L_min, a_min (very green), b_min (yellowish)
         upper_lab_grass = np.array([200, 128, 200])  # L_max, a_max (still green, but less so), b_max (more yellowish)
 
         grass_mask = cv2.inRange(lab_image, lower_lab_grass, upper_lab_grass)
