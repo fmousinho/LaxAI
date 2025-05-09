@@ -30,19 +30,17 @@ def check_for_gpu() -> torch.device:
 def _initialize_team_identifier(
     video_model: VideoModel,
     tools: VideoToools, # Add VideoToools instance
-    frame_generator: Generator[np.ndarray, None, None], 
     num_frames_to_sample: int = 20,
     min_detections_for_sampling_frame: int = 10 # Min detections for a frame to be considered for sampling
 ) -> Callable[[BoundingBox, np.ndarray], Optional[int]]:
     """
     Samples frames from the video, generates detections, and uses them
     to define teams, returning a team_id_getter.
-    This method consumes the provided frame_generator.
 
     Args:
         video_model: The VideoModel instance.
         tools: The VideoToools instance for accessing video properties like total frames.
-        frame_generator: A generator yielding video frames (RGB).
+               and fetching specific frames by index.
         num_frames_to_sample: The target number of frames to sample for team identification.
         min_detections_for_sampling_frame: Minimum detections a frame must have to be included in the sample.
 
@@ -85,22 +83,27 @@ def _initialize_team_identifier(
                 target_indices_to_sample.update(random.sample(available_for_overall_sample, num_overall_additional))
 
     sampled_frames_data = []
-    logger.info(f"Identified {len(target_indices_to_sample)} target frame indices for sampling: {sorted(list(target_indices_to_sample))}")
+    # Sort indices for potentially more efficient seeking, though cv2 might handle out-of-order seeks okay.
+    # It's good practice if seeking performance is sensitive to direction.
+    sorted_target_indices = sorted(list(target_indices_to_sample))
+    logger.info(f"Identified {len(sorted_target_indices)} target frame indices for sampling: {sorted_target_indices}")
 
-    for current_frame_idx, frame in enumerate(frame_generator): # This consumes frame_generator
-        if not target_indices_to_sample and len(sampled_frames_data) >= num_frames_to_sample: # Optimization: stop if all targets processed or enough samples collected
+    for frame_idx_to_process in sorted_target_indices:
+        if len(sampled_frames_data) >= num_frames_to_sample:
+            logger.info(f"Collected enough ({len(sampled_frames_data)}) valid samples for team identification before processing all targets.")
             break
-        if current_frame_idx in target_indices_to_sample:
-            detections = video_model.generate_detections(frame)
-            if len(detections) >= min_detections_for_sampling_frame:
-                sampled_frames_data.append((frame, detections))
-                logger.debug(f"Collected frame {current_frame_idx} (had {len(detections)} detections) for team ID. {len(sampled_frames_data)} collected.")
-            else:
-                logger.debug(f"Skipped frame {current_frame_idx} for team ID sample (had {len(detections)} detections, need >= {min_detections_for_sampling_frame}).")
-            target_indices_to_sample.discard(current_frame_idx) # Remove processed index
-            if len(sampled_frames_data) >= num_frames_to_sample: # Stop if we have enough valid samples
-                logger.info(f"Collected enough ({len(sampled_frames_data)}) valid samples for team identification.")
-                break
+
+        frame = tools.get_frame_by_index(frame_idx_to_process)
+        if frame is None:
+            logger.warning(f"Could not retrieve frame at index {frame_idx_to_process} for team ID sampling. Skipping.")
+            continue
+
+        detections = video_model.generate_detections(frame)
+        if len(detections) >= min_detections_for_sampling_frame:
+            sampled_frames_data.append((frame, detections))
+            logger.debug(f"Collected frame {frame_idx_to_process} (had {len(detections)} detections) for team ID. {len(sampled_frames_data)} collected.")
+        else:
+            logger.debug(f"Skipped frame {frame_idx_to_process} for team ID sample (had {len(detections)} detections, need >= {min_detections_for_sampling_frame}).")
 
     if not sampled_frames_data:
         logger.warning("No frames were sampled with enough detections. Proceeding with default team getter.")
@@ -132,8 +135,7 @@ def run_application(store: Store):
 
     try:
         tools = VideoToools(input_video_path=temp_video_path, output_video_path="results.mp4")
-        setup_frame_generator = tools.get_next_frame() # This generator is for team ID
-        team_id_getter = _initialize_team_identifier(video_model, tools, setup_frame_generator)
+        team_id_getter = _initialize_team_identifier(video_model, tools)
         
         # --- Pipeline to detect and track players, draw frame ---
      
@@ -167,7 +169,6 @@ def run_application(store: Store):
             frame_idx += 1
 
         logger.info(f"Video processing completed.")
-        logger.info(f"Final Track to Team Map: {video_model.track_to_team_map}")
 
     except (FileNotFoundError, IOError) as e:
         logger.error(f"Error initializing VideoTools: {e}")

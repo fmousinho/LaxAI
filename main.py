@@ -10,7 +10,7 @@ from . import application as app
 
 #--- Initialize logging
 
-logging.basicConfig(level=logging.INFO, format=': %(asctime)s %(levelname)s %(message)s (%(name)s)')
+logging.basicConfig(level=logging.WARNING, format=': %(asctime)s %(levelname)s %(message)s (%(name)s)')
 logger = logging.getLogger(__name__) # Get logger for main.py
 logger.info("--- Logger initialized in main.py ---")
 
