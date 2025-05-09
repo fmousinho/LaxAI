@@ -1,10 +1,10 @@
 import logging
 import io
 import torch
-import constants as const
+from . import constants as const
 import numpy as np
-from store_driver import Store
-from videotools import BoundingBox
+from .store_driver import Store
+from .videotools import BoundingBox
 from deep_sort_realtime.deepsort_tracker import DeepSort
 from rfdetr import RFDETRBase # Import the custom class needed for loading
 import cv2
@@ -12,7 +12,7 @@ from sklearn.cluster import KMeans
 from typing import Callable, Optional
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D # For 3D scatter plot
-from team_identification import TeamIdentification
+from .team_identification import TeamIdentification
 import collections # For deque
 
 logger = logging.getLogger(__name__)
@@ -164,13 +164,14 @@ class VideoModel:
             track_data['classifications_history'].append(current_raw_team_classification)
             
             valid_classifications_in_history = [cls for cls in track_data['classifications_history'] if cls is not None]
-            
+
             new_assigned_team_id = None
             current_history_certainty = 0.0 # Certainty based on current history window
+            count = collections.Counter() # Initialize count as an empty Counter
 
             if valid_classifications_in_history:
-                count = collections.Counter(valid_classifications_in_history)
-                if count:
+                count = collections.Counter(valid_classifications_in_history) # Populate if history exists
+                if count: # True if valid_classifications_in_history was not empty
                     most_common_item = count.most_common(1)[0]
                     new_assigned_team_id = most_common_item[0]
                     current_history_certainty = most_common_item[1] / len(valid_classifications_in_history)
@@ -203,10 +204,11 @@ class VideoModel:
                 else:
                     # Stick with the confirmed_team_id for display, but update certainty based on current history
                     # This means 'team_id' (for display) remains the confirmed one,
-                    # but 'certainty' reflects how well the current history supports that confirmed_team_id
-                    if track_data['confirmed_team_id'] in [c for c in count]: # if confirmed team is still in history counts
-                        track_data['certainty'] = count[track_data['confirmed_team_id']] / len(valid_classifications_in_history) if valid_classifications_in_history else 0.0
-                    else: # Confirmed team not even in recent history
+                    # but 'certainty' reflects how well the current history supports that confirmed_team_id.
+                    if track_data['confirmed_team_id'] in count: # Check if confirmed team is in current history counts
+                        # If in count, valid_classifications_in_history was non-empty.
+                        track_data['certainty'] = count[track_data['confirmed_team_id']] / len(valid_classifications_in_history)
+                    else: # Confirmed team not in recent history, or history itself is empty (so count is empty)
                         track_data['certainty'] = 0.0 
                     track_data['team_id'] = track_data['confirmed_team_id'] # Ensure display team is the confirmed one
 

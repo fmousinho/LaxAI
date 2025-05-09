@@ -13,16 +13,21 @@ logger = logging.getLogger(__name__)
 
 # --- Requirements Check Function ---
 
-def check_requirements(requirements_path="requirements.txt"):
+def check_requirements(requirements_filename="requirements.txt"):
     """
     Checks if packages listed in the requirements file are installed.
 
     Args:
-        requirements_path: Path to the requirements file.
+        requirements_filename: Name of the requirements file (e.g., "requirements.txt").
+                               This file is expected to be in the same directory as this script.
 
     Returns:
         True if all requirements are met, False otherwise.
     """
+    # Construct the absolute path to the requirements file
+    # __file__ is the path to the current script (initialize.py)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    requirements_path = os.path.join(script_dir, requirements_filename)
     try:
         missing_packages = []
         version_mismatches = []
@@ -42,7 +47,7 @@ def check_requirements(requirements_path="requirements.txt"):
                 except importlib.metadata.PackageNotFoundError:
                     missing_packages.append(f"  - {req.name} ({req.specifier or 'any version'})")
 
-        if not missing_packages and not version_mismatches:
+        if not missing_packages and not version_mismatches: # All good
             logger.info("All requirements are installed and versions match.")
             return True
     except FileNotFoundError:
@@ -56,9 +61,10 @@ def check_requirements(requirements_path="requirements.txt"):
     if version_mismatches:
         logger.error("Error: The following installed packages have version mismatches:")
         logger.error("\n".join(version_mismatches))
+
     if missing_packages or version_mismatches:
-        logger.error("\nPlease install or update the required packages using: pip install -r requirements.txt")
+        # Suggest installing from the project root's requirements.txt
+        logger.error(f"\nPlease install or update the required packages. If running from the project root, you might use: pip install -r {requirements_filename}")
         return False
 
-    return False
-
+    return True # Should have returned True if no errors and no FileNotFoundError

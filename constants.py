@@ -8,5 +8,5 @@ CREDENTIALS_PATH = "credentials.json"
 TOKEN_PATH = "token.json"
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 
-CACHE_DIR = os.path.join(os.path.dirname(__file__), ".file_cache") # Cache dir in project root
+CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".file_cache") # Cache dir in project root
 CACHE_DURATION_SECONDS = 60 * 60 * 24 * 7 # 7 days

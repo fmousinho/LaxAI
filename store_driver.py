@@ -6,12 +6,19 @@ import tempfile # Import tempfile module
 import time # Import time for cache expiration
 from typing import Optional, Callable # Import Optional and Callable
 # Define constants locally to avoid licensing issues
-CREDENTIALS_PATH = "credentials.json"
-TOKEN_PATH = "token.json"
-SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
-CACHE_DIR = ".file_cache" # Default cache dir if not provided
-CACHE_DURATION_SECONDS = 60 * 60 * 24 * 7 # Default 7 days
 
+# Determine the directory of the current script (store_driver.py)
+# This will be the base for resolving relative paths for credentials, token, and default cache.
+_STORE_DRIVER_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Define constants locally, making them absolute paths relative to this script's location
+CREDENTIALS_PATH = os.path.join(_STORE_DRIVER_SCRIPT_DIR, "credentials.json")
+TOKEN_PATH = os.path.join(_STORE_DRIVER_SCRIPT_DIR, "token.json")
+SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+# Default cache_dir is also relative to this script's location (project root)
+# This ensures that if Store is instantiated without cache_dir, it still resolves correctly.
+CACHE_DIR = os.path.join(_STORE_DRIVER_SCRIPT_DIR, ".file_cache")
+CACHE_DURATION_SECONDS = 60 * 60 * 24 * 7 # Default 7 days
 # Remove the import for constants
 
 # Imports for Google Drive API
@@ -20,6 +27,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
+import google.auth.exceptions # Import for RefreshError
 from googleapiclient.errors import HttpError
 
 logger = logging.getLogger(__name__)
@@ -37,8 +45,11 @@ class Store:
         cache_dir: str = CACHE_DIR,
         cache_duration: int = CACHE_DURATION_SECONDS):
         """
-        Initializes the store by authenticating with the Google Drive API.
-
+        Initializes the store by authenticating with the Google Drive API. Paths for
+        credentials, token, and cache_dir default to absolute paths within the
+        application's directory.
+        If relative paths are explicitly passed for these arguments, they will be
+        resolved relative to the Current Working Directory.
         Args:
             credentials_path: Path to the OAuth 2.0 client secrets file.
             token_path: Path to store/retrieve the user's access token.
@@ -47,11 +58,11 @@ class Store:
             cache_dir: Directory to store cached files.
             cache_duration: Maximum age of cached files in seconds.
         """
-        self.credentials_path = credentials_path
-        self.token_path = token_path
+        self.credentials_path = credentials_path # Will be absolute if default is used
+        self.token_path = token_path             # Will be absolute if default is used
         self.scopes = scopes if scopes else SCOPES # Use provided scopes or default from constants
         self.temp_file_registrar = temp_file_registrar # Store the registrar function
-        self.cache_dir = cache_dir
+        self.cache_dir = cache_dir               # Will be absolute if default or const.CACHE_DIR is used
         self.cache_duration = cache_duration
         self.service = self._authenticate()
 
@@ -81,12 +92,28 @@ class Store:
         # If there are no (valid) credentials available, let the user log in.
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
+                logger.info("Attempting to refresh expired token...")
                 try:
                     creds.refresh(Request())
-                except Exception as e:
-                    logger.error(f"Error refreshing token: {e}. Please re-authenticate.")
-                    creds = None # Force re-authentication
-            else:
+                    logger.info("Token refreshed successfully.")
+                except google.auth.exceptions.RefreshError as e:
+                    logger.error(f"Error refreshing token: {e}. This usually means the refresh token is invalid or revoked.")
+                    logger.info(f"Attempting to delete problematic token file: {self.token_path}")
+                    try:
+                        if os.path.exists(self.token_path):
+                            os.remove(self.token_path)
+                            logger.info(f"Successfully deleted token file: {self.token_path}. Please re-run to authenticate.")
+                        else:
+                            logger.info(f"Token file {self.token_path} not found, no need to delete.")
+                    except OSError as ose:
+                        logger.error(f"Failed to delete token file {self.token_path}: {ose}. Please delete it manually.")
+                    creds = None # Force re-authentication by falling through
+                except Exception as e: # Catch other potential errors during refresh
+                    logger.error(f"An unexpected error occurred during token refresh: {e}. Please re-authenticate.")
+                    creds = None # Force re-authentication by falling through
+            # This block is now for when creds is None initially, or became None after a failed refresh, or was never valid
+            if not creds or not creds.valid: # Re-check creds as it might have been set to None above
+                logger.info("No valid credentials, attempting to authenticate via browser flow...")
                 if not os.path.exists(self.credentials_path):
                     logger.error(f"Credentials file not found at: {self.credentials_path}")
                     logger.error("Please download 'credentials.json' from Google Cloud Console "
@@ -95,13 +122,17 @@ class Store:
                 flow = InstalledAppFlow.from_client_secrets_file(self.credentials_path, self.scopes)
                 # Run local server flow which will open a browser window for auth
                 creds = flow.run_local_server(port=0)
-            # Save the credentials for the next run
-            try:
-                with open(self.token_path, 'w') as token:
-                    token.write(creds.to_json())
-                logger.info(f"Credentials saved to {self.token_path}")
-            except Exception as e:
-                logger.error(f"Error saving token to {self.token_path}: {e}")
+            # Save the credentials for the next run, only if creds is not None
+            if creds:
+                try:
+                    with open(self.token_path, 'w') as token:
+                        token.write(creds.to_json())
+                    logger.info(f"Credentials saved to {self.token_path}")
+                except Exception as e:
+                    logger.error(f"Error saving token to {self.token_path}: {e}")
+            else: # If creds is still None after all attempts
+                logger.error("Failed to obtain valid credentials after all attempts.")
+                return None
         try:
             service = build('drive', 'v3', credentials=creds)
             logger.info("Google Drive API service created successfully.")

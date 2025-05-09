@@ -1,19 +1,20 @@
 import os
 import logging
-import constants as const
+from . import constants as const
 import numpy as np
 import torch
-from store_driver import Store
+from .store_driver import Store
 import ipywidgets as widgets
 import random
-from videotools import VideoToools, BoundingBox
-import cv2 
-from model import VideoModel
+from .videotools import VideoToools, BoundingBox
+import cv2
+from .model import VideoModel
 from deep_sort_realtime.deepsort_tracker import DeepSort
 from typing import Callable, Optional, Generator
 import collections # For deque
 
-VIDEO_FILE = "FCA_Upstate_NY_003.mp4"
+#VIDEO_FILE = "FCA_Upstate_NY_003.mp4"
+VIDEO_FILE = "GRIT Dallas-Houston 2027 vs Urban Elite 2027 - 12-30pm.mp4"
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +138,7 @@ def run_application(store: Store):
         # --- Pipeline to detect and track players, draw frame ---
      
         main_processing_generator = tools.get_next_frame()
-        max_frames = 100 # Process N frames for testing
+        max_frames = 1000 # Process N frames for testing
         frame_idx = 0
 
         logger.info("Starting main video processing loop...")
