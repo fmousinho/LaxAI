@@ -49,7 +49,7 @@ def _initialize_team_identifier(
         to a team ID, or a default getter if team identification fails.
     """
     logger.info(f"Attempting to define teams by sampling up to {num_frames_to_sample} frames...")
-
+   
     num_total_frames = tools.in_n_frames
     if num_total_frames == 0:
         logger.warning("Video appears to have no frames (total_frames is 0). Proceeding with default team getter.")
@@ -97,8 +97,8 @@ def _initialize_team_identifier(
         if frame is None:
             logger.warning(f"Could not retrieve frame at index {frame_idx_to_process} for team ID sampling. Skipping.")
             continue
-
-        detections = video_model.generate_detections(frame)
+       
+        detections = video_model.generate_detections(frame) # Now generate detections
         if len(detections) >= min_detections_for_sampling_frame:
             sampled_frames_data.append((frame, detections))
             logger.debug(f"Collected frame {frame_idx_to_process} (had {len(detections)} detections) for team ID. {len(sampled_frames_data)} collected.")
@@ -110,6 +110,25 @@ def _initialize_team_identifier(
         return video_model.get_default_team_getter()
 
     logger.info(f"Attempting to identify teams using {len(sampled_frames_data)} sampled frames.")
+
+    # --- Debug: Save sampled frames with detections if logger is DEBUG ---
+    if logging.getLogger().getEffectiveLevel() == logging.DEBUG:
+        # Determine the directory of the current script (application.py)
+        # and create the debug save directory within the LaxAI package folder.
+        app_script_dir = os.path.dirname(os.path.abspath(__file__))
+        debug_save_dir = os.path.join(app_script_dir, "debug_sampled_frames_with_detections")
+        os.makedirs(debug_save_dir, exist_ok=True)
+        logger.debug(f"Logger is DEBUG. Saving sampled frames with detections to: {debug_save_dir}")
+
+        for idx, (frame_rgb, detections) in enumerate(sampled_frames_data):
+            # Convert RGB frame to BGR for drawing and saving with OpenCV
+            frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+            # Draw detections on the BGR frame (draw_detections modifies frame_bgr in place)
+            frame_with_detections_bgr = tools.draw_detections(frame_bgr, detections)
+            save_path = os.path.join(debug_save_dir, f"sampled_frame_with_detections_{idx + 1:03d}.png")
+            cv2.imwrite(save_path, frame_with_detections_bgr)
+            logger.debug(f"Saved debug image: {save_path}")
+
     return video_model.identifies_team(sampled_frames_data)
 
 def run_application(store: Store):
@@ -140,7 +159,7 @@ def run_application(store: Store):
         # --- Pipeline to detect and track players, draw frame ---
      
         main_processing_generator = tools.get_next_frame()
-        max_frames = 1000 # Process N frames for testing
+        max_frames = 100 # Process N frames for testing
         frame_idx = 0
 
         logger.info("Starting main video processing loop...")

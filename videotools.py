@@ -3,6 +3,8 @@ import logging
 import numpy as np
 import cv2
 import ipywidgets as widgets
+import base64 # For encoding images for HTML report
+import io # For image encoding
 from typing import Generator, NamedTuple, Callable, Optional # Import Generator and NamedTuple
 
 logger = logging.getLogger(__name__)
@@ -140,23 +142,28 @@ class VideoToools:
         Draws bounding boxes and labels on the frame for detected objects.
 
         Args:
-            frame: The input video frame as a numpy array.
+            frame: The input video frame as a numpy array. This frame will be modified in place.
             detections: A list of detected objects with their bounding boxes and scores.
 
                         Expected format for each item in detections:
-                        (BoundingBox(x1, y1, w, h), confidence, class_id)
+                         ([x1, y1, w, h], confidence, class_id)
+                         where [x1, y1, w, h] are the coordinates for the top-left corner
+                         and width/height of the bounding box.
 
         Returns:
-            The modified frame with drawn detections.
+            The input frame, modified with drawn detections.
         """
-        for bbox, confidence, class_id in detections:
-            # Access attributes directly from the BoundingBox object and convert to int for drawing
-            x1, y1, w, h = map(int, [bbox.x1, bbox.y1, bbox.w, bbox.h])
+        for bbox_coords, confidence, class_id in detections:
+            if not (isinstance(bbox_coords, (list, tuple)) and len(bbox_coords) == 4):
+                logger.warning(f"Unexpected bbox_coords format in draw_detections: {bbox_coords}. Skipping.")
+                continue
+            # bbox_coords is [x1, y1, w, h]
+            x1, y1, w, h = map(int, bbox_coords)
             # Calculate bottom-right coordinates for cv2.rectangle
             x2, y2 = x1 + w, y1 + h
             label = f"Class {class_id} ({confidence:.2f})"
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2) # Increased font size slightly for consistency
         return frame
 
     def draw_tracks(self, frame: np.ndarray, tracks: list,
@@ -209,3 +216,34 @@ class VideoToools:
                 label += f" T: {team_id}"
             cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, track_color, 2)
         return frame
+
+    @staticmethod
+    def image_to_base64_str(image_np: Optional[np.ndarray]) -> Optional[str]:
+        """Converts a NumPy image array (RGB) to a base64 PNG string for HTML."""
+        if image_np is None or image_np.size == 0:
+            logger.debug("Cannot convert None or empty image to base64.")
+            return None
+        try:
+            # Ensure image is 3-channel RGB before attempting to convert to BGR for imencode
+            if image_np.ndim == 2: # Grayscale
+                image_rgb = cv2.cvtColor(image_np, cv2.COLOR_GRAY2RGB)
+            elif image_np.shape[2] == 4: # RGBA
+                image_rgb = cv2.cvtColor(image_np, cv2.COLOR_RGBA2RGB)
+            elif image_np.shape[2] == 3: # RGB
+                image_rgb = image_np
+            else:
+                logger.warning(f"Unsupported image format for base64 encoding: channels={image_np.shape[2] if image_np.ndim == 3 else 'N/A'}")
+                return None
+
+            # cv2.imencode expects BGR format
+            image_bgr_for_encode = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+            is_success, buffer = cv2.imencode(".png", image_bgr_for_encode)
+            if not is_success:
+                logger.warning("Failed to encode image to PNG for HTML report.")
+                return None
+            
+            img_base64 = base64.b64encode(buffer).decode("utf-8")
+            return f"data:image/png;base64,{img_base64}"
+        except Exception as e:
+            logger.error(f"Error converting image to base64: {e}", exc_info=True)
+            return None

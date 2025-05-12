@@ -5,6 +5,7 @@ token.json
 results*
 .git/
 credentials.json
+debug*/
 
 # Python cache files
 __pycache__/
