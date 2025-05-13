@@ -1,17 +1,11 @@
 import logging
-import io
 import torch
 from . import constants as const
 import numpy as np
 from .store_driver import Store
 from .videotools import BoundingBox
 from deep_sort_realtime.deepsort_tracker import DeepSort
-from rfdetr import RFDETRBase # Import the custom class needed for loading
-import cv2
-from sklearn.cluster import KMeans
 from typing import Callable, Optional
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D # For 3D scatter plot
 from .team_identification import TeamIdentification
 import collections # For deque
 
@@ -81,7 +75,7 @@ class VideoModel:
 
         Returns:
             A list of detected objects with their bounding boxes and scores.  
-            [(bbox, confidence, class)] DeepSort expects
+            [(bbox list, confidence, class)] DeepSort expects
             bbox in xywh format
         """
         if self.model is None:

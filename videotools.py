@@ -2,9 +2,7 @@ import os
 import logging
 import numpy as np
 import cv2
-import ipywidgets as widgets
-import base64 # For encoding images for HTML report
-import io # For image encoding
+import base64 
 from typing import Generator, NamedTuple, Callable, Optional # Import Generator and NamedTuple
 
 logger = logging.getLogger(__name__)
@@ -12,13 +10,13 @@ logger = logging.getLogger(__name__)
 # Define a structure for bounding boxes within this module
 class BoundingBox(NamedTuple):
     """Represents a bounding box with x1, y1, width, and height."""
-    x1: float
-    y1: float
-    w: float
-    h: float
+    x1: int
+    y1: int
+    w: int
+    h: int
 
     @classmethod
-    def from_xyxy(cls, x1: float, y1: float, x2: float, y2: float) -> 'BoundingBox':
+    def from_xyxy(cls, x1: int, y1: int, x2: int, y2: int) -> 'BoundingBox':
         """
         Creates a BoundingBox instance from top-left (x1, y1) and bottom-right (x2, y2) coordinates.
 
@@ -30,7 +28,7 @@ class BoundingBox(NamedTuple):
         """
         return cls(x1=x1, y1=y1, w=x2 - x1, h=y2 - y1)
     
-    def to_xyxy(self) -> tuple:
+    def to_xyxy(self) -> tuple[int, int, int, int]:
         """
         Converts the bounding box to top-left (x1, y1) and bottom-right (x2, y2) coordinates.
 
@@ -39,7 +37,7 @@ class BoundingBox(NamedTuple):
         """
         x2 = self.x1 + self.w
         y2 = self.y1 + self.h
-        return (self.x1, self.y1, x2, y2)
+        return map(int, (self.x1, self.y1, x2, y2))
 
 
 class VideoToools:

@@ -1,18 +1,23 @@
 import logging
 import numpy as np
 import cv2
-from sklearn.cluster import KMeans
-from typing import Callable, Optional, Union, Dict
-import torch # Added missing import
-from transformers import ViTModel, ViTImageProcessor
-from PIL import Image
-from .videotools import BoundingBox, VideoToools 
+from typing import Callable, Optional
+from .videotools import BoundingBox 
 from . import utils
-import base64 # For encoding images for HTML report
-import io # For image encoding
-import os # For path manipulation
 
 logger = logging.getLogger(__name__)
+
+#DEFAULTS
+FEATURE_EXTRACTOR = "dominant_color"
+CLUSTERING_ALGORITHM = "kmeans"
+GRASS_MASK = True
+CENTER_CROP = True
+RESIZE_DIMENSIONS = (20, 20)
+TOP_CROP_PERCENTAGE = 0.1 #removes head
+BOTTOM_CROP_PERCENTAGE = 0.4 #removes legs
+LEFT_CROP_PERCENTAGE = 0.1
+RIGHT_CROP_PERCENTAGE = 0.1
+
 
 # Default LAB color ranges for grass masking (OpenCV's 0-255 scaled LAB)
 # These will likely need tuning based on specific video conditions.
@@ -22,60 +27,75 @@ DEFAULT_UPPER_LAB_GRASS = np.array([200, 128, 200])  # L_max, a_max (still green
 
 class TeamIdentification:
     _kmeans_fail_counter = 0 # Class attribute to count KMeans failures for unique filenames
-    _avg_hsv_debug_save_counter = 0 # Class attribute for new get_dominant_color debug images
-    def __init__(self, player_feature_extractor: str = "dominant_color"):
+    def __init__(self, 
+                 player_feature_extractor: str = FEATURE_EXTRACTOR,
+                 clustering_algorithm: str = CLUSTERING_ALGORITHM,
+                 grass_mask: bool = GRASS_MASK,
+                 center_crop: bool = CENTER_CROP):
         """Initializes the TeamIdentification class."""
         self.player_feature_extractor = player_feature_extractor
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.clustering_algorithm = clustering_algorithm
+        self.grass_mask = grass_mask
+        self.center_crop = center_crop
         self._embedding_fn = None
 
         logger.info(f"Initializing TeamIdentification with feature extractor: {self.player_feature_extractor}")
 
-        # Make grass mask parameters configurable if needed, or use defaults
         self.lower_lab_grass = DEFAULT_LOWER_LAB_GRASS
         self.upper_lab_grass = DEFAULT_UPPER_LAB_GRASS
-
-        if self.player_feature_extractor == "dino_vit":
-            self.dino_processor = None
-            self.dino_model = None
-            self._initialize_dino_vit_model() # This sets self.dino_model and self.dino_processor
-            if self.dino_model and self.dino_processor:
-                self._embedding_fn = self._get_dino_vit_embedding
-            else:
-                logger.error("DINO ViT model failed to initialize. Embedding function will be non-functional for DINO.")
-                self._embedding_fn = lambda roi_img: None # Fallback
-        elif self.player_feature_extractor == "dominant_color":
+        
+        if self.player_feature_extractor == "dominant_color":
+            # This embedding function returns a (1, 3) or (k, 3) color vector
             self._embedding_fn = self._get_dominant_color_embedding
+        elif self.player_feature_extractor == "crop_no_grass":
+            # This embedding function returns the processed image array itself
+            self._embedding_fn = self._get_crop_no_grass_embedding
         else:
             logger.error(f"Unsupported player feature extractor: {self.player_feature_extractor}. Embedding function set to None.")
-            self._embedding_fn = lambda roi_img: None # Fallback for unsupported types
+            self._embedding_fn = lambda: None
 
-    def _initialize_dino_vit_model(self):
-        try:
-            self.dino_processor = ViTImageProcessor.from_pretrained('facebook/dino-vitb16')
-            self.dino_model = ViTModel.from_pretrained('facebook/dino-vitb16').to(self.device).eval()
-            logger.info(f"DINO ViT model (facebook/dino-vitb16) loaded to {self.device}.")
-        except Exception as e:
-            logger.error(f"Failed to load DINO ViT model: {e}", exc_info=True)
-            self.dino_processor = None
-            self.dino_model = None
-
-    def _get_dominant_color_embedding(self, roi_image: np.ndarray, return_intermediate_images: bool = False) -> Union[tuple[Optional[np.ndarray], Optional[Dict]], Optional[np.ndarray]]:
+    def _get_dominant_color_embedding(self, roi_image: np.ndarray) -> Optional[np.ndarray]:
         """Helper to get a single dominant color as a (3,) embedding vector."""
-        # Always apply grass mask for embedding logic; report will reflect this.
-        result = self.get_dominant_color(roi_image, k=1, apply_grass_mask=True, return_intermediate_images=return_intermediate_images)
+        result = self._get_dominant_color(roi_image, k=1)
+        dominant_colors = result
+        embedding = dominant_colors[0] if dominant_colors is not None and dominant_colors.shape[0] > 0 else None
+        return embedding
 
-        if return_intermediate_images:
-            # result is (dominant_colors, intermediate_dict) or (None, intermediate_dict)
-            dominant_colors, intermediates = result if isinstance(result, tuple) and len(result) == 2 else (result, {})
-            embedding = dominant_colors[0] if dominant_colors is not None and dominant_colors.shape[0] > 0 else None
-            return embedding, intermediates
-        else:
-            # result is dominant_colors or None
-            dominant_colors = result
-            embedding = dominant_colors[0] if dominant_colors is not None and dominant_colors.shape[0] > 0 else None
-            return embedding
+    def _get_crop_no_grass_embedding(self, roi_image: np.ndarray) -> Optional[np.ndarray]:
+        """
+        Applies grass masking and center cropping to an ROI image.
+        Returns the resulting image array as the "embedding".
+        Compatible with the signature of _get_dominant_color_embedding.
+        """
+        if roi_image is None or roi_image.shape[0] == 0 or roi_image.shape[1] == 0 or roi_image.shape[2] != 3:
+            logger.warning(f"_get_crop_no_grass_embedding received an invalid image with shape: {roi_image.shape if roi_image is not None else 'None'}.")
+            return None
 
+        image = self._apply_masks(roi_image)
+        if image is None: return
+      
+        try:
+            resized_embedding_img = cv2.resize(image, RESIZE_DIMENSIONS)
+            embedding = resized_embedding_img.flatten().astype(np.float16)
+        except cv2.error as e:
+            logger.warning(f"cv2.error during resize/flatten in _get_crop_no_grass_embedding: {e}. Image shape: {image.shape}")
+            return None
+
+        return embedding
+
+    def _apply_masks(self, image: np.ndarray) -> Optional[np.ndarray]:
+        """
+        Applies grass masking and center cropping to an image.
+        Returns the processed image.
+        """
+        if self.grass_mask:
+            image = self._apply_grass_mask(image)
+        if self.center_crop:
+            image = self._get_center_crop(image)
+        if image is None or image.size == 0:
+            logger.warning(f"Image pre-processing resulted in invalid image (orig_shape={roi_image.shape}, after_mask_shape={image.shape}). Ignoring this ROI.")
+            return None
+        return image
 
     def get_default_team_getter(self) -> Callable[[BoundingBox, np.ndarray], Optional[int]]:
         """Returns a default team getter function that always returns None."""
@@ -86,194 +106,114 @@ class TeamIdentification:
     def identifies_team (
         self,
         sampled_frames_data: list[tuple[np.ndarray, list]],
-        clustering_algorithm: str = "kmeans" # New argument with a default
     ) -> Callable[[BoundingBox, np.ndarray], Optional[int]]:
         """
-        Analyzes embeddings detected objects and groups them into two teams
+        Analyzes embeddings of detected objects and groups them into two teams
         using the specified clustering algorithm.
 
         Args:
             sampled_frames_data: A list of tuples, where each tuple contains:
                 - frame (np.ndarray): An RGB video frame.
                 - detections (list): A list of detections for that frame.
-                  Each detection is (bbox_coords, confidence, class_id).
-            clustering_algorithm (str): The name of the clustering algorithm to use.
-                                        Currently supports "kmeans".
+                  Each detection is (bbox_coords, confidence, class_id). 
 
         Returns:
             A function that takes a BoundingBox object and the current frame as input
             and returns the team_id (0 or 1) or None.
         """
-        if clustering_algorithm == "kmeans":
-            return self._kmeans_only_clustering(sampled_frames_data)
+        if not sampled_frames_data:
+            logger.warning("No sampled frames data provided. Cannot define teams.")
+            return self._default_team_getter
+        if self.clustering_algorithm == "kmeans":
+            return self._kmeans_clustering(sampled_frames_data)
         else:
-            logger.warning(f"Unsupported clustering algorithm: {clustering_algorithm}. Defaulting team getter.")
+            logger.error(f"Unsupported clustering algorithm: {self.clustering_algorithm}. Defaulting team getter.")
             return self.get_default_team_getter()
 
-    def _kmeans_only_clustering(
+    def _kmeans_clustering(
         self,
         sampled_frames_data: list[tuple[np.ndarray, list]]
     ) -> Callable[[BoundingBox, np.ndarray], Optional[int]]:
         """
         Performs team identification using KMeans clustering.
         """
-        _default_team_getter = self.get_default_team_getter()
-        if not sampled_frames_data:
-            logger.warning("No sampled frames data provided. Cannot define teams.")
-            return _default_team_getter
-
-        detection_bboxes = [] 
-        player_roi_embeddings = []
-        html_table_rows = []
-
-        # Generate ROI report only if logger is DEBUG and using dominant color
-        generate_roi_report = (logger.getEffectiveLevel() <= logging.DEBUG and
-                               self.player_feature_extractor == "dominant_color")
         
+        _default_team_getter = self.get_default_team_getter()
+
+        collected_embeddings = []
+
         for frame, detections_in_frame in sampled_frames_data:
-            for det_coords, _, _ in detections_in_frame:
-                bbox = BoundingBox(*det_coords) 
-                bbox_xyxy = bbox.to_xyxy()
-                x1_roi, y1_roi, x2_roi, y2_roi = map(int, bbox_xyxy)
-                # Ensure ROI coordinates are valid
-                if x1_roi >= x2_roi or y1_roi >= y2_roi:
-                    logger.debug(f"Skipping invalid ROI coordinates: {bbox_xyxy}")
-                    continue
+            for det_coords, _, _ in detections_in_frame: # type: ignore
+                bbox = BoundingBox(*det_coords)
+                x1_roi, y1_roi, x2_roi, y2_roi = bbox.to_xyxy()
                 roi = frame[y1_roi:y2_roi, x1_roi:x2_roi]
-                if roi.size == 0:
-                    logger.debug(f"Skipping empty ROI for bbox: {bbox_xyxy}")
-                    continue
+                if roi.size == 0: continue
                 
                 embedding = None
-                intermediate_data_for_report = None
-
                 if self._embedding_fn:
-                    if self._embedding_fn == self._get_dominant_color_embedding:
-                        # Pass generate_roi_report to control if intermediate images are returned
-                        result_from_embedding_fn = self._embedding_fn(roi, return_intermediate_images=generate_roi_report)
-                        if generate_roi_report:
-                            embedding, intermediate_data_for_report = result_from_embedding_fn
-                        else:
-                            embedding = result_from_embedding_fn
-                    else: # For DINO or other extractors not producing this specific report
-                        embedding = self._embedding_fn(roi)
-                else: # Should ideally not be reached if __init__ sets a fallback
-                    logger.error("Embedding function is not defined!")
-
-                if embedding is not None:
-                    player_roi_embeddings.append(embedding)
-                    detection_bboxes.append(bbox)
-
-                    if generate_roi_report and intermediate_data_for_report and self.player_feature_extractor == "dominant_color":
-                        html_row = utils.format_roi_for_html_report(intermediate_data_for_report, embedding) # embedding is the dominant color here
-                        if html_row:
-                            html_table_rows.append(html_row)
-
-        if len(player_roi_embeddings) < 2: # KMeans needs at least n_clusters (which is 2) samples
-            logger.warning(f"Not enough player ROIs collected ({len(player_roi_embeddings)}) to attempt team definition. Need at least 2. Defaulting team getter.")
-            return _default_team_getter
-
-        # Convert to numpy array for easier manipulation and checking
-        embeddings_array = np.array(player_roi_embeddings, dtype=np.float16) # Specify dtype for consistency
-
-        # Check for NaNs or Infs in embeddings and filter them out
-        valid_mask = ~np.any(np.isnan(embeddings_array), axis=1) & ~np.any(np.isinf(embeddings_array), axis=1)
-        if not np.all(valid_mask):
-            logger.warning(f"Embeddings contain NaN or Inf values. Filtering them out. Original count: {len(embeddings_array)}")
-            embeddings_array = embeddings_array[valid_mask]
-            # Note: detection_bboxes would also need filtering if used directly with filtered embeddings later.
-            # For now, the primary concern is the KMeans input.
-            logger.info(f"Proceeding with {embeddings_array.shape[0]} valid embeddings after filtering NaN/Inf.")
-
-        if embeddings_array.shape[0] < 2: # Check again after filtering
-            logger.warning(f"Not enough valid (non-NaN/Inf) embeddings remaining ({embeddings_array.shape[0]}) after filtering. Need at least 2 for KMeans. Defaulting team getter.")
-            return _default_team_getter
-
-        try:
-            # Temporarily set NumPy to raise exceptions for these warnings
-            with np.errstate(divide='raise', over='raise', invalid='raise'):
-                logger.debug(f"Attempting KMeans.fit with embeddings_array of shape: {embeddings_array.shape}, dtype: {embeddings_array.dtype}")
-                # logger.debug(f"Sample of embeddings_array before fit: {embeddings_array[:5]}") # Uncomment to log sample data
-                kmeans = KMeans(n_clusters=2, random_state=0, n_init='auto').fit(embeddings_array)
-
-            # Plotting - only if embeddings are 3D (like dominant color)
-            # Use the cleaned embeddings_array for plotting
-            if embeddings_array.ndim == 2 and embeddings_array.shape[1] == 3:
-                utils.plot_team_kmeans_clusters(embeddings_array, kmeans.labels_, kmeans.cluster_centers_)
-            else:
-                logger.info("Skipping 3D cluster plot as embeddings are not 3-dimensional (e.g., not RGB colors).")
-
-            def get_team_id_for_bbox(bbox_to_check: BoundingBox, current_frame_for_roi: np.ndarray) -> Optional[int]:
-                x1_roi, y1_roi, x2_roi, y2_roi = map(int, bbox_to_check.to_xyxy())
-                frame_roi = current_frame_for_roi[y1_roi:y2_roi, x1_roi:x2_roi]
-                if frame_roi.size == 0:
-                    return None
-
-                embedding_for_prediction = None
-                if self._embedding_fn:
-                    # For prediction, we don't need intermediate images, so pass False
-                    if self._embedding_fn == self._get_dominant_color_embedding:
-                         embedding_for_prediction = self._embedding_fn(frame_roi, return_intermediate_images=False)
-                    else:
-                         embedding_for_prediction = self._embedding_fn(frame_roi)
+                    embedding = self._embedding_fn(roi) # Get embedding using the selected method
                 
-                if embedding_for_prediction is not None:
-                    # Check the single embedding for prediction as well
-                    embedding_np = np.array([embedding_for_prediction], dtype=np.float16)
-                    if np.any(np.isnan(embedding_np)) or np.any(np.isinf(embedding_np)):
-                        logger.warning(f"Embedding for prediction contains NaN/Inf. Cannot predict team for this ROI.")
-                        return None
-                    try:
-                        with np.errstate(divide='raise', over='raise', invalid='raise'):
-                            # logger.debug(f"Attempting KMeans.predict with embedding_np: {embedding_np}") # Uncomment for predict data
-                            return kmeans.predict(embedding_np)[0]
-                    except Exception as e:
-                        # This will now catch the raised exceptions from np.errstate
-                        logger.warning(f"KMeans prediction failed for ROI embedding: {e}")
-                        return None
-                return None # If embedding is None or prediction fails
-            
-            # After the loop and successful KMeans, generate the HTML report if data was collected
-            if generate_roi_report and html_table_rows:
-                script_dir = os.path.dirname(os.path.abspath(__file__))
-                report_output_dir = os.path.join(script_dir, "debug_team_identification_rois")
-                os.makedirs(report_output_dir, exist_ok=True)
-                utils.generate_and_save_roi_report_html(html_table_rows, report_output_dir)
-                logger.info(f"Team ID ROI processing HTML report saved in: {report_output_dir}")
+                if embedding is not None:
+                    collected_embeddings.append(embedding)
 
-            return get_team_id_for_bbox
-        
-        except Exception as e:
-            logger.error(f"Error during K-Means clustering for team definition: {e}", exc_info=True)
+        if len(collected_embeddings) < 2: # KMeans needs at least n_clusters (which is 2) samples
+            logger.warning(f"KMeans: Not enough valid embeddings collected ({len(collected_embeddings)}) for clustering. Need at least 2. Defaulting team getter.")
             return _default_team_getter
-    
-    def _get_dino_vit_embedding(self, roi_image: np.ndarray) -> Optional[np.ndarray]:
-        """
-        Extracts DINO ViT embedding for a given ROI image.
-        roi_image is expected to be a NumPy array (H, W, C) in RGB format.
-        """
-        if not self.dino_model or not self.dino_processor:
-            logger.error("DINO ViT model or processor not initialized in _get_dino_vit_embedding.")
-            return None
-        
-        try:
-            # Assuming roi_image is already RGB, directly convert to PIL Image
-            img_rgb = roi_image 
-            pil_image = Image.fromarray(img_rgb)
 
-            inputs = self.dino_processor(images=pil_image, return_tensors="pt").to(self.device)
+        # Filter out NaNs or Infs
+        embeddings_array_f32 = np.array(collected_embeddings, dtype=np.float32)
+
+        # Filter out NaNs or Infs from the NumPy array
+        valid_mask = ~np.any(np.isnan(embeddings_array_f32), axis=1) & ~np.any(np.isinf(embeddings_array_f32), axis=1)
+        embeddings_array_f32_filtered = embeddings_array_f32 # Start with the full array
+     
+        if not np.all(valid_mask):
+            logger.warning("KMeans: Embeddings contain NaN/Inf values. Filtering them out.")
+            embeddings_array_f32_filtered = embeddings_array_f32[valid_mask] 
+
+        if embeddings_array_f32_filtered.shape[0] < 2: 
+            logger.warning(f"KMeans: Not enough valid (non-NaN/Inf) embeddings remaining ({embeddings_array_f32_filtered.shape[0]}) after filtering. Need at least 2 for KMeans. Defaulting team getter.")
+            return _default_team_getter
+        
+        # Check for sufficient variance
+        if embeddings_array_f32_filtered.shape[0] > 0 and np.all(np.std(embeddings_array_f32_filtered, axis=0) < 1e-5): # Safe to use .shape and np.std on NumPy array
+                logger.warning(f"KMeans: Collected embeddings have near-zero variance (std: {np.std(embeddings_array_f32_filtered, axis=0)}). Cannot perform KMeans. Defaulting team getter.")
+                return _default_team_getter
+
+        # Normalize embeddings to [0, 1] range (assuming original data like colors/pixels is 0-255)
+        normalized_embeddings_array = embeddings_array_f32_filtered / 255.0
+        kmeans_model = None
+
+        try:
+            with np.errstate(divide='raise', over='raise', invalid='raise'):
+                logger.debug(f"KMeans: Attempting fit with normalized_embeddings_array shape: {normalized_embeddings_array.shape}, dtype: {normalized_embeddings_array.dtype}")
+                kmeans_model = utils.CustomKMeans(n_clusters=2, random_state=42).fit(normalized_embeddings_array)
             
-            with torch.no_grad():
-                outputs = self.dino_model(**inputs)
+            logger.info("KMeans clustering for team definition completed successfully.")
+
+            def get_team_id_for_bbox_kmeans(bbox_to_check: BoundingBox, current_frame_for_roi: np.ndarray) -> Optional[int]:
+                if kmeans_model is None: return None # Should not happen if fit was successful
+                
+                x1, y1, x2, y2 = bbox_to_check.to_xyxy()
+                roi = current_frame_for_roi[y1:y2, x1:x2]
+                if roi.size == 0: return None
+                
+                embedding = self._embedding_fn(roi) 
+                if embedding is None: return None
+                
+                embedding_np = np.array([embedding]) # Reshape to (1, D)
+                if np.any(np.isnan(embedding_np)) or np.any(np.isinf(embedding_np)):
+                    logger.warning("KMeans predict: Embedding for prediction contains NaN/Inf.")
+                    return None
+                normalized_embedding_for_prediction = embedding_np / 255.0
+                
+                return kmeans_model.predict(normalized_embedding_for_prediction)[0]
             
-            # For DINO ViT, the [CLS] token embedding is often used as the global image representation.
-            # The [CLS] token is typically the first token in the sequence.
-            cls_token_embedding = outputs.last_hidden_state[:, 0, :] # Batch_size, CLS_token_index, Hidden_dim
-            
-            return cls_token_embedding.squeeze().cpu().numpy()
+            return get_team_id_for_bbox_kmeans
+
         except Exception as e:
-            logger.error(f"Error getting DINO ViT embedding: {e}", exc_info=True)
-            return None
+            logger.error(f"Error during KMeans clustering for team definition: {e}", exc_info=True)
+            return _default_team_getter
 
     def _get_center_crop(self, image: np.ndarray) -> np.ndarray:
         """
@@ -288,10 +228,10 @@ class TeamIdentification:
         """
         h, w = image.shape[:2]
 
-        top_crop_px = int(h * 0.1)
-        bottom_crop_px = int(h * 0.4)
-        left_crop_px = int(w * 0.1)
-        right_crop_px = int(w * 0.1)
+        top_crop_px = int(h * TOP_CROP_PERCENTAGE)
+        bottom_crop_px = int(h * BOTTOM_CROP_PERCENTAGE)
+        left_crop_px = int(w * LEFT_CROP_PERCENTAGE)
+        right_crop_px = int(w * RIGHT_CROP_PERCENTAGE)
 
         start_y = top_crop_px
         end_y = h - bottom_crop_px
@@ -312,10 +252,6 @@ class TeamIdentification:
         image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
         lab_image = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB)
 
-        # --- WILL REQUIRE CAREFUL TUNING for your specific videos. ---
-        # L: Lightness (0-100, but OpenCV scales it to 0-255 for 8-bit images)
-        # a: Green-Red axis (approx -128 to 127, OpenCV maps to 0-255, where ~128 is neutral)
-        # b: Blue-Yellow axis (approx -128 to 127, OpenCV maps to 0-255, where ~128 is neutral)
         grass_mask = cv2.inRange(lab_image, self.lower_lab_grass, self.upper_lab_grass)
         non_grass_mask = cv2.bitwise_not(grass_mask)
         
@@ -324,128 +260,61 @@ class TeamIdentification:
         masked_image_rgb = cv2.bitwise_and(image_rgb, image_rgb, mask=non_grass_mask)
         
         return masked_image_rgb
+    
+    def _resize_image(self, image: np.ndarray) -> Optional[np.ndarray]:
+        """
+        Resizes the image to the specified dimensions.
+        Returns the resized image.
+        """
+        if image is None or image.shape[0] == 0 or image.shape[1] == 0:
+            logger.warning(f"resize_image received an invalid image with shape: {image.shape if image is not None else 'None'}.")
+            return None
+        
+        try:
+            resized_image = cv2.resize(image, RESIZE_DIMENSIONS)
+            return resized_image
+        except cv2.error as e:
+            logger.warning(f"cv2.resize error in resize_image: {e}. Original image shape: {image.shape}")
+            return None
 
-    def get_dominant_color(self, image: np.ndarray, k: int = 1, apply_grass_mask: bool = False, return_intermediate_images: bool = False) -> Union[tuple[Optional[np.ndarray], Dict], Optional[np.ndarray]]:
+    def _get_dominant_color(self, image: np.ndarray, k: int = 1) -> Optional[np.ndarray]:
         if image is None or image.shape[0] == 0 or image.shape[1] == 0 or image.shape[2] != 3:
             logger.warning(f"get_dominant_color received an invalid image with shape: {image.shape if image is not None else 'None'}.")
-            return (None, {}) if return_intermediate_images else None
+            return None
         
-        intermediate_results = {}
-        if return_intermediate_images:
-            intermediate_results['original_roi'] = image.copy()
-
-        # Process for masking
-        image_for_masking = image.copy() # Use a copy for masking step
-        if apply_grass_mask:
-            logger.debug("Applying grass mask in get_dominant_color.")
-            image_after_mask = self._apply_grass_mask(image_for_masking)
-            if return_intermediate_images:
-                intermediate_results['masked_roi'] = image_after_mask.copy()
-        else:
-            image_after_mask = image_for_masking # No mask applied
-            if return_intermediate_images:
-                # If no mask applied, "masked" is same as original for reporting
-                intermediate_results['masked_roi'] = image_after_mask.copy() 
-        
-        # Process for cropping (applied to the result of masking step)
-        image_after_crop = self._get_center_crop(image_after_mask)
-        if image_after_crop.size == 0:
-            logger.debug(f"Center crop resulted in an empty image (orig_shape={image.shape}, after_mask_shape={image_after_mask.shape}). Using image before crop.")
-            image_after_crop = image_after_mask # Fallback to image before crop
-            if image_after_crop.size == 0: # If image_after_mask was also empty (e.g. fully masked out)
-                 logger.warning(f"Image after mask was empty. Using original image for dominant color.")
-                 image_after_crop = image.copy() # Ultimate fallback to original
-
-        if return_intermediate_images:
-            intermediate_results['cropped_roi'] = image_after_crop.copy()
-
-        # Final image to process for dominant color (after mask and crop)
-        final_image_for_kmeans = image_after_crop
-
-        try:
-            # Ensure final_image_for_kmeans is valid before resize
-            if final_image_for_kmeans is None or final_image_for_kmeans.size == 0:
-                logger.warning(f"Final image for K-Means is empty or None before resize. Shape: {final_image_for_kmeans.shape if final_image_for_kmeans is not None else 'None'}")
-                return (None, intermediate_results) if return_intermediate_images else None
-
-            resized_image = cv2.resize(final_image_for_kmeans, (20, 20)) # This is RGB
-            # Ensure resized_image is not empty and has 3 channels
-            if resized_image.shape[0] == 0 or resized_image.shape[1] == 0:
-                logger.warning(f"Image became invalid after resizing in get_dominant_color. Original shape: {image.shape}")
-                return (None, intermediate_results) if return_intermediate_images else None
-            
-        except cv2.error as e:
-            logger.warning(f"cv2.resize error in get_dominant_color: {e}. Original image shape: {image.shape}")
-            return (None, intermediate_results) if return_intermediate_images else None
+        image = self._apply_masks(image)
+        resized_image = self._resize_image(image)
+        if resized_image is None: return None
 
         pixels = resized_image.reshape((-1, 3)) # Pixels are RGB
 
-        # Check for NaN/Inf in pixels (e.g. if image_to_process had issues)
-        if np.any(np.isnan(pixels)) or np.any(np.isinf(pixels)):
-            logger.warning(f"Pixel data contains NaN/Inf values BEFORE astype in get_dominant_color. Pixels: {pixels[:5]}")
-            return (None, intermediate_results) if return_intermediate_images else None
-
-        pixels_float32 = pixels.astype(np.float32)
-
-        if np.any(np.isnan(pixels_float32)) or np.any(np.isinf(pixels_float32)):
-            logger.warning(f"Pixel data contains NaN/Inf values AFTER astype in get_dominant_color. Pixels: {pixels_float32[:5]}")
-            return (None, intermediate_results) if return_intermediate_images else None
+        # Pixels are np.uint8 at this point. NaN/Inf checks are not needed for uint8.
 
         # Filter out black pixels ([0,0,0])
-        is_black_pixel = np.all(pixels_float32 == 0, axis=1)
+        # Perform this check on the original uint8 pixels
+        is_black_pixel = np.all(pixels == 0, axis=1)
         non_black_pixels_mask = ~is_black_pixel
-        pixels_float32_non_black = pixels_float32[non_black_pixels_mask]
+        pixels_non_black = pixels[non_black_pixels_mask] # This will be uint8
+        if pixels_non_black.shape[0] <k:
+            logger.debug("Most pixels were black or became black after masking/cropping. No non-black pixels to process for dominant color.")
+            return None
 
-        if pixels_float32_non_black.shape[0] == 0:
-            logger.debug("All pixels were black or became black after masking/cropping. No non-black pixels to process for dominant color.")
-            return (None, intermediate_results) if return_intermediate_images else None
-        
-        # Update pixels_float32 to be the non-black version for subsequent processing
-        pixels_float32 = pixels_float32_non_black
-
-        # Check for sufficient variance if all remaining non-black pixels are nearly identical
-        # The pixels_float32.shape[0] > 0 check is implicitly true here due to the previous check for empty pixels_float32_non_black
-        if np.all(np.std(pixels_float32, axis=0) < 1e-5): # Small threshold for variance
-            logger.debug(f"Remaining non-black RGB pixels have near-zero variance (std: {np.std(pixels_float32, axis=0)}). Using average of these non-black pixels.")
-            avg_rgb_color = np.mean(pixels_float32, axis=0, keepdims=True)
-            if return_intermediate_images:
-                return avg_rgb_color, intermediate_results
-            else:
-                return avg_rgb_color
-
-        if pixels_float32.shape[0] < k:
-            logger.warning(f"Not enough non-black RGB pixels ({pixels_float32.shape[0]}) to form {k} cluster(s) in get_dominant_color.")
-            return (None, intermediate_results) if return_intermediate_images else None
         try:
             with np.errstate(divide='raise', over='raise', invalid='raise'):
-                # KMeans on RGB pixels
-                kmeans = KMeans(n_clusters=k, n_init='auto', random_state=0).fit(pixels_float32) 
-                dominant_rgb_colors = kmeans.cluster_centers_ # Cluster centers are already RGB
+                # Convert to float32 specifically for KMeans
+                pixels_f32 = pixels_non_black.astype(np.float32)
+                # Normalize pixel values to [0, 1]
+                normalized_pixels_for_kmeans = pixels_f32 / 255.0
+                kmeans = utils.CustomKMeans(n_clusters=k, random_state=0).fit(normalized_pixels_for_kmeans)
                 
-                if return_intermediate_images:
-                    return dominant_rgb_colors, intermediate_results
-                else:
-                    return dominant_rgb_colors
+                # Cluster centers are normalized ([0,1]), scale them back to [0,255]
+                dominant_rgb_colors_normalized = kmeans.cluster_centers_
+                dominant_rgb_colors_float = dominant_rgb_colors_normalized * 255.0
+                dominant_rgb_colors = np.round(dominant_rgb_colors_float).astype(np.uint8)
+                
+                return dominant_rgb_colors
+            
         except Exception as e:
-            TeamIdentification._kmeans_fail_counter += 1
-            error_msg = (f"KMeans clustering failed in get_dominant_color (attempt {TeamIdentification._kmeans_fail_counter}). "
-                         f"Error: {e}. Input pixels (first 5 of {pixels_float32.shape[0]}): {pixels_float32[:5]}")
-            
-            # Save problematic images for visual inspection
-            try:
-                debug_image_save_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug_kmeans_fail_images")
-                os.makedirs(debug_image_save_dir, exist_ok=True)
+            logger.error("KMeans clustering failed in the get_dominant_color method.")
 
-                if 'final_image_for_kmeans' in locals() and final_image_for_kmeans is not None and final_image_for_kmeans.size > 0:
-                    pre_resize_path = os.path.join(debug_image_save_dir, f"fail_kmeans_input_{TeamIdentification._kmeans_fail_counter}_pre_resize.png")
-                    cv2.imwrite(pre_resize_path, cv2.cvtColor(final_image_for_kmeans, cv2.COLOR_RGB2BGR))
-                    error_msg += f" Saved pre-resize image to {pre_resize_path}."
-                if 'resized_image' in locals() and resized_image is not None and resized_image.size > 0:
-                    resized_path = os.path.join(debug_image_save_dir, f"fail_kmeans_input_{TeamIdentification._kmeans_fail_counter}_resized.png")
-                    cv2.imwrite(resized_path, cv2.cvtColor(resized_image, cv2.COLOR_RGB2BGR))
-                    error_msg += f" Saved resized image to {resized_path}."
-            except Exception as save_exc:
-                error_msg += f" Additionally, failed to save debug images: {save_exc}."
-            
-            logger.error(error_msg, exc_info=True)
-            return (None, intermediate_results) if return_intermediate_images else None
+            return None
