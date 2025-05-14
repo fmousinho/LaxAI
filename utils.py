@@ -5,10 +5,10 @@ import logging # Keep logging
 
 logger = logging.getLogger(__name__)
 
-def plot_team_kmeans_clusters(colors_array: np.ndarray, labels: np.ndarray, centers: np.ndarray, output_filename: str = "team_kmeans_visualization.png"):
+def plot_team_kmeans_clusters(colors_array_rgb: np.ndarray, labels: np.ndarray, centers_rgb: np.ndarray, output_filename: str = "team_kmeans_visualization.png"):
     """
     Generates and saves a 3D scatter plot of color clusters.
-
+    
     Args:
         colors_array (np.ndarray): Array of RGB colors (N, 3).
         labels (np.ndarray): Cluster labels for each color.
@@ -16,13 +16,13 @@ def plot_team_kmeans_clusters(colors_array: np.ndarray, labels: np.ndarray, cent
         output_filename (str): Filename to save the plot.
     """
     if not (colors_array.ndim == 2 and colors_array.shape[1] == 3):
-        logger.warning("Cannot plot KMeans clusters: colors_array is not 3D (RGB).")
+        logger.warning("Cannot plot KMeans clusters: colors_array_rgb is not 3D (RGB).")
         return
     try:
         fig = plt.figure(figsize=(10, 8))
         ax = fig.add_subplot(111, projection='3d')
         plot_colors = ['blue', 'red'] 
-        for i in range(len(colors_array)):
+        for i in range(len(colors_array_rgb)):
             ax.scatter(colors_array[i, 0], colors_array[i, 1], colors_array[i, 2], 
                        color=plot_colors[labels[i]], marker='o', alpha=0.6)
         ax.scatter(centers[:, 0], centers[:, 1], centers[:, 2],

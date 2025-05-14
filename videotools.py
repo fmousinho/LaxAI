@@ -103,12 +103,12 @@ class VideoToools:
 
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0) # Ensure we start from the beginning
         while True:
-            ret, frame = self.cap.read()     # Read frame in BGR format
+            ret, frame_bgr = self.cap.read()     # Read frame in BGR format
             if not ret:
                 logger.info("Reached end of video or error reading frame.")
                 break # Exit the loop if no frame is returned
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            yield frame
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB) # Converts to RGB
+            yield frame_rgb
 
     def get_frame_by_index(self, frame_index: int) -> Optional[np.ndarray]:
         """
@@ -129,13 +129,13 @@ class VideoToools:
             return None
 
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-        ret, frame_bgr = self.cap.read() # Read frame in BGR
+        ret, frame_bgr = self.cap.read() # Read frame in BGR format
         if not ret:
             logger.error(f"Failed to read frame at index {frame_index}.")
             return None
         return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB) # Convert to RGB
 
-    def draw_detections(self, frame: np.ndarray, detections: list) -> np.ndarray:
+    def draw_detections(self, frame_bgr: np.ndarray, detections: list) -> np.ndarray:
         """
         Draws bounding boxes and labels on the frame for detected objects.
 
@@ -158,10 +158,10 @@ class VideoToools:
             # bbox_coords is [x1, y1, w, h]
             x1, y1, w, h = map(int, bbox_coords)
             # Calculate bottom-right coordinates for cv2.rectangle
-            x2, y2 = x1 + w, y1 + h
+            x2, y2 = x1 + w, y1 + h # These are coordinates, not image data
             label = f"Class {class_id} ({confidence:.2f})"
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2) # Increased font size slightly for consistency
+            cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), (0, 255, 0), 2) # Draw green rectangle (BGR)
+            cv2.putText(frame_bgr, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2) # Draw green text (BGR)
         return frame
 
     def draw_tracks(self, frame: np.ndarray, tracks: list,
@@ -177,7 +177,7 @@ class VideoToools:
                             and the track_id, and returns a team ID.
 
         Returns:
-            The modified frame with drawn track information.
+            The modified frame (RGB) with drawn track information.
         """
 
         for track in tracks:
@@ -198,16 +198,16 @@ class VideoToools:
                                                       y1=float(original_ltwh[1]),
                                                       w=float(original_ltwh[2]),
                                                       h=float(original_ltwh[3]))
-                team_id = team_id_getter(original_detection_bbox, frame, track_id) # Pass track_id
+                team_id = team_id_getter(original_detection_bbox, frame, track_id) # Pass track_id, getter expects RGB frame
 
             # Determine color based on team_id
             if team_id == 0:
                 track_color = (0, 0, 255)   # Red for team 0 (RGB)
             elif team_id == 1:
-                track_color = (0, 255, 255) # Yellow for team 1 (RGB) - Changed from blue for better contrast if needed
+                track_color = (255, 0, 0) # Blue for team 1 (RGB)
             else: # Default color if no team or team_id_getter not provided
                 track_color = (0, 255, 0)   # Green for unknown/unassigned (RGB)
-
+            
             frame = cv2.rectangle(frame, (x1, y1), (x2, y2), track_color, 2)
             label = f"ID: {track_id}"
             if team_id is not None:
@@ -215,22 +215,22 @@ class VideoToools:
             cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, track_color, 2)
         return frame
 
-    @staticmethod
-    def image_to_base64_str(image_np: Optional[np.ndarray]) -> Optional[str]:
+    @staticmethod # This method is not used in the provided code, but refactoring it for consistency
+    def image_to_base64_str(image_np_in: Optional[np.ndarray]) -> Optional[str]:
         """Converts a NumPy image array (RGB) to a base64 PNG string for HTML."""
-        if image_np is None or image_np.size == 0:
+        if image_np_in is None or image_np_in.size == 0:
             logger.debug("Cannot convert None or empty image to base64.")
             return None
         try:
             # Ensure image is 3-channel RGB before attempting to convert to BGR for imencode
             if image_np.ndim == 2: # Grayscale
                 image_rgb = cv2.cvtColor(image_np, cv2.COLOR_GRAY2RGB)
-            elif image_np.shape[2] == 4: # RGBA
+            elif image_np.shape[2] == 4: # RGBA # type: ignore[union-attr]
                 image_rgb = cv2.cvtColor(image_np, cv2.COLOR_RGBA2RGB)
-            elif image_np.shape[2] == 3: # RGB
-                image_rgb = image_np
+            elif image_np.shape[2] == 3: # RGB # type: ignore[union-attr]
+                image_rgb = image_np_in
             else:
-                logger.warning(f"Unsupported image format for base64 encoding: channels={image_np.shape[2] if image_np.ndim == 3 else 'N/A'}")
+                logger.warning(f"Unsupported image format for base64 encoding: channels={image_np_in.shape[2] if image_np_in.ndim == 3 else 'N/A'}")
                 return None
 
             # cv2.imencode expects BGR format

@@ -92,7 +92,7 @@ def _initialize_team_identifier(
         if len(sampled_frames_data) >= num_frames_to_sample:
             logger.info(f"Collected enough ({len(sampled_frames_data)}) valid samples for team identification before processing all targets.")
             break
-
+        
         frame = tools.get_frame_by_index(frame_idx_to_process)
         if frame is None:
             logger.warning(f"Could not retrieve frame at index {frame_idx_to_process} for team ID sampling. Skipping.")
@@ -139,32 +139,32 @@ def run_application(store: Store, writer: Optional[SummaryWriter] = None,
         # --- Pipeline to detect and track players, draw frame ---
      
         main_processing_generator = tools.get_next_frame()
-        max_frames = 100 # Process N frames for testing
+        max_frames = 100 # Process N frames for testing # TODO: Make this configurable
         frame_idx = 0
 
         logger.info("Starting main video processing loop...")
-        for frame in main_processing_generator: # frame is RGB
+        for frame_rgb in main_processing_generator: # frame is RGB
             if frame_idx >= max_frames:
                 logger.info(f"Reached max_frames limit of {max_frames}.")
                 break
 
             # All model operations use the RGB frame
-            detections = video_model.generate_detections(frame)
-            tracks = video_model.generate_tracks(frame, detections) # Pass RGB frame
+            detections = video_model.generate_detections(frame_rgb)
+            tracks = video_model.generate_tracks(frame_rgb, detections) # Pass RGB frame
             
             # Update the VideoModel's internal track_to_team_map
             # The `team_id_getter` here is the one from _initialize_team_identifier (raw classifications)
-            video_model.update_track_team_assignments(tracks, frame, team_id_getter)
+            video_model.update_track_team_assignments(tracks, frame_rgb, team_id_getter, current_frame_index=frame_idx)
 
             # draw_tracks takes RGB frame, and the team_id_getter. It returns an RGB frame.
             # Pass the new method from VideoModel that uses the smoothed map
-            output_frame_rgb = tools.draw_tracks(frame, tracks, team_id_getter=video_model.get_smoothed_team_id_from_map)
+            output_frame_rgb = tools.draw_tracks(frame_rgb, tracks, team_id_getter=video_model.get_smoothed_team_id_from_map)
 
             # Convert the final drawn frame to BGR for OpenCV VideoWriter
             output_frame_bgr = cv2.cvtColor(output_frame_rgb, cv2.COLOR_RGB2BGR)
             tools.out.write(output_frame_bgr)
             
-            logger.info(f"Processed frame {frame_idx + 1}/{tools.in_n_frames or 'unknown'} ({frame.shape[1]}x{frame.shape[0]})")
+            logger.info(f"Processed frame {frame_idx + 1}/{tools.in_n_frames or 'unknown'} ({frame_rgb.shape[1]}x{frame_rgb.shape[0]})")
             frame_idx += 1
 
         logger.info(f"Video processing completed.")
