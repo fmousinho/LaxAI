@@ -3,13 +3,15 @@ import numpy as np
 import cv2
 from typing import Callable, Optional
 from .videotools import BoundingBox 
+import torch # Import torch for Tensor conversion
+import torchvision.utils # Import for make_grid
 from . import utils
 from torch.utils.tensorboard import SummaryWriter
 
 logger = logging.getLogger(__name__)
 
 #DEFAULTS
-FEATURE_EXTRACTOR = "dominant_color"
+FEATURE_EXTRACTOR = "crop_no_grass" # "dominant_color" or "crop_no_grass"
 CLUSTERING_ALGORITHM = "kmeans"
 GRASS_MASK = True
 CENTER_CROP = True
@@ -18,7 +20,8 @@ TOP_CROP_PERCENTAGE = 0.1 #removes head
 BOTTOM_CROP_PERCENTAGE = 0.4 #removes legs
 LEFT_CROP_PERCENTAGE = 0.1
 RIGHT_CROP_PERCENTAGE = 0.1
-
+MAX_DEBUG_TEAM_ID_SAMPLE_FRAMES_TO_LOG = 5 # Log images from at most this many sampled frames
+MAX_ROIS_PER_SAMPLED_FRAME_TO_LOG = 16     # Log at most this many ROIs per logged sampled frame
 
 # Default LAB color ranges for grass masking (OpenCV's 0-255 scaled LAB)
 # These will likely need tuning based on specific video conditions.
@@ -48,6 +51,25 @@ class TeamIdentification:
         self.lower_lab_grass = DEFAULT_LOWER_LAB_GRASS
         self.upper_lab_grass = DEFAULT_UPPER_LAB_GRASS
         
+        # Log configuration constants to TensorBoard if writer is available
+        if self.writer:
+            logger.debug("Logging TeamIdentification configuration to TensorBoard.")
+            config_tag_prefix = "TeamIdentification/Configuration"
+            self.writer.add_text(f"{config_tag_prefix}/FeatureExtractor", self.player_feature_extractor, 0)
+            self.writer.add_text(f"{config_tag_prefix}/ClusteringAlgorithm", self.clustering_algorithm, 0)
+            self.writer.add_text(f"{config_tag_prefix}/GrassMaskEnabled", str(self.grass_mask), 0)
+            self.writer.add_text(f"{config_tag_prefix}/CenterCropEnabled", str(self.center_crop), 0)
+            self.writer.add_text(f"{config_tag_prefix}/ResizeDimensions", str(RESIZE_DIMENSIONS), 0)
+            self.writer.add_text(f"{config_tag_prefix}/TopCropPercentage", str(TOP_CROP_PERCENTAGE), 0)
+            self.writer.add_text(f"{config_tag_prefix}/BottomCropPercentage", str(BOTTOM_CROP_PERCENTAGE), 0)
+            self.writer.add_text(f"{config_tag_prefix}/LeftCropPercentage", str(LEFT_CROP_PERCENTAGE), 0)
+            self.writer.add_text(f"{config_tag_prefix}/RightCropPercentage", str(RIGHT_CROP_PERCENTAGE), 0)
+            self.writer.add_text(f"{config_tag_prefix}/MaxDebugSampleFramesToLog", str(MAX_DEBUG_TEAM_ID_SAMPLE_FRAMES_TO_LOG), 0)
+            self.writer.add_text(f"{config_tag_prefix}/MaxROIsPerSampledFrameToLog", str(MAX_ROIS_PER_SAMPLED_FRAME_TO_LOG), 0)
+            # Convert numpy arrays to string for logging
+            self.writer.add_text(f"{config_tag_prefix}/DefaultLowerLABGrass", str(DEFAULT_LOWER_LAB_GRASS), 0)
+            self.writer.add_text(f"{config_tag_prefix}/DefaultUpperLABGrass", str(DEFAULT_UPPER_LAB_GRASS), 0)
+            
         if self.player_feature_extractor == "dominant_color":
             # This embedding function returns a (1, 3) or (k, 3) color vector
             self._embedding_fn = self._get_dominant_color_embedding
@@ -78,7 +100,7 @@ class TeamIdentification:
         image = self._apply_masks(roi_image)
         if image is None: return
       
-        try:
+        try: # This might be moved into _resize_image
             resized_embedding_img = cv2.resize(image, RESIZE_DIMENSIONS)
             embedding = resized_embedding_img.flatten().astype(np.float16)
         except cv2.error as e:
@@ -92,14 +114,17 @@ class TeamIdentification:
         Applies grass masking and center cropping to an image.
         Returns the processed image.
         """
-        if self.grass_mask:
-            image = self._apply_grass_mask(image)
-        if self.center_crop:
-            image = self._get_center_crop(image)
+        if self.grass_mask: # Consider merging these steps
+            image = self._apply_grass_mask(image) 
         if image is None or image.size == 0:
             logger.warning(f"Image pre-processing resulted in invalid image. Ignoring this ROI.")
             return None
-        return image
+        if self.center_crop: # Consider merging these steps
+            image = self._get_center_crop(image)
+        if image is None or image.size == 0:
+            logger.warning(f"Image pre-processing resulted in invalid image after center crop. Ignoring this ROI.")
+            return None
+        return image # Return explicitly
 
     def get_default_team_getter(self) -> Callable[[BoundingBox, np.ndarray], Optional[int]]:
         """Returns a default team getter function that always returns None."""
@@ -134,62 +159,128 @@ class TeamIdentification:
             logger.error(f"Unsupported clustering algorithm: {self.clustering_algorithm}. Defaulting team getter.")
             return self.get_default_team_getter()
 
+    def _prepare_roi_for_logging(self, roi: np.ndarray) -> Optional[np.ndarray]:
+        """
+        Applies standard pre-processing to an ROI for logging purposes.
+        Uses a copy of the ROI to avoid modifying the original.
+        """
+        # Ensure we work on a copy for logging to avoid unintended modifications
+        # to the ROI used for embedding calculation.
+        roi_copy = roi.copy()
+        
+        processed_roi = self._apply_masks(roi_copy) 
+        if processed_roi is None:
+            # _apply_masks already logs a warning if it returns None
+            return None
+        
+        resized_roi = self._resize_image(processed_roi)
+        if resized_roi is None:
+            # _resize_image already logs a warning if it returns None
+            return None
+        return resized_roi # HWC, RGB numpy array
+
+    def _log_roi_grid_for_frame(self, 
+                                rois_to_log_this_frame: list[np.ndarray], 
+                                frame_idx_in_sample: int) -> None:
+        """Logs a grid of pre-processed ROIs for a given frame to TensorBoard."""
+        if not rois_to_log_this_frame:
+            logger.debug(f"No valid ROIs provided to _log_roi_grid_for_frame for frame index {frame_idx_in_sample}.")
+            return
+
+        try:
+            # Ensure all items are valid numpy arrays for tensor conversion
+            # This check might be redundant if _prepare_roi_for_logging guarantees valid output or None
+            valid_rois_for_tensor = [r for r in rois_to_log_this_frame if isinstance(r, np.ndarray) and r.ndim == 3 and r.shape[2] == 3]
+            if not valid_rois_for_tensor:
+                logger.debug(f"No valid numpy arrays in rois_to_log_this_frame for grid creation (frame index {frame_idx_in_sample}).")
+                return
+
+            tensor_rois = torch.stack([
+                torch.from_numpy(img_np.copy()).permute(2, 0, 1).float() / 255.0
+                for img_np in valid_rois_for_tensor
+            ])
+            
+            image_grid = torchvision.utils.make_grid(tensor_rois, nrow=int(np.ceil(MAX_ROIS_PER_SAMPLED_FRAME_TO_LOG**0.5)))
+            
+            tag_name = f'TeamID_Sample_ROIs/Sampled_Frame_{frame_idx_in_sample}'
+            self.writer.add_image(tag_name, image_grid, global_step=frame_idx_in_sample) 
+            logger.debug(f"Logged image grid to TensorBoard with tag: {tag_name}, Global Step: {frame_idx_in_sample}")
+        except Exception as e:
+            logger.error(f"Error creating or logging image grid for frame index {frame_idx_in_sample}: {e}", exc_info=True)
+
+    def _finalize_embeddings(self, collected_embeddings: list) -> Optional[tuple[np.ndarray, np.ndarray]]:
+        """Converts, filters, checks variance, and normalizes collected embeddings."""
+        if len(collected_embeddings) < 2:
+            logger.warning(f"Not enough embeddings collected ({len(collected_embeddings)}) for clustering. Need at least 2.")
+            return None
+
+        embeddings_array_f32 = np.array(collected_embeddings, dtype=np.float32)
+        valid_mask = ~np.any(np.isnan(embeddings_array_f32), axis=1) & ~np.any(np.isinf(embeddings_array_f32), axis=1)
+        embeddings_array_f32_filtered = embeddings_array_f32
+        if not np.all(valid_mask):
+            logger.warning("Embeddings contain NaN/Inf values. Filtering them out.")
+            embeddings_array_f32_filtered = embeddings_array_f32[valid_mask]
+        if embeddings_array_f32_filtered.shape[0] < 2: 
+            logger.warning(f"Not enough valid (non-NaN/Inf) embeddings remaining ({embeddings_array_f32_filtered.shape[0]}) after filtering. Need at least 2. Defaulting team getter.")
+            return None
+        if embeddings_array_f32_filtered.shape[0] > 0 and np.all(np.std(embeddings_array_f32_filtered, axis=0) < 1e-5):
+            logger.warning(f"Collected embeddings have near-zero variance (std: {np.std(embeddings_array_f32_filtered, axis=0)}). Cannot perform clustering. Defaulting team getter.")
+            return None
+        normalized_embeddings_array = embeddings_array_f32_filtered / 255.0
+        return normalized_embeddings_array, embeddings_array_f32_filtered
+
     def _prepare_embeddings_for_clustering(
         self,
         sampled_frames_data: list[tuple[np.ndarray, list]]
     ) -> Optional[np.ndarray]:
         """
         Collects, preprocesses, and normalizes embeddings from sampled frames.
-
+        Also handles conditional logging of ROIs to TensorBoard if in DEBUG mode.
         Returns:
-            A NumPy array of normalized embeddings, or None if processing fails.
+            A tuple of (normalized_embeddings_array, unnormalized_filtered_embeddings_array) or None.
         """
-
         collected_embeddings = []
+        logged_sample_frames_count = 0 # For TensorBoard image logging limits
 
-        for frame, detections_in_frame in sampled_frames_data:
+        should_log_images_for_team_id = self.writer is not None and logger.isEnabledFor(logging.DEBUG)
+        if should_log_images_for_team_id:
+            logger.debug(f"Team ID image logging is active. Will log up to {MAX_DEBUG_TEAM_ID_SAMPLE_FRAMES_TO_LOG} frames with up to {MAX_ROIS_PER_SAMPLED_FRAME_TO_LOG} ROIs each.")
+
+        for frame_idx_in_sample, (frame, detections_in_frame) in enumerate(sampled_frames_data):
+            rois_to_log_this_frame = []
+            logged_rois_count_this_frame = 0
+            
             for det_coords, _, _ in detections_in_frame: # type: ignore
                 bbox = BoundingBox(*det_coords)
                 x1_roi, y1_roi, x2_roi, y2_roi = bbox.to_xyxy()
                 roi = frame[y1_roi:y2_roi, x1_roi:x2_roi]
                 if roi.size == 0: continue
-                
+
                 embedding = None
                 if self._embedding_fn:
-                    embedding = self._embedding_fn(roi) # Get embedding using the selected method
-                
+                    embedding = self._embedding_fn(roi)
                 if embedding is not None:
                     collected_embeddings.append(embedding)
 
-        if len(collected_embeddings) < 2:
-            logger.warning(f"Not enough embeddings collected ({len(collected_embeddings)}) for clustering. Need at least 2.")
-            return None
+                # --- Prepare ROI for logging (if enabled and limits not met) ---
+                if should_log_images_for_team_id and \
+                   logged_sample_frames_count < MAX_DEBUG_TEAM_ID_SAMPLE_FRAMES_TO_LOG and \
+                   logged_rois_count_this_frame < MAX_ROIS_PER_SAMPLED_FRAME_TO_LOG:
+                    
+                    prepared_roi_for_log = self._prepare_roi_for_logging(roi)
+                    if prepared_roi_for_log is not None:
+                        rois_to_log_this_frame.append(prepared_roi_for_log)
+                        logged_rois_count_this_frame += 1
+            
+            # --- Log ROI Grid for the current frame (if enabled and limits not met) ---
+            if should_log_images_for_team_id and \
+               logged_sample_frames_count < MAX_DEBUG_TEAM_ID_SAMPLE_FRAMES_TO_LOG and \
+               rois_to_log_this_frame:
+                self._log_roi_grid_for_frame(rois_to_log_this_frame, frame_idx_in_sample)
+                logged_sample_frames_count += 1 # Increment count as a grid for this frame was attempted/logged
 
-        embeddings_array_f32 = np.array(collected_embeddings, dtype=np.float32)
-
-        # Filter out NaNs or Infs from the NumPy array
-        valid_mask = ~np.any(np.isnan(embeddings_array_f32), axis=1) & ~np.any(np.isinf(embeddings_array_f32), axis=1)
-        embeddings_array_f32_filtered = embeddings_array_f32 # Start with the full array
-     
-        if not np.all(valid_mask):
-            logger.warning("KMeans: Embeddings contain NaN/Inf values. Filtering them out.")
-            embeddings_array_f32_filtered = embeddings_array_f32[valid_mask]
-
-        if embeddings_array_f32_filtered.shape[0] < 2: 
-            logger.warning(f"KMeans: Not enough valid (non-NaN/Inf) embeddings remaining ({embeddings_array_f32_filtered.shape[0]}) after filtering. Need at least 2 for KMeans. Defaulting team getter.")
-            return None
-        
-        # Check for sufficient variance
-        if embeddings_array_f32_filtered.shape[0] > 0 and np.all(np.std(embeddings_array_f32_filtered, axis=0) < 1e-5): # Safe to use .shape and np.std on NumPy array
-                logger.warning(f"KMeans: Collected embeddings have near-zero variance (std: {np.std(embeddings_array_f32_filtered, axis=0)}). Cannot perform KMeans. Defaulting team getter.")
-                return None
-
-        # Normalize embeddings to [0, 1] range (assuming original data like colors/pixels is 0-255)
-        normalized_embeddings_array = embeddings_array_f32_filtered / 255.0
-        
-        # Return the filtered and unnormalized embeddings as well, for TensorBoard visualization
-        # The helper function will now return a tuple: (normalized_embeddings, unnormalized_filtered_embeddings)
-        return normalized_embeddings_array, embeddings_array_f32_filtered
+        # --- Finalize and return embeddings ---
+        return self._finalize_embeddings(collected_embeddings)
 
     def _kmeans_clustering(
         self,
@@ -228,7 +319,7 @@ class TeamIdentification:
                     # Scale them back to 0-255 for easier interpretation if they were colors
                     self.writer.add_image("KMeans_Team_Color_Centroids",
                                           (kmeans_model.cluster_centers_ * 255.0).astype(np.uint8).reshape(1, 2, 1, 3), # Reshape to (Batch=1, Height=2, Width=1, Channels=3) for NHWC
-                                          dataformats='NHWC') # N=1, H=num_teams, W=1 (or num_features if not color)
+                                          dataformats='NHWC', global_step=0) # N=1, H=num_teams, W=1 (or num_features if not color)
 
 
             def get_team_id_for_bbox_kmeans(bbox_to_check: BoundingBox, current_frame_for_roi: np.ndarray) -> Optional[int]:

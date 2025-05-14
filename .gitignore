@@ -6,7 +6,7 @@ results*
 .git/
 credentials.json
 debug*/
-.runs/
+runs/
 
 # Python cache files
 __pycache__/

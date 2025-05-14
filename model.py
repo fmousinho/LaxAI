@@ -209,9 +209,6 @@ class VideoModel:
                         track_data['certainty'] = 0.0 
                     track_data['team_id'] = track_data['confirmed_team_id'] # Ensure display team is the confirmed one
 
-            if old_confirmed_team != track_data['confirmed_team_id'] or \
-               abs(track_data['certainty'] - (current_history_certainty if track_data['confirmed_team_id'] == new_assigned_team_id else track_data['certainty'])) > 0.01 :
-                logger.debug(f"Track {track_id}: Display Team: {track_data['team_id']} (Confirmed: {track_data['confirmed_team_id']}), Certainty: {track_data['certainty']:.2f} (History suggests: {new_assigned_team_id} with {current_history_certainty:.2f})")
             if self.writer and track_data['team_id'] is not None: # Log certainty for assigned teams
                 self.writer.add_scalar(f'TeamCertainty/Track_{track_id}', track_data['certainty'], global_step=logger.getEffectiveLevel()) # Use a global step, e.g., frame number
                 # Note: global_step should ideally be the current frame index from the video processing loop.
