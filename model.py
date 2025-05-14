@@ -8,6 +8,7 @@ from deep_sort_realtime.deepsort_tracker import DeepSort
 from typing import Callable, Optional
 from .team_identification import TeamIdentification
 import collections # For deque
+from torch.utils.tensorboard import SummaryWriter
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,8 @@ class VideoModel:
     """Handles the loading and potentially inference of the video processing model."""
 
     def __init__(self, model_name: str,
-                 drive_path: str, device: torch.device = None):
+                 drive_path: str, device: torch.device = None,
+                 writer: Optional[SummaryWriter] = None):
         """
         Initializes the VideoModel.
 
@@ -27,8 +29,9 @@ class VideoModel:
         self.model_name = model_name
         self.drive_path = drive_path
         self.device = device
+        self.writer = writer
         self.tracker = DeepSort(max_age=30)  # Initialize the tracker with a maximum age of 30 frames
-        self.team_identifier = TeamIdentification() # Instantiate TeamIdentification
+        self.team_identifier = TeamIdentification(writer=self.writer) # Instantiate TeamIdentification
         self.track_to_team_map = {} # For smoothed team assignments
         self.N_HISTORY_FRAMES = 20  # History window for smoothing
         self.MIN_HISTORY_FOR_CONFIRMATION = 10 # Min observations before a team can be "confirmed"
@@ -209,6 +212,9 @@ class VideoModel:
             if old_confirmed_team != track_data['confirmed_team_id'] or \
                abs(track_data['certainty'] - (current_history_certainty if track_data['confirmed_team_id'] == new_assigned_team_id else track_data['certainty'])) > 0.01 :
                 logger.debug(f"Track {track_id}: Display Team: {track_data['team_id']} (Confirmed: {track_data['confirmed_team_id']}), Certainty: {track_data['certainty']:.2f} (History suggests: {new_assigned_team_id} with {current_history_certainty:.2f})")
+            if self.writer and track_data['team_id'] is not None: # Log certainty for assigned teams
+                self.writer.add_scalar(f'TeamCertainty/Track_{track_id}', track_data['certainty'], global_step=logger.getEffectiveLevel()) # Use a global step, e.g., frame number
+                # Note: global_step should ideally be the current frame index from the video processing loop.
 
     def get_smoothed_team_id_from_map(self, bbox: BoundingBox, current_frame: np.ndarray, track_id_for_lookup: str) -> Optional[int]:
         if track_id_for_lookup in self.track_to_team_map:

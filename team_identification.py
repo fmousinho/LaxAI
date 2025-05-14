@@ -4,6 +4,7 @@ import cv2
 from typing import Callable, Optional
 from .videotools import BoundingBox 
 from . import utils
+from torch.utils.tensorboard import SummaryWriter
 
 logger = logging.getLogger(__name__)
 
@@ -31,15 +32,18 @@ class TeamIdentification:
                  player_feature_extractor: str = FEATURE_EXTRACTOR,
                  clustering_algorithm: str = CLUSTERING_ALGORITHM,
                  grass_mask: bool = GRASS_MASK,
-                 center_crop: bool = CENTER_CROP):
+                 center_crop: bool = CENTER_CROP,
+                 writer: Optional[SummaryWriter] = None):
         """Initializes the TeamIdentification class."""
         self.player_feature_extractor = player_feature_extractor
         self.clustering_algorithm = clustering_algorithm
         self.grass_mask = grass_mask
         self.center_crop = center_crop
-        self._embedding_fn = None
+        self.writer = writer
 
         logger.info(f"Initializing TeamIdentification with feature extractor: {self.player_feature_extractor}")
+
+        self.writer = writer
 
         self.lower_lab_grass = DEFAULT_LOWER_LAB_GRASS
         self.upper_lab_grass = DEFAULT_UPPER_LAB_GRASS
@@ -93,7 +97,7 @@ class TeamIdentification:
         if self.center_crop:
             image = self._get_center_crop(image)
         if image is None or image.size == 0:
-            logger.warning(f"Image pre-processing resulted in invalid image (orig_shape={roi_image.shape}, after_mask_shape={image.shape}). Ignoring this ROI.")
+            logger.warning(f"Image pre-processing resulted in invalid image. Ignoring this ROI.")
             return None
         return image
 
@@ -190,6 +194,23 @@ class TeamIdentification:
                 kmeans_model = utils.CustomKMeans(n_clusters=2, random_state=42).fit(normalized_embeddings_array)
             
             logger.info("KMeans clustering for team definition completed successfully.")
+
+            if self.writer:
+                # Log embeddings to TensorBoard Projector
+                # We use the unnormalized embeddings for visualization if they represent colors (0-255)
+                # And labels from KMeans
+                # Ensure embeddings_array_f32_filtered is (N, D)
+                if embeddings_array_f32_filtered.ndim == 2:
+                    self.writer.add_embedding(embeddings_array_f32_filtered, 
+                                              metadata=kmeans_model.labels_.tolist(), # type: ignore
+                                              tag='player_embeddings_kmeans')
+                if kmeans_model.cluster_centers_ is not None and kmeans_model.cluster_centers_.shape[1] == 3:
+                    # Log cluster centers if they are 3D (e.g., colors)
+                    # Scale them back to 0-255 for easier interpretation if they were colors
+                    self.writer.add_image("KMeans_Team_Color_Centroids",
+                                          (kmeans_model.cluster_centers_ * 255.0).astype(np.uint8).reshape(1, 2, 1, 3), # Reshape to (Batch=1, Height=2, Width=1, Channels=3) for NHWC
+                                          dataformats='NHWC') # N=1, H=num_teams, W=1 (or num_features if not color)
+
 
             def get_team_id_for_bbox_kmeans(bbox_to_check: BoundingBox, current_frame_for_roi: np.ndarray) -> Optional[int]:
                 if kmeans_model is None: return None # Should not happen if fit was successful

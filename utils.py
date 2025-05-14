@@ -111,7 +111,7 @@ class CustomKMeans:
             
             centroid_shift = np.sum((self.cluster_centers_ - old_centroids_for_shift_check) ** 2)
             if centroid_shift < self.tol:
-                logger.debug(f"CustomKMeans converged after {iteration+1} iterations. Centroid shift: {centroid_shift:.2e}")
+                #logger.debug(f"CustomKMeans converged after {iteration+1} iterations. Centroid shift: {centroid_shift:.2e}")
                 break
         else: # If loop completes without break (max_iter reached)
             logger.debug(f"CustomKMeans reached max_iter ({self.max_iter}) without converging. Centroid shift: {centroid_shift:.2e}")

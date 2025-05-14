@@ -9,26 +9,56 @@ import random
 from .videotools import VideoToools, BoundingBox
 from .model import VideoModel
 from typing import Callable, Optional
+from torch.utils.tensorboard import SummaryWriter
 
 #VIDEO_FILE = "FCA_Upstate_NY_003.mp4"
 VIDEO_FILE = "GRIT Dallas-Houston 2027 vs Urban Elite 2027 - 12-30pm.mp4"
 
 logger = logging.getLogger(__name__)
 
-def check_for_gpu() -> torch.device:
-    if torch.cuda.is_available():
-        device = torch.device("cuda")  # Use the first available GPU
-        logger.info("GPU is available")
+def _sample_frame_indices(num_total_frames: int, num_frames_to_sample: int) -> list[int]:
+    """
+    Selects a list of frame indices to sample from a video.
+    The sampling is biased towards the middle of the video.
+
+    Args:
+        num_total_frames: The total number of frames in the video.
+        num_frames_to_sample: The target number of frames to sample.
+
+    Returns:
+        A sorted list of unique frame indices to be sampled.
+    """
+    target_indices_to_sample = set()
+
+    if num_total_frames <= num_frames_to_sample:
+        target_indices_to_sample.update(range(num_total_frames))
+        logger.info(f"Targeting all {num_total_frames} frames for sampling as it's less than or equal to target {num_frames_to_sample}.")
     else:
-        device = torch.device("cpu")  # Use the CPU if no GPU is available
-        logger.info("GPU is not available, using CPU instead.")
-    return device
+        middle_start_idx = num_total_frames // 5
+        middle_end_idx = num_total_frames - (num_total_frames // 5)
+        middle_indices_pool = list(range(middle_start_idx, middle_end_idx))
+        if not middle_indices_pool:
+            middle_indices_pool = list(range(num_total_frames))
+
+        num_from_middle = min(len(middle_indices_pool), int(num_frames_to_sample * 0.75))
+        if middle_indices_pool and num_from_middle > 0:
+            target_indices_to_sample.update(random.sample(middle_indices_pool, num_from_middle))
+
+        num_remaining_to_sample = num_frames_to_sample - len(target_indices_to_sample)
+        if num_remaining_to_sample > 0:
+            available_for_overall_sample = [i for i in range(num_total_frames) if i not in target_indices_to_sample]
+            num_overall_additional = min(len(available_for_overall_sample), num_remaining_to_sample)
+            if available_for_overall_sample and num_overall_additional > 0:
+                target_indices_to_sample.update(random.sample(available_for_overall_sample, num_overall_additional))
+    
+    return sorted(list(target_indices_to_sample))
 
 def _initialize_team_identifier(
     video_model: VideoModel,
     tools: VideoToools, 
     num_frames_to_sample: int = 20,
-    min_detections_for_sampling_frame: int = 10 # Min detections for a frame to be considered for sampling
+    min_detections_for_sampling_frame: int = 10, # Min detections for a frame to be considered for sampling
+    writer: Optional[SummaryWriter] = None
 ) -> Callable[[BoundingBox, np.ndarray], Optional[int]]:
     """
     Samples frames from the video, generates detections, and uses them
@@ -52,38 +82,11 @@ def _initialize_team_identifier(
         logger.warning("Video appears to have no frames (total_frames is 0). Proceeding with default team getter.")
         return video_model.get_default_team_getter()
 
-    target_indices_to_sample = set()
-
-    if num_total_frames <= num_frames_to_sample:
-        target_indices_to_sample.update(range(num_total_frames))
-        logger.info(f"Targeting all {num_total_frames} frames for team identification as it's less than or equal to target {num_frames_to_sample}.")
-    else:
-        # Bias sampling towards the middle (e.g., 20% to 80% of the video)
-        middle_start_idx = num_total_frames // 5
-        middle_end_idx = num_total_frames - (num_total_frames // 5)
-
-        middle_indices_pool = list(range(middle_start_idx, middle_end_idx))
-        if not middle_indices_pool: # Fallback if middle section is too small or video too short
-            middle_indices_pool = list(range(num_total_frames))
-
-        # Sample up to 75% of target from the middle
-        num_from_middle = min(len(middle_indices_pool), int(num_frames_to_sample * 0.75))
-        if middle_indices_pool and num_from_middle > 0: # Ensure pool and count are valid
-            target_indices_to_sample.update(random.sample(middle_indices_pool, num_from_middle))
-
-        # Fill remaining spots from all frames, avoiding duplicates
-        num_remaining_to_sample = num_frames_to_sample - len(target_indices_to_sample)
-        if num_remaining_to_sample > 0:
-            available_for_overall_sample = [i for i in range(num_total_frames) if i not in target_indices_to_sample]
-            num_overall_additional = min(len(available_for_overall_sample), num_remaining_to_sample)
-            if available_for_overall_sample and num_overall_additional > 0: # Ensure pool and count are valid
-                target_indices_to_sample.update(random.sample(available_for_overall_sample, num_overall_additional))
+    # Get the sorted list of frame indices to sample
+    sorted_target_indices = _sample_frame_indices(num_total_frames, num_frames_to_sample)
+    logger.info(f"Identified {len(sorted_target_indices)} target frame indices for sampling: {sorted_target_indices}")
 
     sampled_frames_data = []
-    # Sort indices for potentially more efficient seeking, though cv2 might handle out-of-order seeks okay.
-    # It's good practice if seeking performance is sensitive to direction.
-    sorted_target_indices = sorted(list(target_indices_to_sample))
-    logger.info(f"Identified {len(sorted_target_indices)} target frame indices for sampling: {sorted_target_indices}")
 
     for frame_idx_to_process in sorted_target_indices:
         if len(sampled_frames_data) >= num_frames_to_sample:
@@ -110,13 +113,11 @@ def _initialize_team_identifier(
 
     return video_model.identifies_team(sampled_frames_data)
 
-def run_application(store: Store):
-
-    # --- Check for GPU availability ---
-    device = check_for_gpu() 
+def run_application(store: Store, writer: Optional[SummaryWriter] = None, 
+                    device: torch.device = torch.device("cpu")) -> None:
 
     # --- Model Loading ---
-    video_model = VideoModel(model_name=const.MODEL_NAME, drive_path=const.GOOGLE_DRIVE_PATH, device=device)
+    video_model = VideoModel(model_name=const.MODEL_NAME, drive_path=const.GOOGLE_DRIVE_PATH, device=device, writer=writer)
     if not video_model.load_from_drive(store):
         return
 
@@ -133,8 +134,8 @@ def run_application(store: Store):
 
     try:
         tools = VideoToools(input_video_path=temp_video_path, output_video_path="results.mp4")
-        team_id_getter = _initialize_team_identifier(video_model, tools)
-        
+        team_id_getter = _initialize_team_identifier(video_model, tools, writer=writer)
+
         # --- Pipeline to detect and track players, draw frame ---
      
         main_processing_generator = tools.get_next_frame()
