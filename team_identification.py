@@ -20,9 +20,12 @@ TOP_CROP_PERCENTAGE = 0.1 #removes head
 BOTTOM_CROP_PERCENTAGE = 0.4 #removes legs
 LEFT_CROP_PERCENTAGE = 0.1
 RIGHT_CROP_PERCENTAGE = 0.1
-MAX_DEBUG_TEAM_ID_SAMPLE_FRAMES_TO_LOG = 5 # Log images from at most this many sampled frames
+MAX_DEBUG_TEAM_ID_SAMPLE_FRAMES_TO_LOG = 10 # Log images from at most this many sampled frames
 MAX_ROIS_PER_SAMPLED_FRAME_TO_LOG = 16     # Log at most this many ROIs per logged sampled frame
 
+# Constants for learning grass color
+MIN_GRASS_PIXELS_FOR_LEARNING = 50000  # Minimum number of pixels from bottom regions to attempt learning
+GRASS_LEARNING_N_STD = 2.2           # Number of standard deviations to define the range around the mean
 # Default LAB color ranges for grass masking (OpenCV's 0-255 scaled LAB)
 # These will likely need tuning based on specific video conditions.
 # 'a' channel values below 128 are greenish.
@@ -48,8 +51,9 @@ class TeamIdentification:
 
         self.writer = writer
 
-        self.lower_lab_grass = DEFAULT_LOWER_LAB_GRASS
-        self.upper_lab_grass = DEFAULT_UPPER_LAB_GRASS
+        if grass_mask:
+            self.lower_lab_grass = DEFAULT_LOWER_LAB_GRASS
+            self.upper_lab_grass = DEFAULT_UPPER_LAB_GRASS
         
         # Log configuration constants to TensorBoard if writer is available
         if self.writer:
@@ -66,9 +70,6 @@ class TeamIdentification:
             self.writer.add_text(f"{config_tag_prefix}/RightCropPercentage", str(RIGHT_CROP_PERCENTAGE), 0)
             self.writer.add_text(f"{config_tag_prefix}/MaxDebugSampleFramesToLog", str(MAX_DEBUG_TEAM_ID_SAMPLE_FRAMES_TO_LOG), 0)
             self.writer.add_text(f"{config_tag_prefix}/MaxROIsPerSampledFrameToLog", str(MAX_ROIS_PER_SAMPLED_FRAME_TO_LOG), 0)
-            # Convert numpy arrays to string for logging
-            self.writer.add_text(f"{config_tag_prefix}/DefaultLowerLABGrass", str(DEFAULT_LOWER_LAB_GRASS), 0)
-            self.writer.add_text(f"{config_tag_prefix}/DefaultUpperLABGrass", str(DEFAULT_UPPER_LAB_GRASS), 0)
             
         if self.player_feature_extractor == "dominant_color":
             # This embedding function returns a (1, 3) or (k, 3) color vector
@@ -79,6 +80,80 @@ class TeamIdentification:
         else:
             logger.error(f"Unsupported player feature extractor: {self.player_feature_extractor}. Embedding function set to None.")
             self._embedding_fn = lambda: None
+
+    def _learn_and_set_grass_parameters(self, sampled_frames_data_rgb: list[tuple[np.ndarray, list]]):
+        """
+        Learns grass color ranges from the bottom 2/3 of sampled frames and updates
+        self.lower_lab_grass and self.upper_lab_grass.
+        Logs the final grass parameters to TensorBoard.
+        """
+        logger.info("Attempting to learn grass color parameters from sampled frames...")
+        all_l_values, all_a_values, all_b_values = [], [], []
+
+        for frame_rgb, _ in sampled_frames_data_rgb:
+            if frame_rgb is None or frame_rgb.ndim < 3 or frame_rgb.shape[2] != 3:
+                logger.debug("Skipping a frame in grass learning due to invalid format.")
+                continue
+
+            h, w = frame_rgb.shape[:2]
+            # Consider the bottom 2/3 of the frame for grass
+            bottom_region_rgb = frame_rgb[h // 3:, :, :]
+
+            if bottom_region_rgb.size == 0:
+                logger.debug("Skipping a frame in grass learning due to empty bottom region.")
+                continue
+
+            bottom_region_bgr = cv2.cvtColor(bottom_region_rgb, cv2.COLOR_RGB2BGR)
+            bottom_region_lab = cv2.cvtColor(bottom_region_bgr, cv2.COLOR_BGR2LAB)
+            
+            pixels_lab = bottom_region_lab.reshape(-1, 3)
+            all_l_values.extend(pixels_lab[:, 0])
+            all_a_values.extend(pixels_lab[:, 1])
+            all_b_values.extend(pixels_lab[:, 2])
+
+        if len(all_l_values) >= MIN_GRASS_PIXELS_FOR_LEARNING:
+            l_mean, l_std = np.mean(all_l_values), np.std(all_l_values)
+            a_mean, a_std = np.mean(all_a_values), np.std(all_a_values)
+            b_mean, b_std = np.mean(all_b_values), np.std(all_b_values)
+
+            self.lower_lab_grass = np.array([max(0, l_mean - GRASS_LEARNING_N_STD * l_std),
+                                             max(0, a_mean - GRASS_LEARNING_N_STD * a_std),
+                                             max(0, b_mean - GRASS_LEARNING_N_STD * b_std)], dtype=np.uint8)
+            self.upper_lab_grass = np.array([min(255, l_mean + GRASS_LEARNING_N_STD * l_std),
+                                             min(255, a_mean + GRASS_LEARNING_N_STD * a_std),
+                                             min(255, b_mean + GRASS_LEARNING_N_STD * b_std)], dtype=np.uint8)
+            logger.info(f"Successfully learned new grass LAB ranges. Lower: {self.lower_lab_grass}, Upper: {self.upper_lab_grass}")
+        else:
+            logger.warning(f"Not enough grass pixels ({len(all_l_values)}) found for learning. Using default LAB ranges.")
+            self.lower_lab_grass = DEFAULT_LOWER_LAB_GRASS
+            self.upper_lab_grass = DEFAULT_UPPER_LAB_GRASS
+
+        if self.writer:
+            config_tag_prefix = "Grass_Color/Configuration" # Same prefix as in __init__
+            self.writer.add_text(f"{config_tag_prefix}/FinalLowerLABGrass", str(self.lower_lab_grass), 0)
+            self.writer.add_text(f"{config_tag_prefix}/FinalUpperLABGrass", str(self.upper_lab_grass), 0)
+
+            # Log images representing the determined LAB color bounds
+            try:
+                color_patch_size = (50, 50, 3) # Height, Width, Channels
+
+                # Create image for lower LAB bound
+                lower_lab_patch = np.full(color_patch_size, self.lower_lab_grass, dtype=np.uint8)
+                lower_rgb_patch = cv2.cvtColor(lower_lab_patch, cv2.COLOR_LAB2RGB)
+                lower_rgb_tensor = torch.from_numpy(lower_rgb_patch.copy()).permute(2, 0, 1).float() / 255.0
+                self.writer.add_image("Grass_Color/LearnedGrassColor_LowerBound_RGB", lower_rgb_tensor, 0)
+
+                # Create image for upper LAB bound
+                upper_lab_patch = np.full(color_patch_size, self.upper_lab_grass, dtype=np.uint8)
+                upper_rgb_patch = cv2.cvtColor(upper_lab_patch, cv2.COLOR_LAB2RGB)
+                upper_rgb_tensor = torch.from_numpy(upper_rgb_patch.copy()).permute(2, 0, 1).float() / 255.0
+                self.writer.add_image("Grass_Color/LearnedGrassColor_UpperBound_RGB", upper_rgb_tensor, 0)
+
+                logger.info("Logged learned grass color bound images to TensorBoard.")
+
+            except Exception as e:
+                logger.error(f"Error logging learned grass color bound images to TensorBoard: {e}", exc_info=True)
+
 
     def _get_dominant_color_embedding(self, roi_image: np.ndarray) -> Optional[np.ndarray]:
         """Helper to get a single dominant color as a (3,) embedding vector."""
@@ -150,6 +225,7 @@ class TeamIdentification:
             A function that takes a BoundingBox object and the current frame as input
             and returns the team_id (0 or 1) or None.
         """
+        if self.grass_mask: self._learn_and_set_grass_parameters(sampled_frames_data)
         if not sampled_frames_data:
             logger.warning("No sampled frames data provided. Cannot define teams.")
             return self._default_team_getter
@@ -287,7 +363,9 @@ class TeamIdentification:
         sampled_frames_data: list[tuple[np.ndarray, list]]
     ) -> Callable[[BoundingBox, np.ndarray], Optional[int]]:
         """
-        Performs team identification using KMeans clustering.
+        Trains a KMeans model on the embeddings of sampled frames to identify teams
+
+        Returns a function that uses the trained KMeans model to assign team IDs
         """
         _default_team_getter = self.get_default_team_getter()
         

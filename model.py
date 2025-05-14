@@ -7,9 +7,8 @@ from .videotools import BoundingBox
 from deep_sort_realtime.deepsort_tracker import DeepSort
 from typing import Callable, Optional
 from .team_identification import TeamIdentification
-import collections # For deque
-import cv2 # For drawing on images
 from torch.utils.tensorboard import SummaryWriter
+import collections
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +33,8 @@ class VideoModel:
         self.tracker = DeepSort(max_age=30)  # Initialize the tracker with a maximum age of 30 frames
         self.team_identifier = TeamIdentification(writer=self.writer) # Instantiate TeamIdentification
         self.track_to_team_map = {} # For smoothed team assignments
-        self.N_HISTORY_FRAMES = 20  # History window for smoothing
-        self.MIN_HISTORY_FOR_CONFIRMATION = 10 # Min observations before a team can be "confirmed"
+        self.N_HISTORY_FRAMES = 40  # History window for smoothing
+        self.MIN_HISTORY_FOR_CONFIRMATION = 20 # Min observations before a team can be "confirmed"
         self.CONFIRMATION_THRESHOLD_CERTAINTY = 0.75 # Min certainty to change a confirmed team or initially confirm
 
         # Constants for logging individual track ROIs
