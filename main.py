@@ -14,6 +14,7 @@ import datetime
 # Determine the directory of the main.py script first
 # This is needed for resolving paths for .env and log_dir
 _MAIN_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_DOTENV_PATH = os.path.join(_MAIN_SCRIPT_DIR, ".env")
 
 def check_for_gpu() -> torch.device:
     """Checks if a GPU is available and returns the appropriate torch device."""
@@ -63,8 +64,6 @@ if not initialize.check_requirements():
 
 # --- Environment Variables Setup ---
 logger.info("Loading environment variables.")
-_DOTENV_PATH = os.path.join(_MAIN_SCRIPT_DIR, ".env")
-
 try:
     from dotenv import load_dotenv
     if load_dotenv(dotenv_path=_DOTENV_PATH): # Use the explicit path

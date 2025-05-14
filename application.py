@@ -11,7 +11,8 @@ from .model import VideoModel
 from typing import Callable, Optional
 from torch.utils.tensorboard import SummaryWriter
 
-#VIDEO_FILE = "FCA_Upstate_NY_003.mp4"
+#When debug mode is on, the following will be used. 
+DEBUG_N_FRAMES = 300 #  Procees the first N frames instead of whole video
 VIDEO_FILE = "GRIT Dallas-Houston 2027 vs Urban Elite 2027 - 12-30pm.mp4"
 
 logger = logging.getLogger(__name__)
@@ -139,7 +140,13 @@ def run_application(store: Store, writer: Optional[SummaryWriter] = None,
         # --- Pipeline to detect and track players, draw frame ---
      
         main_processing_generator = tools.get_next_frame()
-        max_frames = 100 # Process N frames for testing # TODO: Make this configurable
+        
+        if logger.isEnabledFor(logging.DEBUG):
+            max_frames = DEBUG_N_FRAMES
+            logger.debug(f"DEBUG mode: Processing a maximum of {max_frames} frames.")
+        else:
+            max_frames = tools.in_n_frames
+    
         frame_idx = 0
 
         logger.info("Starting main video processing loop...")
@@ -164,7 +171,7 @@ def run_application(store: Store, writer: Optional[SummaryWriter] = None,
             output_frame_bgr = cv2.cvtColor(output_frame_rgb, cv2.COLOR_RGB2BGR)
             tools.out.write(output_frame_bgr)
             
-            logger.info(f"Processed frame {frame_idx + 1}/{tools.in_n_frames or 'unknown'} ({frame_rgb.shape[1]}x{frame_rgb.shape[0]})")
+            logger.debug(f"Processed frame {frame_idx + 1}/{tools.in_n_frames or 'unknown'} ({frame_rgb.shape[1]}x{frame_rgb.shape[0]})")
             frame_idx += 1
 
         logger.info(f"Video processing completed.")
