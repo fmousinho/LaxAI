@@ -134,15 +134,16 @@ class TeamIdentification:
             logger.error(f"Unsupported clustering algorithm: {self.clustering_algorithm}. Defaulting team getter.")
             return self.get_default_team_getter()
 
-    def _kmeans_clustering(
+    def _prepare_embeddings_for_clustering(
         self,
         sampled_frames_data: list[tuple[np.ndarray, list]]
-    ) -> Callable[[BoundingBox, np.ndarray], Optional[int]]:
+    ) -> Optional[np.ndarray]:
         """
-        Performs team identification using KMeans clustering.
+        Collects, preprocesses, and normalizes embeddings from sampled frames.
+
+        Returns:
+            A NumPy array of normalized embeddings, or None if processing fails.
         """
-        
-        _default_team_getter = self.get_default_team_getter()
 
         collected_embeddings = []
 
@@ -160,11 +161,10 @@ class TeamIdentification:
                 if embedding is not None:
                     collected_embeddings.append(embedding)
 
-        if len(collected_embeddings) < 2: # KMeans needs at least n_clusters (which is 2) samples
-            logger.warning(f"KMeans: Not enough valid embeddings collected ({len(collected_embeddings)}) for clustering. Need at least 2. Defaulting team getter.")
-            return _default_team_getter
+        if len(collected_embeddings) < 2:
+            logger.warning(f"Not enough embeddings collected ({len(collected_embeddings)}) for clustering. Need at least 2.")
+            return None
 
-        # Filter out NaNs or Infs
         embeddings_array_f32 = np.array(collected_embeddings, dtype=np.float32)
 
         # Filter out NaNs or Infs from the NumPy array
@@ -173,19 +173,38 @@ class TeamIdentification:
      
         if not np.all(valid_mask):
             logger.warning("KMeans: Embeddings contain NaN/Inf values. Filtering them out.")
-            embeddings_array_f32_filtered = embeddings_array_f32[valid_mask] 
+            embeddings_array_f32_filtered = embeddings_array_f32[valid_mask]
 
         if embeddings_array_f32_filtered.shape[0] < 2: 
             logger.warning(f"KMeans: Not enough valid (non-NaN/Inf) embeddings remaining ({embeddings_array_f32_filtered.shape[0]}) after filtering. Need at least 2 for KMeans. Defaulting team getter.")
-            return _default_team_getter
+            return None
         
         # Check for sufficient variance
         if embeddings_array_f32_filtered.shape[0] > 0 and np.all(np.std(embeddings_array_f32_filtered, axis=0) < 1e-5): # Safe to use .shape and np.std on NumPy array
                 logger.warning(f"KMeans: Collected embeddings have near-zero variance (std: {np.std(embeddings_array_f32_filtered, axis=0)}). Cannot perform KMeans. Defaulting team getter.")
-                return _default_team_getter
+                return None
 
         # Normalize embeddings to [0, 1] range (assuming original data like colors/pixels is 0-255)
         normalized_embeddings_array = embeddings_array_f32_filtered / 255.0
+        
+        # Return the filtered and unnormalized embeddings as well, for TensorBoard visualization
+        # The helper function will now return a tuple: (normalized_embeddings, unnormalized_filtered_embeddings)
+        return normalized_embeddings_array, embeddings_array_f32_filtered
+
+    def _kmeans_clustering(
+        self,
+        sampled_frames_data: list[tuple[np.ndarray, list]]
+    ) -> Callable[[BoundingBox, np.ndarray], Optional[int]]:
+        """
+        Performs team identification using KMeans clustering.
+        """
+        _default_team_getter = self.get_default_team_getter()
+        
+        processed_data = self._prepare_embeddings_for_clustering(sampled_frames_data)
+        if processed_data is None:
+            return _default_team_getter
+        
+        normalized_embeddings_array, embeddings_array_f32_filtered = processed_data
         kmeans_model = None
 
         try:
@@ -197,12 +216,12 @@ class TeamIdentification:
 
             if self.writer:
                 # Log embeddings to TensorBoard Projector
-                # We use the unnormalized embeddings for visualization if they represent colors (0-255)
+                # We use the unnormalized (but filtered) embeddings for visualization
                 # And labels from KMeans
                 # Ensure embeddings_array_f32_filtered is (N, D)
                 if embeddings_array_f32_filtered.ndim == 2:
                     self.writer.add_embedding(embeddings_array_f32_filtered, 
-                                              metadata=kmeans_model.labels_.tolist(), # type: ignore
+                                              metadata=kmeans_model.labels_.tolist(),
                                               tag='player_embeddings_kmeans')
                 if kmeans_model.cluster_centers_ is not None and kmeans_model.cluster_centers_.shape[1] == 3:
                     # Log cluster centers if they are 3D (e.g., colors)
