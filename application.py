@@ -78,7 +78,7 @@ def _initialize_team_identifier(
     """
     logger.info(f"Attempting to define teams by sampling up to {num_frames_to_sample} frames...")
    
-    num_total_frames = tools.in_n_frames
+    num_total_frames = tools.in_n_frames or 0
     if num_total_frames == 0:
         logger.warning("Video appears to have no frames (total_frames is 0). Proceeding with default team getter.")
         return video_model.get_default_team_getter()
@@ -134,9 +134,12 @@ def run_application(store: Store, writer: Optional[SummaryWriter] = None,
 
     try:
         tools = VideoToools(input_video_path=temp_video_path, output_video_path="results.mp4")
+        if tools.out is None:
+            raise ValueError("Video writer (tools.out) is not initialized. Please check the VideoToools setup.")
         
         # Now that tools is initialized, create VideoModel and then get the team_id_getter
-        video_model = VideoModel(device=device, writer=writer, store=store, tools=tools)
+        valid_writer = writer if writer is not None else SummaryWriter()
+        video_model = VideoModel(device=device, writer=valid_writer, store=store, tools=tools)
         team_id_getter = _initialize_team_identifier(video_model, tools, writer=writer)
 
         # --- Pipeline to detect and track players, draw frame ---
@@ -153,7 +156,7 @@ def run_application(store: Store, writer: Optional[SummaryWriter] = None,
 
         logger.info("Starting main video processing loop...")
         for frame_rgb in main_processing_generator: # frame is RGB
-            if frame_idx >= max_frames:
+            if max_frames is not None and frame_idx >= max_frames:
                 logger.info(f"Reached max_frames limit of {max_frames}.")
                 break
 
