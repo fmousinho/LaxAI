@@ -161,29 +161,24 @@ class VideoToools:
             x2, y2 = x1 + w, y1 + h # These are coordinates, not image data
             
             # Define the two lines of text
-            label_line1 = f"Cls {class_id}"
-            label_line2 = f"{confidence:.2f}"
+            # label_line1 = f"Cls {class_id}" # Removed first line
+            label_line2 = f"{confidence*100:.0f}%" # Format as percentage
             
             font_face = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 0.4 
             font_thickness = 1
             text_color_bgr = (0, 255, 0) # Green
-
             cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), (0, 255, 0), 1)
             
-            # Get text size for the first line to position the second line
-            (text_width_line1, text_height_line1), baseline_line1 = cv2.getTextSize(label_line1, font_face, font_scale, font_thickness)
+            # Get text size for the (now single) line to position it
+            (text_width_line2, text_height_line2), baseline_line2 = cv2.getTextSize(label_line2, font_face, font_scale, font_thickness)
             
-            # Position for the first line (above the box)
-            text_y_line1 = y1 - 5 - text_height_line1 - baseline_line1 # Move up by its own height + baseline + a small gap
-            if text_y_line1 < text_height_line1 : # Ensure it's not drawn off the top of the image
-                text_y_line1 = y1 + text_height_line1 + 5 # If too high, draw inside and below top of box
-
-            cv2.putText(frame_bgr, label_line1, (x1, text_y_line1), font_face, font_scale, text_color_bgr, font_thickness)
+            # Position for the single line (above the box)
+            text_y_pos = y1 - 5 # Position 5 pixels above the top of the box
+            if text_y_pos < text_height_line2 : # Ensure it's not drawn off the top of the image
+                text_y_pos = y1 + text_height_line2 + 5 # If too high, draw inside and below top of box
             
-            # Position for the second line (below the first line)
-            text_y_line2 = text_y_line1 + text_height_line1 + baseline_line1 + 2 # Add a small gap (e.g., 2 pixels)
-            cv2.putText(frame_bgr, label_line2, (x1, text_y_line2), font_face, font_scale, text_color_bgr, font_thickness)
+            cv2.putText(frame_bgr, label_line2, (x1, text_y_pos), font_face, font_scale, text_color_bgr, font_thickness)
             
         return frame_bgr
 
