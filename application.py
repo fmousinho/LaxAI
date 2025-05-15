@@ -12,7 +12,7 @@ from typing import Callable, Optional
 from torch.utils.tensorboard import SummaryWriter
 
 #When debug mode is on, the following will be used. 
-DEBUG_N_FRAMES = 300 #  Procees the first N frames instead of whole video
+DEBUG_N_FRAMES = 200 #  Procees the first N frames instead of whole video
 VIDEO_FILE = "GRIT Dallas-Houston 2027 vs Urban Elite 2027 - 12-30pm.mp4"
 
 logger = logging.getLogger(__name__)
@@ -57,8 +57,8 @@ def _sample_frame_indices(num_total_frames: int, num_frames_to_sample: int) -> l
 def _initialize_team_identifier(
     video_model: VideoModel,
     tools: VideoToools, 
-    num_frames_to_sample: int = 20,
-    min_detections_for_sampling_frame: int = 10, # Min detections for a frame to be considered for sampling
+    num_frames_to_sample: int = const.N_FRAMES_TO_SAMPLE,
+    min_detections_for_sampling_frame: int = const.MIN_DETECTIONS_FOR_SAMPLING_FRAME, 
     writer: Optional[SummaryWriter] = None
 ) -> Callable[[BoundingBox, np.ndarray], Optional[int]]:
     """
@@ -85,7 +85,7 @@ def _initialize_team_identifier(
 
     # Get the sorted list of frame indices to sample
     sorted_target_indices = _sample_frame_indices(num_total_frames, num_frames_to_sample)
-    logger.info(f"Identified {len(sorted_target_indices)} target frame indices for sampling: {sorted_target_indices}")
+    logger.info(f"Identified {len(sorted_target_indices)} target frame indices for sampling")
 
     sampled_frames_data = []
 
@@ -99,7 +99,7 @@ def _initialize_team_identifier(
             logger.warning(f"Could not retrieve frame at index {frame_idx_to_process} for team ID sampling. Skipping.")
             continue
        
-        detections = video_model.generate_detections(frame) 
+        detections = video_model.generate_detections(frame, frame_idx=frame_idx_to_process) 
         if len(detections) >= min_detections_for_sampling_frame:
             sampled_frames_data.append((frame, detections))
             logger.debug(f"Collected frame {frame_idx_to_process} (had {len(detections)} detections) for team ID. {len(sampled_frames_data)} collected.")
@@ -118,23 +118,25 @@ def run_application(store: Store, writer: Optional[SummaryWriter] = None,
                     device: torch.device = torch.device("cpu")) -> None:
 
     # --- Model Loading ---
-    video_model = VideoModel(model_name=const.MODEL_NAME, drive_path=const.GOOGLE_DRIVE_PATH, device=device, writer=writer)
-    if not video_model.load_from_drive(store):
-        return
+    # tools will be initialized later, so pass None for now if VideoModel needs it at init
+    # Or, defer VideoModel instantiation until after tools is created.
+    # For now, assuming VideoModel can handle tools=None initially or it's passed later.
 
-    # --- Download video to be processed ---
-    logger.info(f"Downloading video file: {VIDEO_FILE}")
     temp_video_path = store.download_file_to_temp(VIDEO_FILE, const.GOOGLE_DRIVE_PATH, suffix=".mp4")
     if not temp_video_path:
         return
 
     tools = None
-    team_id_getter = video_model.get_default_team_getter() 
+    video_model = None # Initialize to None or handle its creation before use
+    team_id_getter = None # Will be set properly after video_model is initialized
 
     #--- Main Logic ---
 
     try:
         tools = VideoToools(input_video_path=temp_video_path, output_video_path="results.mp4")
+        
+        # Now that tools is initialized, create VideoModel and then get the team_id_getter
+        video_model = VideoModel(device=device, writer=writer, store=store, tools=tools)
         team_id_getter = _initialize_team_identifier(video_model, tools, writer=writer)
 
         # --- Pipeline to detect and track players, draw frame ---
@@ -156,7 +158,7 @@ def run_application(store: Store, writer: Optional[SummaryWriter] = None,
                 break
 
             # All model operations use the RGB frame
-            detections = video_model.generate_detections(frame_rgb)
+            detections = video_model.generate_detections(frame_rgb, frame_idx=frame_idx)
             tracks = video_model.generate_tracks(frame_rgb, detections) # Pass RGB frame
             
             # Update the VideoModel's internal track_to_team_map

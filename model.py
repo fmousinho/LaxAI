@@ -3,114 +3,89 @@ import torch
 from . import constants as const
 import numpy as np
 from .store_driver import Store
-from .videotools import BoundingBox
+from .detection import DetectionModel # Import the new DetectionModel
+from .videotools import BoundingBox, VideoToools # Import VideoToools
 from deep_sort_realtime.deepsort_tracker import DeepSort
 from typing import Callable, Optional
 from .team_identification import TeamIdentification
 from torch.utils.tensorboard import SummaryWriter
 import collections
+import cv2
+
+# DeepSort parameters
+MAX_IOU_DISTANCE = 0.7
+DEEPSORT_MAX_AGE = 90       # Max frames to keep a track without detection
+DEEPSORT_N_INIT = 5         # Min consecutive detections to initialize a track
+DEEPSORT_MAX_COSINE_DISTANCE = 0.3 # Max cosine distance for appearance matching
 
 logger = logging.getLogger(__name__)
 
 class VideoModel:
     """Handles the loading and potentially inference of the video processing model."""
 
-    def __init__(self, model_name: str,
-                 drive_path: str, device: torch.device = None,
-                 writer: Optional[SummaryWriter] = None):
+    def __init__(self, 
+                 model_name: Optional[str] = None,
+                 drive_path: Optional[str] = None,
+                 writer: SummaryWriter = None, 
+                 store: Optional[Store] = None, # Add store argument
+                 tools: Optional[VideoToools] = None, # Add tools argument
+                 device: torch.device = None,
+                 ):
         """
-        Initializes the VideoModel.
+        Initializes the VideoModel, including the detection and tracking components.
 
         Args:
             model_name: The name of the model file on Google Drive. Defaults to const.MODEL_NAME.
             drive_path: The path within Google Drive where the model file resides. Defaults to const.GOOGLE_DRIVE_PATH.
+            writer: An optional TensorBoard SummaryWriter instance for logging.
+            store: An initialized Store object for Google Drive access, passed to DetectionModel.
+            tools: An initialized VideoToools instance, passed to DetectionModel for drawing.
+            device: The torch.device (cpu or cuda) to load the model onto. Defaults to CPU if None.
         """
         self.model = None  # Model will be loaded later
-        self.model_name = model_name
-        self.drive_path = drive_path
         self.device = device
         self.writer = writer
-        self.tracker = DeepSort(max_age=30)  # Initialize the tracker with a maximum age of 30 frames
+        self.tracker = DeepSort(
+            max_age=DEEPSORT_MAX_AGE,
+            n_init=DEEPSORT_N_INIT,
+            max_iou_distance=MAX_IOU_DISTANCE,
+            max_cosine_distance=DEEPSORT_MAX_COSINE_DISTANCE 
+        )
+        self.detection_model = DetectionModel(
+            model_name=model_name, # Pass through, DetectionModel will use its defaults if None
+            drive_path=drive_path, # Pass through, DetectionModel will use its defaults if None
+            device=device,
+            store=store, # Pass the store object
+            writer=writer, # Pass the writer
+            tools=tools)   # Pass the tools instance
         self.team_identifier = TeamIdentification(writer=self.writer) # Instantiate TeamIdentification
         self.track_to_team_map = {} # For smoothed team assignments
-        self.N_HISTORY_FRAMES = 40  # History window for smoothing
-        self.MIN_HISTORY_FOR_CONFIRMATION = 20 # Min observations before a team can be "confirmed"
-        self.CONFIRMATION_THRESHOLD_CERTAINTY = 0.75 # Min certainty to change a confirmed team or initially confirm
+        self.motion_compensator = CameraMotionCompensator()
+        self.prev_frame_gray_for_ecc = None # For ECC motion compensation
+        self.N_HISTORY_FRAMES = 1  # History window for smoothing
+        self.MIN_HISTORY_FOR_CONFIRMATION = 1 # Min observations before a team can be "confirmed"
+        self.CONFIRMATION_THRESHOLD_CERTAINTY = 0.0 # Min certainty to change a confirmed team or initially confirm
 
         # Constants for logging individual track ROIs
         self.LOG_TRACK_IMAGE_FRAME_INTERVAL = 10  # Log track ROIs every Nth call to update_track_team_assignments
-        self.MAX_TRACK_ROIS_PER_LOGGED_FRAME = 3    # Max track ROIs to log from such a frame
+        self.MAX_TRACK_ROIS_PER_LOGGED_FRAME = 10    # Max track ROIs to log from such a frame
         self._track_rois_logged_this_call = 0     # Internal counter
-
-    def load_from_drive(self, store: Store) -> bool:
-        """
-        Downloads the model file from Google Drive and loads it onto the specified device.
-
-        Args:
-            store: An initialized Store object for Google Drive access.
-            device: The torch.device (cpu or cuda) to load the model onto.
-
-        Returns:
-            True if the model was loaded successfully, False otherwise.
-        """
-        logger.info(f"Attempting to download model '{self.model_name}' from Google Drive path '{self.drive_path}'...") # type: ignore[attr-defined]
-        model_buffer = store.download_file_by_name(self.model_name, self.drive_path) # type: ignore[attr-defined]
-
-        if model_buffer: # type: ignore[truthy-function]
-            logger.info(f"Model file '{self.model_name}' downloaded successfully. Loading into PyTorch...")
-            try:
-                # Ensure custom classes needed for unpickling are added
-                torch.serialization.add_safe_globals([const.MODEL_NAME]) # type: ignore[attr-defined]
-                self.model = torch.load(model_buffer, map_location=self.device, weights_only=False)
-                if self.writer: # Log new constants
-                    config_tag_prefix = "VideoModel/Configuration" # Could be merged with TeamID if desired
-                    self.writer.add_text(f"{config_tag_prefix}/TrackImageLogInterval", str(self.LOG_TRACK_IMAGE_FRAME_INTERVAL), 0)
-                    self.writer.add_text(f"{config_tag_prefix}/MaxTrackROIsPerLoggedFrame", str(self.MAX_TRACK_ROIS_PER_LOGGED_FRAME), 0)
-                    self.writer.add_text(f"{config_tag_prefix}/TrackHistoryFrames", str(self.N_HISTORY_FRAMES), 0)
-                    self.writer.add_text(f"{config_tag_prefix}/TrackMinHistoryForConfirmation", str(self.MIN_HISTORY_FOR_CONFIRMATION), 0)
-                    self.writer.add_text(f"{config_tag_prefix}/TrackConfirmationCertainty", str(self.CONFIRMATION_THRESHOLD_CERTAINTY), 0)
-                logger.info(f"Model loaded successfully to {self.device}")
-                return True
-            except Exception as e:
-                logger.error(f"Error loading model from downloaded buffer: {e}", exc_info=True)
-                self.model = None # Ensure model is None if loading fails
-                return False
-        else:
-            logger.error(f"Failed to download model '{self.model_name}' from Google Drive. Cannot proceed.")
-            self.model = None
-            return False
-        
-    def generate_detections(self, frame_in: np.ndarray, threshold: float = 0.5) -> list:
-        """
-        Runs inference on a single frame using the loaded model.
-
-        Args:
-            frame: The input video frame as a numpy array.
-            threshold: Confidence threshold for detections.
-
-        Returns:
-            A list of detected objects with their bounding boxes and scores.  
-            [(bbox list, confidence, class)] DeepSort expects
-            bbox in xywh format
-        """
-        if self.model is None:
-            logger.error("Model is not loaded. Cannot perform detection.")
-            return []
-        detections = self.model.predict(frame_in, device=self.device,threshold=threshold)
-
-        detections_list = []
-        for i in range(len(detections.xyxy)):
-            # Only processes class_id 3 (player)
-            if detections.class_id[i] !=3: continue  
-            bbox = BoundingBox.from_xyxy(*detections.xyxy[i])
-            detections_list.append(
-                ([*bbox],
-                detections.confidence[i],
-                detections.class_id[i]))
-     
-        return detections_list
     
-    def generate_tracks(self, frame_in: np.ndarray, detections: list) -> list:
+    def generate_detections(self, frame_in_rgb: np.ndarray, frame_idx: int) -> list:
+        """
+        Generates detections for the input video frame using the detection model.
+
+        Args:
+            frame_in_rgb: The input video frame as a numpy array (RGB).
+            frame_idx: The current frame index.
+        
+        Returns:
+            A list of detected objects with their bounding boxes and scores.
+        """
+        detections = self.detection_model.generate_detections(frame_in_rgb, frame_idx=frame_idx)
+        return detections
+
+    def generate_tracks(self, frame_in_rgb: np.ndarray, detections: list) -> list:
         """
         Generates tracks for the detected objects using DeepSort.
 
@@ -122,9 +97,192 @@ class VideoModel:
             A list of tracked objects with their IDs and bounding boxes.
         """
         
-        tracks = self.tracker.update_tracks(detections, frame=frame_in)
+        #tracks = self.tracker.update_tracks(detections, frame=frame_in)
+        tracks = self.motion_compensate(frame_in_rgb, detections)
         return tracks
     
+    def motion_compensate(self, frame_in_rgb: np.ndarray, detections: list) -> list:
+        """
+        Generates tracks for the detected objects using DeepSort, with camera motion compensation.
+        """
+        current_frame_gray = cv2.cvtColor(frame_in_rgb, cv2.COLOR_RGB2GRAY)
+        transform_matrix = None # Will hold the transform from prev_frame to current_frame
+
+        if self.prev_frame_gray_for_ecc is not None:
+            # Estimate transform from self.prev_frame_gray_for_ecc to current_frame_gray
+            # Using a simplified ORB + Homography example here for brevity, ECC is more robust
+            # For ECC, you'd call: self.motion_compensator.estimate_transform_ecc(current_frame_gray)
+            # This is a placeholder for a robust transform estimation
+            try:
+                # --- Example using ORB (replace with ECC or your preferred method) ---
+                orb = cv2.ORB_create(nfeatures=500) # Limit features for speed
+                kp1, des1 = orb.detectAndCompute(self.prev_frame_gray_for_ecc, None)
+                kp2, des2 = orb.detectAndCompute(current_frame_gray, None)
+
+                if des1 is not None and des2 is not None and len(des1) > 1 and len(des2) > 1:
+                    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+                    matches = bf.match(des1, des2)
+                    matches = sorted(matches, key=lambda x: x.distance)
+                    
+                    if len(matches) > 10: # Minimum matches for homography
+                        src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+                        dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+                        transform_matrix, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+                # --- End ORB Example ---
+            except Exception as e:
+                logger.warning(f"Motion estimation failed: {e}")
+                transform_matrix = None
+
+        self.prev_frame_gray_for_ecc = current_frame_gray.copy() # Update for next iteration
+
+        compensated_detections = []
+        if transform_matrix is not None:
+            try:
+                # We want to transform current detections to the *previous* frame's coordinate system
+                # So we need the inverse transform
+                inverse_transform_matrix = np.linalg.inv(transform_matrix)
+                for det_bbox_xywh, confidence, class_id in detections:
+                    x, y, w, h = det_bbox_xywh
+                    # Center point of the current detection
+                    center_x, center_y = x + w / 2, y + h / 2
+                    
+                    # Transform the center point
+                    # For homography: [x', y', z']^T = H_inv * [x, y, 1]^T
+                    # Then x_transformed = x'/z', y_transformed = y'/z'
+                    # For affine: [x', y']^T = A_inv * [x, y, 1]^T (if A_inv is 2x3)
+                    
+                    # Assuming affine for simplicity here (inverse_transform_matrix is 2x3)
+                    # If using homography, the transformation is more complex
+                    # This is a simplified transformation of the center point.
+                    # A full bbox transformation is more involved.
+                    current_center = np.array([[[center_x, center_y]]], dtype=np.float32)
+                    if inverse_transform_matrix.shape == (3,3): # Homography
+                        transformed_center_homogeneous = inverse_transform_matrix @ np.array([center_x, center_y, 1.0])
+                        if transformed_center_homogeneous[2] != 0: # Avoid division by zero
+                            transformed_center_x = transformed_center_homogeneous[0] / transformed_center_homogeneous[2]
+                            transformed_center_y = transformed_center_homogeneous[1] / transformed_center_homogeneous[2]
+                        else:
+                            transformed_center_x, transformed_center_y = center_x, center_y # Fallback
+                    elif inverse_transform_matrix.shape == (2,3): # Affine
+                        transformed_center = cv2.transform(current_center, inverse_transform_matrix)
+                        transformed_center_x, transformed_center_y = transformed_center[0][0]
+                    else: # Fallback if matrix shape is unexpected
+                        transformed_center_x, transformed_center_y = center_x, center_y
+
+
+                    # Create new bbox in the "stabilized" (previous frame's) coordinate system
+                    # Note: Width and height might also need scaling depending on the transform
+                    # This simplified version keeps w, h the same, which is only valid for translation/rotation
+                    stabilized_x = transformed_center_x - w / 2
+                    stabilized_y = transformed_center_y - h / 2
+                    compensated_detections.append(
+                        ([stabilized_x, stabilized_y, w, h], confidence, class_id)
+                    )
+                logger.debug(f"Compensated {len(compensated_detections)} detections using estimated transform.")
+            except np.linalg.LinAlgError:
+                logger.warning("Failed to invert transform matrix. Using original detections.")
+                compensated_detections = detections # Fallback
+            except Exception as e:
+                logger.error(f"Error during detection compensation: {e}")
+                compensated_detections = detections # Fallback
+        else:
+            compensated_detections = detections # No transform, use original detections
+
+        # Determine which frame and which set of detections to use for the tracker
+        # The tracker will now operate in the coordinate system of the *previous* frame (more stable)
+        # The frame passed to the tracker should correspond to the coordinate system of the detections.
+        frame_for_tracker_embedding_rgb = None
+        detections_to_pass_to_tracker = []
+
+        if self.prev_frame_gray_for_ecc is not None and transform_matrix is not None: # Only use prev frame if compensation happened
+            frame_for_tracker_embedding_rgb = cv2.cvtColor(self.prev_frame_gray_for_ecc, cv2.COLOR_GRAY2RGB)
+            detections_to_pass_to_tracker = compensated_detections # Use compensated detections
+            # frame_height, frame_width = frame_for_tracker_embedding_rgb.shape[:2] # Moved down
+        else: # First frame or no transform, use current frame and original detections
+            frame_for_tracker_embedding_rgb = frame_in_rgb
+            detections_to_pass_to_tracker = detections # Use original detections
+            # frame_height, frame_width = frame_for_tracker_embedding_rgb.shape[:2] # Moved down
+
+        # Get dimensions from the actual frame that will be used for cropping by the tracker
+        frame_height, frame_width = frame_for_tracker_embedding_rgb.shape[:2]
+
+        # --- Clip bounding boxes to frame boundaries before passing to tracker ---
+        clipped_detections = []
+        for det_bbox_xywh, confidence, class_id in detections_to_pass_to_tracker:
+            x, y, w, h = det_bbox_xywh
+            
+            # Convert to xyxy for easier clipping
+            x1, y1, x2, y2 = x, y, x + w, y + h
+
+            # Clip coordinates to frame boundaries
+            x1_clipped = max(0, round(x1)) # Use round for float coords then int
+            y1_clipped = max(0, round(y1))
+            x2_clipped = min(frame_width, round(x2)) # Ensure x2_clipped does not exceed frame_width
+            y2_clipped = min(frame_height, round(y2))# Ensure y2_clipped does not exceed frame_height
+
+            # Re-calculate width and height after clipping
+            w_clipped = x2_clipped - x1_clipped
+            h_clipped = y2_clipped - y1_clipped
+
+            # Only add the detection if it still has positive dimensions after clipping
+            if w_clipped > 0 and h_clipped > 0:
+                clipped_detections.append(
+                    # Pass xywh to tracker, ensuring x1_clipped, y1_clipped are the top-left
+                    ([x1_clipped, y1_clipped, w_clipped, h_clipped], 
+                     confidence, 
+                     class_id)
+                )
+            else:
+                logger.debug(f"Skipping detection after clipping resulted in zero or negative dimensions: original xywh=({x},{y},{w},{h}), clipped xywh=({x1_clipped},{y1_clipped},{w_clipped},{h_clipped})")
+
+        # Now pass the clipped detections to the tracker
+        tracks = self.tracker.update_tracks(clipped_detections, frame=frame_for_tracker_embedding_rgb)
+
+        # The output tracks from self.tracker.update_tracks will have bbox coordinates
+        # in the "stabilized" (previous frame's) coordinate system.
+        # We need to transform them *back* to the current frame's coordinate system for drawing.
+        output_tracks = []
+        if transform_matrix is not None:
+            for track in tracks:
+                if track.is_confirmed(): # Process only confirmed tracks for transformation
+                    # Assuming track.to_tlwh() gives [x,y,w,h] in the stabilized system
+                    x_s, y_s, w_s, h_s = track.to_tlwh() 
+                    center_x_s, center_y_s = x_s + w_s / 2, y_s + h_s / 2
+
+                    # Transform center point back to current frame coordinates
+                    # This is a simplified transformation of the center point.
+                    stabilized_center = np.array([[[center_x_s, center_y_s]]], dtype=np.float32)
+                    if transform_matrix.shape == (3,3): # Homography
+                        current_center_homogeneous = transform_matrix @ np.array([center_x_s, center_y_s, 1.0])
+                        if current_center_homogeneous[2] != 0:
+                            current_center_x = current_center_homogeneous[0] / current_center_homogeneous[2]
+                            current_center_y = current_center_homogeneous[1] / current_center_homogeneous[2]
+                        else:
+                            current_center_x, current_center_y = center_x_s, center_y_s # Fallback
+                    elif transform_matrix.shape == (2,3): # Affine
+                        current_center = cv2.transform(stabilized_center, transform_matrix)
+                        current_center_x, current_center_y = current_center[0][0]
+                    else: # Fallback
+                        current_center_x, current_center_y = center_x_s, center_y_s
+
+                    # Create a new representation of the track or update its bbox for the current frame
+                    # For simplicity, we'll update a copy of the track's ltwh if possible,
+                    # or store the transformed bbox alongside the track.
+                    # Directly modifying track.ltwh might not be safe depending on DeepSort's internals.
+                    # A safer way is to pass the transform_matrix to the drawing function.
+                    # However, to make tracks usable by downstream logic expecting current frame coords:
+                    current_x = current_center_x - w_s / 2
+                    current_y = current_center_y - h_s / 2
+                    
+                    # Re-assigning to track.ltwh might not be the intended use of the Track object.
+                    # It's better to store this transformed bbox separately or adjust drawing.
+                    # For now, we'll append the original track, assuming drawing will handle transformation.
+                    output_tracks.append(track) # Track's bbox is still in stabilized coords.
+        else:
+            output_tracks = tracks
+
+        return output_tracks # These tracks might be in stabilized coords if transform_matrix was used
+
     def get_default_team_getter(self) -> Callable[[BoundingBox, np.ndarray], Optional[int]]:
         """Returns a default team getter function that always returns None."""
         return self.team_identifier.get_default_team_getter()
@@ -143,10 +301,10 @@ class VideoModel:
         current_raw_team_classification = None
         if raw_team_id_getter and hasattr(track, 'original_ltwh') and track.original_ltwh is not None:
             original_ltwh = track.original_ltwh
-            original_detection_bbox = BoundingBox(x1=float(original_ltwh[0]),
-                                                  y1=float(original_ltwh[1]),
-                                                  w=float(original_ltwh[2]),
-                                                  h=float(original_ltwh[3]))
+            original_detection_bbox = BoundingBox(x1=original_ltwh[0],
+                                                  y1=original_ltwh[1],
+                                                  w=original_ltwh[2],
+                                                  h=original_ltwh[3])
             current_raw_team_classification = raw_team_id_getter(original_detection_bbox, frame_rgb)
         return current_raw_team_classification
 
@@ -278,3 +436,52 @@ class VideoModel:
         if track_id_for_lookup in self.track_to_team_map:
             return self.track_to_team_map[track_id_for_lookup].get('team_id')
         return None
+
+class CameraMotionCompensator:
+    def __init__(self):
+        self.prev_gray = None
+        # For ECC
+        self.warp_mode = cv2.MOTION_HOMOGRAPHY # cv2.MOTION_AFFINE cv2.MOTION_EUCLIDEAN
+        self.number_of_iterations = 50
+        self.termination_eps = 1e-8
+        self.criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
+                         self.number_of_iterations,
+                         self.termination_eps)
+
+    def estimate_transform_ecc(self, current_frame_gray: np.ndarray) -> Optional[np.ndarray]:
+        if self.prev_gray is None:
+            self.prev_gray = current_frame_gray
+            return np.eye(2, 3, dtype=np.float32) if self.warp_mode != cv2.MOTION_HOMOGRAPHY else np.eye(3, 3, dtype=np.float32)
+
+        try:
+            warp_matrix = np.zeros((3, 3), dtype=np.float32) if self.warp_mode == cv2.MOTION_HOMOGRAPHY else np.zeros((2, 3), dtype=np.float32)
+            np.fill_diagonal(warp_matrix, 1)
+            cc, warp_matrix = cv2.findTransformECC(self.prev_gray, current_frame_gray, warp_matrix,
+                                                   self.warp_mode, self.criteria)
+            self.prev_gray = current_frame_gray
+            return warp_matrix
+        except cv2.error as e:
+            logger.warning(f"ECC transform estimation failed: {e}. Using identity matrix.")
+            self.prev_gray = current_frame_gray # Update prev_gray anyway
+            return np.eye(2, 3, dtype=np.float32) if self.warp_mode != cv2.MOTION_HOMOGRAPHY else np.eye(3, 3, dtype=np.float32)
+
+
+# In VideoModel.__init__
+# self.motion_compensator = CameraMotionCompensator()
+
+# In VideoModel.generate_tracks (or a new method called before it)
+# current_frame_gray = cv2.cvtColor(frame_in, cv2.COLOR_RGB2GRAY)
+# transform_matrix = self.motion_compensator.estimate_transform_ecc(current_frame_gray)
+#
+# Now, how to use transform_matrix with DeepSort:
+# DeepSort itself doesn't directly take this matrix. You'd need to:
+# 1. Modify DeepSort's Kalman Filter: This is complex. The Kalman filter's motion model
+#    would need to incorporate this external camera motion.
+# 2. Adjust Detections or Track States *before* `tracker.update_tracks()`:
+#    - If you adjust detections: For each detection bbox (x,y,w,h), transform its center (x+w/2, y+h/2)
+#      using the inverse of `transform_matrix` (to bring it to the "stabilized" previous frame's coordinates).
+#      Then feed these transformed detections to DeepSort. This is often the more practical approach.
+#      The output tracks will be in the "stabilized" coordinate system, so you'd need to transform them
+#      back using `transform_matrix` for drawing on the current `frame_in`.
+
+   

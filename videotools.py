@@ -159,10 +159,33 @@ class VideoToools:
             x1, y1, w, h = map(int, bbox_coords)
             # Calculate bottom-right coordinates for cv2.rectangle
             x2, y2 = x1 + w, y1 + h # These are coordinates, not image data
-            label = f"Class {class_id} ({confidence:.2f})"
-            cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), (0, 255, 0), 2) # Draw green rectangle (BGR)
-            cv2.putText(frame_bgr, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2) # Draw green text (BGR)
-        return frame
+            
+            # Define the two lines of text
+            label_line1 = f"Cls {class_id}"
+            label_line2 = f"{confidence:.2f}"
+            
+            font_face = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.4 
+            font_thickness = 1
+            text_color_bgr = (0, 255, 0) # Green
+
+            cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), (0, 255, 0), 1)
+            
+            # Get text size for the first line to position the second line
+            (text_width_line1, text_height_line1), baseline_line1 = cv2.getTextSize(label_line1, font_face, font_scale, font_thickness)
+            
+            # Position for the first line (above the box)
+            text_y_line1 = y1 - 5 - text_height_line1 - baseline_line1 # Move up by its own height + baseline + a small gap
+            if text_y_line1 < text_height_line1 : # Ensure it's not drawn off the top of the image
+                text_y_line1 = y1 + text_height_line1 + 5 # If too high, draw inside and below top of box
+
+            cv2.putText(frame_bgr, label_line1, (x1, text_y_line1), font_face, font_scale, text_color_bgr, font_thickness)
+            
+            # Position for the second line (below the first line)
+            text_y_line2 = text_y_line1 + text_height_line1 + baseline_line1 + 2 # Add a small gap (e.g., 2 pixels)
+            cv2.putText(frame_bgr, label_line2, (x1, text_y_line2), font_face, font_scale, text_color_bgr, font_thickness)
+            
+        return frame_bgr
 
     def draw_tracks(self, frame: np.ndarray, tracks: list,
                     team_id_getter: Optional[Callable[[BoundingBox, np.ndarray, str], Optional[int]]] = None) -> np.ndarray:
@@ -194,10 +217,10 @@ class VideoToools:
             if team_id_getter and hasattr(track, 'original_ltwh') and track.original_ltwh is not None:
                 original_ltwh = track.original_ltwh # [x, y, w, h]
                 # Create BoundingBox from original_ltwh (which is x1,y1,w,h)
-                original_detection_bbox = BoundingBox(x1=float(original_ltwh[0]),
-                                                      y1=float(original_ltwh[1]),
-                                                      w=float(original_ltwh[2]),
-                                                      h=float(original_ltwh[3]))
+                original_detection_bbox = BoundingBox(x1=original_ltwh[0],
+                                                      y1=original_ltwh[1],
+                                                      w=original_ltwh[2],
+                                                      h=original_ltwh[3])
                 team_id = team_id_getter(original_detection_bbox, frame, track_id) # Pass track_id, getter expects RGB frame
 
             # Determine color based on team_id
@@ -206,7 +229,8 @@ class VideoToools:
             elif team_id == 1:
                 track_color = (255, 0, 0) # Blue for team 1 (RGB)
             else: # Default color if no team or team_id_getter not provided
-                track_color = (0, 255, 0)   # Green for unknown/unassigned (RGB)
+                continue
+                 # track_color = (0, 255, 0)   # Green for unknown/unassigned (RGB)
             
             frame = cv2.rectangle(frame, (x1, y1), (x2, y2), track_color, 2)
             label = f"ID: {track_id}"
@@ -214,34 +238,3 @@ class VideoToools:
                 label += f" T: {team_id}"
             cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, track_color, 2)
         return frame
-
-    @staticmethod # This method is not used in the provided code, but refactoring it for consistency
-    def image_to_base64_str(image_np_in: Optional[np.ndarray]) -> Optional[str]:
-        """Converts a NumPy image array (RGB) to a base64 PNG string for HTML."""
-        if image_np_in is None or image_np_in.size == 0:
-            logger.debug("Cannot convert None or empty image to base64.")
-            return None
-        try:
-            # Ensure image is 3-channel RGB before attempting to convert to BGR for imencode
-            if image_np.ndim == 2: # Grayscale
-                image_rgb = cv2.cvtColor(image_np, cv2.COLOR_GRAY2RGB)
-            elif image_np.shape[2] == 4: # RGBA # type: ignore[union-attr]
-                image_rgb = cv2.cvtColor(image_np, cv2.COLOR_RGBA2RGB)
-            elif image_np.shape[2] == 3: # RGB # type: ignore[union-attr]
-                image_rgb = image_np_in
-            else:
-                logger.warning(f"Unsupported image format for base64 encoding: channels={image_np_in.shape[2] if image_np_in.ndim == 3 else 'N/A'}")
-                return None
-
-            # cv2.imencode expects BGR format
-            image_bgr_for_encode = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
-            is_success, buffer = cv2.imencode(".png", image_bgr_for_encode)
-            if not is_success:
-                logger.warning("Failed to encode image to PNG for HTML report.")
-                return None
-            
-            img_base64 = base64.b64encode(buffer).decode("utf-8")
-            return f"data:image/png;base64,{img_base64}"
-        except Exception as e:
-            logger.error(f"Error converting image to base64: {e}", exc_info=True)
-            return None

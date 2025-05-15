@@ -3,7 +3,7 @@ import numpy as np
 import cv2
 from typing import Callable, Optional
 from .videotools import BoundingBox 
-import torch # Import torch for Tensor conversion
+import torch 
 import torchvision.utils # Import for make_grid
 from . import utils
 from torch.utils.tensorboard import SummaryWriter
@@ -26,6 +26,7 @@ MAX_ROIS_PER_SAMPLED_FRAME_TO_LOG = 16     # Log at most this many ROIs per logg
 # Constants for learning grass color
 MIN_GRASS_PIXELS_FOR_LEARNING = 50000  # Minimum number of pixels from bottom regions to attempt learning
 GRASS_LEARNING_N_STD = 2.2           # Number of standard deviations to define the range around the mean
+MAX_PIXELS_PER_FRAME_FOR_GRASS_LEARNING = 10000 # Max pixels to sample from each frame for grass learning
 # Default LAB color ranges for grass masking (OpenCV's 0-255 scaled LAB)
 # These will likely need tuning based on specific video conditions.
 # 'a' channel values below 128 are greenish.
@@ -103,13 +104,24 @@ class TeamIdentification:
                 logger.debug("Skipping a frame in grass learning due to empty bottom region.")
                 continue
 
-            bottom_region_bgr = cv2.cvtColor(bottom_region_rgb, cv2.COLOR_RGB2BGR)
-            bottom_region_lab = cv2.cvtColor(bottom_region_bgr, cv2.COLOR_BGR2LAB)
+            # Reshape to a list of pixels for easier sampling
+            all_bottom_pixels_rgb = bottom_region_rgb.reshape(-1, 3)
+            num_available_pixels = all_bottom_pixels_rgb.shape[0]
+
+            if num_available_pixels == 0:
+                continue
+
+            # Sub-sample pixels if there are too many
+            sample_size = min(num_available_pixels, MAX_PIXELS_PER_FRAME_FOR_GRASS_LEARNING)
+            sampled_indices = np.random.choice(num_available_pixels, size=sample_size, replace=False)
+            sampled_pixels_rgb = all_bottom_pixels_rgb[sampled_indices, :]
+
+            # Convert only the sampled RGB pixels to LAB
+            sampled_pixels_lab = cv2.cvtColor(sampled_pixels_rgb.reshape(-1, 1, 3), cv2.COLOR_RGB2LAB).reshape(-1, 3)
             
-            pixels_lab = bottom_region_lab.reshape(-1, 3)
-            all_l_values.extend(pixels_lab[:, 0])
-            all_a_values.extend(pixels_lab[:, 1])
-            all_b_values.extend(pixels_lab[:, 2])
+            all_l_values.extend(sampled_pixels_lab[:, 0])
+            all_a_values.extend(sampled_pixels_lab[:, 1])
+            all_b_values.extend(sampled_pixels_lab[:, 2])
 
         if len(all_l_values) >= MIN_GRASS_PIXELS_FOR_LEARNING:
             l_mean, l_std = np.mean(all_l_values), np.std(all_l_values)
@@ -153,7 +165,6 @@ class TeamIdentification:
 
             except Exception as e:
                 logger.error(f"Error logging learned grass color bound images to TensorBoard: {e}", exc_info=True)
-
 
     def _get_dominant_color_embedding(self, roi_image: np.ndarray) -> Optional[np.ndarray]:
         """Helper to get a single dominant color as a (3,) embedding vector."""
@@ -280,7 +291,6 @@ class TeamIdentification:
             
             tag_name = f'TeamID_Sample_ROIs/Sampled_Frame_{frame_idx_in_sample}'
             self.writer.add_image(tag_name, image_grid, global_step=frame_idx_in_sample) 
-            logger.debug(f"Logged image grid to TensorBoard with tag: {tag_name}, Global Step: {frame_idx_in_sample}")
         except Exception as e:
             logger.error(f"Error creating or logging image grid for frame index {frame_idx_in_sample}: {e}", exc_info=True)
 
