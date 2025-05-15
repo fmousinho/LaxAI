@@ -80,7 +80,7 @@ class TeamIdentification:
             self._embedding_fn = self._get_crop_no_grass_embedding
         else:
             logger.error(f"Unsupported player feature extractor: {self.player_feature_extractor}. Embedding function set to None.")
-            self._embedding_fn = lambda: None
+            self._embedding_fn = lambda roi: None
 
     def _learn_and_set_grass_parameters(self, sampled_frames_data_rgb: list[tuple[np.ndarray, list]]):
         """
@@ -239,7 +239,7 @@ class TeamIdentification:
         if self.grass_mask: self._learn_and_set_grass_parameters(sampled_frames_data)
         if not sampled_frames_data:
             logger.warning("No sampled frames data provided. Cannot define teams.")
-            return self._default_team_getter
+            return self.get_default_team_getter()
         if self.clustering_algorithm == "kmeans":
             return self._kmeans_clustering(sampled_frames_data)
         else:
@@ -318,7 +318,7 @@ class TeamIdentification:
     def _prepare_embeddings_for_clustering(
         self,
         sampled_frames_data: list[tuple[np.ndarray, list]]
-    ) -> Optional[np.ndarray]:
+    ) -> Optional[tuple[np.ndarray, np.ndarray]]:
         """
         Collects, preprocesses, and normalizes embeddings from sampled frames.
         Also handles conditional logging of ROIs to TensorBoard if in DEBUG mode.
@@ -344,7 +344,7 @@ class TeamIdentification:
 
                 embedding = None
                 if self._embedding_fn:
-                    embedding = self._embedding_fn(roi)
+                    embedding = self._embedding_fn(roi) if self._embedding_fn else None
                 if embedding is not None:
                     collected_embeddings.append(embedding)
 
@@ -366,7 +366,8 @@ class TeamIdentification:
                 logged_sample_frames_count += 1 # Increment count as a grid for this frame was attempted/logged
 
         # --- Finalize and return embeddings ---
-        return self._finalize_embeddings(collected_embeddings)
+        finalized_embeddings = self._finalize_embeddings(collected_embeddings)
+        return finalized_embeddings
 
     def _kmeans_clustering(
         self,
@@ -400,7 +401,7 @@ class TeamIdentification:
                 # Ensure embeddings_array_f32_filtered is (N, D)
                 if embeddings_array_f32_filtered.ndim == 2:
                     self.writer.add_embedding(embeddings_array_f32_filtered, 
-                                              metadata=kmeans_model.labels_.tolist(),
+                                              metadata=kmeans_model.labels_.tolist() if kmeans_model.labels_ is not None else None,
                                               tag='player_embeddings_kmeans')
                 if kmeans_model.cluster_centers_ is not None and kmeans_model.cluster_centers_.shape[1] == 3:
                     # Log cluster centers if they are 3D (e.g., colors)
@@ -501,7 +502,11 @@ class TeamIdentification:
             logger.warning(f"get_dominant_color received an invalid image with shape: {image.shape if image is not None else 'None'}.")
             return None
         
-        image = self._apply_masks(image)
+        masked_image = self._apply_masks(image)
+        if masked_image is None:
+            logger.warning("Image masking resulted in None. Skipping further processing.")
+            return None
+        image = masked_image
         resized_image = self._resize_image(image)
         if resized_image is None: return None
 
@@ -528,6 +533,9 @@ class TeamIdentification:
                 
                 # Cluster centers are normalized ([0,1]), scale them back to [0,255]
                 dominant_rgb_colors_normalized = kmeans.cluster_centers_
+                if dominant_rgb_colors_normalized is None:
+                    logger.error("KMeans clustering returned None for cluster centers.")
+                    return None
                 dominant_rgb_colors_float = dominant_rgb_colors_normalized * 255.0
                 dominant_rgb_colors = np.round(dominant_rgb_colors_float).astype(np.uint8)
                 

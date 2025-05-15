@@ -68,7 +68,7 @@ class DetectionModel:
             try:
                 # Ensure custom classes needed for unpickling are added
                 # This is for unpickling if the model's saved structure refers to classes by this name.
-                torch.serialization.add_safe_globals([self.model_name])
+                # Removed unnecessary add_safe_globals call
                 self.model = torch.load(model_buffer, map_location=self.device, weights_only=False)
                 logger.info(f"Detection model loaded successfully to {self.device}")
                 return True

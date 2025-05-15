@@ -37,7 +37,7 @@ class BoundingBox(NamedTuple):
         """
         x2 = self.x1 + self.w
         y2 = self.y1 + self.h
-        return map(int, (self.x1, self.y1, x2, y2))
+        return (int(self.x1), int(self.y1), int(x2), int(y2))
 
 
 class VideoToools:
@@ -124,8 +124,11 @@ class VideoToools:
         if not self.cap or not self.cap.isOpened():
             logger.error("Video capture is not initialized or opened for get_frame_by_index.")
             return None
-        if not (0 <= frame_index < self.in_n_frames):
-            logger.error(f"Frame index {frame_index} is out of bounds (0-{self.in_n_frames - 1}).")
+        if self.in_n_frames is None or not (0 <= frame_index < self.in_n_frames):
+            if self.in_n_frames is not None:
+                logger.error(f"Frame index {frame_index} is out of bounds (0-{self.in_n_frames - 1}).")
+            else:
+                logger.error(f"Frame index {frame_index} is out of bounds (total frames unknown).")
             return None
 
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
