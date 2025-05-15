@@ -69,11 +69,7 @@ try:
     if load_dotenv(dotenv_path=_DOTENV_PATH): # Use the explicit path
         logger.info(f".env file loaded successfully from {_DOTENV_PATH}.")
     else:
-        # More specific warning if loading failed but file exists
-        if os.path.exists(_DOTENV_PATH):
-            logger.warning(f".env file found at {_DOTENV_PATH} but could not be loaded (e.g., empty or parsing error).")
-        else:
-            logger.warning(f".env file not found at {_DOTENV_PATH}.")
+        logger.warning(f".env file found at {_DOTENV_PATH} but could not be loaded (e.g., empty or parsing error).")
 except ImportError:
     logger.warning("python-dotenv not installed. Cannot load .env file.")
 
