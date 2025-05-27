@@ -81,7 +81,7 @@ class VideoToools:
             counter += 1
         self.actual_output_path = current_output_path
 
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v') # type: ignore
         self.out = cv2.VideoWriter(self.actual_output_path, fourcc, self.in_fps, (self.in_width, self.in_height))
         if not self.out.isOpened():
             raise IOError(f"Error: Could not open output video writer for path: {self.actual_output_path}")

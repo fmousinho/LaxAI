@@ -3,8 +3,9 @@ import numpy as np
 import cv2
 from typing import Callable, Optional
 from .videotools import BoundingBox 
-import torch 
-import torchvision.utils # Import for make_grid
+import torch
+from transformers import AutoProcessor, SiglipVisionModel
+import torchvision.utils
 from . import utils
 from torch.utils.tensorboard import SummaryWriter
 
@@ -78,9 +79,14 @@ class TeamIdentification:
         elif self.player_feature_extractor == "crop_no_grass":
             # This embedding function returns the processed image array itself
             self._embedding_fn = self._get_crop_no_grass_embedding
+        elif self.player_feature_extractor == "siglip":
+            self._embedding_fn = self._siglip_embedding
         else:
             logger.error(f"Unsupported player feature extractor: {self.player_feature_extractor}. Embedding function set to None.")
             self._embedding_fn = lambda roi: None
+
+    def _siglip_embedding(self, roi_image: np.ndarray) -> Optional[np.ndarray]:
+        pass
 
     def _learn_and_set_grass_parameters(self, sampled_frames_data_rgb: list[tuple[np.ndarray, list]]):
         """

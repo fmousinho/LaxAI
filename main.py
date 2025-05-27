@@ -95,7 +95,12 @@ def check_requirements(requirements_filename="requirements.txt"):
                 except InvalidRequirement:
                     logger.error(f"Warning: Skipping invalid requirement line: {line}")
                 except importlib.metadata.PackageNotFoundError:
-                    missing_packages.append(f"  - {req.name} ({req.specifier or 'any version'})")
+                    # Only append if req was successfully created
+                    try:
+                        req = Requirement(line)
+                        missing_packages.append(f"  - {req.name} ({req.specifier or 'any version'})")
+                    except InvalidRequirement:
+                        logger.error(f"Warning: Skipping invalid requirement line (package not found): {line}")
 
         if not missing_packages and not version_mismatches: # All good
             logger.info("All requirements are installed and versions match.")
