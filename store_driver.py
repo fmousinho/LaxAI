@@ -312,7 +312,7 @@ class Store:
         cache_filepath = self._get_cache_filepath(cache_identifier)
 
         # Check cache first
-        if self._is_cache_valid(cache_filepath):
+        if cache_filepath and self._is_cache_valid(cache_filepath):
             logger.info(f"Using cached content for '{file_name}' from: {cache_filepath}")
             with open(cache_filepath, 'rb') as f:
                 return io.BytesIO(f.read())
@@ -363,7 +363,7 @@ class Store:
         cache_filepath = self._get_cache_filepath(cache_identifier)
 
         # Check cache first - if valid, return the CACHED path directly
-        if self._is_cache_valid(cache_filepath):
+        if cache_filepath and self._is_cache_valid(cache_filepath):
             logger.info(f"Using cached file for '{file_name}': {cache_filepath}")
             return cache_filepath # Return the path to the persistent cache file
 

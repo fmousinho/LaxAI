@@ -3,7 +3,7 @@ import torch
 from . import constants as const
 import numpy as np
 from .store_driver import Store
-from .detection import DetectionModel # Import the new DetectionModel
+from .detection import DetectionModel  # Import the new DetectionModel
 from .videotools import BoundingBox, VideoToools # Import VideoToools
 from deep_sort_realtime.deepsort_tracker import DeepSort
 from typing import Callable, Optional
@@ -26,10 +26,10 @@ class VideoModel:
     def __init__(self, 
                  model_name: Optional[str] = None,
                  drive_path: Optional[str] = None,
-                 writer: SummaryWriter = None, 
+                 writer: Optional[SummaryWriter] = None, 
                  store: Optional[Store] = None, # Add store argument
                  tools: Optional[VideoToools] = None, # Add tools argument
-                 device: torch.device = None,
+                 device: Optional[torch.device] = None,
                  ):
         """
         Initializes the VideoModel, including the detection and tracking components.
@@ -51,13 +51,16 @@ class VideoModel:
             max_iou_distance=MAX_IOU_DISTANCE,
             max_cosine_distance=DEEPSORT_MAX_COSINE_DISTANCE 
         )
+        # Only pass store if it is not None, otherwise raise an error or provide a default
+        if store is None:
+            raise ValueError("A valid Store instance must be provided to DetectionModel.")
         self.detection_model = DetectionModel(
-            model_name=model_name, # Pass through, DetectionModel will use its defaults if None
-            drive_path=drive_path, # Pass through, DetectionModel will use its defaults if None
+            model_name=model_name,  # Pass through, DetectionModel will use its defaults if None
+            drive_path=drive_path,  # Pass through, DetectionModel will use its defaults if None
             device=device,
-            store=store, # Pass the store object
-            writer=writer, # Pass the writer
-            tools=tools)   # Pass the tools instance
+            store=store,  # Pass the store object (guaranteed not None)
+            writer=writer,  # Pass the writer
+            tools=tools)    # Pass the tools instance
         self.team_identifier = TeamIdentification(writer=self.writer) # Instantiate TeamIdentification
         self.track_to_team_map = {} # For smoothed team assignments
         self.motion_compensator = CameraMotionCompensator()
@@ -115,9 +118,9 @@ class VideoModel:
             # This is a placeholder for a robust transform estimation
             try:
                 # --- Example using ORB (replace with ECC or your preferred method) ---
-                orb = cv2.ORB_create(nfeatures=500) # Limit features for speed
-                kp1, des1 = orb.detectAndCompute(self.prev_frame_gray_for_ecc, None)
-                kp2, des2 = orb.detectAndCompute(current_frame_gray, None)
+                orb = cv2.ORB.create(nfeatures=500) # Limit features for speed
+                kp1, des1 = orb.detectAndCompute(self.prev_frame_gray_for_ecc, mask=None)
+                kp2, des2 = orb.detectAndCompute(current_frame_gray, mask=None)
 
                 if des1 is not None and des2 is not None and len(des1) > 1 and len(des2) > 1:
                     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
@@ -125,8 +128,8 @@ class VideoModel:
                     matches = sorted(matches, key=lambda x: x.distance)
                     
                     if len(matches) > 10: # Minimum matches for homography
-                        src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
-                        dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+                        src_pts = np.array([kp1[m.queryIdx].pt for m in matches], dtype=np.float32).reshape(-1, 1, 2)
+                        dst_pts = np.array([kp2[m.trainIdx].pt for m in matches], dtype=np.float32).reshape(-1, 1, 2)
                         transform_matrix, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
                 # --- End ORB Example ---
             except Exception as e:
