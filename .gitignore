@@ -1,5 +1,5 @@
 # Environment
-.venv/
+.venv312/
 .env
 token.json
 results*
