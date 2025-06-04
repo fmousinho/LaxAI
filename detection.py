@@ -7,6 +7,9 @@ from .videotools import VideoToools # Import VideoToools
 from typing import Optional
 from torch.utils.tensorboard import SummaryWriter # Import SummaryWriter
 import cv2 # Import cv2 for color conversion
+from inference import get_model
+import supervision as sv
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +37,7 @@ class DetectionModel:
             tools: An optional VideoToools instance for drawing detections.
         """
         self.model = None  # Model will be loaded later
-        self.model_name = model_name if model_name is not None else const.DEFAULT_DETECTION_MODEL
+        self.model_name = model_name if model_name is not None else "girls-lacrosse/8" # const.DEFAULT_DETECTION_MODEL
         self.drive_path = drive_path if drive_path is not None else const.DEFAULT_MODEL_DRIVE_FOLDER
         self.device = device if device is not None else torch.device("cpu")
         self.player_class_id = player_class_id
@@ -42,13 +45,23 @@ class DetectionModel:
         self.tools = tools # Store the VideoToools instance
         self.debug_detection_frame_sampling_rate = const.DEBUG_DETECTION_FRAME_SAMPLING_RATE
         
-        if store:
-            # Attempt to load the model immediately upon initialization
-            if not self._load_from_drive(store):
-                 raise RuntimeError(f"Failed to load detection model '{self.model_name}' from Drive path '{self.drive_path}'.")
-        else:
-            raise ValueError("Store object is required for DetectionModel initialization to load the model from Drive.")
-        logger.info(f"DetectionModel initialized and model '{self.model_name}' loaded successfully.")
+        # if store:
+        #     # Attempt to load the model immediately upon initialization
+        #     if not self._load_from_drive(store):
+        #          raise RuntimeError(f"Failed to load detection model '{self.model_name}' from Drive path '{self.drive_path}'.")
+        # else:
+        #     raise ValueError("Store object is required for DetectionModel initialization to load the model from Drive.")
+        self._load_from_roboflow()
+
+    def _load_from_roboflow(self) -> bool:
+        try:
+            self.model = get_model(self.model_name, api_key=os.getenv("ROBOFLOW_API_KEY"))
+            logger.info(f"Detection model '{self.model_name}' loaded successfully from Roboflow.")
+            return True
+        except Exception as e:
+            logger.error("Can't import from roboflow. ext_info: %s", e)
+            return False
+
 
     def _load_from_drive(self, store: Store) -> bool:
         """
