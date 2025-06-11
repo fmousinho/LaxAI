@@ -6,7 +6,7 @@ from .videotools import BoundingBox
 import torch
 from transformers import AutoProcessor, SiglipVisionModel
 import torchvision.utils
-from . import utils
+from .tools import utils
 from torch.utils.tensorboard import SummaryWriter
 
 logger = logging.getLogger(__name__)

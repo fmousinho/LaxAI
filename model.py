@@ -1,8 +1,8 @@
 import logging
 import torch
-from . import constants as const
+from .config import constants as const
 import numpy as np
-from .store_driver import Store
+from .tools.store_driver import Store
 from .detection import DetectionModel  # Import the new DetectionModel
 from .videotools import BoundingBox, VideoToools # Import VideoToools
 from deep_sort_realtime.deepsort_tracker import DeepSort
@@ -88,14 +88,14 @@ class VideoModel:
         detections = self.detection_model.generate_detections(frame_in_rgb, frame_idx=frame_idx)
         return detections
 
-    def generate_tracks(self, frame_in_rgb: np.ndarray, detections: list) -> list:
+    def generate_tracks(self, frame_in_rgb: np.ndarray, detections: list) -> tuple[list, Optional[np.ndarray]]:
         """
         Generates tracks for the detected objects using DeepSort.
 
         Args:
             frame: The input video frame as a numpy array.
             detections: A list of detected objects with their bounding boxes and scores.
-        
+
         Returns:
             A list of tracked objects with their IDs and bounding boxes.
         """
@@ -103,9 +103,15 @@ class VideoModel:
         #tracks = self.tracker.update_tracks(detections, frame=frame_in)
         tracks = self.motion_compensate(frame_in_rgb, detections)
         return tracks
-    
-    def motion_compensate(self, frame_in_rgb: np.ndarray, detections: list) -> list:
+
+    def motion_compensate(self, frame_in_rgb: np.ndarray, detections: list) -> tuple[list, Optional[np.ndarray]]:
         """
+        Generates tracks for the detected objects using DeepSort, with camera motion compensation.
+
+        Returns:
+            A tuple containing:
+            - list: The list of tracked objects (their bboxes are in the stabilized coordinate system).
+            - Optional[np.ndarray]: The transformation matrix from the previous frame to the current frame, or None.
         Generates tracks for the detected objects using DeepSort, with camera motion compensation.
         """
         current_frame_gray = cv2.cvtColor(frame_in_rgb, cv2.COLOR_RGB2GRAY)
@@ -284,7 +290,7 @@ class VideoModel:
         else:
             output_tracks = tracks
 
-        return output_tracks # These tracks might be in stabilized coords if transform_matrix was used
+        return output_tracks, transform_matrix # Return tracks (in stabilized coords) and the transform matrix
 
     def get_default_team_getter(self) -> Callable[[BoundingBox, np.ndarray], Optional[int]]:
         """Returns a default team getter function that always returns None."""
@@ -292,7 +298,7 @@ class VideoModel:
 
     def identifies_team (
         self,
-        sampled_frames_data: list[tuple[np.ndarray, list]]
+        sampled_frames_data: list[tuple[np.ndarray, list, Optional[np.ndarray]]] # Added transform matrix to tuple type hint
     ) -> Callable[[BoundingBox, np.ndarray], Optional[int]]:
         """
         Delegates team identification to the TeamIdentification class.
@@ -307,7 +313,7 @@ class VideoModel:
             original_detection_bbox = BoundingBox(x1=original_ltwh[0],
                                                   y1=original_ltwh[1],
                                                   w=original_ltwh[2],
-                                                  h=original_ltwh[3])
+                                                  h=original_ltwh[3]) # original_ltwh is [x,y,w,h]
             current_raw_team_classification = raw_team_id_getter(original_detection_bbox, frame_rgb)
         return current_raw_team_classification
 
@@ -373,7 +379,10 @@ class VideoModel:
         """Logs an annotated ROI for the track to TensorBoard."""
         try:
             ltrb = track.to_ltrb()
-            x1, y1, x2, y2 = map(int, ltrb)
+            # Use float coordinates for potential sub-pixel accuracy before clipping
+            x1, y1, x2, y2 = map(float, ltrb)
+
+            # Clip coordinates to frame boundaries (assuming frame_rgb is the target frame for visualization)
             frame_h, frame_w = frame_rgb.shape[:2]
             x1_c, y1_c = max(0, x1), max(0, y1)
             x2_c, y2_c = min(frame_w, x2), min(frame_h, y2)
@@ -385,6 +394,7 @@ class VideoModel:
                 tag = f"Track_Visuals/Frame_{current_frame_index}/Track_{track.track_id}_Team_{team_id_display if team_id_display is not None else 'NA'}"
                 self.writer.add_image(tag, roi_tensor_chw_float_rgb, global_step=current_frame_index)
                 self._track_rois_logged_this_call += 1
+                logger.debug(f"Logged ROI for track {track.track_id} at frame {current_frame_index}.")
         except Exception as e:
             logger.error(f"Error logging track ROI for track {track.track_id} at frame {current_frame_index}: {e}", exc_info=True)
 
@@ -449,6 +459,7 @@ class CameraMotionCompensator:
         self.termination_eps = 1e-8
         self.criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
                          self.number_of_iterations,
+                         # self.termination_eps) # Removed duplicate termination_eps
                          self.termination_eps)
 
     def estimate_transform_ecc(self, current_frame_gray: np.ndarray) -> Optional[np.ndarray]:

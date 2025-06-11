@@ -87,6 +87,24 @@ class VideoToools:
             raise IOError(f"Error: Could not open output video writer for path: {self.actual_output_path}")
         logger.info(f"Output video writer created for: {self.actual_output_path}")
 
+    def __enter__(self):
+        """Context manager entry point."""
+        logger.debug("Entering VideoToools context.")
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit point, ensures resources are released."""
+        logger.debug("Exiting VideoToools context. Releasing resources.")
+        if self.cap and self.cap.isOpened():
+            self.cap.release()
+            logger.debug("Released video capture.")
+        if self.out and self.out.isOpened():
+            self.out.release()
+            logger.debug("Released video writer.")
+        # Return False to propagate exceptions, True to suppress
+        return False
+
+
     def get_next_frame(self) -> Generator[np.ndarray, None, None]:
         """
         A generator that yields frames sequentially from the input video.
@@ -186,7 +204,8 @@ class VideoToools:
         return frame_bgr
 
     def draw_tracks(self, frame: np.ndarray, tracks: list,
-                    team_id_getter: Optional[Callable[[BoundingBox, np.ndarray, str], Optional[int]]] = None) -> np.ndarray:
+                    team_id_getter: Optional[Callable[[BoundingBox, np.ndarray, str], Optional[int]]] = None,
+                    transform_matrix: Optional[np.ndarray] = None) -> np.ndarray:
         """
         Draws bounding boxes and track IDs on the frame for tracked objects.
         Colors tracks based on team ID if team_id_getter is provided.
@@ -196,6 +215,8 @@ class VideoToools:
             tracks: A list of Track objects from deep_sort_realtime.
             team_id_getter: An optional function that takes a BoundingBox, the current frame,
                             and the track_id, and returns a team ID.
+            transform_matrix: Optional transformation matrix to convert track coordinates
+                              from a stabilized system back to the current frame's system.
 
         Returns:
             The modified frame (RGB) with drawn track information.
@@ -207,8 +228,35 @@ class VideoToools:
 
             track_id = track.track_id
             ltrb = track.to_ltrb() # Left, Top, Right, Bottom format
+            
+            # Original track coordinates (potentially in stabilized system)
+            x1_s, y1_s, x2_s, y2_s = ltrb 
 
-            x1, y1, x2, y2 = map(int, ltrb)
+            # If a transform_matrix is provided, transform the bbox coordinates
+            # from the stabilized system back to the current frame's system.
+            if transform_matrix is not None:
+                # Convert to center point and width/height for easier transformation
+                w_s = x2_s - x1_s
+                h_s = y2_s - y1_s
+                center_x_s, center_y_s = x1_s + w_s / 2, y1_s + h_s / 2
+                
+                stabilized_center = np.array([[[center_x_s, center_y_s]]], dtype=np.float32)
+                if transform_matrix.shape == (3,3): # Homography
+                    current_center_homogeneous = transform_matrix @ np.array([center_x_s, center_y_s, 1.0])
+                    if current_center_homogeneous[2] != 0:
+                        current_center_x = current_center_homogeneous[0] / current_center_homogeneous[2]
+                        current_center_y = current_center_homogeneous[1] / current_center_homogeneous[2]
+                    else: # Fallback
+                        current_center_x, current_center_y = center_x_s, center_y_s
+                elif transform_matrix.shape == (2,3): # Affine
+                    current_center = cv2.transform(stabilized_center, transform_matrix)
+                    current_center_x, current_center_y = current_center[0][0]
+                else: # Fallback
+                    current_center_x, current_center_y = center_x_s, center_y_s
+                
+                x1, y1, x2, y2 = map(int, [current_center_x - w_s/2, current_center_y - h_s/2, current_center_x + w_s/2, current_center_y + h_s/2])
+            else:
+                x1, y1, x2, y2 = map(int, ltrb)
 
             team_id = None
             # Try to get team_id using the original detection bounding box

@@ -1,154 +1,112 @@
-
-import os
-import sys 
-from . import constants as const
+# Standard Library
+import argparse
 import logging
-from .store_driver import Store
-import atexit
+import os
+import sys
+
+# Third-party
+import torch
+from dotenv import load_dotenv
+
+# Local Application/Library
 from . import application as app
-import torch 
-from torch.utils.tensorboard import SummaryWriter
-import importlib.metadata # For check_requirements
-from packaging.requirements import Requirement, InvalidRequirement # For check_requirements
-from packaging.version import Version # For check_requirements
-import datetime
+from .config import logging_config
+from .tools import utils
+from .tools.store_driver import Store # Modify Store implementation to match different application structure
 
-# Determine the directory of the main.py script first
-# This is needed for resolving paths for .env and log_dir
-_MAIN_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_DOTENV_PATH = os.path.join(_MAIN_SCRIPT_DIR, ".env")
+logger = logging.getLogger(__name__)
 
-def check_for_gpu() -> torch.device:
-    """Checks if a GPU is available and returns the appropriate torch device."""
-    if torch.cuda.is_available():
-        device = torch.device("cuda")  # Use the first available GPU
-        logger.info("GPU is available")
-    else:
-        device = torch.device("cpu")  # Use the CPU if no GPU is available
-        logger.info("GPU is not available, using CPU instead.")
-    return device
+PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
+_DOTENV_PATH = os.path.join(PACKAGE_DIR, ".env")
 
-#--- Initialize logging
-log_dir = os.path.join(_MAIN_SCRIPT_DIR, "runs", datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
-writer = SummaryWriter(log_dir)
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(message)s (%(name)s)')
-logger = logging.getLogger(__name__) # Get logger for main.py
-logger.info(f"TensorBoard logging to: {log_dir}")
-logger.info("--- Logger initialized in main.py ---")
-
-# --- Temporary File Management ---
-_temp_files_registry = set()
-
-def register_temp_file(path: str):
-    """Adds a temporary file path to the registry for cleanup."""
-    if path:
-        logger.debug(f"Registering temporary file for cleanup: {path}")
-        _temp_files_registry.add(path)
-
-def cleanup_temp_files():
-    """Deletes all registered temporary files."""
-    logger.info("Performing application cleanup...")
-    for path in list(_temp_files_registry):
-        try:
-            if os.path.exists(path):
-                os.remove(path)
-                logger.info(f"Successfully deleted temporary file: {path}")
-                _temp_files_registry.remove(path)
-        except OSError as e:
-            logger.error(f"Error deleting temporary file {path}: {e}", exc_info=True)
-    if writer:
-        writer.close()
-
-atexit.register(cleanup_temp_files)
-
-# --- Requirements Check Function (Moved from initialize.py) ---
-
-def check_requirements(requirements_filename="requirements.txt"):
-    """
-    Checks if packages listed in the requirements file are installed.
-
-    Args:
-        requirements_filename: Name of the requirements file (e.g., "requirements.txt").
-                               This file is expected to be in the same directory as this script.
-
-    Returns:
-        True if all requirements are met, False otherwise.
-    """
-    # Construct the absolute path to the requirements file
-    # __file__ is the path to the current script (main.py)
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    requirements_path = os.path.join(script_dir, requirements_filename)
-    try:
-        missing_packages = []
-        version_mismatches = []
-        with open(requirements_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'): # Skip empty lines and comments
-                    continue
-                try:
-                    req = Requirement(line)
-                    dist = importlib.metadata.distribution(req.name)
-                    installed_version = Version(dist.version)
-                    if not req.specifier.contains(installed_version, prereleases=True):
-                        version_mismatches.append(f"  - {req.name}: Installed={installed_version}, Required={req.specifier}")
-                except InvalidRequirement:
-                    logger.error(f"Warning: Skipping invalid requirement line: {line}")
-                except importlib.metadata.PackageNotFoundError:
-                    # Only append if req was successfully created
-                    try:
-                        req = Requirement(line)
-                        missing_packages.append(f"  - {req.name} ({req.specifier or 'any version'})")
-                    except InvalidRequirement:
-                        logger.error(f"Warning: Skipping invalid requirement line (package not found): {line}")
-
-        if not missing_packages and not version_mismatches: # All good
-            logger.info("All requirements are installed and versions match.")
-            return True
-    except FileNotFoundError:
-        logger.error(f"{requirements_path} not found.")
-        return False
-
-    # Report errors if any were found
-    if missing_packages:
-        logger.error("Error: The following required packages are missing:")
-        logger.error("\n".join(missing_packages))
-    if version_mismatches:
-        logger.error("Error: The following installed packages have version mismatches:")
-        logger.error("\n".join(version_mismatches))
-
-    if missing_packages or version_mismatches:
-        logger.error(f"\nPlease install or update the required packages. If running from the project root, you might use: pip install -r {requirements_filename}")
-        return False
-
-    return True # Should have returned True if no errors and no FileNotFoundError
-
-# --- Perform Requirements Check ---
-if not check_requirements(): # Call the local check_requirements function
-    sys.exit(1)
-
-# --- Environment Variables Setup ---
-logger.info("Loading environment variables.")
-try:
-    from dotenv import load_dotenv
-    if load_dotenv(dotenv_path=_DOTENV_PATH): # Use the explicit path
-        logger.info(f".env file loaded successfully from {_DOTENV_PATH}.")
-    else:
-        logger.warning(f".env file found at {_DOTENV_PATH} but could not be loaded (e.g., empty or parsing error).")
-except ImportError:
-    logger.warning("python-dotenv not installed. Cannot load .env file.")
-
-# --- Check for GPU availability ---
-device = check_for_gpu()
-
-# --- Google Storage  ---
-store = Store(
-    temp_file_registrar=register_temp_file,
-    cache_dir=const.CACHE_DIR,
-    cache_duration=const.CACHE_DURATION_SECONDS
+DEFAULT_TORCH_DEVICE = torch.device(
+    "cuda" if torch.cuda.is_available() else \
+    "mps" if torch.backends.mps.is_available() else \
+    "cpu"
 )
-if store.service:
-    app.run_application(store=store, writer=writer, device=device) # Pass device
-else:
-    logger.critical("Failed to initialize storage service (authentication likely failed). Cannot start application.")
-    sys.exit(1) 
+
+def main() -> int:
+    logger.info("---------- LaxAI Starting Application ----------")
+
+    # --- Argument Parsing ---
+    parser = argparse.ArgumentParser(description="LaxAI Video Processing Application.")
+    parser.add_argument("input_video",
+                        type=str,
+                        help="Local file path of the video to be processed.")
+    parser.add_argument("-o", "--output_video_path",
+                        type=str,
+                        default="results.mp4",
+                        help="Path for the output processed video. Default: results.mp4")
+    parser.add_argument("--device",
+                        type=str,
+                        default=DEFAULT_TORCH_DEVICE.type,
+                        choices=['cuda', 'mps', 'cpu'],
+                        help=f"Computation device. Default: auto-detect ({DEFAULT_TORCH_DEVICE.type})")
+    parser.add_argument("--debug_frames",
+                        type=int,
+                        default=None,
+                        metavar='N',
+                        help="Process only the first N frames for debugging. Default: process all frames.")
+    parser.add_argument("--log_level",
+                        type=str,
+                        default="INFO",
+                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+                        help="Set the logging level. Default: INFO")
+    args = parser.parse_args()
+
+    # --- Configure Logging Level based on args ---
+    try:
+        logging.getLogger('LaxAI').setLevel(args.log_level.upper())
+    except Exception as e:
+        # Fallback if the above fails, log at the initial level
+        logger.error(f"Failed to dynamically set log level to {args.log_level.upper()}: {e}")
+
+    # --- Environment and System Checks ---
+    selected_device = torch.device(args.device)
+    logger.info(f"Using device: {selected_device}")
+
+    if not utils.check_requirements():
+        logger.error("Requirements check failed. Please install missing packages.")
+        return 1 # Exit with error code
+
+    # --- Load .env ---
+    if os.path.exists(_DOTENV_PATH):
+        if load_dotenv(dotenv_path=_DOTENV_PATH, verbose=True): # verbose=True logs INFO messages from dotenv
+            logger.info(f".env file loaded successfully from {_DOTENV_PATH}.")
+        else:
+            logger.warning(f".env file at {_DOTENV_PATH} was found but may be empty or failed to load variables.")
+    else:
+        logger.info(f".env file not found at {_DOTENV_PATH}. Proceeding with environment variables or defaults.")
+
+    # --- Verify if video file provided exists  ---
+    input_video = args.input_video
+    if not os.path.exists(input_video):
+        logger.error(f"Input video file '{input_video}' does not exist. Please provide a valid file path.")
+        return 1
+
+    # --- Main Application Logic ---
+    try:
+        with Store() as store:
+            # Store is crucial if downloading video or models from the store object
+            if not store.is_initialized():
+                logger.critical("Store initialization failed. Exiting.")
+                return 1
+            app.run_application(
+                store=store,
+                input_video=input_video,
+                output_video_path=args.output_video_path,
+                device=selected_device,
+                debug_max_frames=args.debug_frames
+            )
+        logger.info("Application run completed successfully.")
+        return 0
+
+    except Exception as e:
+        logger.critical(f"An unhandled exception occurred in the main application: {e}", exc_info=True)
+        return 1
+    finally:
+        logger.info("---------- LaxAI Application Finished ----------")
+
+if __name__ == "__main__":
+    exit_code = main()
+    sys.exit(exit_code)
