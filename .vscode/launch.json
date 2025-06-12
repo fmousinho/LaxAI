@@ -34,7 +34,7 @@
                 // Replace with the actual path to your test video
                 "/Users/fernandomousinho/Library/CloudStorage/GoogleDrive-fmousinho76@gmail.com/My Drive/Colab_Notebooks/GRIT Dallas-Houston 2027 vs Urban Elite 2027 - 12-30pm.mp4", 
                 "--device", "cpu", // or "mps", "cuda"
-                "--analyse", "20:30",
+                "--analyse", "20:40",
                 "--log_level", "DEBUG"
             ]
         }

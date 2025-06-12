@@ -65,7 +65,6 @@ def run_application (
                     labels=labels
                 )
 
-
             sink.write_frame(frame=annotated_frame)
             frame_id += 1
             if debug_max_frames and frame_id >= debug_max_frames:

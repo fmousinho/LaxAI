@@ -17,6 +17,8 @@ MODEL_CHECKPOINT = "checkpoint.pth"
 DEFAULT_CHECKPOINT_DIR = "Colab_Notebooks"
 DEFAULT_PLAYER_CLASS_ID = 3
 DEFAULT_TORCH_DEVICE = torch.device("cpu")
+PREDICTION_THRESHOLD = 0.4
+
 
 class DetectionModel:
     """
@@ -101,7 +103,7 @@ class DetectionModel:
     def generate_detections(
             self,
             images: Union[str, Image.Image, np.ndarray, torch.Tensor, List[Union[str, np.ndarray, Image.Image, torch.Tensor]]],
-            threshold: float = 0.5,
+            threshold: float = PREDICTION_THRESHOLD,
             **kwargs,
         ) -> sv.Detections: # type: ignore
         """

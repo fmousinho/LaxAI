@@ -107,9 +107,9 @@ def main() -> int:
                 analyse_module.analyse_video (
                     store=store,
                     input_video=input_video,
-                    device=selected_device,
                     start_frame=start_frame, 
-                    end_frame=end_frame
+                    end_frame=end_frame,
+                    device=selected_device
                     )
                 logger.info("Analysis completed successfully.")
                 return 0
