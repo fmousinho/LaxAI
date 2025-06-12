@@ -35,9 +35,9 @@ def run_application (
     tracker = sv.ByteTrack(     #type: ignore
         track_activation_threshold = 0.25,
         lost_track_buffer = 30,
-        minimum_matching_threshold=0.95,
+        minimum_matching_threshold=0.8,
         frame_rate = video_info.fps,
-        minimum_consecutive_frames=1
+        minimum_consecutive_frames=15
         ) 
     smoother = sv.DetectionsSmoother() #type: ignore
 

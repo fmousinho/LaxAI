@@ -12,7 +12,9 @@ from dotenv import load_dotenv
 from . import application as app
 from .config import logging_config
 from .tools import utils
-from .tools.store_driver import Store # Modify Store implementation to match different application structure
+from .tools.store_driver import Store
+from .analyse import analyse as analyse_module
+
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,12 @@ def main() -> int:
                         default="INFO",
                         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
                         help="Set the logging level. Default: INFO")
+    parser.add_argument("--analyse",
+                        type=utils.frame_interval_type,
+                        default=None, # Explicitly set default to None
+                        metavar='START:END',
+                        help="Analyse a specific frame interval (e.g., '100:500'). START must be < END. Default: process based on other settings.")
+
     args = parser.parse_args()
 
     # --- Configure Logging Level based on args ---
@@ -91,6 +99,21 @@ def main() -> int:
             if not store.is_initialized():
                 logger.critical("Store initialization failed. Exiting.")
                 return 1
+            
+            #Analyse is a mode to evalue details of ByteTracker implementation. Can be verbose.
+            if args.analyse:
+                start_frame, end_frame = args.analyse
+                logger.warning(f"Entering analysis mode. Check directory for results.")
+                analyse_module.analyse_video (
+                    store=store,
+                    input_video=input_video,
+                    device=selected_device,
+                    start_frame=start_frame, 
+                    end_frame=end_frame
+                    )
+                logger.info("Analysis completed successfully.")
+                return 0
+            
             app.run_application(
                 store=store,
                 input_video=input_video,

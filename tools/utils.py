@@ -1,5 +1,6 @@
 import logging
 import os
+import argparse # For custom type checking
 import importlib.metadata # For check_requirements
 from packaging.requirements import Requirement, InvalidRequirement # For check_requirements
 from packaging.version import Version # For check_requirements
@@ -65,3 +66,33 @@ def check_requirements(requirements_filename="requirements.txt"):
         return False
 
     return True # Should have returned True if no errors and no FileNotFoundError
+
+def frame_interval_type(arg_string: str) -> tuple[int, int]:
+    """
+    Custom argparse type for a frame interval string "START:END".
+
+    Validates that the input is in "START:END" format, both parts are integers,
+    are non-negative, and that START is strictly less than END.
+
+    Args:
+        arg_string: The command-line argument string.
+
+    Returns:
+        A tuple (start_frame, end_frame).
+
+    Raises:
+        argparse.ArgumentTypeError: If the string is not in the correct format or values are invalid.
+    """
+    try:
+        parts = arg_string.split(':')
+        if len(parts) != 2:
+            raise ValueError("must be in START:END format (e.g., '100:500').")
+        start_frame = int(parts[0])
+        end_frame = int(parts[1])
+        if start_frame < 0 or end_frame < 0:
+            raise ValueError("frame numbers must be non-negative.")
+        if start_frame >= end_frame:
+            raise ValueError(f"START frame ({start_frame}) must be strictly less than END frame ({end_frame}).")
+        return start_frame, end_frame
+    except ValueError as e: # Catches int() conversion errors and our custom ValueErrors
+        raise argparse.ArgumentTypeError(f"Invalid frame interval '{arg_string}': {e}")

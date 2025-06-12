@@ -4,10 +4,8 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-
-
         {
-            "name": "Python Debugger: Module",
+            "name": "LaxAI in Debug",
             "type": "debugpy",
             "request": "launch",
             "module": "LaxAI.main",
@@ -22,6 +20,25 @@
                 "--debug_frames", "200", // Example: process only 100 frames
                 "--log_level", "DEBUG"
             ]
+        },
+
+        {
+            "name": "LaxAI Analyse",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "LaxAI.main",
+            "cwd": "${workspaceFolder}/..",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                // Replace with the actual path to your test video
+                "/Users/fernandomousinho/Library/CloudStorage/GoogleDrive-fmousinho76@gmail.com/My Drive/Colab_Notebooks/GRIT Dallas-Houston 2027 vs Urban Elite 2027 - 12-30pm.mp4", 
+                "--device", "cpu", // or "mps", "cuda"
+                "--analyse", "20:30",
+                "--log_level", "DEBUG"
+            ]
         }
+
+
     ]
 }
