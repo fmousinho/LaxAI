@@ -118,7 +118,7 @@ class DetectionModel:
                       model's predict method.
 
         Returns:
-            Results returned as `supervision.Detections` objecct or list or objects.
+            Results returned as `supervision.Detections` object or list or objects.
             The  format is determined by the underlying `RFDETRBase.predict` method.
             For more information on output format, refer to documentation:
             https://supervision.roboflow.com/latest/detection/core/
