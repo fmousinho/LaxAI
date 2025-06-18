@@ -10,6 +10,8 @@ import numpy as np
 from .modules.detection import DetectionModel
 from .modules.player import Player
 from .tools.store_driver import Store
+from .modules.affine_motion_compensation import AffineAwareByteTrack
+
 
 logger = logging.getLogger(__name__)
 
@@ -39,42 +41,58 @@ def run_application (
     frames_generator = sv.get_video_frames_generator(**generator_params)
     model = DetectionModel(store=store, device=device)
 
-    tracker = sv.ByteTrack(  
-        track_activation_threshold = 0.25,
+    tracker = AffineAwareByteTrack(  
+        track_activation_threshold = 0.1,
         lost_track_buffer = 30,
         minimum_matching_threshold=0.8,
         frame_rate = video_info.fps,
         minimum_consecutive_frames=1
         ) 
-    #smoother = sv.DetectionsSmoother()
+    #smoother = sv.DetectionsSmoother() #Smoother doesn't produce good results.
 
     ellipse_annotator = sv.EllipseAnnotator() 
     label_annotator = sv.LabelAnnotator()
     multi_frame_detections = deque()
 
-    frame_id = 0
     frame_target = debug_max_frames if debug_max_frames else video_info.total_frames
 
     # --- First pass: Process frames, update/create players, and store all detections ---
     # This loop ensures all Player instances in Player._registry are up-to-date with their
     # confirmation counts and validation status.
     logger.info("Starting first pass: detecting, tracking, and updating player statuses...")
+    previous_frame = None
+    affine_matrix = None
     for frame in tqdm(frames_generator, desc="Reading and processing frames", total=frame_target):
-        detections = model.generate_detections(frame)
-        detections = tracker.update_with_detections(detections)
+        try:
+            # Detector determines where the players are
+            detections = model.generate_detections(frame)
+            # Affine matrix determines any camera move between consecutive frames
+            if previous_frame is not None:
+                affine_matrix = AffineAwareByteTrack.calculate_affine_transform(previous_frame, frame)
+            if affine_matrix is None:
+                affine_matrix = AffineAwareByteTrack.get_identity_affine_matrix()
+            # The tracker applies the affine matrix to the previous tracked detections
+            detections = tracker.update_with_transform(detections, affine_matrix)
+            previous_frame = frame.copy()
+            # Use line bellow instead of the Affine sequence if only the standard tracker is needed.
+            # detections = tracker.update_with_detections(detections)
+        except Exception as e:
+            logger.error(f"Error during detection/tracking for frame: {e}", exc_info=True)
+            # If detection or tracking fails for a frame, we might not have valid 'detections'.
+            # It's safer to skip processing this frame further for player updates.
+            multi_frame_detections.append(sv.Detections.empty()) # Append empty detections to keep deque length consistent
+            continue
 
-        # Assign player_id based on tracker_id
+        # Check if tracker_id is not None before iterating.
+        # An empty np.ndarray for tracker_id is fine and the loop won't execute.
         if detections.tracker_id is not None:
-            player_ids_list = [
-                Player.update_or_create(int(tid)) if tid is not None else 0
-                for tid in detections.tracker_id
-            ]
+            for tid_numpy in detections.tracker_id: # tid_numpy is a NumPy scalar (e.g., np.int64)
+                player_tid = int(tid_numpy) # Convert to Python int for Player.update_or_create
+                Player.update_or_create(tracker_id=player_tid)
         multi_frame_detections.append(detections)
-        frame_id +=1
 
     # --- Second pass: Write output video using stored detections and validated player info ---
     logger.info("Starting second pass: Annotating and writing video...")
-
     writer_frames_generator = sv.get_video_frames_generator(**generator_params)
     with sv.VideoSink(target_path=output_video_path, video_info=video_info) as sink:
         for frame in tqdm(writer_frames_generator, desc="Writing frames", total=frame_target):
@@ -83,8 +101,8 @@ def run_application (
             except IndexError:
                 logger.error(f"Detections could not be retrieved to write a frame.")
                 break
-            validated_detections = []
-            if detections.tracker_id is None:
+            if detections.tracker_id is None or detections.confidence is None:
+                logger.error(f"Missing tracking ID or confidence in detections.")
                 continue
             detections.data["player_id"] = np.zeros(len(detections), dtype=np.int16)
 
@@ -100,14 +118,14 @@ def run_application (
                 detections.data["player_id"][i] = player.id  
             
             annotated_frame = ellipse_annotator.annotate(scene=frame.copy(), detections=detections)
-            if detections.confidence is not None:
-                labels = [
-                    f"{tracker_id} {confidence:.2f}" 
-                    for tracker_id, confidence in zip(detections.data["player_id"], detections.confidence)
-                ]
-                annotated_frame = label_annotator.annotate(
-                    scene=annotated_frame,
-                    detections=detections,
-                    labels=labels
-                )
+
+            labels = [
+                f"{pid:.0f} {confidence:.0%}" 
+                for pid, confidence in zip(detections.data["player_id"], detections.confidence)
+            ]
+            annotated_frame = label_annotator.annotate(
+                scene=annotated_frame,
+                detections=detections,
+                labels=labels
+            )
             sink.write_frame(frame=annotated_frame)

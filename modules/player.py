@@ -63,13 +63,13 @@ class Player:
             player._consecutive_confirmations += 1
             if player._consecutive_confirmations == cls.needed_confirmations:
                 player._validate_player()
-            logger.debug(f"Player tracker_id {tracker_id} has {player._consecutive_confirmations} confirmations.")
+            # logger.debug(f"Player tracker_id {tracker_id} has {player._consecutive_confirmations} confirmations.")
 
         else:
             player = cls(tracker_id=tracker_id) # Calls __init__
             player._consecutive_confirmations = 1 # First sighting counts as one confirmation
             cls._registry[tracker_id] = player
-            logger.debug(f"New player created with tracker_id {tracker_id} (ID: {player.id}). Confirmations: {player._consecutive_confirmations}")
+            # logger.debug(f"New player created with tracker_id {tracker_id} (ID: {player.id}). Confirmations: {player._consecutive_confirmations}")
 
         return player.id # will be 0 if player has not been validated
     
