@@ -86,9 +86,15 @@ def run_application (
         # Check if tracker_id is not None before iterating.
         # An empty np.ndarray for tracker_id is fine and the loop won't execute.
         if detections.tracker_id is not None:
-            for tid_numpy in detections.tracker_id: # tid_numpy is a NumPy scalar (e.g., np.int64)
-                player_tid = int(tid_numpy) # Convert to Python int for Player.update_or_create
-                Player.update_or_create(tracker_id=player_tid)
+            for i in range(len(detections)):
+                player_tid = detections.tracker_id[i]
+                tid = int(player_tid)
+                player, is_new = Player.update_or_create(tracker_id=player_tid)
+                if is_new:
+                    bbox_xyxy = detections.xyxy[i]
+                    player_crop = sv.crop_image(frame, xyxy=bbox_xyxy)
+              
+                    
         multi_frame_detections.append(detections)
 
     # --- Second pass: Write output video using stored detections and validated player info ---

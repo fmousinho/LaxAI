@@ -1,4 +1,4 @@
-from typing import Optional, Literal, List, Dict
+from typing import Optional, Literal, Tuple, Dict
 import logging
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ class Player:
         return cls._registry.get(tracker_id)
 
     @classmethod
-    def update_or_create(cls, tracker_id: int) -> int:
+    def update_or_create(cls, tracker_id: int) -> Tuple['Player', bool]:
         """
         Updates an existing player's confirmation count or creates a new player
         if one with the given tracker_id does not exist.
@@ -55,23 +55,24 @@ class Player:
             tracker_id: The tracker ID of the player to update or create.
 
         Returns:
-            The unique ID of the player (0 if not yet validated, or a positive
-            integer if validated).
+            The player object and a bool indicating if it is new (True) or not (False).
         """
         if tracker_id in cls._registry:
             player = cls._registry[tracker_id]
             player._consecutive_confirmations += 1
             if player._consecutive_confirmations == cls.needed_confirmations:
                 player._validate_player()
+            is_new = False
             # logger.debug(f"Player tracker_id {tracker_id} has {player._consecutive_confirmations} confirmations.")
 
         else:
             player = cls(tracker_id=tracker_id) # Calls __init__
             player._consecutive_confirmations = 1 # First sighting counts as one confirmation
             cls._registry[tracker_id] = player
+            is_new = True
             # logger.debug(f"New player created with tracker_id {tracker_id} (ID: {player.id}). Confirmations: {player._consecutive_confirmations}")
 
-        return player.id # will be 0 if player has not been validated
+        return player, is_new
     
     @classmethod
     def get_confirmation_requirements (cls) -> int:
