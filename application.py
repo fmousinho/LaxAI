@@ -44,7 +44,7 @@ def run_application (
     tracker = AffineAwareByteTrack(  
         track_activation_threshold = 0.1,
         lost_track_buffer = 30,
-        minimum_matching_threshold=0.8,
+        minimum_matching_threshold=0.7,
         frame_rate = video_info.fps,
         minimum_consecutive_frames=1
         ) 
