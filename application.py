@@ -112,10 +112,10 @@ def run_application (
                 if tracker_id_np is None:
                     continue
                 tid = int(tracker_id_np)
-                player = Player.get_player(tid)
+                player = Player.get_player_by_tid(tid)
                 if player is None or not player.is_validated:
                     continue
-                detections.data["player_id"][i] = player.id  
+                detections.data["player_id"][i] = player.id
             
             annotated_frame = ellipse_annotator.annotate(scene=frame.copy(), detections=detections)
 

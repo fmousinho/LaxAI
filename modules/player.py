@@ -33,7 +33,7 @@ class Player:
         self.is_validated: bool = False
 
     @classmethod
-    def get_player(cls, tracker_id: int) -> Optional['Player']:
+    def get_player_by_tid(cls, tracker_id: int) -> Optional['Player']:
         """
         Retrieves a Player instance from the registry by its tracker_id.
 
