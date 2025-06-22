@@ -5,6 +5,9 @@ import cv2
 import supervision as sv
 
 logger = logging.getLogger(__name__)
+# Set the logging level specifically for this module to INFO.
+# This will prevent DEBUG messages from this module from being displayed.
+logger.setLevel(logging.INFO)
 
 
 def warp_bbox(bbox_tlbr: np.ndarray, affine_matrix: np.ndarray) -> np.ndarray:

@@ -83,18 +83,26 @@ def run_application (
             multi_frame_detections.append(sv.Detections.empty()) # Append empty detections to keep deque length consistent
             continue
 
-        # Check if tracker_id is not None before iterating.
-        # An empty np.ndarray for tracker_id is fine and the loop won't execute.
+       # This next blocks creates or updates a Player object for all detections.
+       # If a player is encountered for the first time (consecutive_confirmations==1),
+       # we crop its image and add to an array. 
+
         if detections.tracker_id is not None:
+            known_players = []
+            maybe_new_players = []
+            crops=[]
             for i in range(len(detections)):
                 player_tid = detections.tracker_id[i]
                 tid = int(player_tid)
-                player, is_new = Player.update_or_create(tracker_id=player_tid)
-                if is_new:
-                    bbox_xyxy = detections.xyxy[i]
-                    player_crop = sv.crop_image(frame, xyxy=bbox_xyxy)
-              
-                    
+                player = Player.update_or_create(tracker_id=player_tid)
+                if player.consecutive_confirmations == 1:
+                    maybe_new_players.append(player)
+                    crop = sv.crop_image(frame, xyxy=detections.xyxy[i])
+                    crops.append(crop)
+                else:
+                    known_players.append(player)
+            Player.generate_embeddings_for_batch(players=maybe_new_players, images=crops)
+                            
         multi_frame_detections.append(detections)
 
     # --- Second pass: Write output video using stored detections and validated player info ---
