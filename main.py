@@ -58,7 +58,10 @@ def main() -> int:
                         type=utils.frame_interval_type,
                         default=None, # Explicitly set default to None
                         metavar='START:END',
-                        help="Analyse a specific frame interval (e.g., '100:500'). START must be < END. Default: process based on other settings.")
+                        help="Analyse a specific frame interval (e.g., '100:500'). This runs in a special analysis mode.")
+    parser.add_argument("--report",
+                        action='store_true',
+                        help="Generate a player analysis HTML report at the end of the main application run.")
 
     args = parser.parse_args()
 
@@ -119,7 +122,8 @@ def main() -> int:
                 input_video=input_video,
                 output_video_path=args.output_video_path,
                 device=selected_device,
-                debug_max_frames=args.debug_frames
+                debug_max_frames=args.debug_frames,
+                #generate_report=args.report
             )
         logger.info("Application run completed successfully.")
         return 0

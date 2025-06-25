@@ -1,48 +1,39 @@
-from typing import Optional, Literal, Dict, Union, List
+from typing import Optional, Literal, Dict, List, Tuple
 import logging
 import numpy as np
-import torch
-from transformers import AutoProcessor, SiglipVisionModel
 import supervision as sv
-
+from sklearn.metrics.pairwise import cosine_similarity # For robust cosine similarity calculation
 
 logger = logging.getLogger(__name__)
 
-_REQUIRED_CONFIRMATIONS = 15
-_MIN_HEIGHT_FOR_EMBEDDINGS = 40
-_MIN_WIDTH_FOR_EMBEDDINGS = 15
-_EMBEDDINGS_MODEL_PATH = "google/siglip2-base-patch16-224"
+_REID_SIMILARITY_THRESHOLD = 0.9
 
 class Player:
     """
     Represents a player detected and tracked in the video.
 
     Attributes:
-        id (int): A unique identifier for the player. It is 0 for players
-                  that have not yet met the confirmation threshold. Once validated,
-                  a unique positive integer is assigned.
+        id (int): A unique identifier for the player.
         tracker_id (int): The ID assigned by the object tracker (e.g., ByteTrack).
         name (Optional[str]): The name of the player, if identified.
         jersey_color (Optional[Literal["light", "dark"]]): The player's jersey color.
         jersey_number (Optional[int]): The player's jersey number.
-        is_validated (bool): True if the player has been confirmed enough times, False otherwise.
+        crops (List[np.ndarray]): List of cropped images of the player.
+        embeddings (Optional[np.ndarray]): The embedding vector representing the player.
     """
     _next_id: int = 1
-    _registry: Dict[int, 'Player'] = {} # Registry to store players by tracker_id
-    needed_confirmations: int = _REQUIRED_CONFIRMATIONS
-    device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
-    processor = AutoProcessor.from_pretrained(_EMBEDDINGS_MODEL_PATH)
-    model = SiglipVisionModel.from_pretrained(_EMBEDDINGS_MODEL_PATH).to(device)
+    _registry: Dict[int, 'Player'] = {} # Registry to map tracker IDs to Player objects.
 
-    def __init__(self, tracker_id: int) -> None:
-        self.id: int = 0 #will be 0 for all unconfirmed players, and unique once confirmed
-        self.tracker_id: int = tracker_id
+    def __init__(self, initial_embedding: Optional[np.ndarray] = None, initial_crops: Optional[List[np.ndarray]] = None) -> None:
+
+        self.id = Player._next_id
+        Player._next_id += 1 
         self.name: Optional[str] = None
         self.jersey_color: Optional[Literal["light", "dark"]] = None
         self.jersey_number: Optional[int] = None
-        self.consecutive_confirmations: int = 0 
-        self.is_validated: bool = False
-        self.embeddings: Optional[np.ndarray] = None
+        self.embeddings: Optional[np.ndarray] = initial_embedding
+        self.crops: List[np.ndarray] = initial_crops if initial_crops is not None else []
+        self.associated_tracker_ids: List[int] = []
 
     @classmethod
     def get_player_by_tid(cls, tracker_id: int) -> Optional['Player']:
@@ -69,106 +60,174 @@ class Player:
         Returns:
             The player object.
         """
+        # This method is for simple presence tracking and does not handle re-ID data.
+        # For re-ID, use `match_and_update_for_batch` or `register_new_players_batch`.
+
         if tracker_id in cls._registry:
             player = cls._registry[tracker_id]
-            player.consecutive_confirmations += 1
-            if player.consecutive_confirmations == cls.needed_confirmations:
-                player._validate_player()
-            # logger.debug(f"Player tracker_id {tracker_id} has {player.consecutive_confirmations} confirmations.")
 
         else:
-            player = cls(tracker_id=tracker_id) # Calls __init__
-            player.consecutive_confirmations = 1 # First sighting counts as one confirmation
+            player = cls() # Calls __init__
             cls._registry[tracker_id] = player
-            # logger.debug(f"New player created with tracker_id {tracker_id} (ID: {player.id}). Confirmations: {player.consecutive_confirmations}")
 
         return player
     
     @classmethod
-    def get_confirmation_requirements (cls) -> int:
+    def register_new_players_batch(cls, tracker_ids: List[int], embeddings: List[np.ndarray], crops: List[List[np.ndarray]]) -> List['Player']:
         """
-        Returns the number of consecutive confirmations needed for a player to be validated.
+        Registers a batch of truly new players (not found in re-identification).
+        Each input tracker_id must not already be in the registry.
+
+        Args:
+            tracker_ids (List[int]): List of new tracker IDs.
+            embeddings (List[np.ndarray]): List of initial embeddings for each new tracker.
+            crops (List[List[np.ndarray]]): List of initial crops for each new tracker.
 
         Returns:
-            An integer representing the required number of confirmations.
+            List['Player']: A list of newly created Player objects.
         """
-        return cls.needed_confirmations
-    
-    def _validate_player(self) -> None:
-        """ Changes the vadlidation status of a player and update the player sequence number. """
-        self.is_validated = True
-        self.id = Player._next_id
-        Player._next_id += 1
+        players: List['Player'] = []
+        if not (len(tracker_ids) == len(embeddings) == len(crops)):
+            raise ValueError("tracker_ids, embeddings, and crops must have the same length.")
+
+        for i in range(len(tracker_ids)):
+            tid = tracker_ids[i]
+            embedding = embeddings[i]
+            crop_list = crops[i]
+
+            if tid in cls._registry:
+                logger.warning(f"Attempted to register new player with existing tracker ID {tid}. Skipping.")
+                continue
+
+            if embedding is None:
+                logger.warning(f"Skipping player creation for tracker ID {tid} due to missing embedding.")
+                continue
+
+            player = cls(initial_embedding=embedding, initial_crops=crop_list)
+            player.associated_tracker_ids.append(tid)
+            cls._registry[tid] = player
+            players.append(player)
+            logger.debug(f"Registered new player {player.id} with tracker ID {tid}.")
+        return players
 
     @classmethod
-    def generate_embeddings_for_batch(cls, players: List['Player'], images: List[np.ndarray]) -> None:
+    def match_and_update_for_batch(
+        cls,
+        new_tracker_ids: List[int],
+        new_embeddings: List[np.ndarray],
+        new_crops: List[List[np.ndarray]],
+        orphan_track_ids: List[int]
+    ) -> Tuple[List[int], List[np.ndarray], List[List[np.ndarray]], List[int]]:
         """
-        Generates and stores image embeddings for a batch of players efficiently.
+        Attempts to re-identify new tracker IDs with existing players in the registry
+        using cosine similarity.
 
-        This method processes a list of images in a single batch, which is much
-        more efficient than processing them one by one. It filters out players
-        whose corresponding image crops are too small and updates the `embeddings`
-        attribute for each valid player.
+        If a new tracker ID's embedding is sufficiently similar to an existing player's
+        embedding, the new tracker ID is associated with that existing player.
+        Otherwise, the new tracker ID, its embedding, and crops are returned as
+        unmatched.
 
         Args:
-            players (List[Player]): A list of Player instances to update.
-            images (List[np.ndarray]): A corresponding list of image crops (NumPy arrays).
+            new_tracker_ids (List[int]): List of tracker IDs that need to be matched.
+            new_embeddings (List[np.ndarray]): List of embeddings corresponding to `new_tracker_ids`.
+            new_crops (List[List[np.ndarray]]): List of crops corresponding to `new_tracker_ids`.
+
+        Returns:
+            A tuple containing:
+            - unmatched_tids: Tracker IDs that could not be matched.
+            - unmatched_embeddings: Corresponding embeddings for unmatched TIDs.
+            - unmatched_crops: Corresponding crops for unmatched TIDs.
+            - reassigned_tids: Tracker IDs that were successfully re-identified.
         """
-        if not players or not images:
-            return
+        if not (len(new_tracker_ids) == len(new_embeddings) == len(new_crops)):
+            raise ValueError("new_tracker_ids, new_embeddings, and new_crops must have the same length.")
 
-        if len(players) != len(images):
-            logger.error(f"Batch embedding generation failed: Mismatch between players ({len(players)}) and images ({len(images)}).")
-            return
+        unmatched_tids: List[int] = []
+        unmatched_embeddings: List[np.ndarray] = []
+        unmatched_crops: List[List[np.ndarray]] = []
+        reassigned_tids: List[int] = [] # This will store the newly matched TIDs
 
-        # Filter out players and images that don't meet size requirements
-        valid_players_and_images = [
-            (player, image) for player, image in zip(players, images)
-            if image.shape[0] >= _MIN_HEIGHT_FOR_EMBEDDINGS and image.shape[1] >= _MIN_WIDTH_FOR_EMBEDDINGS
-        ]
+        # 1. Gather existing player embeddings and their associated Player objects for orphans
+        orphan_players_with_embeddings: List[Tuple['Player', np.ndarray]] = []
+        
+        for tid in orphan_track_ids:
+            if tid not in cls._registry:
+                logger.warning(f"Orphan track ID {tid} not found in registry. Skipping re-identification for it.")
+                continue
+            player_obj = cls._registry[tid]
+            if player_obj.embeddings is not None:
+                orphan_players_with_embeddings.append((player_obj, player_obj.embeddings))
 
-        if not valid_players_and_images:
-            return
+        if not new_tracker_ids or not orphan_players_with_embeddings:
+            logger.debug("No new tracks to match or no orphan players to match against. All new tracks considered unmatched.")
+            return new_tracker_ids, new_embeddings, new_crops, []
 
-        valid_players, valid_images = zip(*valid_players_and_images)
-        pil_images = [sv.cv2_to_pillow(img) for img in valid_images]
+        # Extract embeddings for batch processing
+        orphan_embeddings_array = np.array([emb for _, emb in orphan_players_with_embeddings])
+        new_embeddings_array = np.array(new_embeddings)
 
-        inputs = cls.processor(images=pil_images, return_tensors="pt").to(cls.device)
-        with torch.no_grad():
-            outputs = cls.model(**inputs)
 
-        batch_embeddings = torch.mean(outputs.last_hidden_state, dim=1).cpu().numpy()
-        for i, player in enumerate(valid_players):
-            player.embeddings = batch_embeddings[i]
+        # 2. Compute Cosine Similarity Matrix
+        try:
+            similarity_matrix = cosine_similarity(new_embeddings_array, orphan_embeddings_array)
+        except ValueError as e:
+            logger.error(f"Error computing cosine similarity: {e}. Check embedding dimensions or content.")
+            # If similarity computation fails, treat all as unmatched
+            return new_tracker_ids, new_embeddings, new_crops, []
 
-    def generate_embeddings(self, image: np.ndarray) -> None:
+        # 3. Match New Tracks to Existing Players
+        matched_new_tids_set = set()
+        for i, new_tid in enumerate(new_tracker_ids):
+            # If this new_tid is already in the registry, it means it was already linked
+            # (e.g., by update_or_create in a previous frame). We should not re-identify it.
+            if new_tid in cls._registry:
+                logger.debug(f"New tracker ID {new_tid} is already in registry. Skipping re-identification for it.")
+                matched_new_tids_set.add(new_tid) # Mark as "handled"
+                continue
+
+            # Find the best match for the current new_embedding
+            best_match_idx = np.argmax(similarity_matrix[i])
+            max_similarity = similarity_matrix[i, best_match_idx]
+
+            if max_similarity >= _REID_SIMILARITY_THRESHOLD:
+                matched_player, _ = orphan_players_with_embeddings[best_match_idx]
+                cls._registry[new_tid] = matched_player
+                matched_player.associated_tracker_ids.append(new_tid)
+                matched_player.crops.extend(new_crops[i])
+                matched_new_tids_set.add(new_tid)
+                reassigned_tids.append(new_tid)
+                logger.debug(f"Re-identified tracker ID {new_tid} as existing player {matched_player.id} (similarity: {max_similarity:.2f}).")
+            else:
+                logger.debug(f"Tracker ID {new_tid} (similarity: {max_similarity:.2f}) did not find a strong re-ID match.")
+        
+        # 4. Collect Unmatched
+        for i, original_new_tid in enumerate(new_tracker_ids):
+            if original_new_tid not in matched_new_tids_set:
+                unmatched_tids.append(original_new_tid)
+                unmatched_embeddings.append(new_embeddings[i])
+                unmatched_crops.append(new_crops[i])
+
+        return unmatched_tids, unmatched_embeddings, unmatched_crops, reassigned_tids
+    
+    @classmethod
+    def get_registered_tracker_ids(cls) -> List[int]:
         """
-        Generates and stores image embeddings for the player using a SigLIP model.
+        Returns a list of all registered tracker IDs.
 
-        The method first checks if the input image meets minimum dimension requirements.
-        If the image is too small, the method returns without generating embeddings.
-        Otherwise, it processes the image using the class-level SigLIP processor and
-        model to produce a feature vector. This vector is then averaged across
-        the patch dimension, converted to a NumPy array, flattened, and stored in
-        the `self.embeddings` attribute.
-        
-        Args:
-            image: A NumPy array representing the player's image (e.g., a crop
-                   from a video frame) in BGR or RGB format (as expected by
-                   `supervision.cv2_to_pillow`).
+        Returns:
+            A list of integers representing the tracker IDs of all registered players.
         """
-        height = image.shape[0]
-        width = image.shape[1]
-        if height < _MIN_HEIGHT_FOR_EMBEDDINGS or width < _MIN_WIDTH_FOR_EMBEDDINGS:
-            return
-        impage_pil = sv.cv2_to_pillow(image)
-        inputs = self.processor(images=impage_pil, return_tensors="pt").to(self.device)
-        with torch.no_grad():
-            outputs = self.model(**inputs)
-        md_embeddings = torch.mean(outputs.last_hidden_state, dim=1).cpu().numpy()
-        self.embeddings = np.concatenate(md_embeddings)
-        
-        
+        return list(cls._registry.keys()) # This returns all TIDs that are keys in the registry
 
+    @classmethod
+    def get_registered_players(cls) -> List['Player']:
+        """
+        Returns a list of all registered Player instances.
 
-        
+        Returns:
+            A list of Player instances.
+        """
+        return list(set(cls._registry.values())) # Use set to get unique Player objects
+    
+    
+    

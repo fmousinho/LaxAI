@@ -1,16 +1,19 @@
 
 import logging
 from typing import Optional, List
+import datetime
+import os
 import torch
 import supervision as sv
 from tqdm import tqdm
 from collections import deque
 import numpy as np
 
+from .tools import reporting
 from .modules.detection import DetectionModel
 from .modules.player import Player
 from .tools.store_driver import Store
-from .modules.affine_motion_compensation import AffineAwareByteTrack
+from .modules.custom_tracker import AffineAwareByteTrack # SiglipReID is now managed by the tracker
 
 
 logger = logging.getLogger(__name__)
@@ -21,7 +24,8 @@ def run_application (
         input_video: str,
         output_video_path: str = "results.mp4",
         device: torch.device = torch.device("cpu"),
-        debug_max_frames: Optional[int] = None
+        debug_max_frames: Optional[int] = None,
+        generate_report: bool = True
     ):
     """
     Main entry point for the video processing application.
@@ -41,13 +45,15 @@ def run_application (
     frames_generator = sv.get_video_frames_generator(**generator_params)
     model = DetectionModel(store=store, device=device)
 
-    tracker = AffineAwareByteTrack(  
+    tracker = AffineAwareByteTrack(
+        # The reid module is now managed internally by AffineAwareByteTrack
         track_activation_threshold = 0.1,
         lost_track_buffer = 30,
         minimum_matching_threshold=0.7,
         frame_rate = video_info.fps,
-        minimum_consecutive_frames=1
+        minimum_consecutive_frames=30
         ) 
+    
     #smoother = sv.DetectionsSmoother() #Smoother doesn't produce good results.
 
     ellipse_annotator = sv.EllipseAnnotator() 
@@ -59,10 +65,10 @@ def run_application (
     # --- First pass: Process frames, update/create players, and store all detections ---
     # This loop ensures all Player instances in Player._registry are up-to-date with their
     # confirmation counts and validation status.
-    logger.info("Starting first pass: detecting, tracking, and updating player statuses...")
+    logger.info("First pass: Reading frames and detectiong players")
     previous_frame = None
     affine_matrix = None
-    for frame in tqdm(frames_generator, desc="Reading and processing frames", total=frame_target):
+    for frame in tqdm(frames_generator, desc="Reading frames and detecting players", total=frame_target):
         try:
             # Detector determines where the players are
             detections = model.generate_detections(frame)
@@ -72,10 +78,9 @@ def run_application (
             if affine_matrix is None:
                 affine_matrix = AffineAwareByteTrack.get_identity_affine_matrix()
             # The tracker applies the affine matrix to the previous tracked detections
-            detections = tracker.update_with_transform(detections, affine_matrix)
+            detections = tracker.update_with_transform(detections, affine_matrix, frame=frame)
             previous_frame = frame.copy()
-            # Use line bellow instead of the Affine sequence if only the standard tracker is needed.
-            # detections = tracker.update_with_detections(detections)
+           
         except Exception as e:
             logger.error(f"Error during detection/tracking for frame: {e}", exc_info=True)
             # If detection or tracking fails for a frame, we might not have valid 'detections'.
@@ -83,30 +88,62 @@ def run_application (
             multi_frame_detections.append(sv.Detections.empty()) # Append empty detections to keep deque length consistent
             continue
 
-       # This next blocks creates or updates a Player object for all detections.
-       # If a player is encountered for the first time (consecutive_confirmations==1),
-       # we crop its image and add to an array. 
-
-        if detections.tracker_id is not None:
-            known_players = []
-            maybe_new_players = []
-            crops=[]
-            for i in range(len(detections)):
-                player_tid = detections.tracker_id[i]
-                tid = int(player_tid)
-                player = Player.update_or_create(tracker_id=player_tid)
-                if player.consecutive_confirmations == 1:
-                    maybe_new_players.append(player)
-                    crop = sv.crop_image(frame, xyxy=detections.xyxy[i])
-                    crops.append(crop)
-                else:
-                    known_players.append(player)
-            Player.generate_embeddings_for_batch(players=maybe_new_players, images=crops)
-                            
         multi_frame_detections.append(detections)
 
-    # --- Second pass: Write output video using stored detections and validated player info ---
-    logger.info("Starting second pass: Annotating and writing video...")
+    # --- Second pass: Creates players based on video analysis
+
+    logger.info("Second pass: Creating and linking Player objects")
+    for frame_idx, detections in enumerate(tqdm(multi_frame_detections, desc="Identifying players", total=len(multi_frame_detections))):
+        if detections.tracker_id is None or len(detections.tracker_id) == 0:
+            continue
+
+        # Collect TIDs that are in the current frame and have re-ID data from SiglipReID,
+        # but are NOT yet associated with a Player object in Player._registry.
+        tids_for_player_match_or_create = []
+        embeddings_for_player_match_or_create = []
+        crops_for_player_match_or_create = []
+
+        # Find all tids in the current detections that are not yet linked to a Player object, and collect their re-ID data.
+        for tid_np in detections.tracker_id:
+            tid = int(tid_np)
+            if Player.get_player_by_tid(tid) is None:
+                reid_data = tracker.get_reid_data_for_tid(tid)
+                if reid_data is not None and reid_data[0] is not None and reid_data[1]: # Check if embedding and crops exist
+                    tids_for_player_match_or_create.append(tid)
+                    embeddings_for_player_match_or_create.append(reid_data[0])
+                    crops_for_player_match_or_create.append(reid_data[1])
+                else:
+                    logger.debug(f"Tracker ID {tid} in frame {frame_idx} has no re-ID data from SiglipReID or data is incomplete. Skipping initial player creation/re-ID for it.")
+
+        # If we have TIDs that need to be matched or created, proceed with the matching process.
+        # Matching only happens with TIDs that are considered orphans (not linked to player object nor reassigned.).
+        if tids_for_player_match_or_create: 
+            orphan_track_ids = set(tracker.get_orphan_track_ids())
+
+
+            # Attempt to match these TIDs to existing players
+            unmatched_tids, unmatched_embeddings, unmatched_crops, reassigned_tids = Player.match_and_update_for_batch(
+                new_tracker_ids=tids_for_player_match_or_create,
+                new_embeddings=embeddings_for_player_match_or_create,
+                new_crops=crops_for_player_match_or_create,
+                orphan_track_ids=orphan_track_ids
+            )
+
+            tracker.reassigned_track_ids.update(reassigned_tids)
+
+
+            # For any remaining unmatched TIDs, create new Player objects
+            if unmatched_tids:
+                Player.register_new_players_batch(
+                    tracker_ids=unmatched_tids,
+                    embeddings=unmatched_embeddings,
+                    crops=unmatched_crops
+                )
+                logger.debug(f"Created {len(unmatched_tids)} new Player objects for unmatched tracker IDs in frame {frame_idx}.")
+
+
+    # --- Third pass: Write output video using stored detections and validated player info ---
+    logger.info("Creating output video with annotated frames")
     writer_frames_generator = sv.get_video_frames_generator(**generator_params)
     with sv.VideoSink(target_path=output_video_path, video_info=video_info) as sink:
         for frame in tqdm(writer_frames_generator, desc="Writing frames", total=frame_target):
@@ -127,8 +164,6 @@ def run_application (
                     continue
                 tid = int(tracker_id_np)
                 player = Player.get_player_by_tid(tid)
-                if player is None or not player.is_validated:
-                    continue
                 detections.data["player_id"][i] = player.id
             
             annotated_frame = ellipse_annotator.annotate(scene=frame.copy(), detections=detections)
@@ -143,3 +178,15 @@ def run_application (
                 labels=labels
             )
             sink.write_frame(frame=annotated_frame)
+
+     # --- (Optional) Fourth pass: Generate analysis report ---
+    if generate_report:
+        logger.info("Generating player analysis report")
+        run_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_output_dir = os.path.join(reporting.REPORTS_BASE_DIR, run_id)
+        
+        unique_players = list(set(Player._registry.values()))
+        logger.info(f"Found {len(unique_players)} unique players to report on.")
+
+        reporting.generate_player_report_html(run_id, run_output_dir, unique_players)
+        reporting.update_main_index_html()
