@@ -13,7 +13,7 @@ from .tools import reporting
 from .modules.detection import DetectionModel
 from .modules.player import Player
 from .tools.store_driver import Store
-from .modules.custom_tracker import AffineAwareByteTrack # SiglipReID is now managed by the tracker
+from .modules.custom_tracker import AffineAwareByteTrack
 
 
 logger = logging.getLogger(__name__)
@@ -45,14 +45,7 @@ def run_application (
     frames_generator = sv.get_video_frames_generator(**generator_params)
     model = DetectionModel(store=store, device=device)
 
-    tracker = AffineAwareByteTrack(
-        # The reid module is now managed internally by AffineAwareByteTrack
-        track_activation_threshold = 0.1,
-        lost_track_buffer = 30,
-        minimum_matching_threshold=0.7,
-        frame_rate = video_info.fps,
-        minimum_consecutive_frames=30
-        ) 
+    tracker = AffineAwareByteTrack(frame_rate = video_info.fps) 
     
     #smoother = sv.DetectionsSmoother() #Smoother doesn't produce good results.
 
@@ -72,6 +65,9 @@ def run_application (
         try:
             # Detector determines where the players are
             detections = model.generate_detections(frame)
+            if detections.xyxy.size > 0 and np.any(detections.xyxy < 0):
+                logger.warning("Detections from model contain negative xyxy coordinates. This may indicate an issue with the detection model.")
+
             # Affine matrix determines any camera move between consecutive frames
             if previous_frame is not None:
                 affine_matrix = AffineAwareByteTrack.calculate_affine_transform(previous_frame, frame)
@@ -118,8 +114,7 @@ def run_application (
         # If we have TIDs that need to be matched or created, proceed with the matching process.
         # Matching only happens with TIDs that are considered orphans (not linked to player object nor reassigned.).
         if tids_for_player_match_or_create: 
-            orphan_track_ids = set(tracker.get_orphan_track_ids())
-
+            orphan_track_ids = set(tracker.orphan_track_ids())
 
             # Attempt to match these TIDs to existing players
             unmatched_tids, unmatched_embeddings, unmatched_crops, reassigned_tids = Player.match_and_update_for_batch(
@@ -169,8 +164,8 @@ def run_application (
             annotated_frame = ellipse_annotator.annotate(scene=frame.copy(), detections=detections)
 
             labels = [
-                f"{pid:.0f} {confidence:.0%}" 
-                for pid, confidence in zip(detections.data["player_id"], detections.confidence)
+                f"{pid:.0f}" 
+                for pid in detections.data["player_id"]
             ]
             annotated_frame = label_annotator.annotate(
                 scene=annotated_frame,

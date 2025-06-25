@@ -9,8 +9,11 @@ from .Siglip_reid import SiglipReID
 logger = logging.getLogger(__name__)
 # Set the logging level specifically for this module to INFO.
 # This will prevent DEBUG messages from this module from being displayed.
-logger.setLevel(logging.INFO)
 
+_TRACK_ACTIVATION_THRESHOLD = 0.2
+_LOST_TRACK_BUFFER = 15
+_MINIMUM_MATCHING_THRESHOLD = 0.7
+_MINIMUM_CONSECUTIVE_FRAMES = 30    
 
 def warp_bbox(bbox_tlbr: np.ndarray, affine_matrix: np.ndarray) -> np.ndarray:
     """
@@ -70,8 +73,8 @@ def warp_bbox(bbox_tlbr: np.ndarray, affine_matrix: np.ndarray) -> np.ndarray:
     # Re-calculate the new axis-aligned bounding boxes (xyxy)
     min_xy = warped_corners.min(axis=0) # min_xy will be (2,)
     max_xy = warped_corners.max(axis=0) # max_xy will be (2,)
-    
-    warped_xyxy = np.hstack([min_xy, max_xy]) # hstack results in (4,)
+
+    warped_xyxy = np.hstack([np.maximum(0, min_xy), np.maximum(0, max_xy)]) # Ensure no negative coordinates
 
     return warped_xyxy
 
@@ -86,9 +89,14 @@ class AffineAwareByteTrack(sv.ByteTrack):
     there is camera motion.
     """
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # The tracker now internally manages the ReID module.
+    def __init__(self, frame_rate: int, *args, **kwargs):
+        super().__init__(
+            frame_rate = frame_rate,
+            track_activation_threshold = _TRACK_ACTIVATION_THRESHOLD,
+            lost_track_buffer = _LOST_TRACK_BUFFER,
+            minimum_matching_threshold = _MINIMUM_MATCHING_THRESHOLD,
+            minimum_consecutive_frames = _MINIMUM_CONSECUTIVE_FRAMES,
+            *args, **kwargs)
         self.reid = SiglipReID()
         self.reassigned_track_ids: set[int] = set()  # Track IDs that have been reassigned in the current frame
 
@@ -112,9 +120,9 @@ class AffineAwareByteTrack(sv.ByteTrack):
             sv.Detections: The detections object, potentially with updated tracker IDs
                 and other tracking information, after processing by the ByteTrack algorithm.
         """
-        # Before calling the original update, warp the internal tracks' predicted locations
+        # Wwarp the internal tracks' predicted locations
         # ByteTrack keeps the following 3 types of lists of tracks, all in the STtrack format
-        for track_list_type in [self.tracked_tracks, self.lost_tracks,  self.removed_tracks]:
+        for track_list_type in [self.tracked_tracks, self.lost_tracks]:
             for track in track_list_type:
                 if track.mean is None or track.covariance is None: # Should not happen for active/lost tracks
                     continue
@@ -128,7 +136,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
                 w_h = w_y2 - w_y1
 
                 if w_w <= 0 or w_h <= 0: # Warped box is degenerate, skip update for this track
-                    logger.debug(f"Track {track.track_id} warped to degenerate bbox: {warped_bbox_tlbr}. Skipping state update.")
+                    logger.debug(f"Track {track.internal_track_id} warped to degenerate bbox: {warped_bbox_tlbr}. Skipping state update.")
                     continue
 
                 new_cx = w_x1 + w_w / np.float32(2.0)
@@ -176,9 +184,24 @@ class AffineAwareByteTrack(sv.ByteTrack):
                      len(self.tracked_tracks), len(self.lost_tracks), len(self.removed_tracks))
         
         detections = super().update_with_detections(detections)
-        self.reid.update_ids(detections=detections, frame=frame, frame_id=self.frame_id)
 
-        # Identifies the removed tracks from ByteTrack minus those that have been re-identified.
+        # Create a map from external_track_id to internal_track_id for currently tracked tracks.
+        external_to_internal_id_map = {
+            track.external_track_id: track.internal_track_id
+            for track in self.tracked_tracks
+            if track.external_track_id != -1
+        }
+
+        # Replace external track IDs in detections with their internal counterparts.
+        if detections.tracker_id is not None:
+            # Using .get() provides a default value (-1) for IDs not in the map.
+            internal_ids = np.array([
+                external_to_internal_id_map.get(int(ext_id), -1)
+                for ext_id in detections.tracker_id
+            ], dtype=int)
+            detections.tracker_id = internal_ids
+
+        self.reid.update_ids(detections=detections, frame=frame, frame_id=self.frame_id)
 
         return detections
     
@@ -272,7 +295,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
         """
         return self.reid.get_embeddings_and_crops_by_tid(tid)
     
-    def get_orphan_track_ids(self) -> List[int]:
+    def orphan_track_ids(self) -> List[int]:
         """
         Returns a list of tracker IDs that were considered 'removed' by ByteTrack
         in the latest update.
@@ -284,12 +307,17 @@ class AffineAwareByteTrack(sv.ByteTrack):
         # self.removed_tracks is a list of STrack objects. Accessing an attribute
         # directly on the list will fail. We must iterate through the list using
         # a list comprehension to extract the ID from each track.
-        byte_track_removed_ids = {
-            track.external_track_id for track in self.removed_tracks if track.external_track_id is not None
-        }
+        
+        byte_track_removed_ids = set()
+        for track in self.removed_tracks:
+            # We return the internal_track_id for tracks that were once active (had an external_track_id).
+            # This is consistent with the rest of the system now using internal IDs.
+            byte_track_removed_ids.add(track.internal_track_id)
+        
         result = byte_track_removed_ids - self.reassigned_track_ids
         result = list(result)
 
+        logger.debug("Orphan track IDs: %s", result)
+
         return result
     
-

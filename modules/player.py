@@ -6,7 +6,7 @@ from sklearn.metrics.pairwise import cosine_similarity # For robust cosine simil
 
 logger = logging.getLogger(__name__)
 
-_REID_SIMILARITY_THRESHOLD = 0.9
+_REID_SIMILARITY_THRESHOLD = 0.8
 
 class Player:
     """
@@ -196,7 +196,7 @@ class Player:
                 matched_player.crops.extend(new_crops[i])
                 matched_new_tids_set.add(new_tid)
                 reassigned_tids.append(new_tid)
-                logger.debug(f"Re-identified tracker ID {new_tid} as existing player {matched_player.id} (similarity: {max_similarity:.2f}).")
+                logger.info(f"Re-identified tracker ID {new_tid} as existing player {matched_player.id} (similarity: {max_similarity:.2f}).")
             else:
                 logger.debug(f"Tracker ID {new_tid} (similarity: {max_similarity:.2f}) did not find a strong re-ID match.")
         

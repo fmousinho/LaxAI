@@ -49,7 +49,7 @@ class DetectionModel:
             device: The torch.device (cpu or cuda) to load the model onto.
             player_class_id: The class ID that represents players in the detection model.
         """
-        self.model: RFDETRBase
+        self.model: RFDETRBase(num_classes=6)
         self.store = store
         self.model_dict = model_dict
         self.model_dir = model_dir
@@ -131,5 +131,9 @@ class DetectionModel:
             )
         
         model_output_detections = self.model.predict(images, threshold=threshold, **kwargs)
+        
+        # Ensure that bounding box coordinates are not negative.
+        if model_output_detections.xyxy.size > 0:
+            np.maximum(model_output_detections.xyxy, 0, out=model_output_detections.xyxy)
    
         return model_output_detections
