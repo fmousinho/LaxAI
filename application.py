@@ -45,13 +45,14 @@ def run_application (
     frames_generator = sv.get_video_frames_generator(**generator_params)
     model = DetectionModel(store=store, device=device)
 
-    tracker = AffineAwareByteTrack(frame_rate = video_info.fps) 
+    tracker = AffineAwareByteTrack() 
     
     #smoother = sv.DetectionsSmoother() #Smoother doesn't produce good results.
 
     ellipse_annotator = sv.EllipseAnnotator() 
     label_annotator = sv.LabelAnnotator()
     multi_frame_detections = deque()
+    multi_ineligible_track_ids = deque(List[int])
 
     frame_target = debug_max_frames if debug_max_frames else video_info.total_frames
 
@@ -85,6 +86,9 @@ def run_application (
             continue
 
         multi_frame_detections.append(detections)
+        ineligible_tracker_ids = tracker.get_tids_for_frame()
+        multi_ineligible_track_ids.append(ineligible_tracker_ids)
+
 
     # --- Second pass: Creates players based on video analysis
 
@@ -99,10 +103,13 @@ def run_application (
         embeddings_for_player_match_or_create = []
         crops_for_player_match_or_create = []
 
+        tracker_ids_ineligible_for_match: List[int] = multi_ineligible_track_ids[frame_idx]
+
         # Find all tids in the current detections that are not yet linked to a Player object, and collect their re-ID data.
         for tid_np in detections.tracker_id:
             tid = int(tid_np)
-            if Player.get_player_by_tid(tid) is None:
+            player = Player.get_player_by_tid(tid)
+            if player is None:
                 reid_data = tracker.get_reid_data_for_tid(tid)
                 if reid_data is not None and reid_data[0] is not None and reid_data[1]: # Check if embedding and crops exist
                     tids_for_player_match_or_create.append(tid)
@@ -110,21 +117,21 @@ def run_application (
                     crops_for_player_match_or_create.append(reid_data[1])
                 else:
                     logger.debug(f"Tracker ID {tid} in frame {frame_idx} has no re-ID data from SiglipReID or data is incomplete. Skipping initial player creation/re-ID for it.")
+            else:
+                emb, _ = tracker.get_reid_data_for_tid(tid)
+                player.update_embeddings(emb)
 
         # If we have TIDs that need to be matched or created, proceed with the matching process.
         # Matching only happens with TIDs that are considered orphans (not linked to player object nor reassigned.).
         if tids_for_player_match_or_create: 
-            orphan_track_ids = set(tracker.orphan_track_ids())
 
-            # Attempt to match these TIDs to existing players
-            unmatched_tids, unmatched_embeddings, unmatched_crops, reassigned_tids = Player.match_and_update_for_batch(
+            # Attempt to match these TIDs to existing (previously removed) players
+            unmatched_tids, unmatched_embeddings, unmatched_crops = Player.match_and_update_for_batch(
                 new_tracker_ids=tids_for_player_match_or_create,
                 new_embeddings=embeddings_for_player_match_or_create,
                 new_crops=crops_for_player_match_or_create,
-                orphan_track_ids=orphan_track_ids
+                tracker_ids_ineligible_for_match=tracker_ids_ineligible_for_match
             )
-
-            tracker.reassigned_track_ids.update(reassigned_tids)
 
 
             # For any remaining unmatched TIDs, create new Player objects
@@ -159,7 +166,11 @@ def run_application (
                     continue
                 tid = int(tracker_id_np)
                 player = Player.get_player_by_tid(tid)
-                detections.data["player_id"][i] = player.id
+                if player is None:
+                    logger.warning(f"Tracker ID {tid} in frame {frame_idx} has no associated Player object. Skipping annotation.")
+                    detections.data["player_id"][i] = -1  # Assign -1 for untracked players
+                else:
+                    detections.data["player_id"][i] = player.id
             
             annotated_frame = ellipse_annotator.annotate(scene=frame.copy(), detections=detections)
 

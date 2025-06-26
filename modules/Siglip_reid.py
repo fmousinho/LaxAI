@@ -20,7 +20,6 @@ class ReIDData:
 
 _MIN_HEIGHT_FOR_EMBEDDINGS = 40
 _MIN_WIDTH_FOR_EMBEDDINGS = 15
-_REID_SIMILARITY_THRESHOLD = 0.85
 _EMBEDDINGS_MODEL_PATH = "google/siglip2-base-patch16-224"
 _EMBEDDINGS_LEARNING_FREQUENCY = 30  # How often to log embeddings generation progress
 _EMBEDDINGS_LEARNING_RATE = 0.1  # Learning rate for embeddings updates

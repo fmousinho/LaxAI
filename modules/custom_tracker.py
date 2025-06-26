@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 import numpy as np
 import cv2
 import supervision as sv
@@ -7,13 +7,11 @@ from .Siglip_reid import SiglipReID
 
 
 logger = logging.getLogger(__name__)
-# Set the logging level specifically for this module to INFO.
-# This will prevent DEBUG messages from this module from being displayed.
 
 _TRACK_ACTIVATION_THRESHOLD = 0.2
 _LOST_TRACK_BUFFER = 15
 _MINIMUM_MATCHING_THRESHOLD = 0.7
-_MINIMUM_CONSECUTIVE_FRAMES = 30    
+_MINIMUM_CONSECUTIVE_FRAMES = 30
 
 def warp_bbox(bbox_tlbr: np.ndarray, affine_matrix: np.ndarray) -> np.ndarray:
     """
@@ -69,7 +67,6 @@ def warp_bbox(bbox_tlbr: np.ndarray, affine_matrix: np.ndarray) -> np.ndarray:
     # Ensure division is done correctly for each point
     warped_corners = warped_corners_hom[:, :2] / warped_corners_hom[:, 2, np.newaxis]
 
-
     # Re-calculate the new axis-aligned bounding boxes (xyxy)
     min_xy = warped_corners.min(axis=0) # min_xy will be (2,)
     max_xy = warped_corners.max(axis=0) # max_xy will be (2,)
@@ -89,16 +86,15 @@ class AffineAwareByteTrack(sv.ByteTrack):
     there is camera motion.
     """
 
-    def __init__(self, frame_rate: int, *args, **kwargs):
+    def __init__(self):
         super().__init__(
-            frame_rate = frame_rate,
             track_activation_threshold = _TRACK_ACTIVATION_THRESHOLD,
             lost_track_buffer = _LOST_TRACK_BUFFER,
             minimum_matching_threshold = _MINIMUM_MATCHING_THRESHOLD,
-            minimum_consecutive_frames = _MINIMUM_CONSECUTIVE_FRAMES,
-            *args, **kwargs)
+            frame_rate = 30,
+            minimum_consecutive_frames = _MINIMUM_CONSECUTIVE_FRAMES
+            )
         self.reid = SiglipReID()
-        self.reassigned_track_ids: set[int] = set()  # Track IDs that have been reassigned in the current frame
 
     def update_with_transform(self, detections: sv.Detections, affine_matrix: np.ndarray, frame: np.ndarray) -> sv.Detections:
         """_summary_
@@ -279,7 +275,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
         return np.array([[1.0, 0.0, 0.0],
                          [0.0, 1.0, 0.0]], dtype=np.float32)
 
-    def get_reid_data_for_tid(self, tid: int) -> Optional[Tuple[np.ndarray, List[np.ndarray]]]:
+    def get_reid_data_for_tid(self, tid: int) -> Tuple[np.ndarray, List[np.ndarray]]:
         """
         Retrieves re-identification data (embeddings and crops) for a given tracker ID.
 
@@ -293,31 +289,26 @@ class AffineAwareByteTrack(sv.ByteTrack):
         Returns:
             Optional[Tuple[np.ndarray, List[np.ndarray]]]: A tuple of (embedding, crops) or None.
         """
-        return self.reid.get_embeddings_and_crops_by_tid(tid)
-    
-    def orphan_track_ids(self) -> List[int]:
-        """
-        Returns a list of tracker IDs that were considered 'removed' by ByteTrack
-        in the latest update.
-
-        These tracks are candidates for re-identification.
-        Returns:
-            List[int]: A list of tracker IDs for tracks newly marked as 'removed'.
-        """
-        # self.removed_tracks is a list of STrack objects. Accessing an attribute
-        # directly on the list will fail. We must iterate through the list using
-        # a list comprehension to extract the ID from each track.
+        result = self.reid.get_embeddings_and_crops_by_tid(tid)
+        if result is None:
+            return np.array([]), []
         
-        byte_track_removed_ids = set()
-        for track in self.removed_tracks:
-            # We return the internal_track_id for tracks that were once active (had an external_track_id).
-            # This is consistent with the rest of the system now using internal IDs.
-            byte_track_removed_ids.add(track.internal_track_id)
-        
-        result = byte_track_removed_ids - self.reassigned_track_ids
-        result = list(result)
-
-        logger.debug("Orphan track IDs: %s", result)
-
         return result
     
+    
+    def get_tids_for_frame(self) -> List[int]:
+
+        """
+        Retrieves all unique track IDs for the current, including lost tracks..
+
+        Returns:
+            List[int]: A sorted list of unique  track IDs for the specified frame.
+        """
+        tids = set()
+
+        # Collect external track IDs from tracked tracks and lost tracks
+        tids.update(track.internal_track_id for track in self.tracked_tracks)
+        tids.update(track.internal_track_id for track in self.lost_tracks)
+
+        return sorted(list(tids))
+        
