@@ -10,10 +10,10 @@ from collections import deque
 import numpy as np
 
 # Local Application/Library
-from ..modules.detection import DetectionModel
-from ..modules.player import Player
-from ..tools.store_driver import Store
-from ..modules.custom_tracker import AffineAwareByteTrack
+from modules.detection import DetectionModel
+from modules.player import Player
+from tools.store_driver import Store
+from modules.custom_tracker import AffineAwareByteTrack
 
 logger = logging.getLogger(__name__)
 

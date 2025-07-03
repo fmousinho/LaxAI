@@ -4,16 +4,19 @@ import logging
 import os
 import sys
 
+# Ensure the script's directory is in sys.path for local imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 # Third-party
 import torch
 from dotenv import load_dotenv
 
 # Local Application/Library
-from . import application as app
-from .config import logging_config
-from .tools import utils
-from .tools.store_driver import Store
-from .analyse import analyse as analyse_module
+import application as app
+from config import logging_config
+from tools import utils
+from tools.store_driver import Store
+from analyse import analyse as analyse_module
 
 
 logger = logging.getLogger(__name__)

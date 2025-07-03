@@ -3,15 +3,15 @@ from typing import Optional, List, Tuple, Dict
 import numpy as np
 import cv2
 import supervision as sv
-from .Siglip_reid import SiglipReID
+from modules.Siglip_reid import SiglipReID
 
 
 logger = logging.getLogger(__name__)
 
-_TRACK_ACTIVATION_THRESHOLD = 0.2
+_TRACK_ACTIVATION_THRESHOLD = 0.3
 _LOST_TRACK_BUFFER = 15
 _MINIMUM_MATCHING_THRESHOLD = 0.7
-_MINIMUM_CONSECUTIVE_FRAMES = 30
+_MINIMUM_CONSECUTIVE_FRAMES = 15
 
 def warp_bbox(bbox_tlbr: np.ndarray, affine_matrix: np.ndarray) -> np.ndarray:
     """
@@ -152,8 +152,8 @@ class AffineAwareByteTrack(sv.ByteTrack):
                 # We do NOT reset track.mean[4:8] (velocities); the filter will adjust them.
                 
                 # pylint: disable=protected-access 
-                std_pos_w = track.kalman_filter._std_weight_position
-                std_vel_w = track.kalman_filter._std_weight_velocity
+                std_pos_w = track.kalman_filter._std_weight_position #type: ignore
+                std_vel_w = track.kalman_filter._std_weight_velocity #type: ignore
                 # pylint: enable=protected-access
 
                 current_h = track.mean[3] # This is new_h
@@ -178,7 +178,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
 
         logger.debug("Applied affine transform to %d tracked, %d lost, %d removed tracks before update.",
                      len(self.tracked_tracks), len(self.lost_tracks), len(self.removed_tracks))
-        
+                
         detections = super().update_with_detections(detections)
 
         # Create a map from external_track_id to internal_track_id for currently tracked tracks.
@@ -197,7 +197,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
             ], dtype=int)
             detections.tracker_id = internal_ids
 
-        self.reid.update_ids(detections=detections, frame=frame, frame_id=self.frame_id)
+        # self.reid.update_ids(detections=detections, frame=frame, frame_id=self.frame_id)
 
         return detections
     
@@ -229,7 +229,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
             return None
 
         # Calculate optical flow
-        current_pts, status, err = cv2.calcOpticalFlowPyrLK(prev_gray, current_gray, prev_pts, None) 
+        current_pts, status, err = cv2.calcOpticalFlowPyrLK(prev_gray, current_gray, prev_pts, None) #type: ignore
 
         # Filter out bad points
         if current_pts is not None and status is not None:
@@ -275,7 +275,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
         return np.array([[1.0, 0.0, 0.0],
                          [0.0, 1.0, 0.0]], dtype=np.float32)
 
-    def get_reid_data_for_tid(self, tid: int) -> Tuple[np.ndarray, List[np.ndarray]]:
+    def get_reid_data_for_tid(self, tid: int) -> Optional[Tuple[np.ndarray, List[np.ndarray], int]]:
         """
         Retrieves re-identification data (embeddings and crops) for a given tracker ID.
 
@@ -287,13 +287,9 @@ class AffineAwareByteTrack(sv.ByteTrack):
             tid (int): The tracker ID.
 
         Returns:
-            Optional[Tuple[np.ndarray, List[np.ndarray]]]: A tuple of (embedding, crops) or None.
+            Optional[Tuple[np.ndarray, List[np.ndarray], int]]: A tuple of (embedding, crops, det_class) or None.
         """
-        result = self.reid.get_embeddings_and_crops_by_tid(tid)
-        if result is None:
-            return np.array([]), []
-        
-        return result
+        return self.reid.get_embeddings_and_crops_by_tid(tid)
     
     
     def get_tids_for_frame(self) -> List[int]:

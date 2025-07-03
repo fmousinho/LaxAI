@@ -17,7 +17,7 @@
                 "/Users/fernandomousinho/Library/CloudStorage/GoogleDrive-fmousinho76@gmail.com/My Drive/Colab_Notebooks/FCA_Upstate_NY_003.mp4", 
                 "--output_video_path", "debug_output.mp4",
                 "--device", "cpu", // or "mps", "cuda"
-                "--debug_frames", "2000", // Example: process only 100 frames
+                "--debug_frames", "200", // Example: process only 100 frames
                 "--log_level", "DEBUG"
             ]
         },

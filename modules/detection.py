@@ -1,21 +1,20 @@
 
 import logging
 from typing import Optional, Union, List
-import os 
-import tempfile 
+import os
+import tempfile
 import numpy as np
 import torch
 import supervision as sv
 from PIL import Image
 from rfdetr import RFDETRBase  # type: ignore
-from ..tools.store_driver import Store
+from tools.store_driver import Store
 
 logger = logging.getLogger(__name__)
 
 # Checkpoint for RFDETR Base model
 MODEL_CHECKPOINT = "checkpoint.pth"
 DEFAULT_CHECKPOINT_DIR = "Colab_Notebooks"
-DEFAULT_PLAYER_CLASS_ID = 3
 DEFAULT_TORCH_DEVICE = torch.device("cpu")
 PREDICTION_THRESHOLD = 0.4
 
@@ -35,7 +34,6 @@ class DetectionModel:
                  model_dict: str = MODEL_CHECKPOINT,
                  model_dir: Optional[str] = DEFAULT_CHECKPOINT_DIR,
                  device: torch.device = DEFAULT_TORCH_DEVICE,
-                 player_class_id: int = DEFAULT_PLAYER_CLASS_ID
         ): 
         """
         Initializes the DetectionModel.
@@ -47,14 +45,12 @@ class DetectionModel:
             model_dir: The path within the store object where the model dictionary resides.
                        Defaults to `DEFAULT_CHECKPOINT_DIR`. # type: ignore
             device: The torch.device (cpu or cuda) to load the model onto.
-            player_class_id: The class ID that represents players in the detection model.
         """
-        self.model: RFDETRBase(num_classes=6)
+        self.model: RFDETRBase
         self.store = store
         self.model_dict = model_dict
         self.model_dir = model_dir
         self.device = device
-        self.player_class_id = player_class_id
         
         if not store.is_initialized():
             raise RuntimeError("Store object is not initialized. Please initialize it before using DetectionModel.")
@@ -85,7 +81,7 @@ class DetectionModel:
                 temp_checkpoint_path = tmp_f.name # Get the path to the temporary file
             
             logger.info(f"Checkpoint saved to temporary file: {temp_checkpoint_path}")
-            self.model = RFDETRBase(device=self.device.type, pretrain_weights=temp_checkpoint_path)
+            self.model = RFDETRBase(device=self.device.type, pretrain_weights=temp_checkpoint_path, num_classes=6)
             #self.model = self.model.optimize_for_inference()  # TODO: Must test and maybe uncomment this line
             return True
         except RuntimeError as e:
@@ -131,9 +127,5 @@ class DetectionModel:
             )
         
         model_output_detections = self.model.predict(images, threshold=threshold, **kwargs)
-        
-        # Ensure that bounding box coordinates are not negative.
-        if model_output_detections.xyxy.size > 0:
-            np.maximum(model_output_detections.xyxy, 0, out=model_output_detections.xyxy)
-   
+
         return model_output_detections

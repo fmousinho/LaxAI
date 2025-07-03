@@ -4,7 +4,7 @@ import datetime
 from typing import List
 import cv2
 
-from ..modules.player import Player
+from modules.player import Player
 
 logger = logging.getLogger(__name__)
 
