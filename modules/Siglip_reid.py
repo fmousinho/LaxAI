@@ -25,7 +25,7 @@ class SiglipReID:
         Initializes the SiglipReID instance.
         """
 
-    def get_emb_from_crops(self, crops: List[np.ndarray]) -> np.ndarray:
+    def get_emb_from_crops(self, crops: List[np.ndarray], format: str = "BGR") -> np.ndarray:
         """
         Generates embeddings for a list of crops.
 
@@ -38,7 +38,11 @@ class SiglipReID:
         """
 
         if not crops: return np.empty((0, 768))
-        crops_pil = [sv.cv2_to_pillow(crop) for crop in crops]
+        if format in ["BGR"]:
+            crops_pil = [sv.cv2_to_pillow(crop) for crop in crops]
+        elif format in ["Pillow", "PIL"]:
+            crops_pil = crops
+
         batches = chunked(crops_pil, _BATCH_SIZE)
         data = []
 
