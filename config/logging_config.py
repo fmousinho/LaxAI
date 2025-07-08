@@ -16,7 +16,7 @@ LOGGING = {
             "formatter": "json",
         }
     },
-    "loggers": {"": {"handlers": ["stdout"], "level": "DEBUG"}},
+    "loggers": {"": {"handlers": ["stdout"], "level": "INFO"}},
 }
 
 logging.config.dictConfig(LOGGING)

@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 _TRACK_ACTIVATION_THRESHOLD = 0.3
 _LOST_TRACK_BUFFER = 15
-_MINIMUM_MATCHING_THRESHOLD = 0.7
+_MINIMUM_MATCHING_THRESHOLD = 0.6
 _MINIMUM_CONSECUTIVE_FRAMES = 15
 
 def warp_bbox(bbox_tlbr: np.ndarray, affine_matrix: np.ndarray) -> np.ndarray:

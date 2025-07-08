@@ -7,7 +7,7 @@ import cv2
 
 logger = logging.getLogger(__name__)
 
-_KERNEL_OPEN = np.ones((7, 7), np.uint8)  # Kernel for morphological operations
+_KERNEL_OPEN = np.ones((5, 5), np.uint8)  # Kernel for morphological operations
 
 class PlayerMasker:
     """    
@@ -30,6 +30,16 @@ class PlayerMasker:
             if not all(isinstance(crop, np.ndarray) for crop in args[0]):
                 raise ValueError("All elements in the crops list must be numpy arrays.")
             return self._fit_predict_kmeans_morph_edge(*args, **kwargs)
+        elif self.type == "grass_avg":
+            if len(args) < 1 or not isinstance(args[0], list):
+                raise ValueError("Expected a list of crops as the first argument.")
+            if not all(isinstance(crop, np.ndarray) for crop in args[0]):
+                raise ValueError("All elements in the crops list must be numpy arrays.")
+            # Check for optional frames argument
+            frames = kwargs.get('frames', None)
+            if frames is None or len(frames) == 0:
+                logger.warning("No frames provided for grass_avg method, falling back to edge pixels from crops")
+            return self._fit_predict_grass_avg(*args, **kwargs)
         else:
             logger.error(f"Unknown type '{self.type}' for PlayerMasker. Please implement the fit_predict method for this type.")
             raise NotImplementedError("fit_predict method must be implemented in subclasses.")
@@ -50,10 +60,14 @@ class PlayerMasker:
             Dict[str, np.ndarray]: The trained mask for each crop.
         """
         shapes = []
-        roi_crops = crops.copy()
+        crops = crops.copy()
+        # Convert to LAB color space for better clustering
+        roi_crops_lab = [cv2.cvtColor(crop, cv2.COLOR_BGR2LAB) for crop in crops]
+
         flat_crop_array = []
-        for crop in roi_crops:
+        for crop in roi_crops_lab:
             shapes.append(crop.shape)
+            # Normalize LAB values (OpenCV uses 0-255 for all LAB channels)
             flat_crop = crop.reshape(-1, 3).astype(np.float32) / 255.0
             flat_crop_array.append(flat_crop)
         
@@ -78,19 +92,132 @@ class PlayerMasker:
             # The mask should have player pixels as 255 and background as 0.
             cleaned_mask = cv2.morphologyEx(mask * 255, cv2.MORPH_OPEN, kernel_open)
             
-            # Apply the cleaned mask to the original crop.
-            masked_crop = roi_crops[i]
+            # Apply the cleaned mask to the original BGR crop (not LAB)
+            masked_crop = crops[i]  # Use original BGR crop
             masked_crop = cv2.bitwise_and(masked_crop, masked_crop, mask=cleaned_mask)
-            masked_crop[cleaned_mask == 0] = [255, 255, 255]  # Set background to white.
-            masked_crops.append(masked_crop.copy())
+            masked_crop[cleaned_mask == 0] = [255, 255, 255]  # Set background to white in BGR
+            masked_crop = masked_crop.copy()
+            masked_crops.append(masked_crop)
             start = stop
 
         return masked_crops
     
+    def _fit_predict_grass_avg(
+        self,
+        crops: List[np.ndarray],
+        frames: Optional[List[np.ndarray]] = None
+        ) -> List[np.ndarray]:
+        """
+        Creates player masks by identifying grass regions using average color statistics.
+        
+        This method calculates the average grass color and standard deviation from the bottom
+        half of 5 different frames (beginning, middle, end of video segment), then creates 
+        masks by identifying pixels that fall within 2 standard deviations of the grass color.
 
+        Args:
+            crops (List[np.ndarray]): The input image crops.
+            frames (Optional[List[np.ndarray]]): List of frames to sample grass color from.
+                                               If None, falls back to edge pixels from crops.
 
+        Returns:
+            List[np.ndarray]: The masked crops with player regions isolated.
+        """
+        crops = crops.copy()
+        masked_crops = []
+        
+        # Collect grass pixels from frame samples or fallback to crop edges
+        if frames is not None and len(frames) > 0:
+            # Use bottom half of 5 frames sampled from the video segment
+            num_frames = len(frames)
+            if num_frames >= 5:
+                # Sample 5 frames: beginning, quarter, middle, three-quarter, end
+                indices = [
+                    0,                              # Beginning
+                    num_frames // 4,                # Quarter
+                    num_frames // 2,                # Middle  
+                    3 * num_frames // 4,            # Three-quarter
+                    num_frames - 1                  # End
+                ]
+            else:
+                # Use all available frames if less than 5
+                indices = list(range(num_frames))
+            
+            all_grass_pixels = []
+            for idx in indices:
+                frame = frames[idx]
+                # Extract bottom half of the frame (assuming it contains mostly grass)
+                h, w = frame.shape[:2]
+                bottom_half = frame[h//2:, :]  # Bottom 50% of frame
+                
+                # Reshape to get all pixels in bottom half
+                grass_pixels = bottom_half.reshape(-1, 3)
+                all_grass_pixels.append(grass_pixels)
+            
+            # Combine all grass pixels from sampled frames
+            all_grass_pixels = np.concatenate(all_grass_pixels, axis=0).astype(np.float32)
+            
+        else:
+            # Fallback: collect edge pixels from all crops to estimate grass color
+            logger.warning("No frames provided, using edge pixels from crops for grass estimation")
+            all_edge_pixels = []
+            for crop in crops:
+                # Extract edge pixels (assuming they're mostly grass)
+                h, w = crop.shape[:2]
+                edge_pixels = np.concatenate([
+                    crop[0, :].reshape(-1, 3),      # Top edge
+                    crop[-1, :].reshape(-1, 3),     # Bottom edge
+                    crop[:, 0].reshape(-1, 3),      # Left edge
+                    crop[:, -1].reshape(-1, 3)      # Right edge
+                ])
+                all_edge_pixels.append(edge_pixels)
+            
+            # Combine all edge pixels
+            all_grass_pixels = np.concatenate(all_edge_pixels, axis=0).astype(np.float32)
+        
+        # Convert grass pixels to LAB color space for better color analysis
+        # Reshape to image format for cv2.cvtColor, then back to pixel array
+        grass_pixels_bgr = all_grass_pixels.astype(np.uint8).reshape(1, -1, 3)
+        grass_pixels_lab = cv2.cvtColor(grass_pixels_bgr, cv2.COLOR_BGR2LAB)
+        all_grass_pixels_lab = grass_pixels_lab.reshape(-1, 3).astype(np.float32)
+        
+        # Calculate grass color statistics in LAB space
+        grass_mean = np.mean(all_grass_pixels_lab, axis=0)
+        grass_std = np.std(all_grass_pixels_lab, axis=0)
 
+        # Define grass color range (mean ± 1.5 standard deviations)
+        n_std_devs = 1.5
+        grass_lower = grass_mean - n_std_devs * grass_std
+        grass_upper = grass_mean + n_std_devs * grass_std
 
+        # Ensure bounds are within valid color range [0, 255]
+        grass_lower = np.clip(grass_lower, 0, 255)
+        grass_upper = np.clip(grass_upper, 0, 255)
+        
+        kernel_open = _KERNEL_OPEN
+        
+        for i, crop in enumerate(crops):
+            # Convert crop to LAB color space for consistent comparison
+            crop_lab = cv2.cvtColor(crop, cv2.COLOR_BGR2LAB).astype(np.float32)
+            
+            # Check if each pixel is within the grass color range for all channels
+            grass_mask = np.all(
+                (crop_lab >= grass_lower) & (crop_lab <= grass_upper), 
+                axis=2
+            ).astype(np.uint8)
+            
+            # Player mask is the inverse of grass mask
+            player_mask = (1 - grass_mask).astype(np.uint8)
+            
+            # Clean the mask using morphological opening to remove noise
+            cleaned_mask = cv2.morphologyEx(player_mask * 255, cv2.MORPH_OPEN, kernel_open)
+            
+            # Apply the cleaned mask to the original BGR crop
+            masked_crop = crop.copy()
+            masked_crop = cv2.bitwise_and(masked_crop, masked_crop, mask=cleaned_mask)
+            masked_crop[cleaned_mask == 0] = [255, 255, 255]  # Set background to white
+            masked_crops.append(masked_crop.copy())
+        
+        return masked_crops
 
 class TeamIdentifier:
     """
@@ -129,5 +256,5 @@ class TeamIdentifier:
 
         teams = self.kmeans_model.fit_predict(embeddings_array)
         return teams
-    
+
 

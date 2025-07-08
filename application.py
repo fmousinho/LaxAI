@@ -62,19 +62,17 @@ def run_application (
         "end": debug_max_frames
     }
     frames_generator = sv.get_video_frames_generator(**generator_params)
-    model = DetectionModel(store=store, device=device)
-
+    model = DetectionModel(store=store, device=device)    
     tracker = AffineAwareByteTrack() 
     team_identifier = TeamIdentifier()
     masker = PlayerMasker()
+    masker.type = "grass_avg"  # Set the type after initialization
+    
     emb_provider = SiglipReID()
     
     ellipse_annotator = sv.EllipseAnnotator()
     label_annotator = sv.LabelAnnotator()
     multi_frame_detections = deque()
-    multi_ineligible_track_ids_team_0: deque[list[int]] = deque()
-    multi_ineligible_track_ids_team_1: deque[list[int]] = deque()
-
 
     frame_target = debug_max_frames if debug_max_frames else video_info.total_frames
 
@@ -87,9 +85,31 @@ def run_application (
     affine_matrix = None
 
     tracker = AffineAwareByteTrack()
+    
+    # Collect 5 frames equally spread throughout the video for grass estimation
+    sample_frames = []
+    frame_indices_to_sample = []
+    if frame_target > 0:
+        if frame_target >= 5:
+            # Sample 5 frames: beginning, quarter, middle, three-quarter, end
+            frame_indices_to_sample = [
+                0,                              # Beginning
+                frame_target // 4,              # Quarter
+                frame_target // 2,              # Middle  
+                3 * frame_target // 4,          # Three-quarter
+                frame_target - 1                # End
+            ]
+        else:
+            # Use all available frames if less than 5
+            frame_indices_to_sample = list(range(frame_target))
 
+    current_frame_idx = 0
     for frame in tqdm(frames_generator, desc="Frames read", total=frame_target):
         try:
+            # Collect sample frames for grass estimation
+            if current_frame_idx in frame_indices_to_sample:
+                sample_frames.append(frame.copy())
+            
             all_detections = model.generate_detections(frame)
             if all_detections.xyxy.size > 0 and np.any(all_detections.xyxy < 0):
                 logger.warning("Detections from model contain negative xyxy coordinates. This may indicate an issue with the detection model.")
@@ -111,9 +131,11 @@ def run_application (
         except Exception as e:
             logger.error(f"Error during detection/tracking for frame: {e}", exc_info=True)
             multi_frame_detections.append(sv.Detections.empty()) # Append empty detections to keep deque length consistent
+            current_frame_idx += 1
             continue
 
         multi_frame_detections.append(detections)
+        current_frame_idx += 1
 
 
      # --- Creating Embeddings and Finding Teams for each track  ---
@@ -128,7 +150,9 @@ def run_application (
         if track_data.largest_crop is not None:
             tids.append(track_id)
             crops.append(track_data.largest_crop)
-    masked_crops = masker.fit_predict(crops)
+    
+    logger.info(f"Using {len(sample_frames)} sample frames for grass estimation")
+    masked_crops = masker.fit_predict(crops, frames=sample_frames)
     embs: np.ndarray = emb_provider.get_emb_from_crops(masked_crops) # 2D array, 0 for batch, 1 for siglip embedding
     avg_colors = emb_provider.get_avg_color_from_crops(masked_crops)
     teams_array = team_identifier.fit_predict(avg_colors)
@@ -247,16 +271,33 @@ def run_application (
             
             sink.write_frame(frame=annotated_frame)
 
-     # --- (Optional) Fourth pass: Generate analysis report ---
+    # --- (Optional) Fourth pass: Generate analysis report ---
+    generate_report = True
     if generate_report:
-        logger.info("Generating player analysis report")
+        logger.info("Generating per-track analysis report")
         run_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         run_output_dir = os.path.join(reporting.REPORTS_BASE_DIR, run_id)
-        
-        unique_players = list(set(Player._registry.values()))
-        logger.info(f"Found {len(unique_players)} unique players to report on.")
 
-        reporting.generate_player_report_html(run_id, run_output_dir, unique_players)
+        # Collect per-track info: original crop, masked crop, team, player_id, track_id
+        per_track_rows = []
+        for tid, track_data in tracker_data.items():
+            # Find masked crop index
+            try:
+                crop_idx = tids.index(tid)
+                masked_crop = masked_crops[crop_idx]
+            except (ValueError, IndexError):
+                masked_crop = None
+            player = track_to_player.get(tid, None)
+            per_track_rows.append({
+                "track_id": tid,
+                "original_crop": track_data.largest_crop,
+                "masked_crop": masked_crop,
+                "team": getattr(track_data, 'team', -1),
+                "player_id": player.id if player is not None else -1
+            })
+
+        logger.info(f"Found {len(per_track_rows)} tracks to report on.")
+        reporting.generate_track_report_html(run_id, run_output_dir, per_track_rows)
         reporting.update_main_index_html()
 
 def get_player_display_info(player: Optional[Player], team: int) -> Tuple[str, Tuple[int, int, int]]:

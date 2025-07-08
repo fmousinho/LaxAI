@@ -1,3 +1,86 @@
+def generate_track_report_html(run_id: str, run_output_dir: str, track_rows: list):
+    """Generates an HTML report with a row for each track, showing crops, masked crops, team, and player ID."""
+    import cv2
+    os.makedirs(run_output_dir, exist_ok=True)
+    crops_dir = os.path.join(run_output_dir, "crops")
+    masked_dir = os.path.join(run_output_dir, "masked_crops")
+    os.makedirs(crops_dir, exist_ok=True)
+    os.makedirs(masked_dir, exist_ok=True)
+    report_html_path = os.path.join(run_output_dir, "report.html")
+
+    # Save crops and masked crops, collect their relative paths
+    for row in track_rows:
+        tid = row["track_id"]
+        crop = row["original_crop"]
+        masked_crop = row["masked_crop"]
+        crop_path = None
+        masked_path = None
+        if crop is not None and hasattr(crop, 'size') and crop.size > 0:
+            crop_filename = f"crop_{tid}.png"
+            crop_abs_path = os.path.join(crops_dir, crop_filename)
+            cv2.imwrite(crop_abs_path, crop)
+            crop_path = os.path.join("crops", crop_filename)
+        if masked_crop is not None and hasattr(masked_crop, 'size') and masked_crop.size > 0:
+            masked_filename = f"masked_{tid}.png"
+            masked_abs_path = os.path.join(masked_dir, masked_filename)
+            cv2.imwrite(masked_abs_path, masked_crop)
+            masked_path = os.path.join("masked_crops", masked_filename)
+        row["crop_path"] = crop_path
+        row["masked_path"] = masked_path
+
+    html_content = f"""
+<!DOCTYPE html>
+<html lang=\"en\">
+<head>
+    <meta charset=\"UTF-8\">
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
+    <title>Track Analysis Report - Run {run_id}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }}
+        h1 {{ color: #333; border-bottom: 2px solid #007bff; padding-bottom: 10px; }}
+        table {{ width: 100%; border-collapse: collapse; margin-top: 20px; box-shadow: 0 2px 3px #ccc; }}
+        th, td {{ border: 1px solid #ddd; padding: 12px; text-align: left; vertical-align: top; }}
+        th {{ background-color: #e9e9e9; }}
+        .crop-img {{ max-width: 80px; max-height: 80px; border: 1px solid #eee; border-radius: 4px; }}
+    </style>
+</head>
+<body>
+    <h1>Track Analysis Report - Run ID: {run_id}</h1>
+    <table>
+        <thead>
+            <tr>
+                <th>Track ID</th>
+                <th>Original Crop</th>
+                <th>Masked Crop</th>
+                <th>Team</th>
+                <th>Player ID</th>
+            </tr>
+        </thead>
+        <tbody>
+"""
+    for row in track_rows:
+        html_content += f"<tr>"
+        html_content += f"<td>{row['track_id']}</td>"
+        if row["crop_path"]:
+            html_content += f'<td><img src="{row["crop_path"]}" class="crop-img"></td>'
+        else:
+            html_content += f'<td></td>'
+        if row["masked_path"]:
+            html_content += f'<td><img src="{row["masked_path"]}" class="crop-img"></td>'
+        else:
+            html_content += f'<td></td>'
+        html_content += f"<td>{row['team']}</td>"
+        html_content += f"<td>{row['player_id']}</td>"
+        html_content += f"</tr>"
+    html_content += """
+        </tbody>
+    </table>
+</body>
+</html>
+"""
+    with open(report_html_path, "w", encoding="utf-8") as f:
+        f.write(html_content)
+    logger.info(f"Generated Track Analysis HTML report for run {run_id} at {report_html_path}")
 import logging
 import os
 import datetime

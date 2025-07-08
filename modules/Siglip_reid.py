@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 _EMBEDDINGS_MODEL_PATH = "google/siglip2-base-patch16-224"
 _BATCH_SIZE = 32
 _TOP_CROP_FACTOR = 0.1
-_BOTTOM_CROP_FACTOR = 0.5
-_LEFT_CROP_FACTOR = 0.1
-_RIGHT_CROP_FACTOR = 0.1
+_BOTTOM_CROP_FACTOR = 0.4
+_LEFT_CROP_FACTOR = .1
+_RIGHT_CROP_FACTOR = .1
 
 
 class SiglipReID:
@@ -52,14 +52,14 @@ class SiglipReID:
         right = int(width * _RIGHT_CROP_FACTOR)
 
         if top >= bottom or left >= right:
-            return crop.copy()
+            return crop
 
         roi_crop = crop[top:bottom, left:right]
-        return roi_crop.copy()
+        return roi_crop
 
     def get_emb_from_crops(self, crops: List[np.ndarray], format: str = "BGR") -> np.ndarray:
         """
-        Generates embeddings for a list of crops.
+        Generates SigLip embeddings for a list of crops.
 
         Args:
             crops (List[np.ndarray]): A list of np.array image crops.
@@ -70,8 +70,8 @@ class SiglipReID:
         """
 
         if not crops: return np.empty((0, 768))
-        #crops = [self._get_roi_crop(crop) for crop in crops]
-
+        crops = crops.copy()  # Avoid modifying the original list
+       
         if format in ["BGR"]:
             crops_pil = [sv.cv2_to_pillow(crop) for crop in crops]
         else:
@@ -108,11 +108,13 @@ class SiglipReID:
         if not crops: return np.empty((0, 3))
 
         avg_colors = []
+        crops = crops.copy()
         for crop in crops:
             crop = self._get_roi_crop(crop)
             crop = cv2.cvtColor(crop, cv2.COLOR_BGR2LAB)
             if crop.size == 0:
                 avg_colors.append(np.empty((0, 3), dtype=np.float32))
+                logger.warning("Empty crop encountered, skipping.")
                 continue
             avg_color = cv2.mean(crop)[:3]
             avg_colors.append(avg_color)
