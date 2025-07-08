@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 MODEL_CHECKPOINT = "checkpoint.pth"
 DEFAULT_CHECKPOINT_DIR = "Colab_Notebooks"
 DEFAULT_TORCH_DEVICE = torch.device("cpu")
-PREDICTION_THRESHOLD = 0.5
+PREDICTION_THRESHOLD = 0.7
 
 
 class DetectionModel:

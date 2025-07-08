@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, List, Tuple, Dict
+from typing import Optional, List, Tuple, Dict, Literal
 import numpy as np
 import cv2
 import supervision as sv
@@ -8,10 +8,10 @@ from modules.Siglip_reid import SiglipReID
 
 logger = logging.getLogger(__name__)
 
-_TRACK_ACTIVATION_THRESHOLD = 0.3
-_LOST_TRACK_BUFFER = 15
-_MINIMUM_MATCHING_THRESHOLD = 0.6
-_MINIMUM_CONSECUTIVE_FRAMES = 15
+_TRACK_ACTIVATION_THRESHOLD = 0.4
+_LOST_TRACK_BUFFER = 30
+_MINIMUM_MATCHING_THRESHOLD = 0.8
+_MINIMUM_CONSECUTIVE_FRAMES = 30
 
 def warp_bbox(bbox_tlbr: np.ndarray, affine_matrix: np.ndarray) -> np.ndarray:
     """
@@ -153,7 +153,11 @@ class AffineAwareByteTrack(sv.ByteTrack):
     there is camera motion.
     """
 
-    def __init__(self):
+    def __init__(
+            self,
+            id_type: Literal['internal', 'external'] = 'internal',
+            maintain_separate_track_obj: bool = True):
+        
         super().__init__(
             track_activation_threshold = _TRACK_ACTIVATION_THRESHOLD,
             lost_track_buffer = _LOST_TRACK_BUFFER,
@@ -162,6 +166,8 @@ class AffineAwareByteTrack(sv.ByteTrack):
             minimum_consecutive_frames = _MINIMUM_CONSECUTIVE_FRAMES
             )
         self.track_data: dict[int, TrackData] = {}
+        self.id_type = id_type
+        self.maintain_separate_track_obj = maintain_separate_track_obj
 
     def update_with_transform(self, detections: sv.Detections, affine_matrix: np.ndarray, frame: np.ndarray) -> sv.Detections:
         """_summary_
@@ -249,24 +255,25 @@ class AffineAwareByteTrack(sv.ByteTrack):
         
         detections = super().update_with_detections(detections)
 
-        # Create a map from external_track_id to internal_track_id for currently tracked tracks.
-        external_to_internal_id_map = {
-            track.external_track_id: track.internal_track_id
-            for track in self.tracked_tracks
-            if track.external_track_id != -1
-        }
-
-        # Replace external track IDs in detections with their internal counterparts.
-        if detections.tracker_id is not None:
-            # Using .get() provides a default value (-1) for IDs not in the map.
-            internal_ids = np.array([
-                external_to_internal_id_map.get(int(ext_id), -1)
-                for ext_id in detections.tracker_id
-            ], dtype=int)
-            detections.tracker_id = internal_ids
+        if self.id_type == 'internal':
+            # Create a map from external_track_id to internal_track_id for currently tracked tracks.
+            external_to_internal_id_map = {
+                track.external_track_id: track.internal_track_id
+                for track in self.tracked_tracks
+                if track.external_track_id != -1
+            }
+            # Replace external track IDs in detections with their internal counterparts.
+            if detections.tracker_id is not None:
+                # Using .get() provides a default value (-1) for IDs not in the map.
+                internal_ids = np.array([
+                    external_to_internal_id_map.get(int(ext_id), -1)
+                    for ext_id in detections.tracker_id
+                ], dtype=int)
+                detections.tracker_id = internal_ids
 
         # Updates crops for each track
-        self._update_tracks_with_detections(detections, frame)
+        if self.maintain_separate_track_obj:
+            self._update_tracks_with_detections(detections, frame)
 
         return detections
     

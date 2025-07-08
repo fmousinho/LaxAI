@@ -8,6 +8,7 @@ credentials.json
 debug*/
 runs/
 analyse/reports/
+notebooks/data/
 
 # Python cache files
 __pycache__/
