@@ -27,7 +27,12 @@ class Player:
     _next_id: int = 1
     _registry: Dict[int, 'Player'] = {} # Registry to map tracker IDs to Player objects.
 
-    def __init__(self, initial_embedding: Optional[np.ndarray] = None, initial_crops: Optional[List[np.ndarray]] = None, team: Optional[int] = None) -> None:
+    def __init__(self,
+                 tracker_id: Optional[int] = None,
+                 initial_embedding: Optional[np.ndarray] = None, 
+                 initial_crops: Optional[List[np.ndarray]] = None, 
+                 team: Optional[int] = None
+                 ) -> None:
 
         self.id = Player._next_id
         Player._next_id += 1 
@@ -36,8 +41,10 @@ class Player:
         self.jersey_number: Optional[int] = None
         self.embeddings: Optional[np.ndarray] = initial_embedding
         self.crops: List[np.ndarray] = initial_crops if initial_crops is not None else []
-        self.associated_tracker_ids: List[int] = []
+        self.associated_tracker_ids: List[int] = [tracker_id] if tracker_id is not None else []  # List of tracker IDs associated with this player
         self.team = team
+        self.frame_first_seen: int = -1
+        self.frame_last_seen: int = -1
 
     @classmethod
     def get_player_by_tid(cls, tracker_id: int) -> Optional['Player']:
@@ -83,51 +90,6 @@ class Player:
             self.det_class = new_det_class
 
     
-    @classmethod
-    def register_new_players_batch(cls, 
-                                tracker_ids: List[int],
-                                embeddings: List[np.ndarray], 
-                                crops: List[List[np.ndarray]], 
-                                teams: List[int]
-                                ) -> List['Player']:
-        """
-        Registers a batch of truly new players (not found in re-identification).
-        Each input tracker_id must not already be in the registry.
-
-        Args:
-            tracker_ids (List[int]): List of new tracker IDs.
-            embeddings (List[np.ndarray]): List of initial embeddings for each new tracker.
-            crops (List[List[np.ndarray]]): List of initial crops for each new tracker.
-            teams (List[int]): List of teams each new player belongs to.
-
-        Returns:
-            List['Player']: A list of newly created Player objects.
-        """
-        players: List['Player'] = []
-        if not (len(tracker_ids) == len(embeddings) == len(crops) == len(teams)):
-            raise ValueError("tracker_ids, embeddings, crops, and det_classes must have the same length.")
-
-        for i in range(len(tracker_ids)):
-            tid = tracker_ids[i]
-            embedding = embeddings[i]
-            crop_list = crops[i]
-            team = teams[i]
-
-            if tid in cls._registry:
-                logger.warning(f"Attempted to register new player with existing tracker ID {tid}. Skipping.")
-                continue
-
-            if embedding is None:
-                logger.warning(f"Skipping player creation for tracker ID {tid} due to missing embedding.")
-                continue
-
-            player = cls(initial_embedding=embedding, initial_crops=crop_list, team=team)
-            player.associated_tracker_ids.append(tid)
-            cls._registry[tid] = player
-            players.append(player)
-            logger.debug(f"Registered new player {player.id} with tracker ID {tid}.")
-        return players
-
     @classmethod
     def match_and_update_for_batch(
         cls,

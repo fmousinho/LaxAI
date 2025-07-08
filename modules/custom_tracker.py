@@ -75,6 +75,73 @@ def warp_bbox(bbox_tlbr: np.ndarray, affine_matrix: np.ndarray) -> np.ndarray:
 
     return warped_xyxy
 
+
+class TrackData:    
+    """
+    A simple data class to hold re-identification data for a track.
+    """
+    def __init__(self,
+                    track_id: int,
+                    crop: np.ndarray,
+                    class_id: int,
+                    confidence: float,
+                    frame_id: int,
+                ):
+        self.track_id = track_id
+        self._largest_crop: np.ndarray = crop
+        self._embedding: np.ndarray = np.empty((0,))
+        self._largest_crop_area: int = int(crop.shape[0] * crop.shape[1] if crop.size > 0 else 0)
+        self._class_id = class_id
+        self._class_confidence = confidence
+        self.frame_first_seen: int = frame_id
+        self.frame_last_seen: int = frame_id
+        self._masked_crop = np.zeros_like(self._largest_crop, dtype=np.uint8)
+        self._team: int = -1
+
+    @property
+    def embedding(self) -> np.ndarray:
+        return self._embedding
+
+    @embedding.setter
+    def embedding(self, value: np.ndarray):
+        self._embedding = value
+
+    @property
+    def team(self) -> int:
+        return self._team
+
+    @team.setter
+    def team(self, value: int):
+        self._team = value
+
+    @property
+    def class_id(self) -> np.ndarray:
+        return self._class_id
+
+    @property
+    def largest_crop(self) -> np.ndarray:
+        return self._largest_crop
+
+    @property
+    def largest_crop_area(self) -> int:
+        return self._largest_crop_area
+    
+    def update_data(self, crop: np.ndarray, class_id: int, confidence: float):
+        """ Updates the track data with a new crop, class ID, and confidence. """
+        if confidence > self._class_confidence:
+            self._class_confidence = confidence
+            self._class_id = class_id
+
+        new_crop_area = crop.shape[0] * crop.shape[1]
+        if new_crop_area > self._largest_crop_area:
+            self._largest_crop = crop
+            self._largest_crop_area = new_crop_area
+
+        self.frame_last_seen += 1
+
+
+
+
 class AffineAwareByteTrack(sv.ByteTrack):
     """
     A custom ByteTrack tracker that incorporates affine motion compensation and
@@ -94,7 +161,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
             frame_rate = 30,
             minimum_consecutive_frames = _MINIMUM_CONSECUTIVE_FRAMES
             )
-        self.reid = SiglipReID()
+        self.track_data: dict[int, TrackData] = {}
 
     def update_with_transform(self, detections: sv.Detections, affine_matrix: np.ndarray, frame: np.ndarray) -> sv.Detections:
         """_summary_
@@ -179,6 +246,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
         logger.debug("Applied affine transform to %d tracked, %d lost, %d removed tracks before update.",
                      len(self.tracked_tracks), len(self.lost_tracks), len(self.removed_tracks))
                 
+        
         detections = super().update_with_detections(detections)
 
         # Create a map from external_track_id to internal_track_id for currently tracked tracks.
@@ -197,7 +265,8 @@ class AffineAwareByteTrack(sv.ByteTrack):
             ], dtype=int)
             detections.tracker_id = internal_ids
 
-        # self.reid.update_ids(detections=detections, frame=frame, frame_id=self.frame_id)
+        # Updates crops for each track
+        self._update_tracks_with_detections(detections, frame)
 
         return detections
     
@@ -274,23 +343,6 @@ class AffineAwareByteTrack(sv.ByteTrack):
         """
         return np.array([[1.0, 0.0, 0.0],
                          [0.0, 1.0, 0.0]], dtype=np.float32)
-
-    def get_reid_data_for_tid(self, tid: int) -> Optional[Tuple[np.ndarray, List[np.ndarray], int]]:
-        """
-        Retrieves re-identification data (embeddings and crops) for a given tracker ID.
-
-        This method serves as a public interface to the internal SiglipReID module,
-        allowing the application to get ReID data without directly interacting with
-        the SiglipReID class.
-
-        Args:
-            tid (int): The tracker ID.
-
-        Returns:
-            Optional[Tuple[np.ndarray, List[np.ndarray], int]]: A tuple of (embedding, crops, det_class) or None.
-        """
-        return self.reid.get_embeddings_and_crops_by_tid(tid)
-    
     
     def get_tids_for_frame(self) -> List[int]:
 
@@ -308,3 +360,59 @@ class AffineAwareByteTrack(sv.ByteTrack):
 
         return sorted(list(tids))
         
+    def _update_tracks_with_detections(self, detections: sv.Detections, frame: np.ndarray):
+        """
+        Updates the track data with the latest detections and crops.
+
+        Args:
+            detections (sv.Detections): The detections for the current frame.
+            frame (np.ndarray): The raw image of the current frame.
+
+        Returns:
+            None
+        """
+        detections_track_ids = detections.tracker_id
+        if detections_track_ids is None:
+            return
+
+        # Keeps the largest crop for each track ID (hopefullly the most represenative one!)
+        for i, tid in enumerate(detections_track_ids):
+            crop = sv.crop_image(frame, detections.xyxy[i])
+            class_id = detections.class_id[i] if detections.class_id is not None else -1
+            confidence = detections.confidence[i] if detections.confidence is not None else 0.0
+            if tid not in self.track_data:
+                self.track_data[tid] = TrackData(
+                    track_id=tid,
+                    crop=crop,
+                    class_id=class_id,
+                    confidence=confidence,
+                    frame_id=self.frame_id
+                )
+            else:
+                self.track_data[tid].update_data(crop, class_id, confidence)
+
+
+    def update_track_with_embedding_and_team (self, track_id: int, embedding: np.ndarray, team: int):
+        """
+        Adds an embedding and team information to the track data for a specific track ID.
+
+        Args:
+            track_id (int): The ID of the track to which the embedding belongs.
+            embedding (np.ndarray): The embedding to be added.
+            team (int): The team ID associated with the track.
+        """
+        if track_id in self.track_data:
+            self.track_data[track_id].embedding = embedding
+            self.track_data[track_id].team = team
+        else:
+            logger.warning(f"Track ID {track_id} not found in track data. Cannot add embedding.")
+       
+    def get_tracks_data(self) -> Dict[int, TrackData]:
+        """
+        Retrieves the track data for all tracks.
+
+        Returns:
+            Dict[int, TrackData]: A dictionary mapping track IDs to their
+            corresponding TrackData objects.
+        """
+        return self.track_data
