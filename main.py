@@ -31,7 +31,6 @@ DEFAULT_TORCH_DEVICE = torch.device(
 )
 
 def main() -> int:
-    logger.info("---------- LaxAI Starting Application ----------")
 
     # --- Argument Parsing ---
     parser = argparse.ArgumentParser(description="LaxAI Video Processing Application.")
@@ -73,7 +72,10 @@ def main() -> int:
         logging.getLogger('LaxAI').setLevel(args.log_level.upper())
     except Exception as e:
         # Fallback if the above fails, log at the initial level
-        logger.error(f"Failed to dynamically set log level to {args.log_level.upper()}: {e}")
+        logger.error(
+            f"Failed to dynamically set log level to {args.log_level.upper()}:\n"
+            f"  {type(e).__name__}: {e}"
+        )
 
     # --- Environment and System Checks ---
     selected_device = torch.device(args.device)
@@ -86,16 +88,21 @@ def main() -> int:
     # --- Load .env ---
     if os.path.exists(_DOTENV_PATH):
         if load_dotenv(dotenv_path=_DOTENV_PATH, verbose=True): # verbose=True logs INFO messages from dotenv
-            logger.info(f".env file loaded successfully from {_DOTENV_PATH}.")
+            logger.info(f".env file loaded successfully.")
         else:
-            logger.warning(f".env file at {_DOTENV_PATH} was found but may be empty or failed to load variables.")
-    else:
-        logger.info(f".env file not found at {_DOTENV_PATH}. Proceeding with environment variables or defaults.")
+            logger.warning(".env file was found but may be empty or failed to load variables.")
+            logger.warning(f"path: {_DOTENV_PATH}")
 
+    else:
+        logger.info(f".env file not found, proceeding with defaults."
+                    f"path: {_DOTENV_PATH}"
+            )
+        
     # --- Verify if video file provided exists  ---
     input_video = args.input_video
     if not os.path.exists(input_video):
-        logger.error(f"Input video file '{input_video}' does not exist. Please provide a valid file path.")
+        logger.error("Input video file does not exist.")
+        logger.error(f"path: {input_video}")
         return 1
 
     # --- Main Application Logic ---
@@ -132,7 +139,11 @@ def main() -> int:
         return 0
 
     except Exception as e:
-        logger.critical(f"An unhandled exception occurred in the main application: {e}", exc_info=True)
+        logger.critical(
+            f"An unhandled exception occurred in the main application:\n"
+            f"  {type(e).__name__}: {e}",
+            exc_info=True
+        )
         return 1
     finally:
         logger.info("---------- LaxAI Application Finished ----------")

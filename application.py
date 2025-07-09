@@ -1,11 +1,12 @@
 import logging
+from config.constants import LOGGING_LINE_SIZE
+from modules.utils import log_progress
 from typing import Optional, List, Dict, Tuple
 import datetime
 import os
 import torch
 import cv2
 import supervision as sv
-from supervision.annotators.utils import ColorLookup
 from tqdm import tqdm
 from collections import deque
 import numpy as np
@@ -17,6 +18,9 @@ from modules.team_identification import TeamIdentifier, PlayerMasker
 from tools.store_driver import Store
 from modules.custom_tracker import AffineAwareByteTrack, TrackData
 from modules.Siglip_reid import SiglipReID
+from modules.detection_processor import DetectionProcessor
+from modules.crop_extractor_processor import CropExtractor
+from modules.dataset_creation import LacrossePlayerDataset
 from modules.player_association import (
     associate_tracks_to_players_greedy,
     associate_tracks_to_players_globally
@@ -46,6 +50,7 @@ def run_application (
         debug_max_frames: Optional[int] = None,
         generate_report: bool = True
     ):
+
     """
     Main entry point for the video processing application.
     Args:
@@ -56,17 +61,33 @@ def run_application (
         debug_max_frames: If set, limits processing to this many frames for debugging.
     """
 
+    logger.info("")
+    logger.info("run_application called with arguments:")
+    logger.info(f"  store:            {type(store).__name__}")
+    logger.info(f"  input_video:      {input_video}")
+    logger.info(f"  output_video_path:{output_video_path}")
+    logger.info(f"  device:           {device}")
+    logger.info(f"  debug_max_frames: {debug_max_frames}")
+    logger.info(f"  generate_report:  {generate_report}")
+
+
     video_info = sv.VideoInfo.from_video_path(video_path=input_video)
     generator_params = {
         "source_path": input_video,
         "end": debug_max_frames
     }
-    frames_generator = sv.get_video_frames_generator(**generator_params)
-    model = DetectionModel(store=store, device=device)    
+
+    TEMP_DIR = os.path.join(os.getcwd(), "temp")
+    if not os.path.exists(TEMP_DIR):
+        os.makedirs(TEMP_DIR, exist_ok=True)
+
+    FRAME_TARGET = debug_max_frames if debug_max_frames is not None else video_info.total_frames
+
+    detection_model = DetectionModel(store=store, device=device)    
     tracker = AffineAwareByteTrack() 
     team_identifier = TeamIdentifier()
     masker = PlayerMasker()
-    masker.type = "grass_avg"  # Set the type after initialization
+    
     
     emb_provider = SiglipReID()
     
@@ -74,73 +95,33 @@ def run_application (
     label_annotator = sv.LabelAnnotator()
     multi_frame_detections = deque()
 
-    frame_target = debug_max_frames if debug_max_frames else video_info.total_frames
-
 
 
     # --- Generate detections and tracks for each frame ---
-
-    logger.info("Generating detections and tracks for each frame")
-    previous_frame = None
-    affine_matrix = None
-
-    tracker = AffineAwareByteTrack()
     
-    # Collect 5 frames equally spread throughout the video for grass estimation
-    sample_frames = []
-    frame_indices_to_sample = []
-    if frame_target > 0:
-        if frame_target >= 5:
-            # Sample 5 frames: beginning, quarter, middle, three-quarter, end
-            frame_indices_to_sample = [
-                0,                              # Beginning
-                frame_target // 4,              # Quarter
-                frame_target // 2,              # Middle  
-                3 * frame_target // 4,          # Three-quarter
-                frame_target - 1                # End
-            ]
-        else:
-            # Use all available frames if less than 5
-            frame_indices_to_sample = list(range(frame_target))
+    frames_generator = sv.get_video_frames_generator(**generator_params)
+    detection_file_path = os.path.join(TEMP_DIR, "detections.json")
+    detection_processor = DetectionProcessor(detection_model, tracker, detection_file_path)
+    
+    multi_frame_detections = detection_processor.process_frames(
+        frames_generator=frames_generator,
+        frame_target=FRAME_TARGET
+    )
 
-    current_frame_idx = 0
-    for frame in tqdm(frames_generator, desc="Frames read", total=frame_target):
-        try:
-            # Collect sample frames for grass estimation
-            if current_frame_idx in frame_indices_to_sample:
-                sample_frames.append(frame.copy())
-            
-            all_detections = model.generate_detections(frame)
-            if all_detections.xyxy.size > 0 and np.any(all_detections.xyxy < 0):
-                logger.warning("Detections from model contain negative xyxy coordinates. This may indicate an issue with the detection model.")
+    # --- Extracting crops and loading into a dataset ---
 
-            # Affine matrix determines any camera move between consecutive frames (very important)
-            if previous_frame is not None:
-                affine_matrix = AffineAwareByteTrack.calculate_affine_transform(previous_frame, frame)
-            if affine_matrix is None:
-                affine_matrix = AffineAwareByteTrack.get_identity_affine_matrix()
+    frames_generator = sv.get_video_frames_generator(**generator_params)
+    crop_processor = CropExtractor(frames_generator, multi_frame_detections, TEMP_DIR)
 
-            detections = tracker.update_with_transform(
-                detections=all_detections,
-                frame=frame,
-                affine_matrix=affine_matrix
-            )
+    crop_processor.extract_crops()
+    crop_processor.split_crops_into_train_and_val()
 
-            previous_frame = frame.copy()
-           
-        except Exception as e:
-            logger.error(f"Error during detection/tracking for frame: {e}", exc_info=True)
-            multi_frame_detections.append(sv.Detections.empty()) # Append empty detections to keep deque length consistent
-            current_frame_idx += 1
-            continue
+    data_dir = crop_processor.get_data_directory()
+    dataset = LacrossePlayerDataset(image_dir=data_dir)
 
-        multi_frame_detections.append(detections)
-        current_frame_idx += 1
+    # --- Train Track Identifier ---
 
 
-     # --- Creating Embeddings and Finding Teams for each track  ---
-
-    tracker_data = tracker.get_tracks_data()
     tracker_data = {tid: data for tid, data in tracker_data.items() if data.class_id == _PLAYER_CLASS_ID}
     
     # Extract crops from track data for convenience
@@ -158,7 +139,7 @@ def run_application (
     teams_array = team_identifier.fit_predict(avg_colors)
 
     for tid, emb, team in zip(tids, embs, teams_array):
-        tracker.update_track_with_embedding_and_team(tid, emb, int(team))
+        detection_processor.tracker.update_track_with_embedding_and_team(tid, emb, int(team))
 
     # Create tracker_crops dictionary for association functions
     tracker_crops: Dict[int, np.ndarray] = {}
@@ -171,7 +152,7 @@ def run_application (
 
     players: set[Player] = set()  # Set to store unique Player objects
     track_to_player: Dict[int, Player] = {}  # Mapping from tracker ID to Player object
-    tracks_data = tracker.get_tracks_data()
+    tracks_data = detection_processor.tracker.get_tracks_data()
     
     # Association parameters
     SIMILARITY_THRESHOLD = 0.9  # Minimum cosine similarity for association
@@ -194,7 +175,7 @@ def run_application (
 
     writer_frames_generator = sv.get_video_frames_generator(**generator_params)
     with sv.VideoSink(target_path=output_video_path, video_info=video_info) as sink:
-        for frame in tqdm(writer_frames_generator, desc="Writing frames", total=frame_target):
+        for frame in tqdm(writer_frames_generator, desc="Writing frames", total=FRAME_TARGET):
             try:
                 detections: sv.Detections = multi_frame_detections.popleft()
             except IndexError:
