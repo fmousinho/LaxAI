@@ -2,12 +2,12 @@ import logging
 import os
 import supervision as sv
 import numpy as np
-from typing import Optional, Deque
+from typing import Optional, Deque, List
 from collections import deque, defaultdict
 import json
 
 from modules.detection import DetectionModel
-from modules.custom_tracker import AffineAwareByteTrack
+from modules.tracker import AffineAwareByteTrack
 from modules.utils import log_progress
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ class DetectionProcessor:
         self, 
         frames_generator, 
         frame_target: int
-    ) -> Deque[sv.Detections]:
+    ) -> List[sv.Detections]:
         """
         Process all frames for detection and tracking.
         
@@ -37,11 +37,11 @@ class DetectionProcessor:
             frame_target: Total number of frames to process
             
         Returns:
-            Deque of detections for each frame
+            List of detections for each frame
         """
         logger.info("Generating detections and tracks for each frame")
         
-        multi_frame_detections = deque()
+        multi_frame_detections = list()
         previous_frame = None
         affine_matrix = None
         current_frame_idx = 0

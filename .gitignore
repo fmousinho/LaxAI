@@ -9,6 +9,7 @@ debug*/
 runs/
 analyse/reports/
 notebooks/data/
+temp
 
 # Python cache files
 __pycache__/

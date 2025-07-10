@@ -5,6 +5,7 @@ from PIL import Image
 import os
 import random
 import numpy as np
+from config.transforms_config import get_transforms
 
 class LacrossePlayerDataset(Dataset):
     """
@@ -113,16 +114,13 @@ class LacrossePlayerDataset(Dataset):
                 anchor_img = transforms.ToTensor()(anchor_img)
                 positive_img = transforms.ToTensor()(positive_img)
                 negative_img = transforms.ToTensor()(negative_img)
+        else:
+            # If no transforms provided, at minimum convert to tensor
+            anchor_img = transforms.ToTensor()(anchor_img)
+            positive_img = transforms.ToTensor()(positive_img)
+            negative_img = transforms.ToTensor()(negative_img)
 
         return anchor_img, positive_img, negative_img, torch.tensor(anchor_label)
 
-# Define data augmentations
-# Note: The input size (80, 40) matches your model expectations
-data_transforms = transforms.Compose([
-    transforms.Resize((80, 40)), # Height, Width
-    transforms.RandomHorizontalFlip(),
-    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-    transforms.RandomRotation(10),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-])
+# Get default training transforms from centralized config
+data_transforms = get_transforms('training')

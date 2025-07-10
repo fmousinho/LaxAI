@@ -4,6 +4,7 @@ import numpy as np
 import cv2
 import supervision as sv
 import torch
+from config.transforms_config import MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH
 
 
 logger = logging.getLogger(__name__)
@@ -444,8 +445,8 @@ class AffineAwareByteTrack(sv.ByteTrack):
             
             # Convert crops to tensor for batch processing
             try:
-                # Resize all crops to a consistent size (e.g., 80x40 to match model input)
-                target_height, target_width = 80, 40
+                # Resize all crops to a consistent size using centralized config
+                target_height, target_width = MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH
                 resized_crops = []
                 
                 for crop in crops:

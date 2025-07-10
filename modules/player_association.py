@@ -18,7 +18,7 @@ from typing import Optional, List, Dict, Tuple
 import numpy as np
 from tqdm import tqdm
 
-from modules.custom_tracker import TrackData
+from modules.tracker import TrackData
 from modules.player import Player
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,6 @@ def cosine_similarity(embedding1: np.ndarray, embedding2: np.ndarray) -> float:
 
 def associate_tracks_to_players_greedy(
     tracks_data: Dict[int, TrackData], 
-    tracker_crops: Dict[int, np.ndarray], 
     similarity_threshold: float
 ) -> Tuple[set[Player], Dict[int, Player]]:
     """
@@ -61,7 +60,6 @@ def associate_tracks_to_players_greedy(
     
     Args:
         tracks_data: Dictionary mapping track IDs to track data
-        tracker_crops: Dictionary mapping track IDs to crop images
         similarity_threshold: Minimum cosine similarity for association
         
     Returns:
@@ -90,7 +88,7 @@ def associate_tracks_to_players_greedy(
             player = Player(
                 tracker_id=track_id,
                 initial_embedding=track_embedding,
-                initial_crops=[tracker_crops[track_id]] if track_id in tracker_crops else [],
+                initial_crops=track_data.crops,
                 team=track_team
             )
             # Set the frame bounds for the new player
@@ -116,8 +114,7 @@ def associate_tracks_to_players_greedy(
             if best_similarity >= similarity_threshold and best_match is not None:
                 # Add this track's data to the existing player
                 best_match.associated_tracker_ids.append(track_id)
-                if track_id in tracker_crops:
-                    best_match.crops.append(tracker_crops[track_id])
+                best_match.crops.extend(track_data.crops)
                 best_match.frame_last_seen = track_last_frame
                 # Update player's embedding (average with existing)
                 if best_match.embeddings is not None:
@@ -134,7 +131,7 @@ def associate_tracks_to_players_greedy(
                 player = Player(
                     tracker_id=track_id,
                     initial_embedding=track_embedding,
-                    initial_crops=[tracker_crops[track_id]] if track_id in tracker_crops else [],
+                    initial_crops=track_data.crops,
                     team=track_team
                 )
                 # Set the frame bounds for the new player
@@ -150,7 +147,6 @@ def associate_tracks_to_players_greedy(
 
 def associate_tracks_to_players_globally(
     tracks_data: Dict[int, TrackData], 
-    tracker_crops: Dict[int, np.ndarray], 
     similarity_threshold: float
 ) -> Tuple[set[Player], Dict[int, Player]]:
     """
@@ -162,19 +158,14 @@ def associate_tracks_to_players_globally(
     
     Args:
         tracks_data: Dictionary mapping track IDs to track data
-        tracker_crops: Dictionary mapping track IDs to crop images
         similarity_threshold: Minimum cosine similarity for association
         
     Returns:
         Tuple of (set of unique players, mapping from track ID to Player)
     """
-    try:
-        from scipy.optimize import linear_sum_assignment
-        has_scipy = True
-    except ImportError:
-        logger.warning("scipy not available, falling back to greedy algorithm")
-        has_scipy = False
-        return associate_tracks_to_players_greedy(tracks_data, tracker_crops, similarity_threshold)
+    
+    from scipy.optimize import linear_sum_assignment
+    has_scipy = True
     
     players: set[Player] = set()
     track_to_player: Dict[int, Player] = {}
@@ -229,8 +220,7 @@ def associate_tracks_to_players_globally(
                     if assigned_player.frame_last_seen < track_data.frame_first_seen and assigned_player.team == track_data.team:
                         # Associate with existing player
                         assigned_player.associated_tracker_ids.append(track_id)
-                        if track_id in tracker_crops:
-                            assigned_player.crops.append(tracker_crops[track_id])
+                        assigned_player.crops.extend(track_data.crops)  #
                         assigned_player.frame_last_seen = track_data.frame_last_seen
                         
                         # Update player's embedding (average with existing)
@@ -247,7 +237,7 @@ def associate_tracks_to_players_globally(
                         player = Player(
                             tracker_id=track_id,
                             initial_embedding=track_data.embedding,
-                            initial_crops=[tracker_crops[track_id]] if track_id in tracker_crops else [],
+                            initial_crops=track_data.crops,
                             team=track_data.team
                         )
                         # Set the frame bounds for the new player
@@ -265,7 +255,7 @@ def associate_tracks_to_players_globally(
                         player = Player(
                             tracker_id=track_id,
                             initial_embedding=track_data.embedding,
-                            initial_crops=[tracker_crops[track_id]] if track_id in tracker_crops else [],
+                            initial_crops=track_data.crops,
                             team=track_data.team
                         )
                         # Set the frame bounds for the new player
@@ -280,7 +270,7 @@ def associate_tracks_to_players_globally(
                     player = Player(
                         tracker_id=track_id,
                         initial_embedding=track_data.embedding,
-                        initial_crops=[tracker_crops[track_id]] if track_id in tracker_crops else [],
+                        initial_crops=track_data.crops,
                         team=track_data.team
                     )
                     # Set the frame bounds for the new player
@@ -299,7 +289,7 @@ def associate_tracks_to_players_globally(
                     player = Player(
                         tracker_id=track_id,
                         initial_embedding=track_data.embedding,
-                        initial_crops=[tracker_crops[track_id]] if track_id in tracker_crops else [],
+                        initial_crops=track_data.crops,
                         team=track_data.team
                     )
                     # Set the frame bounds for the new player
@@ -326,8 +316,7 @@ def associate_tracks_to_players_globally(
                     # Associate if above threshold
                     if best_similarity >= similarity_threshold and best_match is not None:
                         best_match.associated_tracker_ids.append(track_id)
-                        if track_id in tracker_crops:
-                            best_match.crops.append(tracker_crops[track_id])
+                        best_match.crops.extend(track_data.crops)
                         best_match.frame_last_seen = track_data.frame_last_seen
                         
                         # Update player's embedding (average with existing)
@@ -345,7 +334,7 @@ def associate_tracks_to_players_globally(
                         player = Player(
                             tracker_id=track_id,
                             initial_embedding=track_data.embedding,
-                            initial_crops=[tracker_crops[track_id]] if track_id in tracker_crops else [],
+                            initial_crops=track_data.crops,
                             team=track_data.team
                         )
                         # Set the frame bounds for the new player

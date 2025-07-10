@@ -1,0 +1,492 @@
+import torch
+from torch.utils.data import Dataset, DataLoader
+import torchvision.transforms as transforms
+from PIL import Image
+import numpy as np
+from sklearn.cluster import DBSCAN
+import os
+import shutil
+from collections import Counter
+import time
+import logging
+from .utils import log_progress
+from config.transforms_config import get_transforms
+
+class InferenceDataset(Dataset):
+    """
+    A simple dataset to load individual images for generating embeddings.
+    """
+    def __init__(self, image_dir, transform=None):
+        self.image_dir = image_dir
+        self.image_paths = [os.path.join(image_dir, f) for f in os.listdir(image_dir) 
+                           if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        img_path = self.image_paths[idx]
+        img = Image.open(img_path).convert('RGB')
+        if self.transform:
+            img = self.transform(img)
+        return img, img_path
+
+
+class ClusteringProcessor:
+    """
+    A processor for clustering player embeddings using DBSCAN and reorganizing data.
+    """
+    
+    def __init__(self, 
+                 model_path: str,
+                 all_crops_dir: str,
+                 clustered_data_dir: str,
+                 embedding_dim: int = 128,
+                 batch_size: int = 128,
+                 dbscan_eps: float = 0.6,
+                 dbscan_min_samples: int = 5,
+                 temp_dir: str = "temp"):
+        """
+        Initialize the clustering processor.
+        
+        Args:
+            model_path: Path to the trained model
+            all_crops_dir: Directory containing all crop images
+            clustered_data_dir: Output directory for clustered data
+            embedding_dim: Dimension of the embedding vector
+            batch_size: Batch size for inference
+            dbscan_eps: Initial DBSCAN epsilon parameter
+            dbscan_min_samples: DBSCAN minimum samples parameter
+            temp_dir: Temporary directory for intermediate files
+        """
+        self.model_path = model_path
+        self.all_crops_dir = all_crops_dir
+        self.clustered_data_dir = clustered_data_dir
+        self.embedding_dim = embedding_dim
+        self.batch_size = batch_size
+        self.dbscan_eps = dbscan_eps
+        self.dbscan_min_samples = dbscan_min_samples
+        self.temp_dir = temp_dir
+        
+        self.logger = logging.getLogger(__name__)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else 
+                                 "mps" if torch.backends.mps.is_available() else "cpu")
+        
+        # Ensure directories exist
+        os.makedirs(self.all_crops_dir, exist_ok=True)
+        os.makedirs(os.path.dirname(self.clustered_data_dir), exist_ok=True)
+
+    def prepare_all_crops_directory(self, source_data_dir: str):
+        """
+        Copy all crops from individual tracker folders to the all_crops directory.
+        
+        Args:
+            source_data_dir: Directory containing individual tracker folders
+        """
+        if not os.path.exists(source_data_dir):
+            raise FileNotFoundError(f"Source data directory does not exist: {source_data_dir}")
+        
+        self.logger.info(f"Copying crops from individual tracker folders to {self.all_crops_dir}")
+        
+        copied_count = 0
+        for item in os.listdir(source_data_dir):
+            item_path = os.path.join(source_data_dir, item)
+            if os.path.isdir(item_path) and item.isdigit():  # Only process numbered tracker folders
+                for crop_file in os.listdir(item_path):
+                    if crop_file.lower().endswith(('.jpg', '.png', '.jpeg')):
+                        src = os.path.join(item_path, crop_file)
+                        dst = os.path.join(self.all_crops_dir, f"{item}_{crop_file}")  # Prefix with tracker_id
+                        shutil.copy2(src, dst)
+                        copied_count += 1
+        
+        self.logger.info(f"Copied {copied_count} crop images to {self.all_crops_dir}")
+
+    def generate_all_embeddings(self, model, dataloader):
+        """
+        Uses the model to generate embeddings for all images in the dataloader.
+        
+        Args:
+            model: The trained model
+            dataloader: DataLoader containing the images
+            
+        Returns:
+            Tuple of (embeddings_array, image_paths)
+        """
+        # Ensure model is on the correct device
+        model.to(self.device)
+        model.eval()
+        all_embeddings = []
+        all_paths = []
+
+        self.logger.info(f"Generating embeddings for {len(dataloader.dataset)} images")
+        start_time = time.time()
+        
+        with torch.no_grad():
+            for i, (images, paths) in enumerate(dataloader):
+                images = images.to(self.device)
+                embeddings = model(images)
+                all_embeddings.append(embeddings.cpu().numpy())
+                all_paths.extend(paths)
+                
+                # Log progress every 10 batches
+                if (i + 1) % 10 == 0:
+                    log_progress(self.logger, "Generating embeddings", 
+                               i + 1, len(dataloader), step=1)
+
+        elapsed_time = time.time() - start_time
+        self.logger.info(f"Embedding generation complete! ({elapsed_time:.2f}s, {len(all_paths)} images)")
+        return np.vstack(all_embeddings), all_paths
+
+    def cluster_embeddings(self, embeddings):
+        """
+        Performs DBSCAN clustering on the embedding vectors.
+        
+        Args:
+            embeddings: Numpy array of embeddings
+            
+        Returns:
+            Cluster labels array
+        """
+        self.logger.info(f"Starting DBSCAN clustering on {embeddings.shape[0]} embeddings")
+        self.logger.info(f"Embedding dimensions: {embeddings.shape[1]}")
+        self.logger.info(f"Parameters: eps={self.dbscan_eps}, min_samples={self.dbscan_min_samples}")
+        
+        start_time = time.time()
+        clustering = DBSCAN(eps=self.dbscan_eps, min_samples=self.dbscan_min_samples, 
+                           metric='euclidean', n_jobs=-1)
+        
+        self.logger.info("Running DBSCAN algorithm...")
+        cluster_labels = clustering.fit_predict(embeddings)
+        
+        elapsed_time = time.time() - start_time
+        
+        # Print clustering summary
+        unique_labels = set(cluster_labels)
+        num_clusters = len(unique_labels) - (1 if -1 in unique_labels else 0)
+        num_noise = np.sum(cluster_labels == -1)
+        
+        self.logger.info(f"Clustering complete! ({elapsed_time:.2f}s)")
+        self.logger.info(f"Found {num_clusters} unique players (clusters)")
+        self.logger.info(f"{num_noise} images classified as noise ({num_noise/len(cluster_labels)*100:.1f}%)")
+        
+        # Show cluster size distribution
+        if num_clusters > 0:
+            cluster_counts = Counter(cluster_labels)
+            if -1 in cluster_counts:
+                del cluster_counts[-1]  # Remove noise count
+            
+            min_size = min(cluster_counts.values())
+            max_size = max(cluster_counts.values())
+            avg_size = np.mean(list(cluster_counts.values()))
+            self.logger.info(f"Cluster sizes: min={min_size}, max={max_size}, avg={avg_size:.1f}")
+        
+        return cluster_labels
+
+    def reorganize_data_into_clusters(self, image_paths, cluster_labels):
+        """
+        Copies image files into new folders named after their cluster ID.
+        
+        Args:
+            image_paths: List of image file paths
+            cluster_labels: Array of cluster labels for each image
+        """
+        self.logger.info(f"Reorganizing data into '{self.clustered_data_dir}'")
+        
+        if os.path.exists(self.clustered_data_dir):
+            self.logger.info("Cleaning up existing directory...")
+            shutil.rmtree(self.clustered_data_dir)
+        os.makedirs(self.clustered_data_dir)
+        
+        # Create a mapping from image path to its cluster label
+        path_to_label = dict(zip(image_paths, cluster_labels))
+        
+        # Count clusters and create directories
+        valid_labels = [label for label in cluster_labels if label != -1]
+        unique_clusters = set(valid_labels)
+        
+        self.logger.info(f"Creating {len(unique_clusters)} cluster directories")
+        for label in unique_clusters:
+            cluster_dir = os.path.join(self.clustered_data_dir, f"player_{label:04d}")
+            os.makedirs(cluster_dir, exist_ok=True)
+        
+        copied_count = 0
+        self.logger.info("Copying files to cluster directories...")
+        
+        for i, (path, label) in enumerate(path_to_label.items()):
+            # Ignore noise points (label -1)
+            if label == -1:
+                continue
+                
+            # Create a directory for the new cluster ID if it doesn't exist
+            cluster_dir = os.path.join(self.clustered_data_dir, f"player_{label:04d}")
+            
+            # Copy the file
+            filename = os.path.basename(path)
+            dst_path = os.path.join(cluster_dir, filename)
+            shutil.copy2(path, dst_path)
+            copied_count += 1
+            
+            # Log progress every 100 files
+            if (i + 1) % 100 == 0:
+                log_progress(self.logger, "Copying files", i + 1, len(path_to_label), step=1)
+        
+        self.logger.info(f"Successfully copied {copied_count} images into {len(unique_clusters)} cluster folders")
+        
+        # Show final statistics
+        if len(unique_clusters) > 0:
+            avg_per_cluster = copied_count / len(unique_clusters)
+            self.logger.info(f"Average images per cluster: {avg_per_cluster:.1f}")
+
+    def create_inference_transforms(self):
+        """
+        Create the transformation pipeline for inference.
+        
+        Returns:
+            Composed transforms
+        """
+        return get_transforms('inference')
+
+    def _setup_model_and_dataloader(self, model_class, device):
+        """
+        Setup the model and dataloader for inference (internal method).
+        
+        Args:
+            model_class: The model class to use
+            device: Device to use for inference
+            
+        Returns:
+            Tuple of (model, dataloader)
+        """
+        # Create inference transforms and dataset
+        inference_transforms = self.create_inference_transforms()
+        inference_dataset = InferenceDataset(image_dir=self.all_crops_dir, transform=inference_transforms)
+        dataloader = DataLoader(inference_dataset, batch_size=self.batch_size, 
+                               shuffle=False, num_workers=0)
+        
+        # Load the trained model
+        model = model_class(embedding_dim=self.embedding_dim)
+        model.load_state_dict(torch.load(self.model_path, map_location=device))
+        model.to(device)
+        
+        return model, dataloader
+
+    def _count_clusters(self, cluster_labels):
+        """
+        Count the number of clusters (excluding noise).
+        
+        Args:
+            cluster_labels: Array of cluster labels
+            
+        Returns:
+            Number of clusters
+        """
+        unique_labels = set(cluster_labels)
+        return len(unique_labels) - (1 if -1 in unique_labels else 0)
+
+    def process_clustering_with_search(self, model_class, source_data_dir=None, 
+                                     target_min_clusters=20, target_max_clusters=40, 
+                                     initial_eps=0.6, device=None):
+        """
+        Complete clustering pipeline with adaptive eps search.
+        
+        Args:
+            model_class: The model class to use
+            source_data_dir: Optional source directory to copy crops from
+            target_min_clusters: Minimum desired number of clusters
+            target_max_clusters: Maximum desired number of clusters
+            initial_eps: Starting eps value
+            device: Device to use for inference
+            
+        Returns:
+            Tuple of (num_clusters, num_images_processed)
+        """
+        try:
+            self.logger.info("Starting Player Re-identification Clustering Pipeline")
+            self.logger.info(f"Using device: {device or self.device}")
+            
+            # Use provided device or default
+            if device is None:
+                device = self.device
+            
+            # Prepare all_crops directory if needed
+            if source_data_dir:
+                self.prepare_all_crops_directory(source_data_dir)
+            
+            # Check if we have images to process
+            if not os.path.exists(self.all_crops_dir) or len(os.listdir(self.all_crops_dir)) == 0:
+                raise FileNotFoundError(f"No images found in '{self.all_crops_dir}'!")
+            
+            num_images = len([f for f in os.listdir(self.all_crops_dir) 
+                             if f.lower().endswith(('.jpg', '.png', '.jpeg'))])
+            self.logger.info(f"Found {num_images} images to process")
+            
+            # Setup model and dataloader
+            model, dataloader = self._setup_model_and_dataloader(model_class, device)
+            
+            # Generate embeddings
+            embeddings_array, image_paths = self.generate_all_embeddings(model, dataloader)
+            
+            # Find optimal eps value with adaptive search
+            best_eps, best_cluster_labels, best_num_clusters = self.find_optimal_eps(
+                embeddings_array, target_min_clusters, target_max_clusters, initial_eps)
+            
+            # Use the best clustering result
+            self.dbscan_eps = best_eps
+            self.reorganize_data_into_clusters(image_paths, best_cluster_labels)
+            
+            self.logger.info("All clustering steps complete!")
+            self.logger.info(f"Dataset reorganized in '{self.clustered_data_dir}' with {best_num_clusters} clusters")
+            
+            return best_num_clusters, num_images
+            
+        except Exception as e:
+            self.logger.error(f"Clustering pipeline failed: {str(e)}")
+            raise
+
+    def get_clustered_data_directory(self) -> str:
+        """
+        Returns the directory where all crops are stored.
+        
+        Returns:
+            Path to the all_crops directory
+        """
+        return self.clustered_data_dir
+
+    
+    def find_optimal_eps(self, embeddings, target_min_clusters=20, target_max_clusters=40, initial_eps=0.6):
+        """
+        Find optimal eps value to achieve target cluster count using adaptive search.
+        
+        Args:
+            embeddings: Numpy array of embeddings
+            target_min_clusters: Minimum desired number of clusters
+            target_max_clusters: Maximum desired number of clusters
+            initial_eps: Starting eps value
+            
+        Returns:
+            Tuple of (best_eps, best_cluster_labels, best_num_clusters)
+        """
+        target_center = (target_min_clusters + target_max_clusters) / 2
+        
+        self.logger.info(f"Searching for optimal eps value to get {target_min_clusters}-{target_max_clusters} clusters")
+        
+        # Start with initial eps
+        self.logger.info(f"Testing initial eps={initial_eps}")
+        self.dbscan_eps = initial_eps
+        cluster_labels = self.cluster_embeddings(embeddings)
+        num_clusters = self._count_clusters(cluster_labels)
+        self.logger.info(f"eps={initial_eps} resulted in {num_clusters} clusters")
+        
+        # Initialize best result
+        best_eps = initial_eps
+        best_cluster_labels = cluster_labels
+        best_num_clusters = num_clusters
+        
+        # Check if we're already in target range
+        if target_min_clusters <= num_clusters <= target_max_clusters:
+            self.logger.info(f"Initial eps={initial_eps} with {num_clusters} clusters is already in target range")
+            return best_eps, best_cluster_labels, best_num_clusters
+        
+        # Determine search direction and eps values to test
+        if num_clusters < target_min_clusters:
+            # Too few clusters, need to decrease eps
+            self.logger.info(f"Too few clusters ({num_clusters}), decreasing eps to increase clusters")
+            eps_values = [0.5, 0.4, 0.3, 0.2, 0.1, 0.08, 0.06, 0.04, 0.02]
+        else:
+            # Too many clusters, need to increase eps
+            self.logger.info(f"Too many clusters ({num_clusters}), increasing eps to reduce clusters")
+            eps_values = [0.7, 0.8, 0.9]
+        
+        # Search in the determined direction
+        for eps in eps_values:
+            self.logger.info(f"Testing eps={eps}")
+            self.dbscan_eps = eps
+            cluster_labels = self.cluster_embeddings(embeddings)
+            num_clusters = self._count_clusters(cluster_labels)
+            
+            self.logger.info(f"eps={eps} resulted in {num_clusters} clusters")
+            
+            # Check if we're in the target range
+            if target_min_clusters <= num_clusters <= target_max_clusters:
+                best_eps = eps
+                best_cluster_labels = cluster_labels
+                best_num_clusters = num_clusters
+                self.logger.info(f"Found optimal eps={eps} with {num_clusters} clusters")
+                break
+            
+            # Keep track of the best result (closest to target center)
+            if abs(num_clusters - target_center) < abs(best_num_clusters - target_center):
+                best_eps = eps
+                best_cluster_labels = cluster_labels
+                best_num_clusters = num_clusters
+        
+        # Log final result
+        if target_min_clusters <= best_num_clusters <= target_max_clusters:
+            self.logger.info(f"Successfully found eps={best_eps} with {best_num_clusters} clusters in target range")
+        else:
+            self.logger.warning(f"Could not find eps value in target range. Best result: eps={best_eps} with {best_num_clusters} clusters")
+        
+        return best_eps, best_cluster_labels, best_num_clusters
+
+    def process_clustering_with_search(self, model_class, source_data_dir=None, 
+                                     target_min_clusters=20, target_max_clusters=40, 
+                                     initial_eps=0.6, device=None):
+        """
+        Complete clustering pipeline with adaptive eps search.
+        
+        Args:
+            model_class: The model class to use
+            source_data_dir: Optional source directory to copy crops from
+            target_min_clusters: Minimum desired number of clusters
+            target_max_clusters: Maximum desired number of clusters
+            initial_eps: Starting eps value
+            device: Device to use for inference
+            
+        Returns:
+            Tuple of (num_clusters, num_images_processed)
+        """
+        try:
+            self.logger.info("Starting Player Re-identification Clustering Pipeline")
+            self.logger.info(f"Using device: {device or self.device}")
+            
+            # Use provided device or default
+            if device is None:
+                device = self.device
+            
+            # Prepare all_crops directory if needed
+            if source_data_dir:
+                self.prepare_all_crops_directory(source_data_dir)
+            
+            # Check if we have images to process
+            if not os.path.exists(self.all_crops_dir) or len(os.listdir(self.all_crops_dir)) == 0:
+                raise FileNotFoundError(f"No images found in '{self.all_crops_dir}'!")
+            
+            num_images = len([f for f in os.listdir(self.all_crops_dir) 
+                             if f.lower().endswith(('.jpg', '.png', '.jpeg'))])
+            self.logger.info(f"Found {num_images} images to process")
+            
+            # Setup model and dataloader
+            model, dataloader = self._setup_model_and_dataloader(model_class, device)
+            
+            # Generate embeddings
+            embeddings_array, image_paths = self.generate_all_embeddings(model, dataloader)
+            
+            # Find optimal eps value with adaptive search
+            best_eps, best_cluster_labels, best_num_clusters = self.find_optimal_eps(
+                embeddings_array, target_min_clusters, target_max_clusters, initial_eps)
+            
+            # Use the best clustering result
+            self.dbscan_eps = best_eps
+            self.reorganize_data_into_clusters(image_paths, best_cluster_labels)
+            
+            self.logger.info("All clustering steps complete!")
+            self.logger.info(f"Dataset reorganized in '{self.clustered_data_dir}' with {best_num_clusters} clusters")
+            
+            return best_num_clusters, num_images
+            
+        except Exception as e:
+            self.logger.error(f"Clustering pipeline failed: {str(e)}")
+            raise
+
+  
