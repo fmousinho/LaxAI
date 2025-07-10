@@ -15,14 +15,13 @@ import numpy as np
 from tools import reporting
 from modules.detection import DetectionModel
 from modules.player import Player
-from modules.team_identification import TeamIdentifier, PlayerMasker
 from tools.store_driver import Store
 from modules.tracker import AffineAwareByteTrack, TrackData
 from modules.clustering_processor import ClusteringProcessor
-from modules.siamesenet import SiameseNet  # Your model class
+from modules.siamesenet import SiameseNet 
 from modules.detection_processor import DetectionProcessor
 from modules.crop_extractor_processor import CropExtractor, create_train_val_split
-from modules.dataset import LacrossePlayerDataset, data_transforms
+from modules.dataset import LacrossePlayerDataset
 from modules.train_processor import Trainer
 from modules.writer_processor import VideoWriterProcessor
 from modules.player_association import (
@@ -43,7 +42,6 @@ _TEAM_COLORS =  {
 }
 
 _PLAYER_CLASS_ID = 3
-_N_FRAMES_FOR_TEAM_ID = 100 
 
 
 def run_application (
@@ -89,8 +87,7 @@ def run_application (
 
     detection_model = DetectionModel(store=store, device=device)    
     tracker = AffineAwareByteTrack() 
-    team_identifier = TeamIdentifier()
-    masker = PlayerMasker()
+
     
     multi_frame_detections = list()
 
@@ -128,7 +125,7 @@ def run_application (
     track_train_processor.train_and_save(
         model_class=SiameseNet,
         dataset_class=LacrossePlayerDataset,
-        transform=data_transforms
+        transform=get_transforms('training')
     )
 
     # --- Cluster Tracks based on their similarity ---
@@ -165,14 +162,13 @@ def run_application (
     player_processor.train_and_save(
         model_class=SiameseNet,
         dataset_class=LacrossePlayerDataset,
-        transform=data_transforms
+        transform=get_transforms('training')
     )
 
     # --- Create embeddings for tracks using the trained model ---
 
     logger.info("Creating embeddings for tracks using the trained model")
     
-    # Load the trained model
     trained_model = SiameseNet(embedding_dim=128)
     trained_model.load_state_dict(torch.load(embeddings_model_path, map_location=device))
     trained_model.to(device)
@@ -188,11 +184,6 @@ def run_application (
         embeddings_processor=embeddings_processor,
         device=device
     )
-
-    tracker_data = detection_processor.tracker.get_tracks_data()
-    tracker_data = {tid: data for tid, data in tracker_data.items() if data.class_id == _PLAYER_CLASS_ID}
-
-
 
      # --- Analysing Tracks to Create Players  ---
 
@@ -224,7 +215,7 @@ def run_application (
     )
 
     # --- (Optional) Fourth pass: Generate analysis report ---
-    generate_report = True
+    generate_report = False
     if generate_report:
         logger.info("Generating per-track analysis report")
         run_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
