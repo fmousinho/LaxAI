@@ -74,88 +74,88 @@ class VideoWriterProcessor:
                 
         logger.info(f"Video writing complete. Output saved to: {self.output_video_path}")
         
-        def _annotate_frame(self, 
-                        frame: np.ndarray, 
-                        detections: sv.Detections, 
-                        track_to_player: Dict[int, Player]) -> np.ndarray:
-            """
-            Annotate a single frame with player tracking information.
+    def _annotate_frame(self, 
+                    frame: np.ndarray, 
+                    detections: sv.Detections, 
+                    track_to_player: Dict[int, Player]) -> np.ndarray:
+        """
+        Annotate a single frame with player tracking information.
+        
+        Args:
+            frame: The input frame to annotate
+            detections: Detection data for this frame
+            track_to_player: Mapping from tracker ID to Player object
             
-            Args:
-                frame: The input frame to annotate
-                detections: Detection data for this frame
-                track_to_player: Mapping from tracker ID to Player object
-                
-            Returns:
-                Annotated frame with ellipses and labels
-            """
-            # Check if there are any detections to annotate
-            if len(detections) == 0:
-                return frame.copy()
-                
-            # Prepare detections data for supervision annotators
-            detections.data["player_id"] = np.zeros(len(detections), dtype=np.int16)
-            detections.data["team_id"] = np.full(len(detections), -1, dtype=np.int16)
-
-            # Prepare lists for labels and colors
-            labels = []
-            colors = []
-
-            # Loop through all detections in a given frame, and assign a player_id to all confirmed ones
-            for i in range(len(detections)):
-                tracker_id_np = detections.tracker_id[i]
-                if tracker_id_np is None:
-                    detections.data["player_id"][i] = -1
-                    detections.data["team_id"][i] = -1
-                    labels.append("?")
-                    colors.append((64, 64, 64))  # Dark gray for untracked
-                    continue
-                    
-                tid = int(tracker_id_np)
-                player = track_to_player.get(tid, None)
-                
-                if player is None:
-                    logger.warning(f"Tracker ID {tid} has no associated Player object. Skipping annotation.")
-                    detections.data["player_id"][i] = -1
-                    detections.data["team_id"][i] = -1
-                    labels.append("?")
-                    colors.append((128, 128, 128))  # Gray for unknown
-                else:
-                    detections.data["player_id"][i] = player.id
-                    team = player.team if player.team is not None else -1
-                    detections.data["team_id"][i] = team
-                    
-                    # Use player ID as label
-                    labels.append(f"P{player.id:02d}")
-                    
-                    # Get team-based color
-                    color = self.team_colors.get(team, (128, 128, 128))  # Default to gray
-                    colors.append(color)
-
-            # Create annotated frame using supervision annotators
-            annotated_frame = frame.copy()
+        Returns:
+            Annotated frame with ellipses and labels
+        """
+        # Check if there are any detections to annotate
+        if len(detections) == 0:
+            return frame.copy()
             
-            # Try different approaches for color annotation
-            try:
+        # Prepare detections data for supervision annotators
+        detections.data["player_id"] = np.zeros(len(detections), dtype=np.int16)
+        detections.data["team_id"] = np.full(len(detections), -1, dtype=np.int16)
 
-                detections.data["colors"] = np.array(colors, dtype=np.uint8)
+        # Prepare lists for labels and colors
+        labels = []
+        colors = []
+
+        # Loop through all detections in a given frame, and assign a player_id to all confirmed ones
+        for i in range(len(detections)):
+            tracker_id_np = detections.tracker_id[i]
+            if tracker_id_np is None:
+                detections.data["player_id"][i] = -1
+                detections.data["team_id"][i] = -1
+                labels.append("?")
+                colors.append((64, 64, 64))  # Dark gray for untracked
+                continue
                 
-                # Use supervision ellipse annotator
-                annotated_frame = self.ellipse_annotator.annotate(
-                    scene=annotated_frame,
-                    detections=detections
-                )
-                
-                # Use supervision label annotator for player IDs
-                annotated_frame = self.label_annotator.annotate(
-                    scene=annotated_frame,
-                    detections=detections,
-                    labels=labels
-                )
-            except Exception as e:
-                logger.error(f"Error annotating frame:")
-                logger.error(e)
+            tid = int(tracker_id_np)
+            player = track_to_player.get(tid, None)
             
-            return annotated_frame
+            if player is None:
+                logger.warning(f"Tracker ID {tid} has no associated Player object. Skipping annotation.")
+                detections.data["player_id"][i] = -1
+                detections.data["team_id"][i] = -1
+                labels.append("?")
+                colors.append((128, 128, 128))  # Gray for unknown
+            else:
+                detections.data["player_id"][i] = player.id
+                team = player.team if player.team is not None else -1
+                detections.data["team_id"][i] = team
+                
+                # Use player ID as label
+                labels.append(f"P{player.id:02d}")
+                
+                # Get team-based color
+                color = self.team_colors.get(team, (128, 128, 128))  # Default to gray
+                colors.append(color)
+
+        # Create annotated frame using supervision annotators
+        annotated_frame = frame.copy()
+        
+        # Try different approaches for color annotation
+        try:
+
+            detections.data["colors"] = np.array(colors, dtype=np.uint8)
+            
+            # Use supervision ellipse annotator
+            annotated_frame = self.ellipse_annotator.annotate(
+                scene=annotated_frame,
+                detections=detections
+            )
+            
+            # Use supervision label annotator for player IDs
+            annotated_frame = self.label_annotator.annotate(
+                scene=annotated_frame,
+                detections=detections,
+                labels=labels
+            )
+        except Exception as e:
+            logger.error(f"Error annotating frame:")
+            logger.error(e)
+        
+        return annotated_frame
         
        
