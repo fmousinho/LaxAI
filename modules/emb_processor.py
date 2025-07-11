@@ -296,10 +296,6 @@ class EmbeddingsProcessor:
                     batch_embeddings_np = batch_embeddings.cpu().numpy()
                     embeddings_list.append(batch_embeddings_np)
                     
-                    # Log progress
-                    log_progress(logger, "Processing crop batches", 
-                            min(i + batch_size, len(crops)), len(crops), step=batch_size)
-                    
                 except Exception as e:
                     logger.error(f"Error processing batch {i//batch_size + 1}: {e}")
                     # Create zero embeddings as fallback

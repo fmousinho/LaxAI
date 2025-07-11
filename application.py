@@ -97,7 +97,8 @@ def run_application (
 
         FRAME_TARGET:int = debug_max_frames if debug_max_frames is not None else video_info.total_frames #type: ignore
 
-        detection_model = DetectionModel(store=store, device=device)    
+        detection_device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu") #MPS workaround
+        detection_model = DetectionModel(store=store, device=detection_device)    
         tracker = AffineAwareByteTrack() 
 
         
