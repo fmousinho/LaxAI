@@ -51,7 +51,8 @@ def run_application (
         device: torch.device = torch.device("cpu"),
         debug_max_frames: Optional[int] = None,
         generate_report: bool = True,
-        detections_import_path: Optional[str] = None
+        detections_import_path: Optional[str] = None,
+        temp_dir: Optional[str] = None
     ):
 
     """
@@ -74,6 +75,7 @@ def run_application (
     logger.info(f"  debug_max_frames: {debug_max_frames}")
     logger.info(f"  generate_report:  {generate_report}")
     logger.info(f"  detections_import_path: {detections_import_path}")
+    logger.info(f"  temp_dir:         {temp_dir}")
 
 
     video_info = sv.VideoInfo.from_video_path(video_path=input_video)
@@ -81,55 +83,41 @@ def run_application (
         "source_path": input_video,
         "end": debug_max_frames
     }
+    if temp_dir is None:
+        raise ValueError("temp_dir must be provided by the caller.")
+    TEMP_DIR = temp_dir
+    logger.info(f"Using temporary directory: {TEMP_DIR}")
 
-    # Create a proper temporary directory
-    TEMP_DIR = tempfile.mkdtemp(prefix="laxai_", suffix="_temp")
-    logger.info(f"Created temporary directory: {TEMP_DIR}")
-    
-    try:
-        # Register cleanup function to remove temp directory on exit
-        import atexit
-        def cleanup_temp_dir():
-            if os.path.exists(TEMP_DIR):
-                logger.info(f"Cleaning up temporary directory: {TEMP_DIR}")
-                shutil.rmtree(TEMP_DIR)
-        atexit.register(cleanup_temp_dir)
+    FRAME_TARGET:int = debug_max_frames if debug_max_frames is not None else video_info.total_frames #type: ignore
 
-        FRAME_TARGET:int = debug_max_frames if debug_max_frames is not None else video_info.total_frames #type: ignore
-
-        detection_device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu") #MPS workaround
-        detection_model = DetectionModel(store=store, device=detection_device)    
-        tracker = AffineAwareByteTrack() 
-
-        
-        multi_frame_detections = list()
+    detection_device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu") #MPS workaround
+    detection_model = DetectionModel(store=store, device=detection_device)    
+    tracker = AffineAwareByteTrack() 
 
 
+    # --- Generate or load detections and tracks for each frame ---
+    frames_generator = sv.get_video_frames_generator(**generator_params)
+    detection_save_path = os.path.join(TEMP_DIR, "detections.json")
+    detection_processor = DetectionProcessor(detection_model, tracker, detection_save_path)
 
-        # --- Generate or load detections and tracks for each frame ---
-
-        frames_generator = sv.get_video_frames_generator(**generator_params)
-        detection_save_path = os.path.join(TEMP_DIR, "detections.json")
-        detection_processor = DetectionProcessor(detection_model, tracker, detection_save_path)
-
-        if detections_import_path and os.path.exists(detections_import_path):
-            logger.info(f"Loading existing detections from {detections_import_path}")
-            with open(detections_import_path, 'r') as f:
-                multi_frame_detections = detection_processor.json_to_detections(
-                    detections_import_path, 
-                    update_tracker_state=True, 
-                    video_source=input_video
-                )
-            logger.info(f"Loaded detections for {len(multi_frame_detections)} frames.")
-        else:
-            if detections_import_path and not os.path.exists(detections_import_path):
-                logger.warning(f"Detections import path does not exist: {detections_import_path}")
-                logger.warning("Proceeding to generate detections from the video.")
-            logger.info("Generating new detections from video.")
-            multi_frame_detections = detection_processor.process_frames(
-                frames_generator=frames_generator,
-                frame_target=FRAME_TARGET
+    if detections_import_path and os.path.exists(detections_import_path):
+        logger.info(f"Loading existing detections from {detections_import_path}")
+        with open(detections_import_path, 'r') as f:
+            multi_frame_detections = detection_processor.json_to_detections(
+                detections_import_path, 
+                update_tracker_state=True, 
+                video_source=input_video
             )
+        logger.info(f"Loaded detections for {len(multi_frame_detections)} frames.")
+    else:
+        if detections_import_path and not os.path.exists(detections_import_path):
+            logger.warning(f"Detections import path does not exist: {detections_import_path}")
+            logger.warning("Proceeding to generate detections from the video.")
+        logger.info("Generating new detections from video.")
+        multi_frame_detections = detection_processor.process_frames(
+            frames_generator=frames_generator,
+            frame_target=FRAME_TARGET
+        )
 
 
         # --- Extracting crops ---
@@ -212,7 +200,8 @@ def run_application (
         # --- Train player identifier ---
 
         embeddings_model_path = os.path.join(data_dir, "player_embeddings_model.pth")
-        player_processor = EmbeddingsProcessor(train_dir=os.path.join(data_dir, "train", device=device), model_save_path=embeddings_model_path)
+        player_train_dir = os.path.join(data_dir, "train")
+        player_processor = EmbeddingsProcessor(train_dir=player_train_dir, model_save_path=embeddings_model_path, device=device)
         player_processor.train_and_save(
             model_class=SiameseNet,
             dataset_class=LacrossePlayerDataset,
@@ -317,8 +306,4 @@ def run_application (
             reporting.generate_player_report_html(run_id, run_output_dir, player_rows)
             reporting.update_main_index_html()
     
-    finally:
-        # Ensure cleanup happens even if an error occurs
-        if os.path.exists(TEMP_DIR):
-            logger.info(f"Cleaning up temporary directory: {TEMP_DIR}")
-            shutil.rmtree(TEMP_DIR)
+    # No temp dir cleanup here; handled by main.py

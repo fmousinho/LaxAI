@@ -110,14 +110,14 @@ def main() -> int:
         return 1
 
     # --- Main Application Logic ---
+    import tempfile, shutil
+    TEMP_DIR = tempfile.mkdtemp(prefix="laxai_", suffix="_temp")
+    logger.info(f"Created temporary directory: {TEMP_DIR}")
     try:
         with Store() as store:
-            # Store is crucial if downloading video or models from the store object
             if not store.is_initialized():
                 logger.critical("Store initialization failed. Exiting.")
                 return 1
-            
-            #Analyse is a mode to evalue details of ByteTracker implementation. Can be verbose.
             if args.analyse:
                 start_frame, end_frame = args.analyse
                 logger.warning(f"Entering analysis mode. Check directory for results.")
@@ -130,7 +130,6 @@ def main() -> int:
                     )
                 logger.info("Analysis completed successfully.")
                 return 0
-            
             app.run_application(
                 store=store,
                 input_video=input_video,
@@ -138,11 +137,11 @@ def main() -> int:
                 device=selected_device,
                 debug_max_frames=args.debug_frames,
                 #generate_report=args.report,
-                detections_import_path=args.detections_import_path
+                detections_import_path=args.detections_import_path,
+                temp_dir=TEMP_DIR
             )
         logger.info("Application run completed successfully.")
         return 0
-
     except Exception as e:
         logger.critical(
             f"An unhandled exception occurred in the main application:\n"
@@ -151,6 +150,9 @@ def main() -> int:
         )
         return 1
     finally:
+        if os.path.exists(TEMP_DIR):
+            logger.info(f"Cleaning up temporary directory: {TEMP_DIR}")
+            shutil.rmtree(TEMP_DIR)
         logger.info("---------- LaxAI Application Finished ----------")
 
 if __name__ == "__main__":
