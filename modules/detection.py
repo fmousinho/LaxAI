@@ -1,18 +1,19 @@
 
 import logging
-from typing import Optional, Union, List
 import os
 import tempfile
+from typing import List, Optional, Union
+
 import numpy as np
-import torch
 import supervision as sv
+import torch
 from PIL import Image
 from rfdetr import RFDETRBase  # type: ignore
+
+from config.transforms_config import detection_config
 from tools.store_driver import Store
 
 logger = logging.getLogger(__name__)
-
-from config.transforms_config import detection_config
 
 
 class DetectionModel:
@@ -25,12 +26,13 @@ class DetectionModel:
     predictions from images or image-like data.
     """
 
-    def __init__(self, 
-                 store: Store,
-                 model_dict: str = detection_config.model_checkpoint,
-                 model_dir: Optional[str] = detection_config.checkpoint_dir,
-                 device: Optional[torch.device] = None,
-        ): 
+    def __init__(
+        self,
+        store: Store,
+        model_dict: str = detection_config.model_checkpoint,
+        model_dir: Optional[str] = detection_config.checkpoint_dir,
+        device: Optional[torch.device] = None,
+    ): 
         """
         Initializes the DetectionModel.
 
@@ -71,70 +73,70 @@ class DetectionModel:
         Returns:
             True if the model was loaded successfully, False otherwise.
         """
-        temp_checkpoint_path = None
         try:
-            checkpoint_buffer = self.store.get_file_by_name(file_name=self.model_dict, folder_path=self.model_dir)
+            checkpoint_buffer = self.store.get_file_by_name(
+                file_name=self.model_dict, folder_path=self.model_dir
+            )
             if checkpoint_buffer is None:
                 logger.error(f"Failed to retrieve checkpoint buffer for '{self.model_dict}' from store.")
                 return False
 
-            # Create a named temporary file to save the checkpoint buffer
-            # delete=False is important here so RFDETRBase can open it by name before we delete it.
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pth") as tmp_f: # Use appropriate suffix
+            # Use context manager for proper cleanup
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pth") as tmp_f:
                 tmp_f.write(checkpoint_buffer.getvalue())
-                temp_checkpoint_path = tmp_f.name # Get the path to the temporary file
-            
-            logger.info("Checkpoint saved to temporary file:")
-            logger.info(f"{temp_checkpoint_path}")
-            self.model = RFDETRBase(device=self.device.type, pretrain_weights=temp_checkpoint_path, num_classes=6)
-            #self.model = self.model.optimize_for_inference()  # TODO: Must test and maybe uncomment this line
-            return True
-        except RuntimeError as e:
+                temp_checkpoint_path = tmp_f.name
+
+            try:
+                logger.info(f"Checkpoint saved to temporary file: {temp_checkpoint_path}")
+                self.model = RFDETRBase(
+                    device=self.device.type, 
+                    pretrain_weights=temp_checkpoint_path, 
+                    num_classes=6
+                )
+                logger.info(f"Detection model '{self.model.__class__.__name__}' successfully loaded")
+                return True
+            finally:
+                # Ensure cleanup even if model loading fails
+                if os.path.exists(temp_checkpoint_path):
+                    try:
+                        os.remove(temp_checkpoint_path)
+                        logger.debug(f"Temporary checkpoint file removed: {temp_checkpoint_path}")
+                    except OSError as e:
+                        logger.warning(f"Error removing temporary checkpoint file {temp_checkpoint_path}: {e}")
+
+        except Exception as e:
             logger.error(f"Error loading detection model: {e}", exc_info=True)
             return False
-        finally:
-            # Clean up the temporary file after the model has been loaded (or if an error occurred)
-            if temp_checkpoint_path and os.path.exists(temp_checkpoint_path):
-                try:
-                    os.remove(temp_checkpoint_path)
-                    logger.info("Temporary checkpoint file removed:")
-                    logger.info(f"{temp_checkpoint_path}")
-                except OSError as e:
-                    logger.error(f"Error removing temporary checkpoint file {temp_checkpoint_path}: {e}")
 
     def generate_detections(
-            self,
-            images: Union[str, Image.Image, np.ndarray, torch.Tensor, List[Union[str, np.ndarray, Image.Image, torch.Tensor]]],
-            threshold: float = detection_config.prediction_threshold,
-            **kwargs,
-        ) -> sv.Detections: # type: ignore
+        self,
+        images: Union[str, Image.Image, np.ndarray, torch.Tensor, List[Union[str, np.ndarray, Image.Image, torch.Tensor]]],
+        threshold: float = detection_config.prediction_threshold,
+        **kwargs,
+    ) -> sv.Detections:
         """
         Runs inference using the loaded detection model on the provided image(s).
 
         Args:
             images: The input image(s) to process. Can be a single image or a list/batch.
-                    Accepts various formats: file path (str), PIL Image, NumPy array,
-                    or PyTorch Tensor.
+                   Accepts various formats: file path (str), PIL Image, NumPy array,
+                   or PyTorch Tensor.
             threshold: Confidence threshold for detections.
-            **kwargs: Additional keyword arguments to be passed to the underlying
-                      model's predict method.
+            **kwargs: Additional keyword arguments passed to the underlying model's predict method.
 
         Returns:
-            Results returned as `supervision.Detections` object or list or objects.
-            The  format is determined by the underlying `RFDETRBase.predict` method.
-            For more information on output format, refer to documentation:
-            https://supervision.roboflow.com/latest/detection/core/
-        """
+            Results as `supervision.Detections` object.
 
+        Raises:
+            NotImplementedError: If images is a torch.Tensor or list (not yet supported).
+        """
         if isinstance(images, (torch.Tensor, list)):
             raise NotImplementedError(
-                "torch.Tensor and List inputs are not yet supported by the underlying RF-DETR model.. "
+                "torch.Tensor and List inputs are not yet supported by the underlying RF-DETR model. "
                 "Please use a file path (str), PIL.Image, or np.ndarray."
             )
-        
-        model_output_detections = self.model.predict(images, threshold=threshold, **kwargs)
 
-        return model_output_detections
+        return self.model.predict(images, threshold=threshold, **kwargs)
 
     def empty_detections(self):
         """Returns an empty Detections object."""
