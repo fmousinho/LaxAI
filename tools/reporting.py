@@ -106,16 +106,23 @@ def generate_player_report_html(run_id: str, run_output_dir: str, player_rows: l
         player_id = row["player_id"]
         player_crop_dir = os.path.join(crops_dir, f"player_{player_id}")
         os.makedirs(player_crop_dir, exist_ok=True)
-        crop_paths = []
-        for i, crop_np in enumerate(row["crops"]):
-            if crop_np is None or not hasattr(crop_np, 'size') or crop_np.size == 0:
-                continue
-            crop_filename = f"crop_{i}.png"
-            crop_abs_path = os.path.join(player_crop_dir, crop_filename)
-            cv2.imwrite(crop_abs_path, crop_np)
-            relative_path = os.path.join("crops", f"player_{player_id}", crop_filename)
-            crop_paths.append(relative_path)
-        row["report_crop_paths"] = crop_paths
+        
+        # Process each track for this player
+        for track_idx, track_data in enumerate(row["tracks"]):
+            track_id = track_data["track_id"]
+            track_crop_dir = os.path.join(player_crop_dir, f"track_{track_id}")
+            os.makedirs(track_crop_dir, exist_ok=True)
+            
+            crop_paths = []
+            for i, crop_np in enumerate(track_data["crops"]):
+                if crop_np is None or not hasattr(crop_np, 'size') or crop_np.size == 0:
+                    continue
+                crop_filename = f"crop_{i}.png"
+                crop_abs_path = os.path.join(track_crop_dir, crop_filename)
+                cv2.imwrite(crop_abs_path, crop_np)
+                relative_path = os.path.join("crops", f"player_{player_id}", f"track_{track_id}", crop_filename)
+                crop_paths.append(relative_path)
+            track_data["report_crop_paths"] = crop_paths
 
     html_content = f"""
 <!DOCTYPE html>
@@ -130,10 +137,18 @@ def generate_player_report_html(run_id: str, run_output_dir: str, player_rows: l
         table {{ width: 100%; border-collapse: collapse; margin-top: 20px; box-shadow: 0 2px 3px #ccc; }}
         th, td {{ border: 1px solid #ddd; padding: 12px; text-align: left; vertical-align: top; }}
         th {{ background-color: #e9e9e9; }}
-        td:nth-child(1) {{ width: 10%; font-weight: bold; text-align: center; }}
-        td:nth-child(2) {{ width: 20%; }}
+        .player-row {{ background-color: #f0f8ff; font-weight: bold; }}
+        .track-row {{ background-color: #ffffff; padding-left: 20px; }}
+        .track-row td:first-child {{ padding-left: 30px; font-style: italic; }}
+        td:nth-child(1) {{ width: 15%; }}
+        td:nth-child(2) {{ width: 15%; }}
+        td:nth-child(3) {{ width: 15%; }}
+        td:nth-child(4) {{ width: 15%; }}
+        td:nth-child(5) {{ width: 10%; }}
+        td:nth-child(6) {{ width: 30%; }}
         .crop-gallery {{ display: flex; flex-wrap: wrap; gap: 5px; }}
-        .crop-gallery img {{ max-width: 80px; max-height: 80px; border: 1px solid #eee; border-radius: 4px; }}
+        .crop-gallery img {{ max-width: 60px; max-height: 60px; border: 1px solid #eee; border-radius: 4px; }}
+        .summary-cell {{ font-weight: bold; text-align: center; }}
     </style>
 </head>
 <body>
@@ -141,26 +156,54 @@ def generate_player_report_html(run_id: str, run_output_dir: str, player_rows: l
     <table>
         <thead>
             <tr>
-                <th>Player ID</th>
-                <th>Associated Tracker IDs</th>
-                <th>Player Crops</th>
+                <th>Player/Track ID</th>
+                <th>Frame Range</th>
+                <th>Num Crops</th>
+                <th>Team</th>
+                <th>Summary</th>
+                <th>Crops</th>
             </tr>
         </thead>
         <tbody>
 """
     sorted_rows = sorted(player_rows, key=lambda r: r["player_id"])
     for row in sorted_rows:
-        tracker_ids_str = ", ".join(map(str, sorted(row["tracker_ids"])))
+        player_id = row["player_id"]
+        num_tracks = row["num_tracks"]
+        total_crops = row["total_crops"]
+        
+        # Player summary row
         html_content += f"""
-            <tr>
-                <td>{row['player_id']}</td>
-                <td>{tracker_ids_str}</td>
-                <td>
-                    <div class=\"crop-gallery\">
+            <tr class="player-row">
+                <td class="summary-cell">Player {player_id}</td>
+                <td class="summary-cell">-</td>
+                <td class="summary-cell">{total_crops}</td>
+                <td class="summary-cell">-</td>
+                <td class="summary-cell">{num_tracks} tracks</td>
+                <td class="summary-cell">-</td>
+            </tr>
 """
-        for crop_path in row["report_crop_paths"]:
-            html_content += f'                        <img src="{crop_path}" alt="Crop for player {row["player_id"]}">\n'
-        html_content += """
+        
+        # Track detail rows
+        for track_data in row["tracks"]:
+            track_id = track_data["track_id"]
+            frame_range = f"{track_data['frame_first_seen']}-{track_data['frame_last_seen']}"
+            num_crops = track_data["num_crops"]
+            team = track_data.get("team", "Unknown")
+            
+            html_content += f"""
+            <tr class="track-row">
+                <td>Track {track_id}</td>
+                <td>{frame_range}</td>
+                <td>{num_crops}</td>
+                <td>{team}</td>
+                <td>-</td>
+                <td>
+                    <div class="crop-gallery">
+"""
+            for crop_path in track_data["report_crop_paths"]:
+                html_content += f'                        <img src="{crop_path}" alt="Crop for player {player_id} track {track_id}">\n'
+            html_content += """
                     </div>
                 </td>
             </tr>

@@ -1,5 +1,50 @@
 import logging
-from typing import Optional
+from typing import Optional, Union
+
+import numpy as np
+import torch
+
+
+def l2_normalize_embedding(embedding: Union[torch.Tensor, np.ndarray]) -> Union[torch.Tensor, np.ndarray]:
+    """
+    L2-normalize an embedding vector to unit length.
+    
+    This function ensures consistent normalization across the codebase.
+    Works with both PyTorch tensors and NumPy arrays.
+    
+    Note: This helper function complements the normalization done in SiameseNet
+    (which uses nn.functional.normalize(embedding, p=2, dim=1) for batch processing).
+    
+    Args:
+        embedding: The embedding vector to normalize. Can be:
+            - torch.Tensor of shape (embedding_dim,) or (batch_size, embedding_dim)  
+            - np.ndarray of shape (embedding_dim,) or (batch_size, embedding_dim)
+    
+    Returns:
+        Normalized embedding of the same type and shape as input
+    """
+    if isinstance(embedding, torch.Tensor):
+        # For PyTorch tensors
+        if embedding.dim() == 1:
+            # Single embedding vector: (embedding_dim,)
+            return torch.nn.functional.normalize(embedding, p=2, dim=0)
+        else:
+            # Batch of embeddings: (batch_size, embedding_dim)
+            return torch.nn.functional.normalize(embedding, p=2, dim=1)
+    else:
+        # For NumPy arrays
+        if embedding.ndim == 1:
+            # Single embedding vector: (embedding_dim,)
+            norm = np.linalg.norm(embedding)
+            if norm == 0:
+                return embedding  # Avoid division by zero
+            return embedding / norm
+        else:
+            # Batch of embeddings: (batch_size, embedding_dim)
+            norms = np.linalg.norm(embedding, axis=1, keepdims=True)
+            # Avoid division by zero
+            norms = np.where(norms == 0, 1.0, norms)
+            return embedding / norms
 
 
 def log_progress(

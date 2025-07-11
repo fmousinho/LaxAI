@@ -9,6 +9,7 @@ import shutil
 from collections import Counter
 import time
 import logging
+from typing import Optional
 from .utils import log_progress
 from config.transforms_config import get_transforms, model_config, clustering_config
 
@@ -48,7 +49,8 @@ class ClusteringProcessor:
                  batch_size: int = clustering_config.batch_size,
                  initial_dbscan_eps: float = clustering_config.dbscan_eps,
                  dbscan_min_samples: int = clustering_config.dbscan_min_samples,
-                 temp_dir: str = clustering_config.temp_dir):
+                 temp_dir: str = clustering_config.temp_dir,
+                 device: torch.device = torch.device("cpu")):
         """
         Initialize the clustering processor.
         
@@ -61,6 +63,7 @@ class ClusteringProcessor:
             initial_dbscan_eps: Initial DBSCAN epsilon parameter
             dbscan_min_samples: DBSCAN minimum samples parameter
             temp_dir: Temporary directory for intermediate files
+            device: Device to use for inference (auto-detected if None)
         """
         self.model_path = model_path
         self.all_crops_dir = all_crops_dir
@@ -70,9 +73,7 @@ class ClusteringProcessor:
         self.dbscan_eps = initial_dbscan_eps
         self.dbscan_min_samples = dbscan_min_samples
         self.temp_dir = temp_dir
-        
-        self.device = torch.device("cuda" if torch.cuda.is_available() else 
-                                 "mps" if torch.backends.mps.is_available() else "cpu")
+        self.device = device
         
         # Ensure directories exist
         os.makedirs(self.all_crops_dir, exist_ok=True)
@@ -248,13 +249,12 @@ class ClusteringProcessor:
         """
         return get_transforms('inference')
 
-    def _setup_model_and_dataloader(self, model_class, device):
+    def _setup_model_and_dataloader(self, model_class):
         """
         Setup the model and dataloader for inference (internal method).
         
         Args:
             model_class: The model class to use
-            device: Device to use for inference
             
         Returns:
             Tuple of (model, dataloader)
@@ -267,8 +267,8 @@ class ClusteringProcessor:
         
         # Load the trained model
         model = model_class(embedding_dim=self.embedding_dim)
-        model.load_state_dict(torch.load(self.model_path, map_location=device))
-        model.to(device)
+        model.load_state_dict(torch.load(self.model_path, map_location=self.device))
+        model.to(self.device)
         
         return model, dataloader
 
@@ -295,29 +295,34 @@ class ClusteringProcessor:
         return self.clustered_data_dir
 
     
-    def find_optimal_eps(self, embeddings, target_min_clusters=20, target_max_clusters=40):
+    def find_optimal_eps(self, embeddings, target_min_clusters=None, target_max_clusters=None):
         """
         Find optimal eps value to achieve target cluster count using adaptive search.
         
         Args:
             embeddings: Numpy array of embeddings
-            target_min_clusters: Minimum desired number of clusters
-            target_max_clusters: Maximum desired number of clusters
-            initial_eps: Starting eps value
+            target_min_clusters: Minimum desired number of clusters (uses config if None)
+            target_max_clusters: Maximum desired number of clusters (uses config if None)
             
         Returns:
             Tuple of (best_eps, best_cluster_labels, best_num_clusters)
         """
         
+        # Use config values if not provided
+        if target_min_clusters is None:
+            target_min_clusters = clustering_config.target_min_clusters
+        if target_max_clusters is None:
+            target_max_clusters = clustering_config.target_max_clusters
+        
         logger.info(f"Searching for optimal eps value to get {target_min_clusters}-{target_max_clusters} clusters")
         
-        # Start with initial eps
-        eps = self.dbscan_eps
+        # Start with initial eps from config
+        eps = clustering_config.initial_eps
         
-        _MAX_EPS = .9
-        _MIN_EPS = 0.01
-        _ADJUSTMENT_FACTOR = 0.2
-        _MAX_SEARCHES = 20
+        _MAX_EPS = clustering_config.max_eps
+        _MIN_EPS = clustering_config.min_eps
+        _ADJUSTMENT_FACTOR = clustering_config.eps_adjustment_factor
+        _MAX_SEARCHES = clustering_config.max_eps_searches
 
         n_searches = 0
 
@@ -353,29 +358,32 @@ class ClusteringProcessor:
         return best_eps, best_cluster_labels, best_num_clusters
 
     def process_clustering_with_search(self, model_class, source_data_dir=None, 
-                                     target_min_clusters=20, target_max_clusters=40, 
-                                     initial_eps=0.6, device=None):
+                                     target_min_clusters=None, target_max_clusters=None, 
+                                     initial_eps=None):
         """
         Complete clustering pipeline with adaptive eps search.
         
         Args:
             model_class: The model class to use
             source_data_dir: Optional source directory to copy crops from
-            target_min_clusters: Minimum desired number of clusters
-            target_max_clusters: Maximum desired number of clusters
-            initial_eps: Starting eps value
-            device: Device to use for inference
+            target_min_clusters: Minimum desired number of clusters (uses config if None)
+            target_max_clusters: Maximum desired number of clusters (uses config if None)
+            initial_eps: Starting eps value (uses config if None)
             
         Returns:
             Tuple of (num_clusters, num_images_processed)
         """
         try:
             logger.info("Starting Player Re-identification Clustering Pipeline")
-            logger.info(f"Using device: {device or self.device}")
+            logger.info(f"Using device: {self.device}")
             
-            # Use provided device or default
-            if device is None:
-                device = self.device
+            # Use config values if not provided
+            if target_min_clusters is None:
+                target_min_clusters = clustering_config.target_min_clusters
+            if target_max_clusters is None:
+                target_max_clusters = clustering_config.target_max_clusters
+            if initial_eps is None:
+                initial_eps = clustering_config.initial_eps
             
             # Prepare all_crops directory if needed
             if source_data_dir:
@@ -390,7 +398,7 @@ class ClusteringProcessor:
             logger.info(f"Found {num_images} images to process")
             
             # Setup model and dataloader
-            model, dataloader = self._setup_model_and_dataloader(model_class, device)
+            model, dataloader = self._setup_model_and_dataloader(model_class)
             
             # Generate embeddings
             embeddings_array, image_paths = self.generate_all_embeddings(model, dataloader)

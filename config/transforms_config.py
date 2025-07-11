@@ -11,9 +11,9 @@ from typing import Tuple, List, Optional
 @dataclass
 class ModelConfig:
     """Configuration for model dimensions and architecture."""
-    input_height: int = 80
-    input_width: int = 40
-    embedding_dim: int = 128
+    input_height: int = 160
+    input_width: int = 90
+    embedding_dim: int = 256
     
     # ImageNet normalization values (for pretrained ResNet backbone)
     imagenet_mean: List[float] = field(default_factory=lambda: [0.485, 0.456, 0.406])
@@ -23,12 +23,11 @@ class ModelConfig:
 @dataclass
 class TrackerConfig:
     """Configuration for ByteTrack and tracking parameters."""
-    track_activation_threshold: float = 0.25
-    lost_track_buffer: int = 0
+    track_activation_threshold: float = 0.3
+    lost_track_buffer: int = 15
     minimum_matching_threshold: float = 0.8
     minimum_consecutive_frames: int = 30
     crop_save_interval: int = 5
-    max_lost_frames: int = 30
 
 
 @dataclass
@@ -36,17 +35,19 @@ class TrainingConfig:
     """Configuration for training parameters."""
     batch_size: int = 64
     learning_rate: float = 1e-3
-    num_epochs: int = 50
+    num_epochs: int = 20
     margin: float = 0.04
     model_save_path: str = 'lacrosse_reid_model.pth'
     train_ratio: float = 0.8
     min_images_per_player: int = 3
+    num_workers: int = 4  # Number of DataLoader workers
+    early_stopping_loss_ratio: float = 0.1  # Early stopping threshold as a ratio of margin
 
 
 @dataclass
 class DetectionConfig:
     """Configuration for detection and processing parameters."""
-    nms_iou_threshold: float = 0.4
+    nms_iou_threshold: Optional[float] = None
     player_class_id: int = 3
     prediction_threshold: float = 0.5
     model_checkpoint: str = "checkpoint.pth"
@@ -63,12 +64,32 @@ class ClusteringConfig:
     dbscan_eps: float = 0.08
     dbscan_min_samples: int = 5
     temp_dir: str = "temp"
+    # Target cluster range for adaptive search
+    target_min_clusters: int = 20
+    target_max_clusters: int = 40
+    # Eps search parameters
+    initial_eps: float = 0.6
+    max_eps: float = 0.9
+    min_eps: float = 0.01
+    eps_adjustment_factor: float = 0.2
+    max_eps_searches: int = 20
 
 
 @dataclass
 class PlayerConfig:
     """Configuration for player association parameters."""
-    reid_similarity_threshold: float = 0.91
+    reid_similarity_threshold: float = 0.9
+
+
+@dataclass
+class TrackStitchingConfig:
+    """Configuration for track stitching parameters."""
+    enable_stitching: bool = True
+    stitch_similarity_threshold: float = 0.7
+    max_time_gap: int = 60  # Maximum frame gap between tracklets
+    appearance_weight: float = 1.0
+    temporal_weight: float = 0.1
+    motion_weight: float = 0.05
 
 
 @dataclass
@@ -92,6 +113,7 @@ training_config = TrainingConfig()
 detection_config = DetectionConfig()
 clustering_config = ClusteringConfig()
 player_config = PlayerConfig()
+track_stitching_config = TrackStitchingConfig()
 transform_config = TransformConfig()
 
 

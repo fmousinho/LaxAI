@@ -1,17 +1,18 @@
-
 import logging
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import cv2
 import numpy as np
 import supervision as sv
 import torch
 
-from config.transforms_config import model_config, tracker_config
+from config.transforms_config import tracker_config, model_config
+from modules.utils import l2_normalize_embedding
 
 
 
 logger = logging.getLogger(__name__)
+
 
 def warp_bbox(bbox_tlbr: np.ndarray, affine_matrix: np.ndarray) -> np.ndarray:
     """
@@ -517,6 +518,15 @@ class AffineAwareByteTrack(sv.ByteTrack):
         """
         return self.track_data
     
+    def get_n_of_tracks(self) -> int:
+        """
+        Returns the number of unique tracks currently being tracked.
+
+        Returns:
+            The number of unique tracks.
+        """
+        return len(self.track_data)
+    
     def create_embeddings_for_tracks(
         self, 
         embeddings_processor: Callable, 
@@ -550,11 +560,10 @@ class AffineAwareByteTrack(sv.ByteTrack):
                 logger.warning(f"Track {tid} has no crops. Skipping embedding creation.")
                 continue
             try:
-                # Resize all crops to a consistent size using centralized config
-                target_height, target_width = model_config.input_height, model_config.input_width
-                resized_crops = []
+                # Validate crops before processing (let transforms handle resizing)
+                valid_crops = []
                 for crop in crops:
-                    # Validate crop before resizing
+                    # Basic validation - transforms will handle resizing
                     if crop is None or crop.size == 0 or len(crop.shape) < 2:
                         logger.warning(f"Track {tid}: Skipping invalid crop (None, empty, or wrong dimensions).")
                         continue
@@ -566,45 +575,39 @@ class AffineAwareByteTrack(sv.ByteTrack):
                     if crop.shape[0] < 1 or crop.shape[1] < 1:
                         logger.warning(f"Track {tid}: Skipping crop too small {crop.shape}.")
                         continue
-                    try:
-                        # Resize crop to target dimensions
-                        resized_crop = cv2.resize(crop, (target_width, target_height))
-                        # Validate the resized crop
-                        if resized_crop is None or resized_crop.size == 0:
-                            logger.warning(f"Track {tid}: Resize operation failed. Skipping this crop.")
-                            continue
-                        resized_crops.append(resized_crop)
-                    except cv2.error as e:
-                        logger.warning(f"Track {tid}: OpenCV resize error: {e}. Skipping this crop.")
-                        continue
-                logger.debug(f"Track {tid}: {len(resized_crops)}/{len(crops)} valid crops after filtering.")
+                    valid_crops.append(crop)
+                
+                logger.debug(f"Track {tid}: {len(valid_crops)}/{len(crops)} valid crops after filtering.")
                 # Check if we have any valid crops after filtering
-                if not resized_crops:
+                if not valid_crops:
                     logger.warning(f"Track {tid}: No valid crops found after filtering. Creating zero embedding.")
-                    self.track_data[tid].embedding = np.zeros((128,), dtype=np.float32)
+                    self.track_data[tid].embedding = np.zeros((model_config.embedding_dim,), dtype=np.float32)
                     continue
-                # Stack crops into a batch tensor
-                crops_array = np.stack(resized_crops)  # Shape: (num_crops, height, width, channels)
-                crops_tensor = torch.tensor(crops_array, device=device, dtype=torch.float32)
-                # If crops are in HWC format, convert to CHW format for model
-                if crops_tensor.dim() == 4 and crops_tensor.shape[-1] == 3:
-                    crops_tensor = crops_tensor.permute(0, 3, 1, 2)  # NHWC -> NCHW
-                # Normalize to [0, 1] if values are in [0, 255] range
-                if crops_tensor.max() > 1.0:
-                    crops_tensor = crops_tensor / 255.0
-                # Generate embeddings for all crops of this track
+                
+                # Pass crops directly to embeddings_processor (no manual preprocessing)
+                # The embeddings_processor will handle transforms and normalization
                 with torch.no_grad():
-                    track_embeddings = embeddings_processor(crops_tensor)  # Shape: (num_crops, embedding_dim)
+                    track_embeddings = embeddings_processor(valid_crops)  # Shape: (num_crops, embedding_dim)
+                
+                # Convert to tensor if needed for averaging and normalization
+                if isinstance(track_embeddings, np.ndarray):
+                    track_embeddings = torch.tensor(track_embeddings, device=device, dtype=torch.float32)
+                
                 # Average the embeddings across all crops for this track
                 avg_embedding = torch.mean(track_embeddings, dim=0)
-                avg_embedding = torch.nn.functional.normalize(avg_embedding, p=2, dim=0)  # Shape: (embedding_dim,)
+                # Normalize the averaged embedding using the centralized helper function
+                # (averaging L2-normalized vectors doesn't preserve unit norm)
+                avg_embedding = l2_normalize_embedding(avg_embedding)
                 # Store the averaged embedding
-                self.track_data[tid].embedding = avg_embedding.cpu().numpy()
-                logger.debug(f"Track {tid}: Created embedding from {len(resized_crops)} valid crops.")
+                if isinstance(avg_embedding, torch.Tensor):
+                    self.track_data[tid].embedding = avg_embedding.cpu().numpy()
+                else:
+                    self.track_data[tid].embedding = avg_embedding
+                logger.debug(f"Track {tid}: Created embedding from {len(valid_crops)} valid crops.")
             except Exception as e:
                 logger.error(f"Failed to create embedding for track {tid}: {e}")
-                # Set a zero embedding as fallback (128-dim to match SiameseNet)
-                self.track_data[tid].embedding = np.zeros((128,), dtype=np.float32)
+                # Set a zero embedding as fallback (matching configured embedding dimension)
+                self.track_data[tid].embedding = np.zeros((model_config.embedding_dim,), dtype=np.float32)
 
         logger.info(f"Successfully processed embeddings for {len(track_ids)} tracks.")
 

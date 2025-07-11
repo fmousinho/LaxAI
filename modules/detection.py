@@ -87,13 +87,13 @@ class DetectionModel:
                 temp_checkpoint_path = tmp_f.name
 
             try:
-                logger.info(f"Checkpoint saved to temporary file: {temp_checkpoint_path}")
+                logger.info(f"Checkpoint saved.")
+                logger.info(f"Temp file: {temp_checkpoint_path}")
                 self.model = RFDETRBase(
                     device=self.device.type, 
                     pretrain_weights=temp_checkpoint_path, 
                     num_classes=6
                 )
-                logger.info(f"Detection model '{self.model.__class__.__name__}' successfully loaded")
                 return True
             finally:
                 # Ensure cleanup even if model loading fails

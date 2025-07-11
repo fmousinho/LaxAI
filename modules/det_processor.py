@@ -96,7 +96,10 @@ class DetectionProcessor:
                 # Log progress
                 log_progress(logger, "Frames read", current_frame_idx, frame_target)
         
-        logger.info(f"Detection processing complete. JSON saved to: {self.detection_file_path}")
+        logger.info(f"Detection and tracking processing complete.")
+        logger.info(f"JSON saved to: {self.detection_file_path}")
+        logger.info(f"Found {self.tracker.get_n_of_tracks()} total tracks.")
+
         return multi_frame_detections
 
     def json_to_detections(self, json_file_path: str, update_tracker_state: bool = True, video_source: str = None) -> List[sv.Detections]:

@@ -7,15 +7,23 @@ This package contains the core modules for the LaxAI lacrosse video analysis sys
 from .player_association import (
     associate_tracks_to_players_greedy,
     associate_tracks_to_players_globally,
+    associate_tracks_to_players_with_stitching,
     cosine_similarity,
     find_optimal_batch_assignment,
-    find_global_optimal_associations
+    stitch_tracks,
+    calculate_stitching_cost,
+    create_representative_embedding,
+    update_detection_metadata
 )
 
 __all__ = [
     'associate_tracks_to_players_greedy',
-    'associate_tracks_to_players_globally', 
+    'associate_tracks_to_players_globally',
+    'associate_tracks_to_players_with_stitching',
     'cosine_similarity',
     'find_optimal_batch_assignment',
-    'find_global_optimal_associations'
+    'stitch_tracks',
+    'calculate_stitching_cost',
+    'create_representative_embedding',
+    'update_detection_metadata'
 ]

@@ -4,17 +4,19 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import logging
 import numpy as np
-from .utils import log_progress
+from PIL import Image
 from typing import Optional, Any, List
+
+from .utils import log_progress
+from config.transforms_config import model_config
 
 logger = logging.getLogger(__name__)
 
-
 from config.transforms_config import model_config, training_config
 
-class Trainer:
+class EmbeddingsProcessor:
     """
-    A trainer class for lacrosse player re-identification model using triplet loss.
+    A processor class for lacrosse player re-identification model using triplet loss.
     """
     
     def __init__(self, 
@@ -24,9 +26,10 @@ class Trainer:
                  batch_size: int = training_config.batch_size,
                  num_epochs: int = training_config.num_epochs,
                  margin: float = training_config.margin,
-                 model_save_path: str = training_config.model_save_path):
+                 model_save_path: str = training_config.model_save_path,
+                 device: torch.device = torch.device("cpu")):
         """
-        Initialize the trainer with hyperparameters.
+        Initialize the embeddings processor with hyperparameters.
         
         Args:
             train_dir: Directory containing training data
@@ -36,6 +39,7 @@ class Trainer:
             num_epochs: Number of training epochs
             margin: Margin for triplet loss
             model_save_path: Path to save the trained model
+            device: Device to run the model on (defaults to CPU)
         """
         self.train_dir = train_dir
         self.embedding_dim = embedding_dim
@@ -45,8 +49,7 @@ class Trainer:
         self.margin = margin
         self.model_save_path = model_save_path
         
-        self.device = torch.device("cuda" if torch.cuda.is_available() else 
-                                 "mps" if torch.backends.mps.is_available() else "cpu")
+        self.device = device
         
         self.model = None
         self.optimizer: Optional[torch.optim.Optimizer] = None
@@ -55,7 +58,7 @@ class Trainer:
 
     def setup_data(self, dataset_class, transform: Optional[Any] = None):
         """
-        Setup the dataset and dataloader.
+        Setup the dataset and dataloader. Required before training.
         
         Args:
             dataset_class: The dataset class to use (e.g., LacrossePlayerDataset)
@@ -77,28 +80,40 @@ class Trainer:
             train_dataset = dataset_class(image_dir=self.train_dir, transform=transform)
         else:
             train_dataset = dataset_class(image_dir=self.train_dir)
-        self.dataloader = DataLoader(train_dataset, 
-                                   batch_size=self.batch_size, 
-                                   shuffle=True, 
-                                   num_workers=0)
+
+        n_workers = getattr(training_config, 'num_workers', 0)
+        self.dataloader = DataLoader(
+            train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=n_workers
+        )
         
         logger.info(f"Dataset size: {len(train_dataset)} images")
+        logger.info(f"Batch size: {self.batch_size}")
+        logger.info(f"Number of workers: {n_workers}")
         logger.info(f"Number of batches: {len(self.dataloader)}")
 
-    def setup_model(self, model_class):
+    def setup_model(self, model_class, inference_only: bool = False):
         """
-        Setup the model, loss function, and optimizer.
+        Setup the model, loss function, and optimizer. Required before training.
         
         Args:
             model_class: The model class to use (e.g., SiameseNet)
+            pretrained_path: Optional path to pre-trained weights to load
         """
         self.model = model_class(embedding_dim=self.embedding_dim)
+        
         self.model.to(self.device)
         
-        self.loss_fn = nn.TripletMarginLoss(margin=self.margin, p=2)
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
-        
-        logger.info(f"Model initialized and moved to device: {self.device}")
+        # Only setup training components if not loading pre-trained model
+        if inference_only is False:
+            self.loss_fn = nn.TripletMarginLoss(margin=self.margin, p=2)
+            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
+            logger.info(f"Model initialized for training and moved to device: {self.device}")
+        else:
+            self.model.eval()
+            logger.info(f"Model loaded for inference and moved to device: {self.device}")
 
     def train(self):
         """
@@ -114,6 +129,9 @@ class Trainer:
             raise RuntimeError("Optimizer and loss function must be setup before training")
         
         logger.info(f"Starting training for {self.num_epochs} epochs")
+
+        early_stopping_threshold = training_config.early_stopping_loss_ratio * self.margin
+        logger.info(f"Early stopping threshold set to {early_stopping_threshold:.4f}")
         
         for epoch in range(self.num_epochs):
             self.model.train()
@@ -154,8 +172,10 @@ class Trainer:
             logger.info(f"Average Loss: {epoch_loss:.4f}")
             logger.info("")
 
-            if epoch_loss < 0.1 * self.margin:
-                logger.info("Early stopping triggered")
+            # Early stopping based on config value
+            
+            if epoch_loss < early_stopping_threshold:
+                logger.info(f"Early stopping triggered (loss {epoch_loss:.4f} < threshold {early_stopping_threshold:.4f})")
                 break
 
         logger.info("Finished Training")
@@ -200,27 +220,47 @@ class Trainer:
     def create_embeddings_from_crops(self,
                                     crops: List[np.ndarray], 
                                     batch_size: int = 32,
-                                    device: Optional[torch.device] = None) -> np.ndarray:
+                                    transform: Optional[Any] = None) -> np.ndarray:
         """
         Creates embeddings from an array of crops using batch processing.
         
         Args:
             crops: List of crop images as numpy arrays
-            model: The model to use for generating embeddings
             batch_size: Number of crops to process in each batch
-            device: Device to run the model on (defaults to model's device)
-            
+            transform: Optional transform to apply to each crop before embedding
+
         Returns:
             np.ndarray: Array of embeddings with shape (num_crops, embedding_dim)
         """
+
         if not crops:
             logger.warning("No crops provided for embedding creation")
             return np.array([])
 
-
         if self.model is None:
             raise RuntimeError("Model not initialized")
+        
+        device = self.device
+
+        # Apply transforms if provided
+        if transform is not None:
+            crop_shapes = [crop.shape for crop in crops if hasattr(crop, 'shape')]
+            if crop_shapes and all(s == crop_shapes[0] for s in crop_shapes):
+                logger.warning(f"All crops are the same size. Transform may not be used correctly")
+            transformed_crops = []
+            for crop in crops:
+                pil_image = Image.fromarray(crop)
+                transformed_tensor = transform(pil_image)
+                # Convert tensor back to numpy array
+                transformed_crops.append(transformed_tensor.numpy())
+            crops = transformed_crops
+            use_manual_normalization = False  # Transforms already handle normalization
+        else:
+            use_manual_normalization = True  # Need to normalize manually
             
+        # Check if all crops are the same size
+        
+
         self.model.eval()
         embeddings_list = []
         
@@ -243,9 +283,11 @@ class Trainer:
                     if batch_tensor.dim() == 4 and batch_tensor.shape[-1] == 3:
                         batch_tensor = batch_tensor.permute(0, 3, 1, 2)  # BHWC -> BCHW
                     
-                    # Normalize to [0, 1] if values are in [0, 255] range
-                    if batch_tensor.max() > 1.0:
-                        batch_tensor = batch_tensor / 255.0
+                    # Only normalize manually if transforms weren't applied
+                    if use_manual_normalization:
+                        # Normalize to [0, 1] if values are in [0, 255] range
+                        if batch_tensor.max() > 1.0:
+                            batch_tensor = batch_tensor / 255.0
                     
                     # Generate embeddings
                     batch_embeddings = self.model(batch_tensor)
@@ -261,19 +303,15 @@ class Trainer:
                 except Exception as e:
                     logger.error(f"Error processing batch {i//batch_size + 1}: {e}")
                     # Create zero embeddings as fallback
-                    embedding_dim = getattr(self.model, 'embedding_dim', 128)
+                    embedding_dim = getattr(self.model, 'embedding_dim', model_config.embedding_dim)
                     zero_embeddings = np.zeros((len(batch_crops), embedding_dim), dtype=np.float32)
                     embeddings_list.append(zero_embeddings)
         
         # Concatenate all batch embeddings
         if embeddings_list:
             all_embeddings = np.concatenate(embeddings_list, axis=0)
-            logger.info(f"Successfully created {all_embeddings.shape[0]} embeddings with dimension {all_embeddings.shape[1]}")
+            logger.debug(f"Successfully created {all_embeddings.shape[0]} embeddings with dimension {all_embeddings.shape[1]}")
             return all_embeddings
         else:
             logger.warning("No embeddings were created")
             return np.array([])
-
-
-
-
