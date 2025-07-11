@@ -262,8 +262,12 @@ class ClusteringProcessor:
         # Create inference transforms and dataset
         inference_transforms = self.create_inference_transforms()
         inference_dataset = InferenceDataset(image_dir=self.all_crops_dir, transform=inference_transforms)
-        dataloader = DataLoader(inference_dataset, batch_size=self.batch_size, 
-                               shuffle=False, num_workers=0)
+        dataloader = DataLoader(
+            inference_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=clustering_config.num_workers
+        )
         
         # Load the trained model
         model = model_class(embedding_dim=self.embedding_dim)

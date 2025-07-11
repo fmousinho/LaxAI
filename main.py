@@ -7,6 +7,10 @@ import sys
 # Ensure the script's directory is in sys.path for local imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Set MPS fallback for PyTorch if running on Mac with MPS
+if 'PYTORCH_ENABLE_MPS_FALLBACK' not in os.environ:
+    os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+
 # Third-party
 import torch
 from dotenv import load_dotenv

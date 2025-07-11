@@ -177,7 +177,7 @@ def run_application (
 
         embeddings_model_path = os.path.join(data_dir, "embeddings_model.pth")
         train_dir = os.path.join(data_dir, "train")
-        track_train_processor = EmbeddingsProcessor(train_dir=train_dir, model_save_path=embeddings_model_path)
+        track_train_processor = EmbeddingsProcessor(train_dir=train_dir, model_save_path=embeddings_model_path, device=device)
         track_train_processor.train_and_save(
             model_class=SiameseNet,
             dataset_class=LacrossePlayerDataset,
@@ -211,7 +211,7 @@ def run_application (
         # --- Train player identifier ---
 
         embeddings_model_path = os.path.join(data_dir, "player_embeddings_model.pth")
-        player_processor = EmbeddingsProcessor(train_dir=os.path.join(data_dir, "train"), model_save_path=embeddings_model_path)
+        player_processor = EmbeddingsProcessor(train_dir=os.path.join(data_dir, "train", device=device), model_save_path=embeddings_model_path)
         player_processor.train_and_save(
             model_class=SiameseNet,
             dataset_class=LacrossePlayerDataset,

@@ -61,6 +61,7 @@ class DetectionConfig:
 class ClusteringConfig:
     """Configuration for clustering parameters."""
     batch_size: int = 128
+    num_workers: int = 4  # Number of DataLoader workers for clustering
     dbscan_eps: float = 0.08
     dbscan_min_samples: int = 5
     temp_dir: str = "temp"
