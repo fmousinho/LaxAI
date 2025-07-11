@@ -64,6 +64,10 @@ def main() -> int:
     parser.add_argument("--report",
                         action='store_true',
                         help="Generate a player analysis HTML report at the end of the main application run.")
+    parser.add_argument("--detections_import_path",
+                        type=str,
+                        default=None,
+                        help="Optional path to a detections JSON file to import. If set and file exists, detection step is skipped.")
 
     args = parser.parse_args()
 
@@ -133,7 +137,8 @@ def main() -> int:
                 output_video_path=args.output_video_path,
                 device=selected_device,
                 debug_max_frames=args.debug_frames,
-                #generate_report=args.report
+                #generate_report=args.report,
+                detections_import_path=args.detections_import_path
             )
         logger.info("Application run completed successfully.")
         return 0

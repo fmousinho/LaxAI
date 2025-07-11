@@ -47,9 +47,11 @@ def cosine_similarity(embedding1: np.ndarray, embedding2: np.ndarray) -> float:
     return float(similarity)
 
 
+from config.transforms_config import player_config
+
 def associate_tracks_to_players_greedy(
     tracks_data: Dict[int, TrackData], 
-    similarity_threshold: float
+    similarity_threshold: float = player_config.reid_similarity_threshold
 ) -> Tuple[set[Player], Dict[int, Player]]:
     """
     Associate tracks to players using a greedy chronological approach.
@@ -139,15 +141,54 @@ def associate_tracks_to_players_greedy(
                 player.frame_last_seen = track_last_frame
                 players.add(player)
                 track_to_player[track_id] = player
-                logger.debug(f"Created new player for track {track_id} "
-                           f"(best similarity: {best_similarity:.3f} < {similarity_threshold})")
+                logger.debug(f"Created new player for track {track_id} "                                   f"(best similarity: {best_similarity:.3f} < {similarity_threshold})")
+    
+    # Log player association summary
+    _log_player_association_summary(players)
     
     return players, track_to_player
 
 
+def _log_player_association_summary(players: set[Player]):
+    """
+    Log a summary of player association results showing how many players 
+    were associated with different numbers of tracks.
+    
+    Args:
+        players: Set of Player objects to analyze
+    """
+    from collections import Counter
+    
+    # Count how many tracks each player has
+    tracks_per_player = []
+    for player in players:
+        num_tracks = len(player.associated_tracker_ids)
+        tracks_per_player.append(num_tracks)
+    
+    # Count how many players have each number of tracks
+    track_count_distribution = Counter(tracks_per_player)
+    
+    logger.info("Player association summary:")
+    
+    # Sort by number of tracks for consistent output
+    for num_tracks in sorted(track_count_distribution.keys()):
+        num_players = track_count_distribution[num_tracks]
+        
+        if num_players == 1:
+            player_word = "player was"
+            tracks_word = "track" if num_tracks == 1 else "tracks"
+        else:
+            player_word = "players were"
+            tracks_word = "track" if num_tracks == 1 else "tracks"
+        
+        logger.info(f"  {num_players} {player_word} associated with {num_tracks} {tracks_word}")
+    
+    logger.info(f"Total: {len(players)} unique players from {sum(tracks_per_player)} tracks")
+
+
 def associate_tracks_to_players_globally(
     tracks_data: Dict[int, TrackData], 
-    similarity_threshold: float
+    similarity_threshold: float = 0.96
 ) -> Tuple[set[Player], Dict[int, Player]]:
     """
     Associate tracks to players using global optimization to find the best overall assignment.
@@ -327,7 +368,7 @@ def associate_tracks_to_players_globally(
                             best_match.embeddings = track_data.embedding
                         
                         track_to_player[track_id] = best_match
-                        logger.debug(f"Associated track {track_id} with player {best_match.id} "
+                        logger.info(f"Associated track {track_id} with player {best_match.id} "
                                    f"(similarity: {best_similarity:.3f})")
                     else:
                         # Create new player
@@ -342,8 +383,10 @@ def associate_tracks_to_players_globally(
                         player.frame_last_seen = track_data.frame_last_seen
                         players.add(player)
                         track_to_player[track_id] = player
-                        logger.debug(f"Created new player for track {track_id} "
-                                   f"(best similarity: {best_similarity:.3f} < {similarity_threshold})")
+                        logger.info(f"Created new player for track {track_id} "                                       f"(best similarity: {best_similarity:.3f} < {similarity_threshold})")
+    
+    # Log player association summary
+    _log_player_association_summary(players)
     
     return players, track_to_player
 

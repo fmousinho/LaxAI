@@ -1,45 +1,144 @@
 """
 Transform configurations for training and inference.
-Centralized location for all image preprocessing pipelines.
+Centralized location for all image preprocessing pipelines and module configurations.
 """
 
 import torchvision.transforms as transforms
+from dataclasses import dataclass, field
+from typing import Tuple, List, Optional
 
-# Image dimensions for the SiameseNet model
-MODEL_INPUT_HEIGHT = 80
-MODEL_INPUT_WIDTH = 40
 
-# ImageNet normalization values (for pretrained ResNet backbone)
-IMAGENET_MEAN = [0.485, 0.456, 0.406]
-IMAGENET_STD = [0.229, 0.224, 0.225]
+@dataclass
+class ModelConfig:
+    """Configuration for model dimensions and architecture."""
+    input_height: int = 80
+    input_width: int = 40
+    embedding_dim: int = 128
+    
+    # ImageNet normalization values (for pretrained ResNet backbone)
+    imagenet_mean: List[float] = field(default_factory=lambda: [0.485, 0.456, 0.406])
+    imagenet_std: List[float] = field(default_factory=lambda: [0.229, 0.224, 0.225])
 
-# Training transforms with data augmentation
-training_transforms = transforms.Compose([
-    transforms.Resize((MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH)),  # Height, Width
-    transforms.RandomHorizontalFlip(p=0.5),
-    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-    transforms.RandomRotation(10),
-    transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),  # Small translation
-    transforms.ToTensor(),
-    transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
-])
 
-# Inference transforms without augmentation
-inference_transforms = transforms.Compose([
-    transforms.Resize((MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH)),  # Height, Width
-    transforms.ToTensor(),
-    transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
-])
+@dataclass
+class TrackerConfig:
+    """Configuration for ByteTrack and tracking parameters."""
+    track_activation_threshold: float = 0.25
+    lost_track_buffer: int = 0
+    minimum_matching_threshold: float = 0.8
+    minimum_consecutive_frames: int = 30
+    crop_save_interval: int = 5
+    max_lost_frames: int = 30
 
-# Validation transforms (same as inference, no augmentation)
-validation_transforms = inference_transforms
 
-# Transform for converting tensor back to PIL Image (for visualization)
-tensor_to_pil = transforms.Compose([
-    transforms.Normalize(mean=[0., 0., 0.], std=[1/s for s in IMAGENET_STD]),  # Denormalize
-    transforms.Normalize(mean=[-m for m in IMAGENET_MEAN], std=[1., 1., 1.]),  # Denormalize
-    transforms.ToPILImage()
-])
+@dataclass
+class TrainingConfig:
+    """Configuration for training parameters."""
+    batch_size: int = 64
+    learning_rate: float = 1e-3
+    num_epochs: int = 50
+    margin: float = 0.04
+    model_save_path: str = 'lacrosse_reid_model.pth'
+    train_ratio: float = 0.8
+    min_images_per_player: int = 3
+
+
+@dataclass
+class DetectionConfig:
+    """Configuration for detection and processing parameters."""
+    nms_iou_threshold: float = 0.4
+    player_class_id: int = 3
+    prediction_threshold: float = 0.5
+    model_checkpoint: str = "checkpoint.pth"
+    checkpoint_dir: str = "Colab_Notebooks"
+    output_video_path: str = "results.mp4"
+    temp_dir: str = "temp"
+    crop_extract_interval: int = 5
+
+
+@dataclass
+class ClusteringConfig:
+    """Configuration for clustering parameters."""
+    batch_size: int = 128
+    dbscan_eps: float = 0.08
+    dbscan_min_samples: int = 5
+    temp_dir: str = "temp"
+
+
+@dataclass
+class PlayerConfig:
+    """Configuration for player association parameters."""
+    reid_similarity_threshold: float = 0.91
+
+
+@dataclass
+class TransformConfig:
+    """Configuration for data augmentation and transforms."""
+    # Data augmentation parameters
+    hflip_prob: float = 0.5
+    colorjitter_brightness: float = 0.2
+    colorjitter_contrast: float = 0.2
+    colorjitter_saturation: float = 0.2
+    colorjitter_hue: float = 0.1
+    random_rotation_degrees: int = 10
+    random_affine_degrees: int = 0
+    random_affine_translate: Tuple[float, float] = (0.1, 0.1)
+
+
+# Global config instances - these can be imported and used directly
+model_config = ModelConfig()
+tracker_config = TrackerConfig()
+training_config = TrainingConfig()
+detection_config = DetectionConfig()
+clustering_config = ClusteringConfig()
+player_config = PlayerConfig()
+transform_config = TransformConfig()
+
+
+def create_training_transforms():
+    """Create training transforms with data augmentation."""
+    return transforms.Compose([
+        transforms.Resize((model_config.input_height, model_config.input_width)),
+        transforms.RandomHorizontalFlip(p=transform_config.hflip_prob),
+        transforms.ColorJitter(
+            brightness=transform_config.colorjitter_brightness,
+            contrast=transform_config.colorjitter_contrast,
+            saturation=transform_config.colorjitter_saturation,
+            hue=transform_config.colorjitter_hue
+        ),
+        transforms.RandomRotation(transform_config.random_rotation_degrees),
+        transforms.RandomAffine(
+            degrees=transform_config.random_affine_degrees,
+            translate=transform_config.random_affine_translate
+        ),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=model_config.imagenet_mean, std=model_config.imagenet_std)
+    ])
+
+
+def create_inference_transforms():
+    """Create inference transforms without augmentation."""
+    return transforms.Compose([
+        transforms.Resize((model_config.input_height, model_config.input_width)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=model_config.imagenet_mean, std=model_config.imagenet_std)
+    ])
+
+
+def create_tensor_to_pil_transforms():
+    """Create transforms for converting tensor back to PIL Image."""
+    return transforms.Compose([
+        transforms.Normalize(mean=[0., 0., 0.], std=[1/s for s in model_config.imagenet_std]),
+        transforms.Normalize(mean=[-m for m in model_config.imagenet_mean], std=[1., 1., 1.]),
+        transforms.ToPILImage()
+    ])
+
+
+# Create transform instances
+training_transforms = create_training_transforms()
+inference_transforms = create_inference_transforms()
+validation_transforms = inference_transforms  # Same as inference
+tensor_to_pil = create_tensor_to_pil_transforms()
 
 # Dictionary for easy access to all transforms
 TRANSFORMS = {

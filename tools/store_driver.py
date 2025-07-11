@@ -18,17 +18,9 @@ from googleapiclient.discovery import Resource
 
 logger = logging.getLogger(__name__)
 
-# Directory where this script is located
-_STORE_DRIVER_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Paths for credentials and token files, relative to the script's location
-_CREDENTIALS_PATH = os.path.join(_STORE_DRIVER_SCRIPT_DIR, "credentials.json")
-_TOKEN_PATH = os.path.join(_STORE_DRIVER_SCRIPT_DIR, "token.json")
-_SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
-
-#Cache directory to avoid downloading the same file multiple times
-_CACHE_DIR = os.path.join(os.path.dirname(_STORE_DRIVER_SCRIPT_DIR), ".file_cache")
-_CACHE_DURATION_SECONDS = 60 * 60 * 24 * 7 # Default 7 days
+# Import centralized store config
+from config.store_config import store_config
 
 # GoogleDriveStore is used by Store, which is the main interface for the application.
 
@@ -49,11 +41,11 @@ class GoogleDriveStore:
         within the package structure.
         
         """
-        self.credentials_path = _CREDENTIALS_PATH
-        self.token_path = _TOKEN_PATH
-        self.scopes = _SCOPES
-        self.cache_dir = _CACHE_DIR              
-        self.cache_duration = _CACHE_DURATION_SECONDS 
+        self.credentials_path = store_config.credentials_path
+        self.token_path = store_config.token_path
+        self.scopes = store_config.scopes
+        self.cache_dir = store_config.cache_dir              
+        self.cache_duration = store_config.cache_duration_seconds 
 
         #Establish the service object to interact with Google Drive API
         self.service = self._authenticate() 
@@ -113,10 +105,12 @@ class GoogleDriveStore:
             logger.info("Token refreshed successfully.")
             return creds
         except google.auth.exceptions.RefreshError as e:
-            logger.error(f"Error refreshing token: {e}. This usually means the refresh token is invalid or revoked.")
+            logger.error("Error refreshing token:")
+            logger.error(e, exc_info=True)
             self._delete_token_file("invalid or revoked")
         except Exception as e:
-            logger.error(f"An unexpected error occurred during token refresh: {e}. Please re-authenticate.")
+            logger.error("An unexpected error occurred during token refresh:")
+            logger.error(e, exc_info=True)
         return None # Refresh failed
 
     def _perform_new_authentication(self) -> Optional[Credentials]:
@@ -124,15 +118,15 @@ class GoogleDriveStore:
         logger.info("Attempting to authenticate via browser flow...")
         if not os.path.exists(self.credentials_path):
             logger.error(f"Credentials file not found at: {self.credentials_path}")
-            logger.error("Please download 'credentials.json' from Google Cloud Console "
-                         "and place it in the project directory.")
+            logger.error("Please download 'credentials.json' from Google Cloud Console and place it in the project directory.")
             return None
         try:
             flow = InstalledAppFlow.from_client_secrets_file(self.credentials_path, self.scopes)
             creds = flow.run_local_server(port=0)
             return creds
         except Exception as e:
-            logger.error(f"Failed during new authentication flow: {e}", exc_info=True)
+            logger.error(f"Failed during new authentication flow:")
+            logger.error(f" {e}", exc_info=True)
             return None
 
     def _save_credentials(self, creds: Credentials):
@@ -225,7 +219,8 @@ class GoogleDriveStore:
         if cache_filepath:
             with open(cache_filepath, 'wb') as f:
                 f.write(buffer.getvalue())
-            logger.info(f"Saved downloaded content to cache: {cache_filepath}")
+            logger.info(f"Saved downloaded content to cache:")
+            logger.info(f"{cache_filepath}")
         
     # --- File and Folder Management Methods ---
 
@@ -367,7 +362,8 @@ class GoogleDriveStore:
 
         # Check cache first
         if cache_filepath and self._is_cache_valid(cache_filepath):
-            logger.info(f"Using cached content for file ID '{actual_file_id_to_download}' (name: '{file_name}') from: {cache_filepath}")
+            logger.info(f"Using cache for '{actual_file_id_to_download}' (name: '{file_name}'):")
+            logger.info(f" from: {cache_filepath}")
             with open(cache_filepath, 'rb') as f:
                 return io.BytesIO(f.read())
 
@@ -387,30 +383,30 @@ class GoogleDriveStore:
         return None
     
     def get_file_by_id(self, file_id: str) -> Optional[io.BytesIO]:
-            """
-            Downloads a file's content given its ID into an in-memory buffer.
+        """
+        Downloads a file's content given its ID into an in-memory buffer.
 
-            Returns:
-                An Optional io.BytesIO object containing the file content, or None on error.
-            """
-            if not self.service:
-                logger.error("Drive service not available.")
-                return None
-            try:
-                request = self.service.files().get_media(fileId=file_id)
-                # Use io.BytesIO to handle the downloaded content in memory
-                fh = io.BytesIO()
-                downloader = MediaIoBaseDownload(fh, request)
-                done = False
-                while done is False:
-                    status, done = downloader.next_chunk()
-                    logger.debug(f"Download {int(status.progress() * 100)}%.")
-                logger.info(f"Successfully downloaded file ID: {file_id}")
-                fh.seek(0) # Reset buffer position to the beginning for reading
-                return fh # Return the BytesIO object
-            except HttpError as error:
-                logger.error(f"An API error occurred while downloading file ID '{file_id}': {error}")
-                return None
+        Returns:
+            An Optional io.BytesIO object containing the file content, or None on error.
+        """
+        if not self.service:
+            logger.error("Drive service not available.")
+            return None
+        try:
+            request = self.service.files().get_media(fileId=file_id)
+            # Use io.BytesIO to handle the downloaded content in memory
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+                logger.debug(f"Download {int(status.progress() * 100)}%.")
+            logger.info(f"Successfully downloaded file ID: {file_id}")
+            fh.seek(0) # Reset buffer position to the beginning for reading
+            return fh # Return the BytesIO object
+        except HttpError as error:
+            logger.error(f"An API error occurred while downloading file ID '{file_id}': {error}")
+            return None
   
     def is_initialized(self) -> bool:
         """

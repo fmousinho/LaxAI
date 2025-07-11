@@ -1,12 +1,17 @@
 import torch.nn as nn
 import torchvision.models as models
+import logging
+
+logger = logging.getLogger(__name__)
+
+from config.transforms_config import model_config
 
 class SiameseNet(nn.Module):
     """
     A Siamese network that uses a pre-trained ResNet as a backbone
     to generate feature embeddings for player crops.
     """
-    def __init__(self, embedding_dim=128):
+    def __init__(self, embedding_dim=model_config.embedding_dim):
         super(SiameseNet, self).__init__()
         self.embedding_dim = embedding_dim
         
@@ -22,6 +27,11 @@ class SiameseNet(nn.Module):
         
         # Replace the final layer with our embedding layer
         self.backbone.fc = nn.Linear(num_ftrs, embedding_dim)
+
+        logger.info(f"SiameseNet initialized.")
+        logger.info(f"Embedding dimension set to {embedding_dim}")
+        logger.info(f"Using {self.backbone.__class__.__name__} as backbone.")
+        logger.info(f"Kernel size of first conv layer: {self.backbone.conv1.kernel_size}, stride: {self.backbone.conv1.stride}")
 
     @property
     def device(self):

@@ -10,6 +10,8 @@ from typing import Optional, Any, List
 logger = logging.getLogger(__name__)
 
 
+from config.transforms_config import model_config, training_config
+
 class Trainer:
     """
     A trainer class for lacrosse player re-identification model using triplet loss.
@@ -17,12 +19,12 @@ class Trainer:
     
     def __init__(self, 
                  train_dir: str,
-                 embedding_dim: int = 128,
-                 learning_rate: float = 0.001,
-                 batch_size: int = 16,
-                 num_epochs: int = 5,
-                 margin: float = 0.5,
-                 model_save_path: str = 'lacrosse_reid_model.pth'):
+                 embedding_dim: int = model_config.embedding_dim,
+                 learning_rate: float = training_config.learning_rate,
+                 batch_size: int = training_config.batch_size,
+                 num_epochs: int = training_config.num_epochs,
+                 margin: float = training_config.margin,
+                 model_save_path: str = training_config.model_save_path):
         """
         Initialize the trainer with hyperparameters.
         
@@ -144,13 +146,17 @@ class Trainer:
                 if (i + 1) % 10 == 0:
                     log_progress(logger, f"Epoch {epoch+1}/{self.num_epochs}", 
                                i + 1, len(self.dataloader), step=1)
-                    logger.info(f"Current Loss: {loss.item():.4f}")
+                    logger.debug(f"Epoch {epoch+1}/{self.num_epochs}, Batch {i+1}/{len(self.dataloader)}, Current Loss: {loss.item():.4f}")
 
             # Calculate and log epoch summary
             epoch_loss = running_loss / batch_count if batch_count > 0 else 0.0
             logger.info(f"=== Epoch {epoch+1} Summary ===")
             logger.info(f"Average Loss: {epoch_loss:.4f}")
             logger.info("")
+
+            if epoch_loss < 0.1 * self.margin:
+                logger.info("Early stopping triggered")
+                break
 
         logger.info("Finished Training")
         return self.model

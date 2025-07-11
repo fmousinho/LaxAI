@@ -7,12 +7,14 @@ import random
 import numpy as np
 from config.transforms_config import get_transforms
 
+from config.transforms_config import training_config
+
 class LacrossePlayerDataset(Dataset):
     """
     Custom Dataset for loading lacrosse player crops for triplet loss.
     Each player's crops are expected to be in a separate folder.
     """
-    def __init__(self, image_dir, transform=None, min_images_per_player=3):
+    def __init__(self, image_dir, transform=None, min_images_per_player=training_config.min_images_per_player):
         self.image_dir = image_dir
         self.transform = transform
         self.min_images_per_player = min_images_per_player
@@ -44,9 +46,11 @@ class LacrossePlayerDataset(Dataset):
         
         self.player_indices = {player: i for i, player in enumerate(self.players)}
         
-        print(f"Dataset initialized with {len(self.players)} players and {len(self.all_images)} total images")
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Dataset initialized with {len(self.players)} players and {len(self.all_images)} total images")
         for player in self.players:
-            print(f"  Player {player}: {len(self.player_to_images[player])} images")
+            logger.info(f"  Player {player}: {len(self.player_to_images[player])} images")
 
     def __len__(self):
         return len(self.all_images)

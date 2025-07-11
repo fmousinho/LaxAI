@@ -52,28 +52,21 @@ class VideoWriterProcessor:
         """
         logger.info("Creating output video with annotated frames")
 
-        multi_frame_detections = deque(multi_frame_detections)
+        multi_frame_detections_dq = deque(multi_frame_detections)
+        if len(multi_frame_detections_dq) == 0 or type(multi_frame_detections_dq[0]) is not sv.Detections:
+            logger.error("No detections provided for video writing.")
+            return
         
         with sv.VideoSink(target_path=self.output_video_path, video_info=self.video_info) as sink:
-            for frame in tqdm(frames_generator, desc="Writing frames", total=frame_target):
-                try:
-                    detections: sv.Detections = multi_frame_detections.popleft()
-                except IndexError:
-                    logger.error("Detections could not be retrieved to write a frame.")
-                    break
-                    
-                if detections.tracker_id is None or detections.confidence is None:
-                    logger.error("Missing tracking ID or confidence in detections.")
-                    continue
+            try:
+                for frame, detections in zip(frames_generator, multi_frame_detections_dq):
+                    annotated_frame = self._annotate_frame(frame, detections, track_to_player)
+                    sink.write_frame(frame=annotated_frame)
+                logger.info(f"Video writing complete. Output saved to: {self.output_video_path}")
+            except Exception as e:
+                logger.error(f"Error occurred while writing video frames: {e}")
 
-                # Annotate the frame
-                annotated_frame = self._annotate_frame(frame, detections, track_to_player)
-                
-                # Write the annotated frame
-                sink.write_frame(frame=annotated_frame)
-                
-        logger.info(f"Video writing complete. Output saved to: {self.output_video_path}")
-        
+
     def _annotate_frame(self, 
                     frame: np.ndarray, 
                     detections: sv.Detections, 
@@ -103,14 +96,13 @@ class VideoWriterProcessor:
 
         # Loop through all detections in a given frame, and assign a player_id to all confirmed ones
         for i in range(len(detections)):
-            tracker_id_np = detections.tracker_id[i]
-            if tracker_id_np is None:
+            if detections.tracker_id is None or detections.data is None:
                 detections.data["player_id"][i] = -1
                 detections.data["team_id"][i] = -1
                 labels.append("?")
                 colors.append((64, 64, 64))  # Dark gray for untracked
                 continue
-                
+            tracker_id_np = detections.tracker_id[i]
             tid = int(tracker_id_np)
             player = track_to_player.get(tid, None)
             

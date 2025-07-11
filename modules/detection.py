@@ -12,11 +12,7 @@ from tools.store_driver import Store
 
 logger = logging.getLogger(__name__)
 
-# Checkpoint for RFDETR Base model
-MODEL_CHECKPOINT = "checkpoint.pth"
-DEFAULT_CHECKPOINT_DIR = "Colab_Notebooks"
-DEFAULT_TORCH_DEVICE = torch.device("cpu")
-PREDICTION_THRESHOLD = 0.7
+from config.transforms_config import detection_config
 
 
 class DetectionModel:
@@ -31,9 +27,9 @@ class DetectionModel:
 
     def __init__(self, 
                  store: Store,
-                 model_dict: str = MODEL_CHECKPOINT,
-                 model_dir: Optional[str] = DEFAULT_CHECKPOINT_DIR,
-                 device: torch.device = DEFAULT_TORCH_DEVICE,
+                 model_dict: str = detection_config.model_checkpoint,
+                 model_dir: Optional[str] = detection_config.checkpoint_dir,
+                 device: Optional[torch.device] = None,
         ): 
         """
         Initializes the DetectionModel.
@@ -50,7 +46,15 @@ class DetectionModel:
         self.store = store
         self.model_dict = model_dict
         self.model_dir = model_dir
-        self.device = device
+        if device is None:
+            if torch.cuda.is_available():
+                self.device = torch.device("cuda")
+            elif torch.backends.mps.is_available():
+                self.device = torch.device("mps")
+            else:
+                self.device = torch.device("cpu")
+        else:
+            self.device = device
         
         if not store.is_initialized():
             raise RuntimeError("Store object is not initialized. Please initialize it before using DetectionModel.")
@@ -80,7 +84,8 @@ class DetectionModel:
                 tmp_f.write(checkpoint_buffer.getvalue())
                 temp_checkpoint_path = tmp_f.name # Get the path to the temporary file
             
-            logger.info(f"Checkpoint saved to temporary file: {temp_checkpoint_path}")
+            logger.info("Checkpoint saved to temporary file:")
+            logger.info(f"{temp_checkpoint_path}")
             self.model = RFDETRBase(device=self.device.type, pretrain_weights=temp_checkpoint_path, num_classes=6)
             #self.model = self.model.optimize_for_inference()  # TODO: Must test and maybe uncomment this line
             return True
@@ -92,14 +97,15 @@ class DetectionModel:
             if temp_checkpoint_path and os.path.exists(temp_checkpoint_path):
                 try:
                     os.remove(temp_checkpoint_path)
-                    logger.info(f"Temporary checkpoint file {temp_checkpoint_path} removed.")
+                    logger.info("Temporary checkpoint file removed:")
+                    logger.info(f"{temp_checkpoint_path}")
                 except OSError as e:
                     logger.error(f"Error removing temporary checkpoint file {temp_checkpoint_path}: {e}")
 
     def generate_detections(
             self,
             images: Union[str, Image.Image, np.ndarray, torch.Tensor, List[Union[str, np.ndarray, Image.Image, torch.Tensor]]],
-            threshold: float = PREDICTION_THRESHOLD,
+            threshold: float = detection_config.prediction_threshold,
             **kwargs,
         ) -> sv.Detections: # type: ignore
         """
@@ -129,3 +135,7 @@ class DetectionModel:
         model_output_detections = self.model.predict(images, threshold=threshold, **kwargs)
 
         return model_output_detections
+
+    def empty_detections(self):
+        """Returns an empty Detections object."""
+        return sv.Detections.empty()

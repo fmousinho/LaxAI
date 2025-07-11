@@ -7,7 +7,7 @@ from scipy.optimize import linear_sum_assignment # For optimal one-to-one matchi
 
 logger = logging.getLogger(__name__)
 
-_REID_SIMILARITY_THRESHOLD = 0.91
+from config.transforms_config import player_config
 
 class Player:
     """

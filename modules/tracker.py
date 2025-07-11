@@ -1,18 +1,15 @@
+
 import logging
 from typing import Optional, List, Tuple, Dict, Literal, Callable, Any
 import numpy as np
 import cv2
 import supervision as sv
 import torch
-from config.transforms_config import MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH
+from config.transforms_config import model_config, tracker_config
+
 
 
 logger = logging.getLogger(__name__)
-
-_TRACK_ACTIVATION_THRESHOLD = 0.4
-_LOST_TRACK_BUFFER = 30
-_MINIMUM_MATCHING_THRESHOLD = 0.8
-_MINIMUM_CONSECUTIVE_FRAMES = 30
 
 def warp_bbox(bbox_tlbr: np.ndarray, affine_matrix: np.ndarray) -> np.ndarray:
     """
@@ -131,6 +128,13 @@ class TrackData:
         self.crops.append(crop)
         self.frame_last_seen += 1
 
+    def update_metadata(self, class_id: int, confidence: float):
+        """ Updates the track metadata without adding a crop. """
+        if confidence > self._class_confidence:
+            self._class_confidence = confidence
+            self._class_id = class_id
+        self.frame_last_seen += 1
+
 
 
 
@@ -148,18 +152,21 @@ class AffineAwareByteTrack(sv.ByteTrack):
     def __init__(
             self,
             id_type: Literal['internal', 'external'] = 'internal',
-            maintain_separate_track_obj: bool = True):
+            maintain_separate_track_obj: bool = True,
+            crop_save_interval: int = 5):
         
         super().__init__(
-            track_activation_threshold = _TRACK_ACTIVATION_THRESHOLD,
-            lost_track_buffer = _LOST_TRACK_BUFFER,
-            minimum_matching_threshold = _MINIMUM_MATCHING_THRESHOLD,
+            track_activation_threshold = tracker_config.track_activation_threshold,
+            lost_track_buffer = tracker_config.lost_track_buffer,
+            minimum_matching_threshold = tracker_config.minimum_matching_threshold,
             frame_rate = 30,
-            minimum_consecutive_frames = _MINIMUM_CONSECUTIVE_FRAMES
-            )
+            minimum_consecutive_frames = tracker_config.minimum_consecutive_frames
+        )
         self.track_data: dict[int, TrackData] = {}
         self.id_type = id_type
         self.maintain_separate_track_obj = maintain_separate_track_obj
+        self.crop_save_interval = crop_save_interval
+        self.frame_count = 0
 
     def update_with_transform(self, detections: sv.Detections, affine_matrix: np.ndarray, frame: np.ndarray) -> sv.Detections:
         """_summary_
@@ -181,6 +188,10 @@ class AffineAwareByteTrack(sv.ByteTrack):
             sv.Detections: The detections object, potentially with updated tracker IDs
                 and other tracking information, after processing by the ByteTrack algorithm.
         """
+        if len(detections) == 0:
+            self.frame_count += 1
+            return detections
+        
         # Wwarp the internal tracks' predicted locations
         # ByteTrack keeps the following 3 types of lists of tracks, all in the STtrack format
         for track_list_type in [self.tracked_tracks, self.lost_tracks]:
@@ -207,18 +218,31 @@ class AffineAwareByteTrack(sv.ByteTrack):
 
                 # Update positional components of track.mean
                 # track.mean is [cx, cy, a, h, vcx, vcy, va, vh]
-                track.mean[0] = new_cx # new_cx is already np.float32 due to earlier casting
-                track.mean[1] = new_cy # new_cy is already np.float32
-                track.mean[2] = new_a  # new_a is already np.float32
-                track.mean[3] = new_h  # new_h is already np.float32
+                track.mean[0] = new_cx
+                track.mean[1] = new_cy
+                track.mean[2] = new_a
+                track.mean[3] = new_h
+
+                # Transform velocities instead of leaving them unchanged
+                affine_2x2 = affine_matrix[:2, :2]
+                velocity_xy = np.array([track.mean[4], track.mean[5]])
+                transformed_velocity_xy = affine_2x2 @ velocity_xy
+
+                track.mean[4] = transformed_velocity_xy[0]  # transformed vcx
+                track.mean[5] = transformed_velocity_xy[1]  # transformed vcy
+
+                # Optionally scale height velocity if there's significant scaling
+                scale_factor = np.sqrt(np.linalg.det(affine_2x2))
+                if abs(scale_factor - 1.0) > 0.1:  # Only if significant scaling
+                    track.mean[7] *= scale_factor
 
                 # Reset the entire covariance matrix to reflect the new state's uncertainty,
                 # similar to KalmanFilter.initiate().
                 # We do NOT reset track.mean[4:8] (velocities); the filter will adjust them.
                 
                 # pylint: disable=protected-access 
-                std_pos_w = track.kalman_filter._std_weight_position #type: ignore
-                std_vel_w = track.kalman_filter._std_weight_velocity #type: ignore
+                std_pos_w = track.kalman_filter._std_weight_position
+                std_vel_w = track.kalman_filter._std_weight_velocity 
                 # pylint: enable=protected-access
 
                 current_h = track.mean[3] # This is new_h
@@ -265,7 +289,10 @@ class AffineAwareByteTrack(sv.ByteTrack):
 
         # Updates crops for each track
         if self.maintain_separate_track_obj:
-            self._update_tracks_with_detections(detections, frame)
+            self._update_tracks_obj(detections, frame)
+        
+        # Increment frame count for crop saving logic
+        self.frame_count += 1
 
         return detections
     
@@ -359,9 +386,10 @@ class AffineAwareByteTrack(sv.ByteTrack):
 
         return sorted(list(tids))
         
-    def _update_tracks_with_detections(self, detections: sv.Detections, frame: np.ndarray):
+    def _update_tracks_obj(self, detections: sv.Detections, frame: np.ndarray):
         """
         Updates the track data with the latest detections and crops.
+        Only saves crops every N frames (configurable via crop_save_interval).
 
         Args:
             detections (sv.Detections): The detections for the current frame.
@@ -374,21 +402,31 @@ class AffineAwareByteTrack(sv.ByteTrack):
         if detections_track_ids is None:
             return
 
+        # Only save crops at specified intervals
+        should_save_crop = (self.frame_count % self.crop_save_interval) == 0
+
         for i, tid in enumerate(detections_track_ids):
-            crop = sv.crop_image(frame, detections.xyxy[i])
             class_id = detections.class_id[i] if detections.class_id is not None else -1
             confidence = detections.confidence[i] if detections.confidence is not None else 0.0
+            
             if tid not in self.track_data:
+                # For new tracks, always save the first crop
+                crop = sv.crop_image(frame, detections.xyxy[i])
                 self.track_data[tid] = TrackData(
                     track_id=tid,
                     crop=crop,
                     class_id=class_id,
                     confidence=confidence,
-                    frame_id=self.frame_id
+                    frame_id=self.frame_count
                 )
             else:
-                self.track_data[tid].update_data(crop, class_id, confidence)
-
+                # For existing tracks, only save crop at intervals
+                if should_save_crop:
+                    crop = sv.crop_image(frame, detections.xyxy[i])
+                    self.track_data[tid].update_data(crop, class_id, confidence)
+                else:
+                    # Update metadata without crop
+                    self.track_data[tid].update_metadata(class_id, confidence)
 
     def update_track_with_embedding_and_team (self, track_id: int, embedding: np.ndarray, team: int):
         """
@@ -430,58 +468,80 @@ class AffineAwareByteTrack(sv.ByteTrack):
         track_ids = list(self.track_data.keys())
 
         if not track_ids:
-            logger.warning("No track IDs found. Cannot create embeddings.")
+            logger.error("No track IDs found. Cannot create embeddings.")
             return
 
         logger.info(f"Creating embeddings for {len(track_ids)} tracks using batch processing.")
 
-        # Process each track individually to get averaged embeddings
-        for tid in track_ids:
+        total_tracks = len(track_ids)
+        for idx, tid in enumerate(track_ids, 1):
+            # Log progress every 5%
+            from modules.utils import log_progress
+            log_progress(logger, "Embedding creation progress", idx, total_tracks)
+
+            # ...existing code...
             crops = self.track_data[tid].crops
-            
             if not crops:
                 logger.warning(f"Track {tid} has no crops. Skipping embedding creation.")
                 continue
-            
-            # Convert crops to tensor for batch processing
             try:
                 # Resize all crops to a consistent size using centralized config
-                target_height, target_width = MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH
+                target_height, target_width = model_config.input_height, model_config.input_width
                 resized_crops = []
-                
                 for crop in crops:
-                    # Resize crop to target dimensions
-                    resized_crop = cv2.resize(crop, (target_width, target_height))
-                    resized_crops.append(resized_crop)
-                
+                    # Validate crop before resizing
+                    if crop is None or crop.size == 0 or len(crop.shape) < 2:
+                        logger.warning(f"Track {tid}: Skipping invalid crop (None, empty, or wrong dimensions).")
+                        continue
+                    # Check if crop has valid dimensions
+                    if crop.shape[0] <= 0 or crop.shape[1] <= 0:
+                        logger.warning(f"Track {tid}: Skipping crop with invalid dimensions {crop.shape}.")
+                        continue
+                    # Check if crop is too small (minimum 1x1)
+                    if crop.shape[0] < 1 or crop.shape[1] < 1:
+                        logger.warning(f"Track {tid}: Skipping crop too small {crop.shape}.")
+                        continue
+                    try:
+                        # Resize crop to target dimensions
+                        resized_crop = cv2.resize(crop, (target_width, target_height))
+                        # Validate the resized crop
+                        if resized_crop is None or resized_crop.size == 0:
+                            logger.warning(f"Track {tid}: Resize operation failed. Skipping this crop.")
+                            continue
+                        resized_crops.append(resized_crop)
+                    except cv2.error as e:
+                        logger.warning(f"Track {tid}: OpenCV resize error: {e}. Skipping this crop.")
+                        continue
+                logger.debug(f"Track {tid}: {len(resized_crops)}/{len(crops)} valid crops after filtering.")
+                # Check if we have any valid crops after filtering
+                if not resized_crops:
+                    logger.warning(f"Track {tid}: No valid crops found after filtering. Creating zero embedding.")
+                    self.track_data[tid].embedding = np.zeros((128,), dtype=np.float32)
+                    continue
                 # Stack crops into a batch tensor
                 crops_array = np.stack(resized_crops)  # Shape: (num_crops, height, width, channels)
                 crops_tensor = torch.tensor(crops_array, device=device, dtype=torch.float32)
-                
                 # If crops are in HWC format, convert to CHW format for model
                 if crops_tensor.dim() == 4 and crops_tensor.shape[-1] == 3:
                     crops_tensor = crops_tensor.permute(0, 3, 1, 2)  # NHWC -> NCHW
-                
                 # Normalize to [0, 1] if values are in [0, 255] range
                 if crops_tensor.max() > 1.0:
                     crops_tensor = crops_tensor / 255.0
-                
                 # Generate embeddings for all crops of this track
                 with torch.no_grad():
                     track_embeddings = embeddings_processor(crops_tensor)  # Shape: (num_crops, embedding_dim)
-                
                 # Average the embeddings across all crops for this track
-                avg_embedding = torch.mean(track_embeddings, dim=0)  # Shape: (embedding_dim,)
-                
+                avg_embedding = torch.mean(track_embeddings, dim=0)
+                avg_embedding = torch.nn.functional.normalize(avg_embedding, p=2, dim=0)  # Shape: (embedding_dim,)
                 # Store the averaged embedding
                 self.track_data[tid].embedding = avg_embedding.cpu().numpy()
-                
+                logger.debug(f"Track {tid}: Created embedding from {len(resized_crops)} valid crops.")
             except Exception as e:
                 logger.error(f"Failed to create embedding for track {tid}: {e}")
                 # Set a zero embedding as fallback (128-dim to match SiameseNet)
                 self.track_data[tid].embedding = np.zeros((128,), dtype=np.float32)
 
-        logger.info(f"Successfully created averaged embeddings for {len(track_ids)} tracks.")
+        logger.info(f"Successfully processed embeddings for {len(track_ids)} tracks.")
 
     def get_embedding_statistics(self) -> Dict[str, Any]:
         """
@@ -516,3 +576,14 @@ class AffineAwareByteTrack(sv.ByteTrack):
             stats["max_crops_per_track"] = np.max(stats["crops_per_track"])
         
         return stats
+    
+
+    def update_tracks_with_loaded_detections(self, detections: sv.Detections, frame: np.ndarray):
+        """
+        Update the tracker objects with detections loaded from a JSON file.
+
+        Args:
+            detections: The loaded detections to update the tracker with.
+            frame: The video frame corresponding to the detections.
+        """
+        self._update_tracks_obj(detections, frame)

@@ -19,15 +19,13 @@ from tools.store_driver import Store
 from modules.tracker import AffineAwareByteTrack, TrackData
 from modules.clustering_processor import ClusteringProcessor
 from modules.siamesenet import SiameseNet 
-from modules.detection_processor import DetectionProcessor
+from modules.det_processor import DetectionProcessor
 from modules.crop_extractor_processor import CropExtractor, create_train_val_split
 from modules.dataset import LacrossePlayerDataset
 from modules.train_processor import Trainer
 from modules.writer_processor import VideoWriterProcessor
-from modules.player_association import (
-    associate_tracks_to_players_greedy,
-    associate_tracks_to_players_globally
-)
+from modules.player_association import associate_tracks_to_players_globally
+
 
 
 logger = logging.getLogger(__name__)
@@ -50,7 +48,8 @@ def run_application (
         output_video_path: str = "results.mp4",
         device: torch.device = torch.device("cpu"),
         debug_max_frames: Optional[int] = None,
-        generate_report: bool = True
+        generate_report: bool = True,
+        detections_import_path: Optional[str] = None
     ):
 
     """
@@ -61,6 +60,7 @@ def run_application (
         output_video_path: Path where the processed video will be saved.
         device: The torch device to use for processing (e.g., "cpu", "cuda").
         debug_max_frames: If set, limits processing to this many frames for debugging.
+        detections_import_path: Optional path to save/load detections JSON file. If set, bypass detection step if file exists.
     """
 
     logger.info("")
@@ -71,6 +71,7 @@ def run_application (
     logger.info(f"  device:           {device}")
     logger.info(f"  debug_max_frames: {debug_max_frames}")
     logger.info(f"  generate_report:  {generate_report}")
+    logger.info(f"  detections_import_path: {detections_import_path}")
 
 
     video_info = sv.VideoInfo.from_video_path(video_path=input_video)
@@ -80,10 +81,18 @@ def run_application (
     }
 
     TEMP_DIR = os.path.join(os.getcwd(), "temp")
-    if not os.path.exists(TEMP_DIR):
-        os.makedirs(TEMP_DIR, exist_ok=True)
+    
+    # Clean up any existing temp directory files
+    if os.path.exists(TEMP_DIR):
+        logger.info(f"Cleaning up existing temp directory: {TEMP_DIR}")
+        import shutil
+        shutil.rmtree(TEMP_DIR)
+    
+    # Create fresh temp directory
+    os.makedirs(TEMP_DIR, exist_ok=True)
+    logger.info(f"Created temp directory: {TEMP_DIR}")
 
-    FRAME_TARGET = debug_max_frames if debug_max_frames is not None else video_info.total_frames
+    FRAME_TARGET:int = debug_max_frames if debug_max_frames is not None else video_info.total_frames #type: ignore
 
     detection_model = DetectionModel(store=store, device=device)    
     tracker = AffineAwareByteTrack() 
@@ -93,16 +102,31 @@ def run_application (
 
 
 
-    # --- Generate detections and tracks for each frame ---
-    
+    # --- Generate or load detections and tracks for each frame ---
+
     frames_generator = sv.get_video_frames_generator(**generator_params)
-    detection_file_path = os.path.join(TEMP_DIR, "detections.json")
-    detection_processor = DetectionProcessor(detection_model, tracker, detection_file_path)
-    
-    multi_frame_detections = detection_processor.process_frames(
-        frames_generator=frames_generator,
-        frame_target=FRAME_TARGET
-    )
+    detection_save_path = os.path.join(TEMP_DIR, "detections.json")
+    detection_processor = DetectionProcessor(detection_model, tracker, detection_save_path)
+
+    if detections_import_path and os.path.exists(detections_import_path):
+        logger.info(f"Loading existing detections from {detections_import_path}")
+        with open(detections_import_path, 'r') as f:
+            multi_frame_detections = detection_processor.json_to_detections(
+                detections_import_path, 
+                update_tracker_state=True, 
+                video_source=input_video
+            )
+        logger.info(f"Loaded detections for {len(multi_frame_detections)} frames.")
+    else:
+        if detections_import_path and not os.path.exists(detections_import_path):
+            logger.warning(f"Detections import path does not exist: {detections_import_path}")
+            logger.warning("Proceeding to generate detections from the video.")
+        logger.info("Generating new detections from video.")
+        multi_frame_detections = detection_processor.process_frames(
+            frames_generator=frames_generator,
+            frame_target=FRAME_TARGET
+        )
+
 
     # --- Extracting crops and creating training/validation splits ---
 
@@ -144,7 +168,6 @@ def run_application (
         source_data_dir=crop_processor.get_all_crops_directory(),
         target_min_clusters=20,
         target_max_clusters=40,
-        initial_eps=0.6,
         device=device
     )
     
@@ -190,11 +213,8 @@ def run_application (
     players: set[Player] = set()  # Set to store unique Player objects
     track_to_player: Dict[int, Player] = {}  # Mapping from tracker ID to Player object
     tracks_data = detection_processor.tracker.get_tracks_data()
-    
-    # Association parameters
-    SIMILARITY_THRESHOLD = 0.9  # Minimum cosine similarity for association
 
-    players, track_to_player = associate_tracks_to_players_globally(tracks_data, SIMILARITY_THRESHOLD)
+    players, track_to_player = associate_tracks_to_players_globally(tracks_data)
 
     logger.info(f"Player association complete: {len(players)} unique players from {len(tracks_data)} tracks")
 
@@ -215,24 +235,35 @@ def run_application (
     )
 
     # --- (Optional) Fourth pass: Generate analysis report ---
-    generate_report = False
+    
     if generate_report:
-        logger.info("Generating per-track analysis report")
+        logger.info("Generating per-player analysis report")
         run_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         run_output_dir = os.path.join(reporting.REPORTS_BASE_DIR, run_id)
 
-        # Collect per-track info: track_id, team, player_id
-        per_track_rows = []
-        for tid, track_data in tracker_data.items():
-            player = track_to_player.get(tid, None)
-            per_track_rows.append({
-                "track_id": tid,
-                "original_crop": getattr(track_data, '_crops', [None])[0] if hasattr(track_data, '_crops') and track_data._crops else None,
-                "masked_crop": None,  # Masked crops not available in current workflow
-                "team": getattr(track_data, 'team', -1),
-                "player_id": player.id if player is not None else -1
+        # Build a mapping from player_id to tracker_ids and crops
+        player_rows = []
+        # Reverse mapping: player_id -> list of tracker_ids
+        player_to_trackers = {}
+        for tid, player in track_to_player.items():
+            if player.id not in player_to_trackers:
+                player_to_trackers[player.id] = []
+            player_to_trackers[player.id].append(tid)
+
+        for player in players:
+            tracker_ids = player_to_trackers.get(player.id, [])
+            # Collect all crops for this player (from all associated tracks)
+            crops = []
+            for tid in tracker_ids:
+                track_data = tracks_data.get(tid, None)
+                if track_data is not None and hasattr(track_data, 'crops'):
+                    crops.extend(track_data.crops)
+            player_rows.append({
+                "player_id": player.id,
+                "tracker_ids": tracker_ids,
+                "crops": crops
             })
 
-        logger.info(f"Found {len(per_track_rows)} tracks to report on.")
-        reporting.generate_track_report_html(run_id, run_output_dir, per_track_rows)
+        logger.info(f"Found {len(player_rows)} players to report on.")
+        reporting.generate_player_report_html(run_id, run_output_dir, player_rows)
         reporting.update_main_index_html()

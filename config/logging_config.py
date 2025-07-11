@@ -14,9 +14,10 @@ class PipeFormatter(logging.Formatter):
 
     def format(self, record):
         asctime = self.formatTime(record, self.datefmt)
-        levelname = f"{record.levelname:<8}"
-        asctime = f"{asctime:<14}"
-        filename = record.filename
+        levelname = f"{record.levelname:<7}"
+        asctime = f"{asctime:<12}"
+        # Remove extension from filename
+        filename = record.filename.rsplit('.', 1)[0] if '.' in record.filename else record.filename
         msg = record.getMessage()
 
         return f"{asctime} | {levelname} | [{filename}] {msg}"

@@ -1,6 +1,11 @@
+import logging
+import os
+import cv2
+
+logger = logging.getLogger(__name__)
+
 def generate_track_report_html(run_id: str, run_output_dir: str, track_rows: list):
     """Generates an HTML report with a row for each track, showing crops, masked crops, team, and player ID."""
-    import cv2
     os.makedirs(run_output_dir, exist_ok=True)
     crops_dir = os.path.join(run_output_dir, "crops")
     masked_dir = os.path.join(run_output_dir, "masked_crops")
@@ -80,49 +85,44 @@ def generate_track_report_html(run_id: str, run_output_dir: str, track_rows: lis
 """
     with open(report_html_path, "w", encoding="utf-8") as f:
         f.write(html_content)
-    logger.info(f"Generated Track Analysis HTML report for run {run_id} at {report_html_path}")
-import logging
-import os
-import datetime
-from typing import List
-import cv2
+    logger.info(f"Generated Track Analysis HTML report for run {run_id}:")
+    logger.info (f"link: {report_html_path}")
 
-from modules.player import Player
 
 logger = logging.getLogger(__name__)
 
 REPORTS_BASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "analyse", "reports")
 
 
-def generate_player_report_html(run_id: str, run_output_dir: str, players: List[Player]):
-    """Generates an HTML report summarizing each unique player."""
+
+def generate_player_report_html(run_id: str, run_output_dir: str, player_rows: list):
+    """Generates an HTML report summarizing each unique player (dict-based, not Player objects)."""
     os.makedirs(run_output_dir, exist_ok=True)
     crops_dir = os.path.join(run_output_dir, "crops")
     report_html_path = os.path.join(run_output_dir, "report.html")
 
     # Save all player crops to disk and store their relative paths for the report
-    for player in players:
-        player_crop_dir = os.path.join(crops_dir, f"player_{player.id}")
+    for row in player_rows:
+        player_id = row["player_id"]
+        player_crop_dir = os.path.join(crops_dir, f"player_{player_id}")
         os.makedirs(player_crop_dir, exist_ok=True)
-        
-        # Temporarily attach the list of saved crop paths to the player object
-        player.report_crop_paths = []
-        for i, crop_np in enumerate(player.crops):
-            if crop_np.size == 0:
+        crop_paths = []
+        for i, crop_np in enumerate(row["crops"]):
+            if crop_np is None or not hasattr(crop_np, 'size') or crop_np.size == 0:
                 continue
             crop_filename = f"crop_{i}.png"
             crop_abs_path = os.path.join(player_crop_dir, crop_filename)
             cv2.imwrite(crop_abs_path, crop_np)
-            
-            relative_path = os.path.join("crops", f"player_{player.id}", crop_filename)
-            player.report_crop_paths.append(relative_path)
+            relative_path = os.path.join("crops", f"player_{player_id}", crop_filename)
+            crop_paths.append(relative_path)
+        row["report_crop_paths"] = crop_paths
 
     html_content = f"""
 <!DOCTYPE html>
-<html lang="en">
+<html lang=\"en\">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset=\"UTF-8\">
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
     <title>Player Analysis Report - Run {run_id}</title>
     <style>
         body {{ font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }}
@@ -138,7 +138,6 @@ def generate_player_report_html(run_id: str, run_output_dir: str, players: List[
 </head>
 <body>
     <h1>Player Analysis Report - Run ID: {run_id}</h1>
-    
     <table>
         <thead>
             <tr>
@@ -149,27 +148,23 @@ def generate_player_report_html(run_id: str, run_output_dir: str, players: List[
         </thead>
         <tbody>
 """
-    sorted_players = sorted(players, key=lambda p: p.id)
-
-    for player in sorted_players:
-        tracker_ids_str = ", ".join(map(str, sorted(player.associated_tracker_ids)))
-        
+    sorted_rows = sorted(player_rows, key=lambda r: r["player_id"])
+    for row in sorted_rows:
+        tracker_ids_str = ", ".join(map(str, sorted(row["tracker_ids"])))
         html_content += f"""
             <tr>
-                <td>{player.id}</td>
+                <td>{row['player_id']}</td>
                 <td>{tracker_ids_str}</td>
                 <td>
-                    <div class="crop-gallery">
+                    <div class=\"crop-gallery\">
 """
-        for crop_path in player.report_crop_paths:
-            html_content += f'                        <img src="{crop_path}" alt="Crop for player {player.id}">\n'
-        
+        for crop_path in row["report_crop_paths"]:
+            html_content += f'                        <img src="{crop_path}" alt="Crop for player {row["player_id"]}">\n'
         html_content += """
                     </div>
                 </td>
             </tr>
 """
-
     html_content += """
         </tbody>
     </table>
