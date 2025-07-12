@@ -171,12 +171,6 @@ class EmbeddingsProcessor:
                 
                 running_loss += loss.item()
                 batch_count += 1
-                
-                # Log progress every 10 batches
-                if (i + 1) % 10 == 0:
-                    log_progress(logger, f"Epoch {epoch+1}/{self.num_epochs}", 
-                               i + 1, len(self.dataloader), step=1)
-                    logger.debug(f"Epoch {epoch+1}/{self.num_epochs}, Batch {i+1}/{len(self.dataloader)}, Current Loss: {loss.item():.4f}")
 
             # Calculate and log epoch summary
             epoch_loss = running_loss / batch_count if batch_count > 0 else 0.0

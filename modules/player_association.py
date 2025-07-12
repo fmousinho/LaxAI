@@ -92,8 +92,8 @@ def calculate_stitching_cost(
         appearance_cost = 1.0  # High cost if no embeddings available
     
     # Calculate temporal cost
-    temporal_cost = time_gap * temporal_weight
-    
+    temporal_cost = time_gap / max_time_gap if max_time_gap > 0 else 1.0
+
     # Calculate motion cost (simplified for now)
     motion_cost = 0.0
     

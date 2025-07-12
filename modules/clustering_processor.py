@@ -10,7 +10,6 @@ from collections import Counter
 import time
 import logging
 from typing import Optional
-from .utils import log_progress
 from config.transforms import get_transforms
 from config.all_config import model_config, clustering_config
 
@@ -131,11 +130,6 @@ class ClusteringProcessor:
                 embeddings = model(images)
                 all_embeddings.append(embeddings.cpu().numpy())
                 all_paths.extend(paths)
-                
-                # Log progress every 10 batches
-                if (i + 1) % 10 == 0:
-                    log_progress(logger, "Generating embeddings", 
-                               i + 1, len(dataloader), step=1)
 
         elapsed_time = time.time() - start_time
         logger.info(f"Embedding generation complete! ({elapsed_time:.2f}s, {len(all_paths)} images)")
@@ -228,10 +222,6 @@ class ClusteringProcessor:
             dst_path = os.path.join(cluster_dir, filename)
             shutil.copy2(path, dst_path)
             copied_count += 1
-            
-            # Log progress every 100 files
-            if (i + 1) % 100 == 0:
-                log_progress(logger, "Copying files", i + 1, len(path_to_label))
         
         logger.info(f"Successfully copied {copied_count} images into {len(unique_clusters)} cluster folders")
         
@@ -336,7 +326,7 @@ class ClusteringProcessor:
             self.dbscan_eps = eps
             cluster_labels = self.cluster_embeddings(embeddings)
             num_clusters = self._count_clusters(cluster_labels)
-            logger.info(f"eps={eps} resulted in {num_clusters} clusters")
+            logger.info(f"eps={eps:.4f} resulted in {num_clusters} clusters")
             if target_min_clusters <= num_clusters <= target_max_clusters:
                 # In target range
                 best_eps = eps

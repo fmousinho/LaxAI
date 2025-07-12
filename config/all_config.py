@@ -24,10 +24,10 @@ class ModelConfig:
 @dataclass
 class TrackerConfig:
     """Configuration for ByteTrack and tracking parameters."""
-    track_activation_threshold: float = 0.4
+    track_activation_threshold: float = 0.45
     lost_track_buffer: int = 5
     minimum_matching_threshold: float = 0.8
-    minimum_consecutive_frames: int = 30
+    minimum_consecutive_frames: int = 15
     crop_save_interval: int = 5
 
 
@@ -60,6 +60,7 @@ class DetectionConfig:
     # Color space handling
     color_space: str = "RGB"  # Expected color space for processing
     convert_bgr_to_rgb: bool = True  # Auto-convert OpenCV BGR to RGB
+    enable_grass_mask: bool = True  # Whether to apply grass masking during crop extraction
 
 
 @dataclass
@@ -93,7 +94,7 @@ class TrackStitchingConfig:
     stitch_similarity_threshold: float = 0.9
     max_time_gap: int = 60  # Maximum frame gap between tracklets
     appearance_weight: float = 1.0
-    temporal_weight: float = .1
+    temporal_weight: float = .5
     motion_weight: float = 0.1  # Future use for motion-based cost
 
 

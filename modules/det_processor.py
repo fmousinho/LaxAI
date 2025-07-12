@@ -27,6 +27,7 @@ class DetectionProcessor:
         if self.nms_iou is not None:
             logger.info(f"Using NMS IoU threshold: {self.nms_iou}")
 
+
     def process_frames(
         self, 
         frames_generator, 
