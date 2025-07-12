@@ -138,8 +138,9 @@ def generate_player_report_html(run_id: str, run_output_dir: str, player_rows: l
         th, td {{ border: 1px solid #ddd; padding: 12px; text-align: left; vertical-align: top; }}
         th {{ background-color: #e9e9e9; }}
         .player-row {{ background-color: #f0f8ff; font-weight: bold; }}
-        .track-row {{ background-color: #ffffff; padding-left: 20px; }}
-        .track-row td:first-child {{ padding-left: 30px; font-style: italic; }}
+        .tracker-row {{ background-color: #ffffff; }}
+        .tracker-row td:first-child {{ padding-left: 30px; font-style: italic; color: #666; }}
+        .tracker-row td:nth-child(2) {{ font-weight: bold; }}
         td:nth-child(1) {{ width: 15%; }}
         td:nth-child(2) {{ width: 15%; }}
         td:nth-child(3) {{ width: 15%; }}
@@ -149,6 +150,7 @@ def generate_player_report_html(run_id: str, run_output_dir: str, player_rows: l
         .crop-gallery {{ display: flex; flex-wrap: wrap; gap: 5px; }}
         .crop-gallery img {{ max-width: 60px; max-height: 60px; border: 1px solid #eee; border-radius: 4px; }}
         .summary-cell {{ font-weight: bold; text-align: center; }}
+        .player-cell {{ font-weight: bold; text-align: center; vertical-align: middle; }}
     </style>
 </head>
 <body>
@@ -156,11 +158,11 @@ def generate_player_report_html(run_id: str, run_output_dir: str, player_rows: l
     <table>
         <thead>
             <tr>
-                <th>Player/Track ID</th>
+                <th>Player ID</th>
+                <th>Tracker ID</th>
                 <th>Frame Range</th>
                 <th>Num Crops</th>
                 <th>Team</th>
-                <th>Summary</th>
                 <th>Crops</th>
             </tr>
         </thead>
@@ -172,35 +174,40 @@ def generate_player_report_html(run_id: str, run_output_dir: str, player_rows: l
         num_tracks = row["num_tracks"]
         total_crops = row["total_crops"]
         
-        # Player summary row
-        html_content += f"""
-            <tr class="player-row">
-                <td class="summary-cell">Player {player_id}</td>
-                <td class="summary-cell">-</td>
-                <td class="summary-cell">{total_crops}</td>
-                <td class="summary-cell">-</td>
-                <td class="summary-cell">{num_tracks} tracks</td>
-                <td class="summary-cell">-</td>
-            </tr>
-"""
+        # Track detail rows with player ID in the first row
+        first_track = True
         
-        # Track detail rows
         for track_data in row["tracks"]:
             track_id = track_data["track_id"]
             frame_range = f"{track_data['frame_first_seen']}-{track_data['frame_last_seen']}"
             num_crops = track_data["num_crops"]
             team = track_data.get("team", "Unknown")
             
-            html_content += f"""
-            <tr class="track-row">
+            if first_track:
+                # First row shows player info and first tracker
+                html_content += f"""
+            <tr class="player-row">
+                <td rowspan="{num_tracks}" class="player-cell">Player {player_id}</td>
                 <td>Track {track_id}</td>
                 <td>{frame_range}</td>
                 <td>{num_crops}</td>
                 <td>{team}</td>
-                <td>-</td>
                 <td>
                     <div class="crop-gallery">
 """
+                first_track = False
+            else:
+                # Subsequent rows show only tracker info
+                html_content += f"""
+            <tr class="tracker-row">
+                <td>Track {track_id}</td>
+                <td>{frame_range}</td>
+                <td>{num_crops}</td>
+                <td>{team}</td>
+                <td>
+                    <div class="crop-gallery">
+"""
+            
             for crop_path in track_data["report_crop_paths"]:
                 html_content += f'                        <img src="{crop_path}" alt="Crop for player {player_id} track {track_id}">\n'
             html_content += """

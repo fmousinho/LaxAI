@@ -18,7 +18,7 @@ class CropExtractor:
     Each crop is saved in a directory named after the track_id.
     """
     
-    def __init__(self, frame_generator, all_detections: list[sv.Detections], temp_dir: str = detection_config.temp_dir, crop_extract_interval: int = detection_config.crop_extract_interval):
+    def __init__(self, frame_generator, all_detections: list[sv.Detections], temp_dir: str, crop_extract_interval: int = detection_config.crop_extract_interval):
         self.frame_generator = frame_generator
         self.all_detections = all_detections
         self.temp_dir = temp_dir

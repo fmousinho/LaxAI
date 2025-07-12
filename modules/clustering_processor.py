@@ -45,11 +45,11 @@ class ClusteringProcessor:
                  model_path: str,
                  all_crops_dir: str,
                  clustered_data_dir: str,
+                 temp_dir: str,
                  embedding_dim: int = model_config.embedding_dim,
                  batch_size: int = clustering_config.batch_size,
                  initial_dbscan_eps: float = clustering_config.dbscan_eps,
                  dbscan_min_samples: int = clustering_config.dbscan_min_samples,
-                 temp_dir: str = clustering_config.temp_dir,
                  device: torch.device = torch.device("cpu")):
         """
         Initialize the clustering processor.

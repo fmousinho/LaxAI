@@ -18,7 +18,6 @@ import logging
 from typing import Optional, List, Dict, Tuple
 from collections import Counter
 import numpy as np
-from tqdm import tqdm
 
 from modules.tracker import TrackData
 from modules.player import Player
@@ -254,7 +253,7 @@ def stitch_tracks(
     next_stitched_id = max(tracks_data.keys()) + 1
     
     # Process each track
-    for track_id, track_data in tqdm(sorted_tracks, desc="Stitching tracks"):
+    for track_id, track_data in sorted_tracks:
         if track_id in stitched_track_ids:
             continue  # Already stitched
         
@@ -448,7 +447,7 @@ def associate_tracks_to_players_greedy(
     # Sort tracks by first frame to process them chronologically
     sorted_tracks = sorted(tracks_data.items(), key=lambda x: x[1].frame_first_seen)
     
-    for track_id, track_data in tqdm(sorted_tracks, desc="Creating Players (Greedy)", total=len(sorted_tracks)):
+    for track_id, track_data in sorted_tracks:
         track_first_frame = track_data.frame_first_seen
         track_last_frame = track_data.frame_last_seen
         track_embedding = track_data.embedding

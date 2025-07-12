@@ -49,8 +49,6 @@ class LacrossePlayerDataset(Dataset):
         import logging
         logger = logging.getLogger(__name__)
         logger.info(f"Dataset initialized with {len(self.players)} players and {len(self.all_images)} total images")
-        for player in self.players:
-            logger.info(f"  Player {player}: {len(self.player_to_images[player])} images")
 
     def __len__(self):
         return len(self.all_images)

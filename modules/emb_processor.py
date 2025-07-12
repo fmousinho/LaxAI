@@ -264,7 +264,7 @@ class EmbeddingsProcessor:
         self.model.eval()
         embeddings_list = []
         
-        logger.info(f"Creating embeddings for {len(crops)} crops using batch size {batch_size}")
+        logger.debug(f"Creating embeddings for {len(crops)} crops using batch size {batch_size}")
         
         with torch.no_grad():
             for i in range(0, len(crops), batch_size):

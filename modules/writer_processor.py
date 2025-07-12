@@ -107,7 +107,7 @@ class VideoWriterProcessor:
             player = track_to_player.get(tid, None)
             
             if player is None:
-                logger.warning(f"Tracker ID {tid} has no associated Player object. Skipping annotation.")
+                logger.debug(f"Tracker ID {tid} has no associated Player object. Using placeholder annotation.")
                 detections.data["player_id"][i] = -1
                 detections.data["team_id"][i] = -1
                 labels.append("?")

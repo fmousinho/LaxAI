@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 # Local Application/Library
 import application as app
-from config import logging_config
+
 from tools import utils
 from tools.store_driver import Store
 from analyse import analyse as analyse_module
@@ -31,6 +31,9 @@ DEFAULT_TORCH_DEVICE = torch.device(
 )
 
 def main() -> int:
+
+    from config import logging_config
+    logger = logging.getLogger(__name__)
 
     # --- Argument Parsing ---
     parser = argparse.ArgumentParser(description="LaxAI Video Processing Application.")
@@ -156,5 +159,6 @@ def main() -> int:
         logger.info("---------- LaxAI Application Finished ----------")
 
 if __name__ == "__main__":
+
     exit_code = main()
     sys.exit(exit_code)

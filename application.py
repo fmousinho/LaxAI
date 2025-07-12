@@ -179,6 +179,7 @@ def run_application (
             model_path=embeddings_model_path,
             all_crops_dir=data_dir,
             clustered_data_dir=os.path.join(data_dir, "clustered"),
+            temp_dir=temp_dir,
             device=device
         )
 
@@ -244,6 +245,29 @@ def run_application (
         )
 
         logger.info(f"Player association complete: {len(players)} unique players from {len(tracks_data)} tracks")
+        
+        # --- Ensure all tracker IDs in detections have player mappings ---
+        all_tracker_ids_in_detections = set()
+        for detections in multi_frame_detections:
+            if detections.tracker_id is not None:
+                all_tracker_ids_in_detections.update(detections.tracker_id)
+        
+        missing_tracker_ids = all_tracker_ids_in_detections - set(track_to_player.keys())
+        if missing_tracker_ids:
+            logger.warning(f"Found {len(missing_tracker_ids)} tracker IDs in detections without player mappings")
+            # Create placeholder players for missing tracker IDs
+            for tid in missing_tracker_ids:
+                placeholder_player = Player(
+                    tracker_id=tid,
+                    initial_embedding=None,
+                    initial_crops=[],
+                    team=-1  # Unknown team
+                )
+                players.add(placeholder_player)
+                track_to_player[tid] = placeholder_player
+                logger.debug(f"Created placeholder player for missing tracker ID {tid}")
+            
+            logger.info(f"Created {len(missing_tracker_ids)} placeholder players for orphaned tracker IDs")
 
         # --- Write output video using stored detections and validated player info ---
 
