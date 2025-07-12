@@ -9,7 +9,7 @@ import json
 from modules.detection import DetectionModel
 from modules.tracker import AffineAwareByteTrack
 from modules.utils import log_progress
-from config.transforms_config import detection_config
+from config.all_config import detection_config
 
 logger = logging.getLogger(__name__)
 

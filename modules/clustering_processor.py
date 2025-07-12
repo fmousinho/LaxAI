@@ -11,7 +11,8 @@ import time
 import logging
 from typing import Optional
 from .utils import log_progress
-from config.transforms_config import get_transforms, model_config, clustering_config
+from config.transforms import get_transforms
+from config.all_config import model_config, clustering_config
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,7 @@ class ClusteringProcessor:
         if not os.path.exists(source_data_dir):
             raise FileNotFoundError(f"Source data directory does not exist: {source_data_dir}")
         
-        logger.info(f"Copying crops from individual tracker folders to {self.all_crops_dir}")
+        logger.info(f"Copying crops from individual tracker folders.")
         
         copied_count = 0
         for item in os.listdir(source_data_dir):
@@ -152,13 +153,12 @@ class ClusteringProcessor:
         """
         logger.info(f"Starting DBSCAN clustering on {embeddings.shape[0]} embeddings")
         logger.info(f"Embedding dimensions: {embeddings.shape[1]}")
-        logger.info(f"Parameters: eps={self.dbscan_eps}, min_samples={self.dbscan_min_samples}")
-        
+ 
+        logger.info(f"Parameters: eps={self.dbscan_eps:.4f}, min_samples={self.dbscan_min_samples}")        
         start_time = time.time()
         clustering = DBSCAN(eps=self.dbscan_eps, min_samples=self.dbscan_min_samples, 
                            metric='euclidean', n_jobs=-1)
         
-        logger.info("Running DBSCAN algorithm...")
         cluster_labels = clustering.fit_predict(embeddings)
         
         elapsed_time = time.time() - start_time
@@ -332,7 +332,7 @@ class ClusteringProcessor:
 
         while n_searches < _MAX_SEARCHES:
             n_searches += 1
-            logger.info(f"Testing eps={eps}, search #{n_searches}")
+            logger.info(f"Search #{n_searches}")
             self.dbscan_eps = eps
             cluster_labels = self.cluster_embeddings(embeddings)
             num_clusters = self._count_clusters(cluster_labels)

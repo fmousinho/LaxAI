@@ -5,9 +5,9 @@ from PIL import Image
 import os
 import random
 import numpy as np
-from config.transforms_config import get_transforms
+from config.transforms import get_transforms
 
-from config.transforms_config import training_config
+from config.all_config import training_config
 
 class LacrossePlayerDataset(Dataset):
     """
@@ -107,11 +107,19 @@ class LacrossePlayerDataset(Dataset):
         # Apply transformations
         if self.transform:
             try:
-                anchor_img = self.transform(anchor_img)
-                positive_img = self.transform(positive_img)
-                negative_img = self.transform(negative_img)
+                # Always convert PIL Images to numpy arrays for transforms
+                # This works with both regular and OpenCV-safe transforms
+                anchor_array = np.array(anchor_img)
+                positive_array = np.array(positive_img) 
+                negative_array = np.array(negative_img)
+                
+                anchor_img = self.transform(anchor_array)
+                positive_img = self.transform(positive_array)
+                negative_img = self.transform(negative_array)
             except Exception as e:
                 print(f"Error applying transforms: {e}")
+                print(f"Transform type: {type(self.transform)}")
+                print(f"Transform: {self.transform}")
                 # Return tensors without transforms as fallback
                 anchor_img = transforms.ToTensor()(anchor_img)
                 positive_img = transforms.ToTensor()(positive_img)

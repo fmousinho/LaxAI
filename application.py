@@ -1,6 +1,7 @@
 import logging
 from config.constants import LOGGING_LINE_SIZE
-from config.transforms_config import get_transforms, model_config
+from config.transforms import get_transforms
+from config.all_config import model_config, detection_config
 from modules.utils import log_progress
 from typing import Optional, List, Dict, Tuple
 import datetime
@@ -44,7 +45,7 @@ _TEAM_COLORS =  {
 def run_application (
         store: Store,
         input_video: str,
-        output_video_path: str = model_config.output_video_path,
+        output_video_path: str = detection_config.output_video_path,
         device: torch.device = torch.device("cpu"),
         debug_max_frames: Optional[int] = None,
         generate_report: bool = True,
@@ -131,7 +132,7 @@ def run_application (
             device=device
         )
         emb_proc.setup_model(SiameseNet, inference_only=True)  
-        inference_transforms = get_transforms('inference')
+        inference_transforms = get_transforms('opencv_safe')
         
         def embeddings_processor_with_transforms(crops):
             return emb_proc.create_embeddings_from_crops(
@@ -167,7 +168,7 @@ def run_application (
         track_train_processor.train_and_save(
             model_class=SiameseNet,
             dataset_class=LacrossePlayerDataset,
-            transform=get_transforms('training')
+            transform=get_transforms('opencv_safe_training')
         )
 
         # --- Cluster Tracks based on their similarity ---
@@ -203,7 +204,7 @@ def run_application (
         player_processor.train_and_save(
             model_class=SiameseNet,
             dataset_class=LacrossePlayerDataset,
-            transform=get_transforms('training')
+            transform=get_transforms('opencv_safe_training')
         )
 
         # --- Create embeddings for tracks using the trained model ---

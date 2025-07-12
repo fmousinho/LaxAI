@@ -1,9 +1,8 @@
 """
-Transform configurations for training and inference.
-Centralized location for all image preprocessing pipelines and module configurations.
+Configuration classes for training and inference.
+Centralized location for all hyperparameters and configuration settings.
 """
 
-import torchvision.transforms as transforms
 from dataclasses import dataclass, field
 from typing import Tuple, List, Optional
 import sys
@@ -15,6 +14,7 @@ class ModelConfig:
     input_height: int = 120
     input_width: int = 80
     embedding_dim: int = 512
+    dropout_rate: float = 0.5  # Dropout rate for regularization
     
     # ImageNet normalization values (for pretrained ResNet backbone)
     imagenet_mean: List[float] = field(default_factory=lambda: [0.485, 0.456, 0.406])
@@ -24,7 +24,7 @@ class ModelConfig:
 @dataclass
 class TrackerConfig:
     """Configuration for ByteTrack and tracking parameters."""
-    track_activation_threshold: float = 0.5
+    track_activation_threshold: float = 0.4
     lost_track_buffer: int = 5
     minimum_matching_threshold: float = 0.8
     minimum_consecutive_frames: int = 30
@@ -38,11 +38,13 @@ class TrainingConfig:
     learning_rate: float = 1e-3
     num_epochs: int = 20
     margin: float = 0.1
+    weight_decay: float = 1e-4  # L2 regularization weight decay
     model_save_path: str = 'lacrosse_reid_model.pth'
     train_ratio: float = 0.8
     min_images_per_player: int = 3
     num_workers: int = 4 if sys.platform != "darwin" else 0  # Number of DataLoader workers
     early_stopping_loss_ratio: float = 0.1  # Early stopping threshold as a ratio of margin
+    early_stopping_patience: Optional[int] = 5  # Number of epochs to wait before early stopping (None = disabled)
 
 
 @dataclass
@@ -55,6 +57,9 @@ class DetectionConfig:
     checkpoint_dir: str = "Colab_Notebooks"
     output_video_path: str = "results.mp4"
     crop_extract_interval: int = 5
+    # Color space handling
+    color_space: str = "RGB"  # Expected color space for processing
+    convert_bgr_to_rgb: bool = True  # Auto-convert OpenCV BGR to RGB
 
 
 @dataclass
@@ -88,7 +93,7 @@ class TrackStitchingConfig:
     stitch_similarity_threshold: float = 0.9
     max_time_gap: int = 60  # Maximum frame gap between tracklets
     appearance_weight: float = 1.0
-    temporal_weight: float = 0.5
+    temporal_weight: float = .1
     motion_weight: float = 0.1  # Future use for motion-based cost
 
 
@@ -115,75 +120,3 @@ clustering_config = ClusteringConfig()
 player_config = PlayerConfig()
 track_stitching_config = TrackStitchingConfig()
 transform_config = TransformConfig()
-
-
-def create_training_transforms():
-    """Create training transforms with data augmentation."""
-    return transforms.Compose([
-        transforms.Resize((model_config.input_height, model_config.input_width)),
-        transforms.RandomHorizontalFlip(p=transform_config.hflip_prob),
-        transforms.ColorJitter(
-            brightness=transform_config.colorjitter_brightness,
-            contrast=transform_config.colorjitter_contrast,
-            saturation=transform_config.colorjitter_saturation,
-            hue=transform_config.colorjitter_hue
-        ),
-        transforms.RandomRotation(transform_config.random_rotation_degrees),
-        transforms.RandomAffine(
-            degrees=transform_config.random_affine_degrees,
-            translate=transform_config.random_affine_translate
-        ),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=model_config.imagenet_mean, std=model_config.imagenet_std)
-    ])
-
-
-def create_inference_transforms():
-    """Create inference transforms without augmentation."""
-    return transforms.Compose([
-        transforms.Resize((model_config.input_height, model_config.input_width)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=model_config.imagenet_mean, std=model_config.imagenet_std)
-    ])
-
-
-def create_tensor_to_pil_transforms():
-    """Create transforms for converting tensor back to PIL Image."""
-    return transforms.Compose([
-        transforms.Normalize(mean=[0., 0., 0.], std=[1/s for s in model_config.imagenet_std]),
-        transforms.Normalize(mean=[-m for m in model_config.imagenet_mean], std=[1., 1., 1.]),
-        transforms.ToPILImage()
-    ])
-
-
-# Create transform instances
-training_transforms = create_training_transforms()
-inference_transforms = create_inference_transforms()
-validation_transforms = inference_transforms  # Same as inference
-tensor_to_pil = create_tensor_to_pil_transforms()
-
-# Dictionary for easy access to all transforms
-TRANSFORMS = {
-    'training': training_transforms,
-    'inference': inference_transforms,
-    'validation': validation_transforms,
-    'tensor_to_pil': tensor_to_pil
-}
-
-def get_transforms(mode='inference'):
-    """
-    Get transforms for the specified mode.
-    
-    Args:
-        mode (str): One of 'training', 'inference', 'validation', 'tensor_to_pil'
-        
-    Returns:
-        transforms.Compose: The requested transform pipeline
-        
-    Raises:
-        ValueError: If mode is not recognized
-    """
-    if mode not in TRANSFORMS:
-        raise ValueError(f"Unknown transform mode: {mode}. Available modes: {list(TRANSFORMS.keys())}")
-    
-    return TRANSFORMS[mode]

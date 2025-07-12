@@ -8,11 +8,11 @@ from PIL import Image
 from typing import Optional, Any, List
 
 from .utils import log_progress
-from config.transforms_config import model_config
+from config.all_config import model_config
 
 logger = logging.getLogger(__name__)
 
-from config.transforms_config import model_config, training_config
+from config.all_config import model_config, training_config
 
 class EmbeddingsProcessor:
     """
@@ -24,10 +24,10 @@ class EmbeddingsProcessor:
                  embedding_dim: int = model_config.embedding_dim,
                  learning_rate: float = training_config.learning_rate,
                  batch_size: int = training_config.batch_size,
-                 num_epochs: int = 20,
-                 margin: float = 1.0,
+                 num_epochs: int = training_config.num_epochs,
+                 margin: float = training_config.margin,
                  model_save_path: str = training_config.model_save_path,
-                 device: torch.device = torch.device("cpu")):
+                 device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')):
         """
         Initialize the embeddings processor with hyperparameters.
         
@@ -39,7 +39,7 @@ class EmbeddingsProcessor:
             num_epochs: Number of training epochs
             margin: Margin for triplet loss
             model_save_path: Path to save the trained model
-            device: Device to run the model on (defaults to CPU)
+            device: Device to run the model on (CPU, GPU, or MPS).
         """
         self.train_dir = train_dir
         self.embedding_dim = embedding_dim
@@ -109,7 +109,11 @@ class EmbeddingsProcessor:
         # Only setup training components if not loading pre-trained model
         if inference_only is False:
             self.loss_fn = nn.TripletMarginLoss(margin=self.margin, p=2)
-            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=1e-4)
+            self.optimizer = torch.optim.Adam(
+                self.model.parameters(), 
+                lr=self.learning_rate, 
+                weight_decay=getattr(training_config, 'weight_decay', 1e-4)
+            )
             logger.info(f"Model initialized for training and moved to device: {self.device}")
         else:
             self.model.eval()
@@ -131,7 +135,15 @@ class EmbeddingsProcessor:
         logger.info(f"Starting training for {self.num_epochs} epochs")
 
         early_stopping_threshold = training_config.early_stopping_loss_ratio * self.margin
+        early_stopping_patience = getattr(training_config, 'early_stopping_patience', None)
+        
         logger.info(f"Early stopping threshold set to {early_stopping_threshold:.4f}")
+        if early_stopping_patience is not None:
+            logger.info(f"Early stopping patience set to {early_stopping_patience} epochs")
+        
+        # Early stopping variables
+        best_loss = float('inf')
+        patience_counter = 0
         
         for epoch in range(self.num_epochs):
             self.model.train()
@@ -172,11 +184,24 @@ class EmbeddingsProcessor:
             logger.info(f"Average Loss: {epoch_loss:.4f}")
             logger.info("")
 
-            # Early stopping based on config value
-            
+            # Early stopping based on loss threshold
             if epoch_loss < early_stopping_threshold:
                 logger.info(f"Early stopping triggered (loss {epoch_loss:.4f} < threshold {early_stopping_threshold:.4f})")
                 break
+            
+            # Early stopping based on patience
+            if early_stopping_patience is not None:
+                if epoch_loss < best_loss:
+                    best_loss = epoch_loss
+                    patience_counter = 0
+                    logger.debug(f"New best loss: {best_loss:.4f}")
+                else:
+                    patience_counter += 1
+                    logger.debug(f"Patience counter: {patience_counter}/{early_stopping_patience}")
+                    
+                if patience_counter >= early_stopping_patience:
+                    logger.info(f"Early stopping triggered due to patience ({patience_counter} epochs without improvement)")
+                    break
 
         logger.info("Finished Training")
         return self.model
@@ -246,15 +271,17 @@ class EmbeddingsProcessor:
 
         # Apply transforms if provided
         if transform is not None:
-            crop_shapes = [crop.shape for crop in crops if hasattr(crop, 'shape')]
-            if crop_shapes and all(s == crop_shapes[0] for s in crop_shapes):
-                logger.warning(f"All crops are the same size. Transform may not be used correctly")
+            logger.debug(f"Applying transforms to {len(crops)} crops")
             transformed_crops = []
             for crop in crops:
-                pil_image = Image.fromarray(crop)
-                transformed_tensor = transform(pil_image)
+                # Apply transform directly to numpy array (OpenCV-safe transforms handle this)
+                transformed_tensor = transform(crop)
                 # Convert tensor back to numpy array
-                transformed_crops.append(transformed_tensor.numpy())
+                if hasattr(transformed_tensor, 'numpy'):
+                    transformed_crops.append(transformed_tensor.numpy())
+                else:
+                    # If it's already a numpy array
+                    transformed_crops.append(transformed_tensor)
             crops = transformed_crops
             use_manual_normalization = False  # Transforms already handle normalization
         else:

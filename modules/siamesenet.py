@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torchvision.models as models
 
-from config.transforms_config import model_config, training_config
+from config.all_config import model_config, training_config
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,7 @@ class SiameseNet(nn.Module):
         """
         super().__init__()
         self.embedding_dim = embedding_dim
+        self.dropout_rate = getattr(model_config, 'dropout_rate', 0.5)
         
         # Use a pre-trained ResNet, but remove its final classification layer
         self.backbone = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
@@ -42,11 +43,15 @@ class SiameseNet(nn.Module):
         # Get the number of features from the backbone's output
         num_ftrs = self.backbone.fc.in_features
         
-        # Replace the final layer with our embedding layer
-        self.backbone.fc = nn.Linear(num_ftrs, embedding_dim)
+        # Replace the final layer with our embedding layer including dropout
+        self.backbone.fc = nn.Sequential(
+            nn.Dropout(self.dropout_rate),
+            nn.Linear(num_ftrs, embedding_dim)
+        )
 
         logger.info(f"SiameseNet initialized with embedding dimension {embedding_dim}")
         logger.info(f"Using {self.backbone.__class__.__name__} as backbone")
+        logger.info(f"Dropout rate: {self.dropout_rate}")
         logger.info(f"First conv layer - kernel size: {self.backbone.conv1.kernel_size}, stride: {self.backbone.conv1.stride}")
 
         min_images_per_player=training_config.min_images_per_player

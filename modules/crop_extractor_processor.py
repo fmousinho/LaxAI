@@ -10,7 +10,8 @@ from .utils import log_progress
 
 logger = logging.getLogger(__name__)
 
-from config.transforms_config import detection_config
+from config.all_config import detection_config
+from config.transforms import ensure_rgb_format
 
 class CropExtractor:
     """
@@ -95,13 +96,14 @@ class CropExtractor:
                 x2 = max(x1 + 1, min(x2, frame_width))
                 y2 = max(y1 + 1, min(y2, frame_height))
                 # Extract crop and validate it's not empty
-                crop = frame[y1:y2, x1:x2]
+                crop_bgr = frame[y1:y2, x1:x2]
+                crop_rgb = ensure_rgb_format(crop_bgr, "BGR")
                 # Skip if crop is empty or too small
-                if crop.size == 0 or crop.shape[0] < 5 or crop.shape[1] < 5:
-                    logger.warning(f"Skipping invalid crop for tracker {tracker_id} at frame {frame_id}: bbox=({x1},{y1},{x2},{y2}), crop_shape={crop.shape}")
+                if crop_rgb.size == 0 or crop_rgb.shape[0] < 5 or crop_rgb.shape[1] < 5:
+                    logger.warning(f"Skipping invalid crop for tracker {tracker_id} at frame {frame_id}: bbox=({x1},{y1},{x2},{y2}), crop_shape={crop_rgb.shape}")
                     continue
                 # Track crop size (area in pixels), width, and height
-                crop_height, crop_width = crop.shape[0], crop.shape[1]
+                crop_height, crop_width = crop_rgb.shape[0], crop_rgb.shape[1]
                 crop_sizes.append(crop_height * crop_width)
                 crop_widths.append(crop_width)
                 crop_heights.append(crop_height)
@@ -112,8 +114,8 @@ class CropExtractor:
                 crop_filename = f"{frame_id}_{tracker_id}_{confidence:.3f}.jpg"
                 crop_path = os.path.join(tracker_dir, crop_filename)
                 # Validate crop before writing
-                if crop is not None and crop.size > 0:
-                    success = cv2.imwrite(crop_path, crop)
+                if crop_rgb is not None and crop_rgb.size > 0:
+                    success = cv2.imwrite(crop_path, crop_rgb)
                     if success:
                         total_crops_extracted += 1
                     else:
@@ -272,7 +274,9 @@ def create_train_val_split(source_folder: str, destin_folder: str, train_ratio: 
         destin_folder: Directory where train and val folders will be created
         train_ratio: Ratio of data to use for training (default: 0.8)
     """
-    logger.info(f"Creating train/val split from {source_folder} to {destin_folder}")
+    logger.info(f"Creating train/val split:")
+    logger.info(f" source: {source_folder}")
+    logger.info(f" destination:to {destin_folder}")
 
     # Verify source directory exists
     if not os.path.exists(source_folder):
@@ -318,7 +322,6 @@ def create_train_val_split(source_folder: str, destin_folder: str, train_ratio: 
             shutil.copy2(src, dst)
 
     logger.info(f"Crops split with {train_ratio*100:.0f}% for training and {100 - train_ratio*100:.0f}% for validation.")
-    logger.info(f"Train directory: {train_dir}")
-    logger.info(f"Validation directory: {val_dir}")
+
 
 

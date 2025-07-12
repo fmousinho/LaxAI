@@ -6,7 +6,7 @@ import numpy as np
 import supervision as sv
 import torch
 
-from config.transforms_config import tracker_config, model_config
+from config.all_config import tracker_config, model_config
 from modules.utils import l2_normalize_embedding
 
 
