@@ -41,13 +41,10 @@ _TEAM_COLORS =  {
     -1: (128, 128, 128)  # Gray for unknown
 }
 
-_PLAYER_CLASS_ID = 3
-
-
 def run_application (
         store: Store,
         input_video: str,
-        output_video_path: str = "results.mp4",
+        output_video_path: str = model_config.output_video_path,
         device: torch.device = torch.device("cpu"),
         debug_max_frames: Optional[int] = None,
         generate_report: bool = True,

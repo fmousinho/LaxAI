@@ -61,7 +61,7 @@ class DetectionConfig:
 class ClusteringConfig:
     """Configuration for clustering parameters."""
     batch_size: int = 128
-    num_workers: int = 4  # Number of DataLoader workers for clustering
+    num_workers: int = 4 if sys.platform != "darwin" else 0  
     dbscan_eps: float = 0.1
     dbscan_min_samples: int = 5
     # Target cluster range for adaptive search
@@ -85,11 +85,11 @@ class PlayerConfig:
 class TrackStitchingConfig:
     """Configuration for track stitching parameters."""
     enable_stitching: bool = True
-    stitch_similarity_threshold: float = 0.85
+    stitch_similarity_threshold: float = 0.9
     max_time_gap: int = 60  # Maximum frame gap between tracklets
     appearance_weight: float = 1.0
     temporal_weight: float = 0.5
-    motion_weight: float = 0.05
+    motion_weight: float = 0.1  # Future use for motion-based cost
 
 
 @dataclass

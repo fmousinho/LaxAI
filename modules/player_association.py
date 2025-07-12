@@ -100,7 +100,7 @@ def calculate_stitching_cost(
     # Combine costs
     total_cost = (appearance_weight * appearance_cost + 
                   temporal_weight * temporal_cost + 
-                  motion_weight * motion_cost)
+                  motion_weight * motion_cost) / (appearance_weight + temporal_weight)
     
     return total_cost
 
@@ -522,7 +522,7 @@ def associate_tracks_to_players_greedy(
 
 def associate_tracks_to_players_globally(
     tracks_data: Dict[int, TrackData], 
-    similarity_threshold: float = 0.96
+    similarity_threshold: float = player_config.reid_similarity_threshold
 ) -> Tuple[set[Player], Dict[int, Player]]:
     """
     Associate tracks to players using global optimization.

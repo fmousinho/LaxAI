@@ -4,7 +4,6 @@ from typing import Dict, List, Literal, Optional
 import numpy as np
 import supervision as sv
 from scipy.optimize import linear_sum_assignment
-from sklearn.metrics.pairwise import cosine_similarity
 
 from config.transforms_config import player_config
 
@@ -120,26 +119,6 @@ class Player:
             self.crops.append(crop)
         else:
             logger.warning(f"Attempted to add invalid crop to player {self.id}")
-
-    def get_similarity_to_embedding(self, other_embedding: np.ndarray) -> float:
-        """
-        Calculate cosine similarity between this player's embedding and another embedding.
-        
-        Args:
-            other_embedding: The embedding to compare against
-            
-        Returns:
-            Cosine similarity score between 0 and 1
-        """
-        if self.embeddings is None or other_embedding is None:
-            return 0.0
-        
-        # Reshape embeddings for sklearn cosine_similarity
-        emb1 = self.embeddings.reshape(1, -1)
-        emb2 = other_embedding.reshape(1, -1)
-        
-        similarity = cosine_similarity(emb1, emb2)[0][0]
-        return float(similarity)
 
     def __repr__(self) -> str:
         """Return a string representation of the Player."""

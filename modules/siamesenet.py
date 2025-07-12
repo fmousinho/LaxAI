@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torchvision.models as models
 
-from config.transforms_config import model_config
+from config.transforms_config import model_config, training_config
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,8 @@ class SiameseNet(nn.Module):
         logger.info(f"SiameseNet initialized with embedding dimension {embedding_dim}")
         logger.info(f"Using {self.backbone.__class__.__name__} as backbone")
         logger.info(f"First conv layer - kernel size: {self.backbone.conv1.kernel_size}, stride: {self.backbone.conv1.stride}")
+
+        min_images_per_player=training_config.min_images_per_player
 
     @property
     def device(self) -> torch.device:

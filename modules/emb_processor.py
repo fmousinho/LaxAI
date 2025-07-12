@@ -24,8 +24,8 @@ class EmbeddingsProcessor:
                  embedding_dim: int = model_config.embedding_dim,
                  learning_rate: float = training_config.learning_rate,
                  batch_size: int = training_config.batch_size,
-                 num_epochs: int = training_config.num_epochs,
-                 margin: float = training_config.margin,
+                 num_epochs: int = 20,
+                 margin: float = 1.0,
                  model_save_path: str = training_config.model_save_path,
                  device: torch.device = torch.device("cpu")):
         """
@@ -109,7 +109,7 @@ class EmbeddingsProcessor:
         # Only setup training components if not loading pre-trained model
         if inference_only is False:
             self.loss_fn = nn.TripletMarginLoss(margin=self.margin, p=2)
-            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
+            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=1e-4)
             logger.info(f"Model initialized for training and moved to device: {self.device}")
         else:
             self.model.eval()
@@ -217,10 +217,12 @@ class EmbeddingsProcessor:
             logger.error(f"Training failed: {str(e)}")
             raise
 
-    def create_embeddings_from_crops(self,
-                                    crops: List[np.ndarray], 
-                                    batch_size: int = 32,
-                                    transform: Optional[Any] = None) -> np.ndarray:
+    def create_embeddings_from_crops(
+        self,
+        crops: List[np.ndarray],
+        batch_size: int = training_config.batch_size,
+        transform: Optional[Any] = None
+    ) -> np.ndarray:
         """
         Creates embeddings from an array of crops using batch processing.
         
