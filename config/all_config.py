@@ -7,6 +7,12 @@ from dataclasses import dataclass, field
 from typing import Tuple, List, Optional
 import sys
 
+@dataclass
+class DebugConfig:
+    """Configuration for debugging and logging."""
+    bypass_player_creation: bool = True
+
+
 
 @dataclass
 class ModelConfig:
@@ -15,7 +21,8 @@ class ModelConfig:
     input_width: int = 80
     embedding_dim: int = 512
     dropout_rate: float = 0.5  # Dropout rate for regularization
-    
+    enable_grass_mask: bool = False  # Not fully implemented yet
+
     # ImageNet normalization values (for pretrained ResNet backbone)
     imagenet_mean: List[float] = field(default_factory=lambda: [0.485, 0.456, 0.406])
     imagenet_std: List[float] = field(default_factory=lambda: [0.229, 0.224, 0.225])
@@ -24,11 +31,16 @@ class ModelConfig:
 @dataclass
 class TrackerConfig:
     """Configuration for ByteTrack and tracking parameters."""
-    track_activation_threshold: float = 0.45
+    track_activation_threshold: float = 0.7
     lost_track_buffer: int = 5
     minimum_matching_threshold: float = 0.8
-    minimum_consecutive_frames: int = 15
+    minimum_consecutive_frames: int = 10
     crop_save_interval: int = 5
+    id_type: str = 'external'  # Type of ID to use ('internal' or 'external')
+    # Velocity transformation parameters
+    transform_velocities: bool = True  # Whether to transform velocities with affine matrix
+    scale_height_velocity: bool = True  # Whether to scale height velocity based on scaling factor
+    scaling_threshold: float = 0.1  # Minimum scale factor change to trigger height velocity scaling
 
 
 @dataclass
@@ -36,7 +48,7 @@ class TrainingConfig:
     """Configuration for training parameters."""
     batch_size: int = 64
     learning_rate: float = 1e-3
-    num_epochs: int = 20
+    num_epochs: int = 15
     margin: float = 0.1
     weight_decay: float = 1e-4  # L2 regularization weight decay
     model_save_path: str = 'lacrosse_reid_model.pth'
@@ -59,8 +71,7 @@ class DetectionConfig:
     crop_extract_interval: int = 5
     # Color space handling
     color_space: str = "RGB"  # Expected color space for processing
-    convert_bgr_to_rgb: bool = True  # Auto-convert OpenCV BGR to RGB
-    enable_grass_mask: bool = True  # Whether to apply grass masking during crop extraction
+    convert_bgr_to_rgb: bool = True  # Auto-convert OpenCV BGR to RG
 
 
 @dataclass
@@ -90,7 +101,8 @@ class PlayerConfig:
 @dataclass
 class TrackStitchingConfig:
     """Configuration for track stitching parameters."""
-    enable_stitching: bool = True
+    stich_tracks_after_tracker: bool = False
+    enable_stitching: bool = False
     stitch_similarity_threshold: float = 0.9
     max_time_gap: int = 60  # Maximum frame gap between tracklets
     appearance_weight: float = 1.0
@@ -121,3 +133,4 @@ clustering_config = ClusteringConfig()
 player_config = PlayerConfig()
 track_stitching_config = TrackStitchingConfig()
 transform_config = TransformConfig()
+debug_config = DebugConfig()

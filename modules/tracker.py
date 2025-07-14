@@ -192,7 +192,6 @@ class AffineAwareByteTrack(sv.ByteTrack):
 
     def __init__(
         self,
-        id_type: Literal['internal', 'external'] = 'internal',
         maintain_separate_track_obj: bool = True,
         crop_save_interval: int = 5,
     ) -> None:
@@ -200,7 +199,6 @@ class AffineAwareByteTrack(sv.ByteTrack):
         Initialize the AffineAwareByteTrack tracker.
         
         Args:
-            id_type: Type of ID to use ('internal' or 'external')
             maintain_separate_track_obj: Whether to maintain separate track objects
             crop_save_interval: Interval for saving crops
         """
@@ -212,7 +210,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
             minimum_consecutive_frames=tracker_config.minimum_consecutive_frames
         )
         self.track_data: dict[int, TrackData] = {}
-        self.id_type = id_type
+        self.id_type = tracker_config.id_type
         self.maintain_separate_track_obj = maintain_separate_track_obj
         self.crop_save_interval = crop_save_interval
         self.frame_count = 0
@@ -277,18 +275,22 @@ class AffineAwareByteTrack(sv.ByteTrack):
                 track.mean[2] = new_a
                 track.mean[3] = new_h
 
-                # Transform velocities instead of leaving them unchanged
+                # Extract 2x2 affine matrix for velocity transformations
                 affine_2x2 = affine_matrix[:2, :2]
-                velocity_xy = np.array([track.mean[4], track.mean[5]])
-                transformed_velocity_xy = affine_2x2 @ velocity_xy
 
-                track.mean[4] = transformed_velocity_xy[0]  # transformed vcx
-                track.mean[5] = transformed_velocity_xy[1]  # transformed vcy
+                # Transform velocities based on configuration
+                if tracker_config.transform_velocities:
+                    velocity_xy = np.array([track.mean[4], track.mean[5]])
+                    transformed_velocity_xy = affine_2x2 @ velocity_xy
+
+                    track.mean[4] = transformed_velocity_xy[0]  # transformed vcx
+                    track.mean[5] = transformed_velocity_xy[1]  # transformed vcy
 
                 # Optionally scale height velocity if there's significant scaling
-                scale_factor = np.sqrt(np.linalg.det(affine_2x2))
-                if abs(scale_factor - 1.0) > 0.1:  # Only if significant scaling
-                    track.mean[7] *= scale_factor
+                if tracker_config.scale_height_velocity:
+                    scale_factor = np.sqrt(np.linalg.det(affine_2x2))
+                    if abs(scale_factor - 1.0) > tracker_config.scaling_threshold:
+                        track.mean[7] *= scale_factor
 
                 # Reset the entire covariance matrix to reflect the new state's uncertainty,
                 # similar to KalmanFilter.initiate().

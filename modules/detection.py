@@ -63,6 +63,8 @@ class DetectionModel:
         
         if self._load_model():
             logger.info(f"Detection model '{self.model.__class__.__name__}' successfully initialized")
+            logger.info(f"Detection threshold: {detection_config.prediction_threshold}")
+            logger.info(f"Model loaded onto device: {self.device}")
         else:
             raise RuntimeError(f"Failed to load '{self.model_dict}' from '{self.model_dir}/{self.model_dict}'.")
 

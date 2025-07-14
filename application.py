@@ -1,7 +1,7 @@
 import logging
 from config.constants import LOGGING_LINE_SIZE
 from config.transforms import get_transforms
-from config.all_config import model_config, detection_config
+from config.all_config import model_config, detection_config, track_stitching_config, debug_config
 from modules.utils import log_progress
 from typing import Optional, List, Dict, Tuple
 import datetime
@@ -124,34 +124,30 @@ def run_application (
         crop_processor = CropExtractor(frames_generator, multi_frame_detections, TEMP_DIR)
         crop_processor.extract_crops()
 
+        # --- Setup inference transforms (used throughout the pipeline) ---
+        inference_transforms = get_transforms('opencv_safe')
 
         # --- Merging tracks based on similarity ---
 
-        emb_proc = EmbeddingsProcessor(
-            train_dir=crop_processor.get_all_crops_directory(),
-            device=device
-        )
-        emb_proc.setup_model(SiameseNet, inference_only=True)  
-        inference_transforms = get_transforms('opencv_safe')
-        
-        def embeddings_processor_with_transforms(crops):
-            return emb_proc.create_embeddings_from_crops(
-                crops=crops,
-                transform=inference_transforms
-            )
-       
-        tracker.create_embeddings_for_tracks(
-            embeddings_processor=embeddings_processor_with_transforms
-        )
+        if track_stitching_config.stich_tracks_after_tracker == True:
+            logger.info("Stiching tracks based on similarity")
 
-        tracks_data, multi_frame_detections, track_id_mapping = stitch_tracks(
-            tracks_data=tracker.get_tracks_data(), 
-            multi_frame_detections=multi_frame_detections)
-        
-        tracker.track_data = tracks_data  
-        logger.info("Reorganizing crops based on stitched tracks")
-        crop_processor.reorganize_crops_by_stitched_tracks(track_id_mapping)
-        logger.info(f"Stitching complete. Now {len(tracks_data)} tracks after stitching.")
+            # Create embeddings for tracks before stitching
+            create_track_embeddings(
+                tracker=tracker,
+                train_dir=crop_processor.get_all_crops_directory(),
+                device=device,
+                inference_only=True
+            )
+
+            tracks_data, multi_frame_detections, track_id_mapping = stitch_tracks(
+                tracks_data=tracker.get_tracks_data(), 
+                multi_frame_detections=multi_frame_detections)
+            
+            tracker.track_data = tracks_data  
+            logger.info("Reorganizing crops based on stitched tracks")
+            crop_processor.reorganize_crops_by_stitched_tracks(track_id_mapping)
+            logger.info(f"Stitching complete. Now {len(tracks_data)} tracks after stitching.")
 
 
         # --- Create train/val split using the standalone function ---
@@ -160,112 +156,43 @@ def run_application (
         data_dir = crop_processor.get_crops_directory()
         create_train_val_split(source_crops_dir, data_dir)
         
-        # --- Train Track Identifier ---
-
-        embeddings_model_path = os.path.join(data_dir, "embeddings_model.pth")
-        train_dir = os.path.join(data_dir, "train")
-        track_train_processor = EmbeddingsProcessor(train_dir=train_dir, model_save_path=embeddings_model_path, device=device)
-        track_train_processor.train_and_save(
-            model_class=SiameseNet,
-            dataset_class=LacrossePlayerDataset,
-            transform=get_transforms('opencv_safe_training')
-        )
-
-        # --- Cluster Tracks based on their similarity ---
-
-        clustering_processor = ClusteringProcessor(
-            model_path=embeddings_model_path,
-            all_crops_dir=data_dir,
-            clustered_data_dir=os.path.join(data_dir, "clustered"),
-            temp_dir=temp_dir,
-            device=device
-        )
-
-        num_clusters, num_images = clustering_processor.process_clustering_with_search(
-            model_class=SiameseNet,
-            source_data_dir=crop_processor.get_all_crops_directory()
-        )
-        
-        logger.info(f"Clustering complete: {num_clusters} clusters from {num_images} images")
-
-
-        # --- Prepare clustered images for retraining ---
-
-        player_crops_dir = clustering_processor.get_clustered_data_directory()
-        data_dir = os.path.join(player_crops_dir, "data")
-        create_train_val_split(player_crops_dir, data_dir)
-
-
-        # --- Train player identifier ---
-
-        embeddings_model_path = os.path.join(data_dir, "player_embeddings_model.pth")
-        player_train_dir = os.path.join(data_dir, "train")
-        player_processor = EmbeddingsProcessor(train_dir=player_train_dir, model_save_path=embeddings_model_path, device=device)
-        player_processor.train_and_save(
-            model_class=SiameseNet,
-            dataset_class=LacrossePlayerDataset,
-            transform=get_transforms('opencv_safe_training')
-        )
-
-        # --- Create embeddings for tracks using the trained model ---
-
-        logger.info("Creating embeddings for tracks using the trained model")
-        
-        player_emb_proc = EmbeddingsProcessor(
-            train_dir=os.path.join(data_dir, "train"), 
-            model_save_path=embeddings_model_path
-        )
-        
-        # Load the trained model for inference
-        player_emb_proc.setup_model(SiameseNet, inference_only=False)
-        
-        # Create a wrapper function that uses the EmbeddingsProcessor
-        def embeddings_processor_with_trained_model(crops):
-            return player_emb_proc.create_embeddings_from_crops(
-                crops=crops,
-                transform=inference_transforms
-            )
-        
-        # Create embeddings for tracks
-        tracker.create_embeddings_for_tracks(
-            embeddings_processor=embeddings_processor_with_trained_model,
-            device=device
-        )
-
-         # --- Analysing Tracks to Create Players  ---
+        # --- Analysing Tracks to Create Players  ---
 
         players: set[Player] = set()  # Set to store unique Player objects
         track_to_player: Dict[int, Player] = {}  # Mapping from tracker ID to Player object
         tracks_data = detection_processor.tracker.get_tracks_data()
 
-        players, track_to_player, multi_frame_detections = associate_tracks_to_players_with_stitching(
-            tracks_data, multi_frame_detections
-        )
-
-        logger.info(f"Player association complete: {len(players)} unique players from {len(tracks_data)} tracks")
-        
-        # --- Ensure all tracker IDs in detections have player mappings ---
-        all_tracker_ids_in_detections = set()
-        for detections in multi_frame_detections:
-            if detections.tracker_id is not None:
-                all_tracker_ids_in_detections.update(detections.tracker_id)
-        
-        missing_tracker_ids = all_tracker_ids_in_detections - set(track_to_player.keys())
-        if missing_tracker_ids:
-            logger.warning(f"Found {len(missing_tracker_ids)} tracker IDs in detections without player mappings")
-            # Create placeholder players for missing tracker IDs
-            for tid in missing_tracker_ids:
+        if not debug_config.bypass_player_creation:
+            players, track_to_player, multi_frame_detections = run_player_training_pipeline(
+                data_dir=data_dir,
+                crop_processor=crop_processor,
+                temp_dir=temp_dir,
+                device=device,
+                tracker=tracker,
+                tracks_data=tracks_data,
+                multi_frame_detections=multi_frame_detections
+            )
+        else:
+            logger.info("Bypassing player creation as per debug configuration.")
+            for track_id, track_data in tracks_data.items():
                 placeholder_player = Player(
-                    tracker_id=tid,
+                    tracker_id=track_id,
                     initial_embedding=None,
-                    initial_crops=[],
+                    initial_crops=track_data.crops if track_data else [],
                     team=-1  # Unknown team
                 )
                 players.add(placeholder_player)
-                track_to_player[tid] = placeholder_player
-                logger.debug(f"Created placeholder player for missing tracker ID {tid}")
-            
-            logger.info(f"Created {len(missing_tracker_ids)} placeholder players for orphaned tracker IDs")
+                track_to_player[track_id] = placeholder_player
+
+
+        
+        # --- Ensure all tracker IDs in detections have player mappings ---
+        
+        players, track_to_player = ensure_player_mappings(
+            multi_frame_detections=multi_frame_detections,
+            track_to_player=track_to_player,
+            players=players
+        )
 
         # --- Write output video using stored detections and validated player info ---
 
@@ -327,5 +254,195 @@ def run_application (
             logger.info(f"Found {len(player_rows)} players to report on.")
             reporting.generate_player_report_html(run_id, run_output_dir, player_rows)
             reporting.update_main_index_html()
+
+def create_track_embeddings(
+    tracker: AffineAwareByteTrack,
+    train_dir: str,
+    device: torch.device,
+    model_save_path: Optional[str] = None,
+    inference_only: bool = True
+) -> None:
+    """
+    Helper function to create embeddings for tracks using a trained model.
     
-    # No temp dir cleanup here; handled by main.py
+    Args:
+        tracker: The tracker containing track data
+        train_dir: Directory containing training data
+        device: Device to run inference on
+        model_save_path: Path to saved model (if None, uses train_dir for inference-only)
+        inference_only: Whether to load model in inference-only mode
+    """
+    logger.info("Creating embeddings for tracks using trained model")
+    
+    # Setup embeddings processor
+    emb_proc = EmbeddingsProcessor(
+        train_dir=train_dir,
+        model_save_path=model_save_path,
+        device=device
+    )
+    emb_proc.setup_model(SiameseNet, inference_only=inference_only)
+    
+    # Get inference transforms
+    inference_transforms = get_transforms('opencv_safe')
+    
+    # Create wrapper function for embeddings processor
+    def embeddings_processor_with_transforms(crops):
+        return emb_proc.create_embeddings_from_crops(
+            crops=crops,
+            transform=inference_transforms
+        )
+    
+    # Generate embeddings for all tracks
+    tracker.create_embeddings_for_tracks(
+        embeddings_processor=embeddings_processor_with_transforms,
+        device=device
+    )
+
+def ensure_player_mappings(
+    multi_frame_detections: List[sv.Detections],
+    track_to_player: Dict[int, Player],
+    players: set[Player]
+) -> Tuple[set[Player], Dict[int, Player]]:
+    """
+    Helper function to ensure all tracker IDs in detections have player mappings.
+    Creates placeholder players for any missing tracker IDs.
+    
+    Args:
+        multi_frame_detections: List of detections across all frames
+        track_to_player: Existing mapping from tracker ID to Player object
+        players: Set of existing Player objects
+        
+    Returns:
+        Tuple of (updated players set, updated track_to_player mapping)
+    """
+    # Collect all tracker IDs from detections
+    all_tracker_ids_in_detections = set()
+    for detections in multi_frame_detections:
+        if detections.tracker_id is not None:
+            all_tracker_ids_in_detections.update(detections.tracker_id)
+    
+    # Find missing tracker IDs
+    missing_tracker_ids = all_tracker_ids_in_detections - set(track_to_player.keys())
+    
+    if missing_tracker_ids:
+        logger.warning(f"Found {len(missing_tracker_ids)} tracker IDs in detections without player mappings")
+        
+        # Create placeholder players for missing tracker IDs
+        for tid in missing_tracker_ids:
+            placeholder_player = Player(
+                tracker_id=tid,
+                initial_embedding=None,
+                initial_crops=[],
+                team=-1  # Unknown team
+            )
+            players.add(placeholder_player)
+            track_to_player[tid] = placeholder_player
+            logger.debug(f"Created placeholder player for missing tracker ID {tid}")
+        
+        logger.info(f"Created {len(missing_tracker_ids)} placeholder players for orphaned tracker IDs")
+    
+    return players, track_to_player
+
+def run_player_training_pipeline(
+    data_dir: str,
+    crop_processor: CropExtractor,
+    temp_dir: str,
+    device: torch.device,
+    tracker: AffineAwareByteTrack,
+    tracks_data: Dict[int, TrackData],
+    multi_frame_detections: List[sv.Detections]
+) -> Tuple[set[Player], Dict[int, Player], List[sv.Detections]]:
+    """
+    Helper function to run the complete player training pipeline including:
+    - Track identifier training
+    - Clustering
+    - Player identifier training
+    - Track embeddings creation
+    - Player association
+    
+    Args:
+        data_dir: Base data directory for training
+        crop_processor: Crop extractor processor instance
+        temp_dir: Temporary directory path
+        device: PyTorch device for training
+        tracker: Tracker instance containing track data
+        tracks_data: Dictionary of track data
+        multi_frame_detections: List of detections across frames
+        
+    Returns:
+        Tuple of (players set, track_to_player mapping, updated multi_frame_detections)
+    """
+    logger.info("Starting player training pipeline")
+    
+    # --- Train Track Identifier ---
+    logger.info("Training track identifier model")
+    embeddings_model_path = os.path.join(data_dir, "embeddings_model.pth")
+    train_dir = os.path.join(data_dir, "train")
+    track_train_processor = EmbeddingsProcessor(
+        train_dir=train_dir, 
+        model_save_path=embeddings_model_path, 
+        device=device
+    )
+    track_train_processor.train_and_save(
+        model_class=SiameseNet,
+        dataset_class=LacrossePlayerDataset,
+        transform=get_transforms('opencv_safe_training')
+    )
+
+    # --- Cluster Tracks based on their similarity ---
+    logger.info("Clustering tracks based on similarity")
+    clustering_processor = ClusteringProcessor(
+        model_path=embeddings_model_path,
+        all_crops_dir=data_dir,
+        clustered_data_dir=os.path.join(data_dir, "clustered"),
+        temp_dir=temp_dir,
+        device=device
+    )
+
+    num_clusters, num_images = clustering_processor.process_clustering_with_search(
+        model_class=SiameseNet,
+        source_data_dir=crop_processor.get_all_crops_directory()
+    )
+    
+    logger.info(f"Clustering complete: {num_clusters} clusters from {num_images} images")
+
+    # --- Prepare clustered images for retraining ---
+    logger.info("Preparing clustered data for player training")
+    player_crops_dir = clustering_processor.get_clustered_data_directory()
+    player_data_dir = os.path.join(player_crops_dir, "data")
+    create_train_val_split(player_crops_dir, player_data_dir)
+
+    # --- Train player identifier ---
+    logger.info("Training player identifier model")
+    player_embeddings_model_path = os.path.join(player_data_dir, "player_embeddings_model.pth")
+    player_train_dir = os.path.join(player_data_dir, "train")
+    player_processor = EmbeddingsProcessor(
+        train_dir=player_train_dir, 
+        model_save_path=player_embeddings_model_path, 
+        device=device
+    )
+    player_processor.train_and_save(
+        model_class=SiameseNet,
+        dataset_class=LacrossePlayerDataset,
+        transform=get_transforms('opencv_safe_training')
+    )
+
+    # --- Create embeddings for tracks using the trained model ---
+    logger.info("Creating embeddings for tracks using trained player model")
+    create_track_embeddings(
+        tracker=tracker,
+        train_dir=player_train_dir,
+        device=device,
+        model_save_path=player_embeddings_model_path,
+        inference_only=False
+    )
+    
+    # --- Associate tracks to players ---
+    logger.info("Associating tracks to players")
+    players, track_to_player, updated_multi_frame_detections = associate_tracks_to_players_with_stitching(
+        tracks_data, multi_frame_detections
+    )
+    logger.info(f"Created {len(players)} players for {len(tracks_data)} tracks.")
+    
+    return players, track_to_player, updated_multi_frame_detections
+
