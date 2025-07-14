@@ -103,14 +103,14 @@ class DetectionProcessor:
 
         return multi_frame_detections
 
-    def json_to_detections(self, json_file_path: str, update_tracker_state: bool = True, video_source: str = None) -> List[sv.Detections]:
+    def json_to_detections(self, json_file_path: str, video_source: str, update_tracker_state: bool = True) -> List[sv.Detections]:
         """
         Load detections from a JSON file, and optionally updates the tracker internal state.
         
         Args:
             json_file_path: Path to the JSON file containing detections
             update_tracker_state: Whether to update the tracker's internal state with loaded detections
-            video_source: Path to the video file (required if update_tracker_state is True)
+            video_source: Path to the video file
 
         Returns:
             List of sv.Detections objects with loaded detections

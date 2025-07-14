@@ -98,19 +98,38 @@ class EmbeddingsProcessor:
         logger.info(f"Number of workers: {n_workers}")
         logger.info(f"Number of batches: {len(self.dataloader)}")
 
-    def setup_model(self, model_class, inference_only: bool = False):
+    def setup_model(self, model_class, inference_only: bool = False, force_pretrained: bool = False):
         """
         Setup the model, loss function, and optimizer. Required before training.
         
         Args:
             model_class: The model class to use (e.g., SiameseNet)
-            pretrained_path: Optional path to pre-trained weights to load
+            inference_only: If True, only setup for inference (no training components)
+            force_pretrained: If True, ignore saved weights and start with pre-trained backbone
         """
         self.model = model_class(embedding_dim=self.embedding_dim)
         
+        # Load existing weights if available and not forcing pre-trained
+        if os.path.exists(self.model_save_path) and not force_pretrained:
+            try:
+                self.model.load_state_dict(torch.load(self.model_save_path, map_location=self.device))
+                logger.info(f"✓ Loaded existing fine-tuned weights from {self.model_save_path}")
+                print(f"✓ Continuing training from existing model: {self.model_save_path}")
+            except Exception as e:
+                logger.warning(f"Failed to load existing weights from {self.model_save_path}: {e}")
+                logger.info("Falling back to pre-trained ResNet18 weights")
+                print(f"⚠ Could not load saved weights, using pre-trained ResNet18: {e}")
+        else:
+            if force_pretrained:
+                logger.info(f"Forcing fresh start with pre-trained ResNet18 weights")
+                print(f"🔄 Starting fresh with pre-trained ResNet18 backbone")
+            else:
+                logger.info(f"No existing model found at {self.model_save_path}, using pre-trained ResNet18 weights")
+                print(f"🆕 Starting training with pre-trained ResNet18 backbone")
+        
         self.model.to(self.device)
         
-        # Only setup training components if not loading pre-trained model
+        # Only setup training components if not in inference-only mode
         if inference_only is False:
             self.loss_fn = nn.TripletMarginLoss(margin=self.margin, p=2)
             self.optimizer = torch.optim.Adam(
@@ -118,10 +137,10 @@ class EmbeddingsProcessor:
                 lr=self.learning_rate, 
                 weight_decay=getattr(training_config, 'weight_decay', 1e-4)
             )
-            logger.info(f"Model initialized for training and moved to device: {self.device}")
+            logger.info(f"Model setup for training and moved to device: {self.device}")
         else:
             self.model.eval()
-            logger.info(f"Model loaded for inference and moved to device: {self.device}")
+            logger.info(f"Model setup for inference and moved to device: {self.device}")
 
     def train(self):
         """

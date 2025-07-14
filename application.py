@@ -1,5 +1,4 @@
 import logging
-from config.constants import LOGGING_LINE_SIZE
 from config.transforms import get_transforms
 from config.all_config import model_config, detection_config, track_stitching_config, debug_config
 from modules.utils import log_progress

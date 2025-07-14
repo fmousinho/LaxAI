@@ -50,7 +50,7 @@ class TrainingConfig:
     batch_size: int = 64
     learning_rate: float = 1e-3
     num_epochs: int = 15
-    margin: float = 0.1
+    margin: float = 0.5
     weight_decay: float = 1e-4  # L2 regularization weight decay
     model_save_path: str = 'lacrosse_reid_model.pth'
     train_ratio: float = 0.8
