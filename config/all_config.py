@@ -11,6 +11,7 @@ import sys
 class DebugConfig:
     """Configuration for debugging and logging."""
     bypass_player_creation: bool = True
+    save_detections_file: Optional[str] = "tracks.json"  # Path to save detections JSON file (None = disabled)
 
 
 

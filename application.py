@@ -95,7 +95,10 @@ def run_application (
 
     # --- Generate or load detections and tracks for each frame ---
     frames_generator = sv.get_video_frames_generator(**generator_params)
-    detection_save_path = os.path.join(TEMP_DIR, "detections.json")
+    if debug_config.save_detections_file:
+        detection_save_path = debug_config.save_detections_file
+    else:
+        detection_save_path = os.path.join(TEMP_DIR, "detections.json")
     detection_processor = DetectionProcessor(detection_model, tracker, detection_save_path)
 
     if detections_import_path and os.path.exists(detections_import_path):
