@@ -123,6 +123,11 @@ class TransformConfig:
     random_rotation_degrees: int = 10
     random_affine_degrees: int = 0
     random_affine_translate: Tuple[float, float] = (0.1, 0.1)
+    
+    # Background removal configuration
+    enable_background_removal: bool = False  # Global flag to enable/disable background removal
+    background_detector_sample_frames: int = 5  # Frames to use for background detector training
+    background_detector_auto_train: bool = True  # Whether to auto-train detector from sample images
 
 
 @dataclass
