@@ -127,6 +127,13 @@ def run_application (
         crop_processor.extract_crops()
 
         # --- Setup inference transforms (used throughout the pipeline) ---
+        transform_config.enable_background_removal = True
+        stride = video_info.total_frames // transform_config.background_detector_sample_frames
+        grass_crop_generator = sv.get_video_frames_generator(**generator_params, stride=stride )        
+        sample_images = [frame for frame in grass_crop_generator]
+        initialize_background_removal(sample_images)
+        refresh_transform_instances()
+
         inference_transforms = get_transforms('opencv_safe')
 
         # --- Merging tracks based on similarity ---

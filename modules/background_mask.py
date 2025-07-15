@@ -68,7 +68,7 @@ class BackgroundMaskDetector:
         Initialize the background mask detector.
         
         Args:
-            frame_generator: Generator that yields RGB frames from video
+            frame_generator: Generator that yields BGR frames from video
             config: BackgroundMaskConfig instance (uses global config if None)
             **kwargs: Override any config parameters (sample_frames, std_dev_multiplier, 
                      replacement_color, verbose, top_crop_ratio, bottom_crop_ratio, etc.)
@@ -102,7 +102,7 @@ class BackgroundMaskDetector:
         Analyze frames to detect the dominant background color.
         
         Args:
-            frame_generator: Generator that yields RGB frames
+            frame_generator: Generator that yields BGR frames from video
         """
         if self.verbose:
             print("Analyzing frames for background color detection...")
@@ -113,7 +113,12 @@ class BackgroundMaskDetector:
         
         try:
             for frame in frame_generator:
-                frames.append(frame)
+                # Convert BGR to RGB for consistent processing
+                if len(frame.shape) == 3 and frame.shape[2] == 3:
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                else:
+                    rgb_frame = frame  # Handle grayscale or other formats
+                frames.append(rgb_frame)
                 frame_count += 1
         except Exception as e:
             if self.verbose:
@@ -141,7 +146,7 @@ class BackgroundMaskDetector:
             if self.verbose:
                 print(f"Processing frame {i+1}/{len(selected_frames)}")
             
-            # Remove top half and bottom 10%
+            # Remove top and bottom portions based on config
             h, w = frame.shape[:2]
             top_crop = int(h * self.top_crop_ratio)  # Remove top portion based on config
             bottom_crop = int(h * (1.0 - self.bottom_crop_ratio))  # Keep portion based on config
@@ -151,7 +156,7 @@ class BackgroundMaskDetector:
             if cropped_frame.size == 0:
                 continue
             
-            # Convert to HSV
+            # Convert RGB to HSV for color analysis
             hsv_frame = cv2.cvtColor(cropped_frame, cv2.COLOR_RGB2HSV)
             
             # Reshape to get all pixels
@@ -186,18 +191,55 @@ class BackgroundMaskDetector:
             print(f"  Upper bound: {self.upper_bound}")
             print(f"  Replacement color (RGB): {self.replacement_color}")
     
-    def remove_background(
-        self, 
-        images: Union[np.ndarray, List[np.ndarray]]
-    ) -> Union[np.ndarray, List[np.ndarray]]:
+    def _convert_to_rgb(self, image: np.ndarray, input_format: str = 'BGR') -> np.ndarray:
         """
-        Remove background from RGB image(s) based on detected background color.
+        Convert image to RGB format for consistent processing.
         
         Args:
-            images: Single RGB image or list of RGB images
+            image: Input image array
+            input_format: Input format ('BGR' or 'RGB')
             
         Returns:
-            Processed image(s) with background removed
+            Image in RGB format
+        """
+        if len(image.shape) != 3 or image.shape[2] != 3:
+            return image  # Return as-is for non-color images
+        
+        if input_format == 'BGR':
+            return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        else:
+            return image  # Already RGB
+    
+    def _detect_color_format(self, image: np.ndarray) -> str:
+        """
+        Attempt to detect if image is in BGR or RGB format.
+        
+        This is a heuristic approach - it's better to explicitly specify the format.
+        
+        Args:
+            image: Input image array
+            
+        Returns:
+            'BGR' or 'RGB' based on heuristic analysis
+        """
+        # This is a simple heuristic - in practice, you should know your input format
+        # For now, we'll assume most inputs are BGR (typical OpenCV format)
+        return 'BGR'
+    
+    def remove_background(
+        self, 
+        images: Union[np.ndarray, List[np.ndarray]],
+        input_format: str = 'BGR'
+    ) -> Union[np.ndarray, List[np.ndarray]]:
+        """
+        Remove background from image(s) based on detected background color.
+        
+        Args:
+            images: Single image or list of images
+            input_format: Format of input images ('BGR' or 'RGB')
+            
+        Returns:
+            Processed image(s) with background removed (same format as input)
         """
         if self.mean_hsv is None or self.lower_bound is None or self.upper_bound is None:
             raise ValueError("Background color not detected. Initialize detector first.")
@@ -215,17 +257,26 @@ class BackgroundMaskDetector:
                 processed_images.append(img)
                 continue
             
-            # Convert to HSV
-            hsv_img = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+            # Convert to RGB for consistent processing
+            rgb_img = self._convert_to_rgb(img, input_format)
+            
+            # Convert RGB to HSV for color analysis
+            hsv_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2HSV)
             
             # Create mask for background pixels
             mask = cv2.inRange(hsv_img, self.lower_bound, self.upper_bound)
             
-            # Create output image
+            # Create output image (keep in original format)
             result = img.copy()
             
-            # Replace background pixels with replacement color
-            result[mask > 0] = self.replacement_color
+            # Convert replacement color to match input format
+            if input_format == 'BGR':
+                # Convert RGB replacement color to BGR
+                replacement_bgr = self.replacement_color[::-1]  # Reverse RGB to BGR
+                result[mask > 0] = replacement_bgr
+            else:
+                # Input is RGB, use replacement color as-is
+                result[mask > 0] = self.replacement_color
             
             processed_images.append(result)
         
@@ -237,13 +288,15 @@ class BackgroundMaskDetector:
     
     def get_background_mask(
         self, 
-        images: Union[np.ndarray, List[np.ndarray]]
+        images: Union[np.ndarray, List[np.ndarray]],
+        input_format: str = 'BGR'
     ) -> Union[np.ndarray, List[np.ndarray]]:
         """
         Get binary mask(s) indicating background pixels.
         
         Args:
-            images: Single RGB image or list of RGB images
+            images: Single image or list of images
+            input_format: Format of input images ('BGR' or 'RGB')
             
         Returns:
             Binary mask(s) where 255 = background, 0 = foreground
@@ -264,8 +317,11 @@ class BackgroundMaskDetector:
                 masks.append(None)
                 continue
             
-            # Convert to HSV
-            hsv_img = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+            # Convert to RGB for consistent processing
+            rgb_img = self._convert_to_rgb(img, input_format)
+            
+            # Convert RGB to HSV for color analysis
+            hsv_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2HSV)
             
             # Create mask for background pixels
             mask = cv2.inRange(hsv_img, self.lower_bound, self.upper_bound)
@@ -360,7 +416,7 @@ def create_frame_generator_from_video(video_path: str) -> Generator[np.ndarray, 
         video_path: Path to the video file
         
     Yields:
-        RGB frames from the video
+        BGR frames from the video (OpenCV default format)
     """
     cap = cv2.VideoCapture(video_path)
     
@@ -370,26 +426,32 @@ def create_frame_generator_from_video(video_path: str) -> Generator[np.ndarray, 
             if not ret:
                 break
             
-            # Convert BGR to RGB
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            yield rgb_frame
+            # OpenCV reads in BGR format by default
+            yield frame
     
     finally:
         cap.release()
 
 
-def create_frame_generator_from_images(images: List[np.ndarray]) -> Generator[np.ndarray, None, None]:
+def create_frame_generator_from_images(images: List[np.ndarray], input_format: str = 'RGB') -> Generator[np.ndarray, None, None]:
     """
-    Create a frame generator from a list of RGB images.
+    Create a frame generator from a list of images.
     
     Args:
-        images: List of RGB images
+        images: List of images
+        input_format: Format of input images ('BGR' or 'RGB')
         
     Yields:
-        RGB frames from the list
+        BGR frames for consistency with video generator
     """
     for img in images:
-        yield img
+        if input_format == 'RGB':
+            # Convert RGB to BGR for consistency
+            bgr_img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            yield bgr_img
+        else:
+            # Already BGR
+            yield img
 
 
 # Example usage

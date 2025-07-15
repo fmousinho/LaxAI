@@ -30,8 +30,7 @@ class EmbeddingsProcessor:
                  num_epochs: int = training_config.num_epochs,
                  margin: float = training_config.margin,
                  model_save_path: str = training_config.model_save_path,
-                 device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'),
-                 grass_mask: bool = model_config.enable_grass_mask):
+                 device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')):
         """
         Initialize the embeddings processor with hyperparameters.
         
@@ -52,7 +51,6 @@ class EmbeddingsProcessor:
         self.num_epochs = num_epochs
         self.margin = margin
         self.model_save_path = model_save_path
-        self.grass_masker = grass_mask  # Not fully implemented yet
         self.device = device
 
         self.model = None
@@ -303,13 +301,8 @@ class EmbeddingsProcessor:
             crops = transformed_crops
             use_manual_normalization = False  # Transforms already handle normalization
         else:
-            # Apply grass masking if available and no transforms
-            if self.grass_masker is not None:
-                logger.debug(f"Applying grass masking to {len(crops)} crops")
-                crops = [self.grass_masker(crop) for crop in crops]
             use_manual_normalization = True  # Need to normalize manually
             
-        # Check if all crops are the same size
         
 
         self.model.eval()
@@ -363,142 +356,4 @@ class EmbeddingsProcessor:
             logger.warning("No embeddings were created")
             return np.array([])
 
-    def create_grass_masker(self, frame_generator) -> Callable[[np.ndarray], np.ndarray]:
-        """
-        Creates a grass masking function by analyzing frame samples to determine grass color ranges.
-        
-        Analyzes the top 50% and bottom 10% of 5 equally separated frames to determine grass color
-        statistics, then returns a callable that masks grass-colored pixels to white.
-        
-        Args:
-            frame_generator: Generator yielding video frames
-            
-        Returns:
-            Callable that takes a crop and returns the same crop with grass pixels turned white
-        """
-        logger.info("Creating grass masker by analyzing frame samples...")
-        
-        # Convert generator to list to allow indexing
-        frames = list(frame_generator)
-        total_frames = len(frames)
-        
-        if total_frames < 5:
-            logger.warning(f"Not enough frames ({total_frames}) for grass analysis. Using first frame only.")
-            sample_indices = [0]
-        else:
-            # Select 5 equally separated frames
-            sample_indices = [int(i * total_frames / 5) for i in range(5)]
-        
-        grass_colors = []
-        
-        for idx in sample_indices:
-            frame = frames[idx]
-            frame_height, frame_width = frame.shape[:2]
-            
-            # Extract top 50% and bottom 10% regions
-            top_region = frame[:frame_height//2, :]  # Top 50%
-            bottom_start = int(frame_height * 0.9)
-            bottom_region = frame[bottom_start:, :]  # Bottom 10%
-            
-            # Combine regions for grass analysis
-            grass_regions = [top_region, bottom_region]
-            
-            for region in grass_regions:
-                if region.size > 0:
-                    # Convert BGR to RGB first, then to HSV
-                    region_rgb = ensure_rgb_format(region, "BGR")
-                    region_hsv = cv2.cvtColor(region_rgb, cv2.COLOR_RGB2HSV)
-                    
-                    # Reshape to get all pixels as rows
-                    pixels_hsv = region_hsv.reshape(-1, 3)
-                    
-                    # Filter for green-ish hues (grass colors)
-                    # HSV hue range: 0-179, typical grass is around 40-80 (green spectrum)
-                    hue = pixels_hsv[:, 0]
-                    saturation = pixels_hsv[:, 1]
-                    value = pixels_hsv[:, 2]
-                    
-                    # Filter for grass-like colors:
-                    # - Hue in green range (30-90)
-                    # - Moderate to high saturation (40-255) to avoid grays
-                    # - Moderate brightness (30-200) to avoid shadows and highlights
-                    grass_mask = (
-                        (hue >= 30) & (hue <= 90) &          # Green hue range
-                        (saturation >= 40) & (saturation <= 255) &  # Avoid desaturated colors
-                        (value >= 30) & (value <= 200)       # Avoid very dark/bright
-                    )
-                    
-                    filtered_pixels_hsv = pixels_hsv[grass_mask]
-                    
-                    if len(filtered_pixels_hsv) > 0:
-                        grass_colors.append(filtered_pixels_hsv)
-        
-        if not grass_colors:
-            logger.warning("No grass colors found in frame analysis. Masking will be disabled.")
-            return lambda crop: crop
-        
-        # Combine all grass color samples
-        all_grass_pixels_hsv = np.vstack(grass_colors)
-        
-        # Calculate mean and standard deviation for each HSV channel
-        grass_mean_hsv = np.mean(all_grass_pixels_hsv, axis=0)
-        grass_std_hsv = np.std(all_grass_pixels_hsv, axis=0)
-        
-        # Define bounds: mean ± 1 standard deviation
-        lower_bound_hsv = grass_mean_hsv - grass_std_hsv
-        upper_bound_hsv = grass_mean_hsv + grass_std_hsv
-        
-        # Ensure bounds are within valid HSV range
-        # H: 0-179, S: 0-255, V: 0-255
-        lower_bound_hsv = np.clip(lower_bound_hsv, [0, 0, 0], [179, 255, 255])
-        upper_bound_hsv = np.clip(upper_bound_hsv, [0, 0, 0], [179, 255, 255])
-        
-        # Convert mean HSV back to RGB for logging
-        mean_hsv_reshaped = grass_mean_hsv.reshape(1, 1, 3).astype(np.uint8)
-        mean_rgb = cv2.cvtColor(mean_hsv_reshaped, cv2.COLOR_HSV2RGB)[0, 0]
-        
-        logger.info(f"Grass color analysis complete (HSV-based):")
-        logger.info(f"  Mean HSV: ({grass_mean_hsv[0]:.1f}, {grass_mean_hsv[1]:.1f}, {grass_mean_hsv[2]:.1f})")
-        logger.info(f"  Mean RGB equivalent: ({mean_rgb[0]}, {mean_rgb[1]}, {mean_rgb[2]})")
-        logger.info(f"  Std HSV: ({grass_std_hsv[0]:.1f}, {grass_std_hsv[1]:.1f}, {grass_std_hsv[2]:.1f})")
-        logger.info(f"  HSV Lower bound: ({lower_bound_hsv[0]:.1f}, {lower_bound_hsv[1]:.1f}, {lower_bound_hsv[2]:.1f})")
-        logger.info(f"  HSV Upper bound: ({upper_bound_hsv[0]:.1f}, {upper_bound_hsv[1]:.1f}, {upper_bound_hsv[2]:.1f})")
-        
-        def grass_mask_function(crop):
-            """
-            Masks grass-colored pixels in a crop by turning them white.
-            
-            Args:
-                crop: Input crop as numpy array (assumed to be RGB)
-                
-            Returns:
-                Crop with grass pixels turned white
-            """
-            if crop.size == 0:
-                return crop
-            
-            # Ensure crop is in RGB format
-            crop_rgb = ensure_rgb_format(crop, "RGB")  # Assume input is already RGB
-            
-            # Convert crop to HSV for color-based masking
-            crop_hsv = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2HSV)
-            
-            # Create mask for grass colors in HSV space
-            # Check if each pixel falls within the grass HSV bounds
-            mask = np.all((crop_hsv >= lower_bound_hsv) & (crop_hsv <= upper_bound_hsv), axis=2)
-            
-            # Create output crop (copy to avoid modifying original)
-            masked_crop = crop_rgb.copy()
-            
-            # Set grass pixels to white (255, 255, 255)
-            masked_crop[mask] = [255, 255, 255]
-            
-            return masked_crop
-        
-        # Store the grass masker function
-        self.grass_masker = grass_mask_function
-        logger.info("Grass masker created and stored in EmbeddingsProcessor")
-        
-        return grass_mask_function
-
-    # ...existing code...
+   

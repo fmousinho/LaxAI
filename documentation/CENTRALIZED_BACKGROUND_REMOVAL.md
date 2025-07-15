@@ -38,7 +38,7 @@ class TransformConfig:
     # ... existing parameters ...
     
     # Background removal configuration
-    enable_background_removal: bool = False  # Global enable/disable flag
+    enable_background_removal: bool = True  # Global enable/disable flag
     background_detector_sample_frames: int = 5  # Frames for detector training
     background_detector_auto_train: bool = True  # Auto-train detector
 ```
