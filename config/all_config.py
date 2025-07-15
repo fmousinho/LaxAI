@@ -125,6 +125,29 @@ class TransformConfig:
     random_affine_translate: Tuple[float, float] = (0.1, 0.1)
 
 
+@dataclass
+class BackgroundMaskConfig:
+    """Configuration for background mask detection and removal."""
+    # Background detection parameters
+    sample_frames: int = 5  # Number of frames to sample for background detection
+    std_dev_multiplier: float = 1.0  # Number of standard deviations for color bounds
+    replacement_color: Tuple[int, int, int] = (255, 255, 255)  # RGB color to replace background with (white)
+    verbose: bool = True  # Whether to print progress information
+    
+    # Frame processing parameters
+    top_crop_ratio: float = 0.5  # Remove top 50% of frame
+    bottom_crop_ratio: float = 0.1  # Remove bottom 10% of frame
+    
+    # HSV color space limits
+    hsv_min_values: Tuple[int, int, int] = (0, 0, 0)  # Minimum HSV values
+    hsv_max_values: Tuple[int, int, int] = (179, 255, 255)  # Maximum HSV values
+    
+    # Default bounds adjustment settings
+    default_std_multiplier: float = 1.0  # Default std deviation multiplier
+    min_std_multiplier: float = 0.1  # Minimum allowed std deviation multiplier
+    max_std_multiplier: float = 3.0  # Maximum allowed std deviation multiplier
+
+
 # Global config instances - these can be imported and used directly
 model_config = ModelConfig()
 tracker_config = TrackerConfig()
@@ -134,4 +157,5 @@ clustering_config = ClusteringConfig()
 player_config = PlayerConfig()
 track_stitching_config = TrackStitchingConfig()
 transform_config = TransformConfig()
+background_mask_config = BackgroundMaskConfig()
 debug_config = DebugConfig()
