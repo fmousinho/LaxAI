@@ -38,11 +38,7 @@ def augment_images(images: List[np.ndarray]) -> List[np.ndarray]:
             continue
             
         h, w = img.shape[:2]
-        
-        # Skip images that are too small for meaningful augmentation
-        if h < 20 or w < 20:
-            augmented_images.append(img.copy())
-            continue
+
         
         # Original image
         augmented_images.append(img.copy())
@@ -110,17 +106,17 @@ def augment_images(images: List[np.ndarray]) -> List[np.ndarray]:
         occ_size = min(15, max(5, min(h, w) // 5))
         
         # Only add occlusion if image is large enough
-        if h > occ_size and w > occ_size:
-            num_occlusions = random.randint(3, 10)  # 3-10 occlusions per image
-            for _ in range(OCC_SAMPLES):
-                occluded = img.copy()
-                for _ in range(num_occlusions):
-                    occ_y = random.randint(0, h - occ_size)
-                    occ_x = random.randint(0, w - occ_size)
-                    # Fill with random color
-                    random_color = [random.randint(0, 255) for _ in range(3)]
-                    occluded[occ_y:occ_y + occ_size, occ_x:occ_x + occ_size] = random_color
-                augmented_images.append(occluded.copy())
+     
+        num_occlusions = random.randint(3, 10)  # 3-10 occlusions per image
+        for _ in range(OCC_SAMPLES):
+            occluded = img.copy()
+            for _ in range(num_occlusions):
+                occ_y = random.randint(0, h - occ_size)
+                occ_x = random.randint(0, w - occ_size)
+                # Fill with random color
+                random_color = [random.randint(0, 255) for _ in range(3)]
+                occluded[occ_y:occ_y + occ_size, occ_x:occ_x + occ_size] = random_color
+            augmented_images.append(occluded.copy())
         
         # 6. Noise (Gaussian noise)
         noise = np.random.normal(0, 15, img.shape).astype(np.int16)
