@@ -48,6 +48,8 @@ from typing import List, Union, Tuple, Generator, Optional
 import logging
 from config.all_config import background_mask_config, BackgroundMaskConfig
 
+logger = logging.getLogger(__name__)
+
 
 class BackgroundMaskDetector:
     """
@@ -96,6 +98,7 @@ class BackgroundMaskDetector:
         
         # Detect background color from frames
         self._detect_background_color(frame_generator)
+        logger.info("BackgroundMaskDetector initialized successfully.")
     
     def _detect_background_color(self, frame_generator: Generator[np.ndarray, None, None]):
         """
@@ -105,8 +108,8 @@ class BackgroundMaskDetector:
             frame_generator: Generator that yields BGR frames from video
         """
         if self.verbose:
-            print("Analyzing frames for background color detection...")
-        
+            logger.info("Analyzing frames for background color detection...")
+
         # Collect frames from the generator
         frames = []
         frame_count = 0

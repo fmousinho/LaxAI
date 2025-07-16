@@ -173,40 +173,7 @@ def test_augmentation() -> List[np.ndarray]:
     return augmented
 
 
-def augment_images_with_config(
-    images: List[np.ndarray], 
-    config: dict = None
-) -> List[np.ndarray]:
-    """
-    Perform augmentations with configurable parameters.
-    
-    Args:
-        images: List of RGB numpy arrays (images)
-        config: Configuration dictionary with augmentation parameters
-        
-    Returns:
-        List of augmented RGB numpy arrays
-    """
-    # Default configuration
-    default_config = {
-        'rotation_angles': [20, -20],
-        'stretch_factor': 1.1,
-        'crop_ratios': [0.8, 0.85, 0.9],
-        'occlusion_samples': 3,
-        'noise_std': 15,
-        'saturation_reduce': 0.7,
-        'brightness_reduce': 0.6,
-        'saturation_increase': 1.3,
-        'brightness_slight_reduce': 0.9
-    }
-    
-    # Merge with provided config
-    if config:
-        default_config.update(config)
-    
-    # Use the updated config for augmentation
-    # This is a simplified version - could be expanded to use all config parameters
-    return augment_images(images)
+
 
 
 if __name__ == "__main__":

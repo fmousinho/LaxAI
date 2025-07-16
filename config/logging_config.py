@@ -1,8 +1,22 @@
 import logging.config
 import sys
 import time
+from .constants import LOGGING_LINE_SIZE
 
-LOGGING_LINE_SIZE = 100
+def _is_notebook() -> bool:
+    """Check if the code is running in a Jupyter-like environment."""
+    try:
+        # Check for Google Colab
+        if 'google.colab' in sys.modules:
+            return True
+        # Check for Jupyter, an 'ipython' console does not count.
+        # get_ipython is a builtin in IPython environments.
+        shell = get_ipython().__class__.__name__
+        if shell == 'ZMQInteractiveShell':
+            return True   # Jupyter notebook, JupyterLab, qtconsole
+        return False
+    except NameError:
+        return False      # Not in an IPython-like environment
 
 class PipeFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
@@ -45,8 +59,8 @@ LOGGING = {
     "loggers": {"": {"handlers": ["stdout"], "level": "INFO"}},
 }
 
-# Detect if running in a terminal (not piped/redirected)
-if sys.stdout.isatty():
+# Detect if running in a terminal (not piped/redirected) or a notebook
+if sys.stdout.isatty() or _is_notebook():
     LOGGING["handlers"]["stdout"]["formatter"] = "pipe"
 else:
     LOGGING["handlers"]["stdout"]["formatter"] = "json"

@@ -66,10 +66,11 @@ class DetectionConfig:
     nms_iou_threshold: Optional[float] = None
     player_class_id: int = 3
     prediction_threshold: float = 0.6
-    model_checkpoint: str = "checkpoint.pth"
-    checkpoint_dir: str = "Colab_Notebooks"
+    model_checkpoint: str = "checkpoint_latest.pth"
     output_video_path: str = "results.mp4"
     crop_extract_interval: int = 5
+    # Google Storage configuration
+    default_storage_user_path: str = "Common/Models"  # Default path for model storage in Google Storage
     # Color space handling
     color_space: str = "RGB"  # Expected color space for processing
     convert_bgr_to_rgb: bool = True  # Auto-convert OpenCV BGR to RG
