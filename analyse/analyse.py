@@ -10,7 +10,7 @@ from collections import deque
 import numpy as np
 
 # Local Application/Library
-from modules.detection import DetectionModel
+from core.common.detection import DetectionModel
 from modules.player import Player
 from tools.store_driver import Store
 from modules.tracker import AffineAwareByteTrack
@@ -197,7 +197,7 @@ def analyse_video(
     generator_params = {"source_path": input_video, "start": start_frame, "end": end_frame}
     frames_generator = sv.get_video_frames_generator(**generator_params)
     
-    model = DetectionModel(store=store, device=device)
+    model = DetectionModel(device=device)
     tracker = AffineAwareByteTrack(
         track_activation_threshold=0.1,
         lost_track_buffer=30,

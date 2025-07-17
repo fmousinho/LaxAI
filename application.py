@@ -1,6 +1,6 @@
 import logging
 from config.transforms import get_transforms
-from config.all_config import model_config, detection_config, track_stitching_config, debug_config
+from config.all_config import model_config, detection_config, track_stitching_config, debug_config, transform_config
 from modules.utils import log_progress
 from typing import Optional, List, Dict, Tuple
 import datetime
@@ -15,18 +15,19 @@ import tempfile
 import shutil
 
 from tools import reporting
-from modules.detection import DetectionModel
+from core.common.detection import DetectionModel
 from modules.player import Player
 from tools.store_driver import Store
 from modules.tracker import AffineAwareByteTrack, TrackData
 from modules.clustering_processor import ClusteringProcessor
 from modules.siamesenet import SiameseNet 
 from modules.det_processor import DetectionProcessor
-from modules.crop_extractor_processor import CropExtractor, create_train_val_split
+from core.common.crop_extractor import extract_crops_from_video, reorganize_crops_by_stitched_tracks, create_train_val_split
 from modules.dataset import LacrossePlayerDataset
 from modules.emb_processor import EmbeddingsProcessor
 from modules.writer_processor import VideoWriterProcessor
 from modules.player_association import associate_tracks_to_players_with_stitching, stitch_tracks
+from modules.background_mask import initialize_background_removal, refresh_transform_instances
 
 
 
@@ -88,7 +89,7 @@ def run_application (
     FRAME_TARGET:int = debug_max_frames if debug_max_frames is not None else video_info.total_frames #type: ignore
 
     detection_device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu") #MPS workaround
-    detection_model = DetectionModel(store=store, device=detection_device)    
+    detection_model = DetectionModel(device=detection_device)    
     tracker = AffineAwareByteTrack() 
 
 
@@ -123,8 +124,7 @@ def run_application (
         # --- Extracting crops ---
 
         frames_generator = sv.get_video_frames_generator(**generator_params)
-        crop_processor = CropExtractor(frames_generator, multi_frame_detections, TEMP_DIR)
-        crop_processor.extract_crops()
+        crops_dir, all_crops_dir = extract_crops_from_video(frames_generator, multi_frame_detections, TEMP_DIR)
 
         # --- Setup inference transforms (used throughout the pipeline) ---
         transform_config.enable_background_removal = True
@@ -144,7 +144,7 @@ def run_application (
             # Create embeddings for tracks before stitching
             create_track_embeddings(
                 tracker=tracker,
-                train_dir=crop_processor.get_all_crops_directory(),
+                train_dir=all_crops_dir,
                 device=device,
                 inference_only=True
             )
@@ -155,14 +155,14 @@ def run_application (
             
             tracker.track_data = tracks_data  
             logger.info("Reorganizing crops based on stitched tracks")
-            crop_processor.reorganize_crops_by_stitched_tracks(track_id_mapping)
+            reorganize_crops_by_stitched_tracks(all_crops_dir, TEMP_DIR, track_id_mapping)
             logger.info(f"Stitching complete. Now {len(tracks_data)} tracks after stitching.")
 
 
         # --- Create train/val split using the standalone function ---
 
-        source_crops_dir = crop_processor.get_all_crops_directory()
-        data_dir = crop_processor.get_crops_directory()
+        source_crops_dir = all_crops_dir
+        data_dir = crops_dir
         create_train_val_split(source_crops_dir, data_dir)
         
         # --- Analysing Tracks to Create Players  ---
@@ -174,7 +174,7 @@ def run_application (
         if not debug_config.bypass_player_creation:
             players, track_to_player, multi_frame_detections = run_player_training_pipeline(
                 data_dir=data_dir,
-                crop_processor=crop_processor,
+                all_crops_dir=all_crops_dir,
                 temp_dir=temp_dir,
                 device=device,
                 tracker=tracker,
@@ -354,7 +354,7 @@ def ensure_player_mappings(
 
 def run_player_training_pipeline(
     data_dir: str,
-    crop_processor: CropExtractor,
+    all_crops_dir: str,
     temp_dir: str,
     device: torch.device,
     tracker: AffineAwareByteTrack,
@@ -410,7 +410,7 @@ def run_player_training_pipeline(
 
     num_clusters, num_images = clustering_processor.process_clustering_with_search(
         model_class=SiameseNet,
-        source_data_dir=crop_processor.get_all_crops_directory()
+        source_data_dir=all_crops_dir
     )
     
     logger.info(f"Clustering complete: {num_clusters} clusters from {num_images} images")

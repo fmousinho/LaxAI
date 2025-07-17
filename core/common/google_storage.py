@@ -188,6 +188,70 @@ class GoogleStorageClient:
             logger.error(f"Failed to download blob: {e}")
             return False
     
+    def upload_from_string(self, destination_blob_name: str, data: str) -> bool:
+        """
+        Upload string data to a blob.
+        
+        Args:
+            destination_blob_name: Name of the blob in the bucket (will be prefixed with user_path)
+            data: String data to upload
+            
+        Returns:
+            bool: True if upload successful, False otherwise
+        """
+        if not self._ensure_authenticated():
+            logger.error("Failed to authenticate with Google Cloud Storage")
+            return False
+        
+        try:
+            # Add user_path prefix to destination
+            full_destination = f"{self.config.user_path}/{destination_blob_name}"
+            blob = self._bucket.blob(full_destination)
+            blob.upload_from_string(data)
+            logger.info(f"String data uploaded to {full_destination}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to upload string data: {e}")
+            return False
+    
+    def upload_from_file(self, destination_blob_name: str, file_path: str) -> bool:
+        """
+        Upload a file to the bucket (alias for upload_blob for consistency).
+        
+        Args:
+            destination_blob_name: Name of the blob in the bucket (will be prefixed with user_path)
+            file_path: Path to the file to upload
+            
+        Returns:
+            bool: True if upload successful, False otherwise
+        """
+        return self.upload_blob(file_path, destination_blob_name)
+    
+    def delete_blob(self, blob_name: str) -> bool:
+        """
+        Delete a blob from the bucket.
+        
+        Args:
+            blob_name: Name of the blob to delete (will be prefixed with user_path)
+            
+        Returns:
+            bool: True if deletion successful, False otherwise
+        """
+        if not self._ensure_authenticated():
+            logger.error("Failed to authenticate with Google Cloud Storage")
+            return False
+        
+        try:
+            # Add user_path prefix to blob name
+            full_blob_name = f"{self.config.user_path}/{blob_name}"
+            blob = self._bucket.blob(full_blob_name)
+            blob.delete()
+            logger.info(f"Blob {full_blob_name} deleted")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete blob: {e}")
+            return False
+    
     def blob_exists(self, blob_name: str) -> bool:
         """
         Check if a blob exists in the bucket.
@@ -209,6 +273,70 @@ class GoogleStorageClient:
             return blob.exists()
         except Exception as e:
             logger.error(f"Failed to check if blob exists: {e}")
+            return False
+    
+    def upload_from_string(self, destination_blob_name: str, data: str) -> bool:
+        """
+        Upload string data to a blob.
+        
+        Args:
+            destination_blob_name: Name of the blob in the bucket (will be prefixed with user_path)
+            data: String data to upload
+            
+        Returns:
+            bool: True if upload successful, False otherwise
+        """
+        if not self._ensure_authenticated():
+            logger.error("Failed to authenticate with Google Cloud Storage")
+            return False
+        
+        try:
+            # Add user_path prefix to destination
+            full_destination = f"{self.config.user_path}/{destination_blob_name}"
+            blob = self._bucket.blob(full_destination)
+            blob.upload_from_string(data)
+            logger.info(f"String data uploaded to {full_destination}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to upload string data: {e}")
+            return False
+    
+    def upload_from_file(self, destination_blob_name: str, file_path: str) -> bool:
+        """
+        Upload a file to the bucket (alias for upload_blob for consistency).
+        
+        Args:
+            destination_blob_name: Name of the blob in the bucket (will be prefixed with user_path)
+            file_path: Path to the file to upload
+            
+        Returns:
+            bool: True if upload successful, False otherwise
+        """
+        return self.upload_blob(file_path, destination_blob_name)
+    
+    def delete_blob(self, blob_name: str) -> bool:
+        """
+        Delete a blob from the bucket.
+        
+        Args:
+            blob_name: Name of the blob to delete (will be prefixed with user_path)
+            
+        Returns:
+            bool: True if deletion successful, False otherwise
+        """
+        if not self._ensure_authenticated():
+            logger.error("Failed to authenticate with Google Cloud Storage")
+            return False
+        
+        try:
+            # Add user_path prefix to blob name
+            full_blob_name = f"{self.config.user_path}/{blob_name}"
+            blob = self._bucket.blob(full_blob_name)
+            blob.delete()
+            logger.info(f"Blob {full_blob_name} deleted")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete blob: {e}")
             return False
 
 
@@ -271,4 +399,4 @@ if __name__ == "__main__":
         print("2. Verify GOOGLE_APPLICATION_CREDENTIALS is set in the .env file")
         print("3. Check that the service account key file path is correct")
         print("4. Ensure the service account has access to the bucket")
-        print("5. Verify the bucket exists and is accessible") 
+        print("5. Verify the bucket exists and is accessible")

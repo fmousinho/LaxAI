@@ -6,7 +6,7 @@ from typing import Optional, Deque, List
 from collections import deque, defaultdict
 import json
 
-from modules.detection import DetectionModel
+from core.common.detection import DetectionModel
 from modules.tracker import AffineAwareByteTrack
 from modules.utils import log_progress
 from config.all_config import detection_config
