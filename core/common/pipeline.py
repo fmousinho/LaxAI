@@ -101,7 +101,7 @@ class Pipeline:
         if self.verbose:
             getattr(logger, level)(f"[{self.pipeline_name}:{step_name}] {message}")
     
-    def _save_step_output(self, step_name: str, data: Any, context_id: str = None, filename: str = None):
+    def _save_step_output(self, step_name: str, data: Any, context_id: Optional[str] = None, filename: Optional[str] = None):
         """
         Save step output if save_intermediate is enabled.
         
@@ -193,7 +193,7 @@ class Pipeline:
         step.skip(reason)
         self._log_step(step_name, f"Skipped: {reason}", "warning")
     
-    def _mark_step_completed(self, step_name: str, output_path: str = None, metadata: Dict[str, Any] = None):
+    def _mark_step_completed(self, step_name: str, output_path: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None):
         """
         Manually mark a step as completed (for steps that don't use _execute_step).
         
@@ -207,7 +207,7 @@ class Pipeline:
         
         step = self.steps[step_name]
         step.start()
-        step.complete(output_path=output_path, metadata=metadata)
+        step.complete(output_path=output_path, metadata=metadata or {})
         self._log_step(step_name, f"Marked as completed")
     
     def _get_pipeline_summary(self) -> Dict[str, Any]:
@@ -253,6 +253,183 @@ class Pipeline:
             step.output_path = None
             step.metadata = {}
     
+    def _save_checkpoint(self, context: Dict[str, Any], completed_steps: List[str]) -> bool:
+        """
+        Save pipeline checkpoint to storage.
+        
+        Args:
+            context: Current pipeline context
+            completed_steps: List of completed step names
+            
+        Returns:
+            True if checkpoint saved successfully, False otherwise
+        """
+        try:
+            checkpoint_data = {
+                "pipeline_name": self.pipeline_name,
+                "run_guid": self.run_guid,
+                "run_folder": self.run_folder,
+                "timestamp": datetime.now().isoformat(),
+                "completed_steps": completed_steps,
+                "context": context,
+                "steps_summary": {name: step.to_dict() for name, step in self.steps.items()},
+                "checkpoint_version": "1.0"
+            }
+            
+            checkpoint_blob = f"{self.run_folder}/.checkpoint.json"
+            checkpoint_content = json.dumps(checkpoint_data, indent=2)
+            
+            success = self.storage_client.upload_from_string(checkpoint_blob, checkpoint_content)
+            
+            if success:
+                logger.info(f"Checkpoint saved: {checkpoint_blob}")
+            else:
+                logger.error(f"Failed to save checkpoint: {checkpoint_blob}")
+                
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error saving checkpoint: {e}")
+            return False
+    
+    def _load_checkpoint(self) -> Optional[Dict[str, Any]]:
+        """
+        Load pipeline checkpoint from storage.
+        
+        Returns:
+            Checkpoint data dictionary if found, None otherwise
+        """
+        try:
+            checkpoint_blob = f"{self.run_folder}/.checkpoint.json"
+            
+            if not self.storage_client.blob_exists(checkpoint_blob):
+                logger.info(f"No checkpoint found at: {checkpoint_blob}")
+                return None
+            
+            checkpoint_content = self.storage_client.download_as_string(checkpoint_blob)
+            if not checkpoint_content:
+                logger.error(f"Failed to download checkpoint: {checkpoint_blob}")
+                return None
+            
+            checkpoint_data = json.loads(checkpoint_content)
+            
+            # Validate checkpoint compatibility
+            if not self._validate_checkpoint(checkpoint_data):
+                logger.error("Checkpoint validation failed")
+                return None
+            
+            logger.info(f"Loaded checkpoint with {len(checkpoint_data.get('completed_steps', []))} completed steps")
+            return checkpoint_data
+            
+        except Exception as e:
+            logger.error(f"Error loading checkpoint: {e}")
+            return None
+    
+    def _validate_checkpoint(self, checkpoint_data: Dict[str, Any]) -> bool:
+        """
+        Validate checkpoint compatibility with current pipeline.
+        
+        Args:
+            checkpoint_data: Checkpoint data to validate
+            
+        Returns:
+            True if checkpoint is valid, False otherwise
+        """
+        try:
+            # Check required fields
+            required_fields = ["pipeline_name", "run_guid", "completed_steps", "context"]
+            for field in required_fields:
+                if field not in checkpoint_data:
+                    logger.error(f"Checkpoint missing required field: {field}")
+                    return False
+            
+            # Check pipeline name matches
+            if checkpoint_data["pipeline_name"] != self.pipeline_name:
+                logger.error(f"Checkpoint pipeline name mismatch: {checkpoint_data['pipeline_name']} != {self.pipeline_name}")
+                return False
+            
+            # Check run_guid matches
+            if checkpoint_data["run_guid"] != self.run_guid:
+                logger.error(f"Checkpoint run_guid mismatch: {checkpoint_data['run_guid']} != {self.run_guid}")
+                return False
+            
+            # Check that completed steps exist in current pipeline
+            completed_steps = checkpoint_data["completed_steps"]
+            for step_name in completed_steps:
+                if step_name not in self.steps:
+                    logger.error(f"Checkpoint references unknown step: {step_name}")
+                    return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error validating checkpoint: {e}")
+            return False
+    
+    def _restore_from_checkpoint(self, checkpoint_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Restore pipeline state from checkpoint.
+        
+        Args:
+            checkpoint_data: Checkpoint data to restore from
+            
+        Returns:
+            Restored context dictionary
+        """
+        try:
+            completed_steps = checkpoint_data["completed_steps"]
+            context = checkpoint_data["context"]
+            steps_summary = checkpoint_data.get("steps_summary", {})
+            
+            # Restore step states
+            for step_name in completed_steps:
+                if step_name in self.steps:
+                    step = self.steps[step_name]
+                    step.status = StepStatus.COMPLETED
+                    
+                    # Restore step metadata if available
+                    if step_name in steps_summary:
+                        step_data = steps_summary[step_name]
+                        if "start_time" in step_data:
+                            step.start_time = datetime.fromisoformat(step_data["start_time"])
+                        if "end_time" in step_data:
+                            step.end_time = datetime.fromisoformat(step_data["end_time"])
+                        if "output_path" in step_data:
+                            step.output_path = step_data["output_path"]
+                        if "metadata" in step_data:
+                            step.metadata = step_data["metadata"]
+            
+            logger.info(f"Restored pipeline state from checkpoint. Completed steps: {len(completed_steps)}")
+            return context
+            
+        except Exception as e:
+            logger.error(f"Error restoring from checkpoint: {e}")
+            raise
+    
+    def _cleanup_checkpoint(self) -> bool:
+        """
+        Clean up checkpoint file after successful pipeline completion.
+        
+        Returns:
+            True if cleanup successful, False otherwise
+        """
+        try:
+            checkpoint_blob = f"{self.run_folder}/.checkpoint.json"
+            
+            if self.storage_client.blob_exists(checkpoint_blob):
+                success = self.storage_client.delete_blob(checkpoint_blob)
+                if success:
+                    logger.info(f"Cleaned up checkpoint file: {checkpoint_blob}")
+                else:
+                    logger.warning(f"Failed to clean up checkpoint file: {checkpoint_blob}")
+                return success
+            
+            return True  # No checkpoint to clean up
+            
+        except Exception as e:
+            logger.error(f"Error cleaning up checkpoint: {e}")
+            return False
+    
     def _get_failed_steps(self) -> List[str]:
         """Get list of step names that failed."""
         return [name for name, step in self.steps.items() if step.status == StepStatus.ERROR]
@@ -265,12 +442,13 @@ class Pipeline:
         """Get list of step names that were skipped."""
         return [name for name, step in self.steps.items() if step.status == StepStatus.SKIPPED]
     
-    def run(self, context: Dict[str, Any] = None) -> Dict[str, Any]:
+    def run(self, context: Optional[Dict[str, Any]] = None, resume_from_checkpoint: bool = False) -> Dict[str, Any]:
         """
         Execute the pipeline by running all steps in order.
         
         Args:
             context: Optional context dictionary to pass between steps
+            resume_from_checkpoint: If True, attempt to resume from existing checkpoint
             
         Returns:
             Dictionary with pipeline results
@@ -281,16 +459,28 @@ class Pipeline:
         if context is None:
             context = {}
         
+        # Handle checkpoint restoration
+        completed_steps = []
+        if resume_from_checkpoint:
+            checkpoint_data = self._load_checkpoint()
+            if checkpoint_data:
+                context = self._restore_from_checkpoint(checkpoint_data)
+                completed_steps = checkpoint_data["completed_steps"]
+                logger.info(f"Resuming from checkpoint. Skipping {len(completed_steps)} completed steps")
+            else:
+                logger.info("No valid checkpoint found, starting from beginning")
+        
         results = {
             "pipeline_name": self.pipeline_name,
             "status": PipelineStatus.RUNNING.value,
             "run_guid": self.run_guid,
             "run_folder": self.run_folder,
-            "steps_completed": 0,
+            "steps_completed": len(completed_steps),
             "steps_failed": 0,
             "steps_skipped": 0,
             "errors": [],
-            "context": context
+            "context": context,
+            "resumed_from_checkpoint": resume_from_checkpoint and len(completed_steps) > 0
         }
         
         try:
@@ -300,6 +490,12 @@ class Pipeline:
             # Execute each step in order
             for step_name, step_config in self.step_definitions.items():
                 try:
+                    # Skip if step already completed (from checkpoint)
+                    if step_name in completed_steps:
+                        self._skip_step(step_name, "Already completed (from checkpoint)")
+                        results["steps_skipped"] += 1
+                        continue
+                    
                     step_function = step_config["function"]
                     
                     # Execute the step
@@ -316,12 +512,21 @@ class Pipeline:
                         self._save_step_output(step_name, step_result, filename=f"{step_name}_result.json")
                     
                     results["steps_completed"] += 1
+                    completed_steps.append(step_name)
+                    
+                    # Save checkpoint after each completed step
+                    if not self._save_checkpoint(context, completed_steps):
+                        logger.warning(f"Failed to save checkpoint after step: {step_name}")
                     
                 except Exception as e:
                     results["steps_failed"] += 1
                     error_msg = f"Step '{step_name}' failed: {str(e)}"
                     results["errors"].append(error_msg)
                     logger.error(error_msg)
+                    
+                    # Save checkpoint even on failure to preserve progress
+                    if not self._save_checkpoint(context, completed_steps):
+                        logger.warning(f"Failed to save checkpoint after step failure: {step_name}")
                     
                     # Decide whether to continue or stop
                     if self._should_stop_on_error(step_name, step_config):
@@ -334,6 +539,9 @@ class Pipeline:
             else:
                 self.status = PipelineStatus.COMPLETED
                 results["status"] = PipelineStatus.COMPLETED.value
+                
+                # Clean up checkpoint file on successful completion
+                self._cleanup_checkpoint()
             
             # Add pipeline summary
             results["pipeline_summary"] = self._get_pipeline_summary()

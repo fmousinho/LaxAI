@@ -22,7 +22,7 @@ from modules.tracker import AffineAwareByteTrack, TrackData
 from modules.clustering_processor import ClusteringProcessor
 from modules.siamesenet import SiameseNet 
 from core.common.detection_utils import process_frames, load_detections_from_json
-from core.common.crop_extractor import extract_crops_from_video, reorganize_crops_by_stitched_tracks, create_train_val_split
+from core.common.crop_utils import extract_crops_from_video, reorganize_crops_by_stitched_tracks, create_train_val_split
 from modules.dataset import LacrossePlayerDataset
 from modules.emb_processor import EmbeddingsProcessor
 from modules.writer_processor import VideoWriterProcessor

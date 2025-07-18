@@ -26,16 +26,16 @@ from core.common.pipeline import Pipeline, PipelineStatus
 from config.all_config import DetectionConfig
 from config import logging_config
 from core.common.background_mask import BackgroundMaskDetector, create_frame_generator_from_images
-from core.common.crop_extractor import extract_crops_from_video
+from core.common.crop_utils import extract_crops_from_video, create_train_val_split
 from core.train.augmentation import augment_images
 
 logger = logging.getLogger(__name__)
 
 
-class TrainPipeline(Pipeline):
+class DataPrepPipeline(Pipeline):
     """
-    Training pipeline that processes MP4 videos from Google Storage.
-    
+    Data preparation pipeline that processes MP4 videos from Google Storage.
+
     This pipeline:
     1. Creates a processing run folder with GUID
     2. Processes videos from the raw directory
@@ -120,12 +120,13 @@ class TrainPipeline(Pipeline):
             save_intermediate=save_intermediate
         )
     
-    def run(self, video_path: str) -> Dict[str, Any]:
+    def run(self, video_path: str, resume_from_checkpoint: bool = True) -> Dict[str, Any]:
         """
         Execute the complete training pipeline for a single video.
         
         Args:
             video_path: Path to the video file to process (can be local path or gs:// URL)
+            resume_from_checkpoint: Whether to check for and resume from existing checkpoint (default: True)
             
         Returns:
             Dictionary with pipeline results and statistics
@@ -139,7 +140,8 @@ class TrainPipeline(Pipeline):
         initial_context = {"video_path": video_path}
         
         # Call the base class run method with the initial context
-        results = super().run(initial_context)
+        # The base class now handles checkpoint functionality automatically
+        results = super().run(initial_context, resume_from_checkpoint=resume_from_checkpoint)
         
         # Add training-specific result formatting
         context = results.get("context", {})
@@ -413,10 +415,12 @@ class TrainPipeline(Pipeline):
                     crop_extract_interval=1  # Extract from all frames since we have limited frames
                 )
                 
-                # Upload crops to Google Storage
+                # OPTIMIZATION: Keep crops in memory for next step
+                crops_in_memory = {}
                 crops_uploaded = 0
+                
                 if os.path.exists(all_crops_dir):
-                    # Walk through all crop files and upload them
+                    # Walk through all crop files and load them into memory
                     for root, dirs, files in os.walk(all_crops_dir):
                         for file in files:
                             if file.endswith('.jpg'):
@@ -425,16 +429,22 @@ class TrainPipeline(Pipeline):
                                 # Calculate relative path from all_crops_dir
                                 rel_path = os.path.relpath(local_crop_path, all_crops_dir)
                                 
-                                # Upload to Google Storage
-                                storage_crop_path = f"{original_crops_folder}/{rel_path}"
-                                
-                                if self.tenant_storage.upload_from_file(storage_crop_path, local_crop_path):
-                                    crops_uploaded += 1
-                                    logger.debug(f"Uploaded crop: {storage_crop_path}")
-                                else:
-                                    logger.warning(f"Failed to upload crop: {storage_crop_path}")
+                                # Load crop into memory
+                                crop_img = cv2.imread(local_crop_path)
+                                if crop_img is not None:
+                                    crops_in_memory[rel_path] = crop_img
+                                    
+                                    # Upload to Google Storage (still needed for persistence)
+                                    storage_crop_path = f"{original_crops_folder}/{rel_path}"
+                                    
+                                    if self.tenant_storage.upload_from_file(storage_crop_path, local_crop_path):
+                                        crops_uploaded += 1
+                                        logger.debug(f"Uploaded crop: {storage_crop_path}")
+                                    else:
+                                        logger.warning(f"Failed to upload crop: {storage_crop_path}")
                 
                 logger.info(f"Successfully extracted and uploaded {crops_uploaded} crops for video: {video_guid}")
+                logger.info(f"Loaded {len(crops_in_memory)} crops into memory for next step")
                 
                 return {
                     "crops_extracted": True,
@@ -442,7 +452,8 @@ class TrainPipeline(Pipeline):
                     "crops_folder": crops_folder,
                     "original_crops_folder": original_crops_folder,
                     "crops_uploaded": crops_uploaded,
-                    "total_detections": len(all_detections)
+                    "total_detections": len(all_detections),
+                    "crops_in_memory": crops_in_memory  # OPTIMIZATION: Pass crops in memory
                 }
                 
             finally:
@@ -489,100 +500,179 @@ class TrainPipeline(Pipeline):
             crops_folder = f"{video_folder}/crops"
             modified_crops_folder = f"{crops_folder}/modified"
             
-            # Create temporary directory for processing
-            temp_dir = f"/tmp/background_removal_{video_guid}"
-            os.makedirs(temp_dir, exist_ok=True)
+            # OPTIMIZATION: Use in-memory crops if available
+            crops_in_memory = context.get("crops_in_memory", {})
             
-            try:
-                # Download all original crops from Google Storage
-                temp_original_dir = os.path.join(temp_dir, "original")
-                os.makedirs(temp_original_dir, exist_ok=True)
+            if crops_in_memory:
+                logger.info(f"Using {len(crops_in_memory)} crops from memory (optimized)")
                 
-                # List all blobs in the original crops folder
-                blobs = self.tenant_storage.list_blobs(prefix=f"{original_crops_folder}/")
-                
-                downloaded_crops = []
+                # Process crops directly from memory
+                modified_crops_in_memory = {}
                 crops_processed = 0
                 
-                for blob_name in blobs:
-                    if blob_name.endswith('.jpg'):
-                        # Calculate local path maintaining directory structure
-                        rel_path = blob_name[len(f"{original_crops_folder}/"):]
-                        local_path = os.path.join(temp_original_dir, rel_path)
-                        
-                        # Create directory structure if needed
-                        os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                        
-                        # Download the crop
-                        if self.tenant_storage.download_blob(blob_name, local_path):
-                            downloaded_crops.append((blob_name, local_path, rel_path))
-                            logger.debug(f"Downloaded crop: {blob_name}")
-                        else:
-                            logger.warning(f"Failed to download crop: {blob_name}")
+                # Create temporary directory for saving processed crops
+                temp_dir = f"/tmp/background_removal_{video_guid}"
+                os.makedirs(temp_dir, exist_ok=True)
                 
-                logger.info(f"Downloaded {len(downloaded_crops)} crops for background removal")
-                
-                # Process each crop to remove background
-                for blob_name, local_path, rel_path in downloaded_crops:
-                    try:
-                        # Read the crop image
-                        crop_img = cv2.imread(local_path)
-                        
-                        if crop_img is None:
-                            logger.warning(f"Failed to read crop image: {local_path}")
-                            continue
-                        
-                        # Remove background using the grass mask detector
-                        processed_result = self.background_mask_detector.remove_background(
-                            crop_img, 
-                            input_format='BGR'
-                        )
-                        
-                        # Ensure we have a single image (not a list)
-                        if isinstance(processed_result, list):
-                            processed_crop = processed_result[0]
-                        else:
-                            processed_crop = processed_result
-                        
-                        # Save the processed crop to temporary location
-                        temp_modified_path = os.path.join(temp_dir, "modified", rel_path)
-                        os.makedirs(os.path.dirname(temp_modified_path), exist_ok=True)
-                        
-                        if cv2.imwrite(temp_modified_path, processed_crop):
-                            # Upload the modified crop to Google Storage
-                            storage_modified_path = f"{modified_crops_folder}/{rel_path}"
+                try:
+                    for rel_path, crop_img in crops_in_memory.items():
+                        try:
+                            # Remove background using the grass mask detector
+                            processed_result = self.background_mask_detector.remove_background(
+                                crop_img, 
+                                input_format='BGR'
+                            )
                             
-                            if self.tenant_storage.upload_from_file(storage_modified_path, temp_modified_path):
-                                crops_processed += 1
-                                logger.debug(f"Processed and uploaded crop: {storage_modified_path}")
+                            # Ensure we have a single image (not a list)
+                            if isinstance(processed_result, list):
+                                processed_crop = processed_result[0]
                             else:
-                                logger.warning(f"Failed to upload modified crop: {storage_modified_path}")
-                        else:
-                            logger.warning(f"Failed to save modified crop: {temp_modified_path}")
+                                processed_crop = processed_result
                             
-                    except Exception as crop_error:
-                        logger.warning(f"Failed to process crop {local_path}: {crop_error}")
-                        continue
+                            # Store in memory and save to temporary location for upload
+                            modified_crops_in_memory[rel_path] = processed_crop
+                            
+                            # Save the processed crop to temporary location
+                            temp_modified_path = os.path.join(temp_dir, rel_path)
+                            os.makedirs(os.path.dirname(temp_modified_path), exist_ok=True)
+                            
+                            if cv2.imwrite(temp_modified_path, processed_crop):
+                                # Upload the modified crop to Google Storage
+                                storage_modified_path = f"{modified_crops_folder}/{rel_path}"
+                                
+                                if self.tenant_storage.upload_from_file(storage_modified_path, temp_modified_path):
+                                    crops_processed += 1
+                                    logger.debug(f"Processed and uploaded crop: {storage_modified_path}")
+                                else:
+                                    logger.warning(f"Failed to upload modified crop: {storage_modified_path}")
+                            else:
+                                logger.warning(f"Failed to save modified crop: {temp_modified_path}")
+                                
+                        except Exception as crop_error:
+                            logger.warning(f"Failed to process crop {rel_path}: {crop_error}")
+                            continue
+                    
+                    logger.info(f"Successfully processed {crops_processed} crops from memory for video: {video_guid}")
+                    
+                    return {
+                        "background_removed": True,
+                        "video_guid": video_guid,
+                        "original_crops_folder": original_crops_folder,
+                        "modified_crops_folder": modified_crops_folder,
+                        "crops_processed": crops_processed,
+                        "total_crops_processed": len(crops_in_memory),
+                        "modified_crops_in_memory": modified_crops_in_memory,  # OPTIMIZATION: Pass to next step
+                        "optimization_used": "in_memory_processing"
+                    }
+                    
+                finally:
+                    # Clean up temporary directory
+                    if os.path.exists(temp_dir):
+                        try:
+                            shutil.rmtree(temp_dir)
+                            logger.debug(f"Cleaned up temporary background removal directory: {temp_dir}")
+                        except Exception as cleanup_error:
+                            logger.warning(f"Failed to cleanup temporary directory {temp_dir}: {cleanup_error}")
+            
+            else:
+                # FALLBACK: Original implementation using Google Storage
+                logger.info("Using fallback implementation with Google Storage downloads")
                 
-                logger.info(f"Successfully removed background from {crops_processed} crops for video: {video_guid}")
+                # Create temporary directory for processing
+                temp_dir = f"/tmp/background_removal_{video_guid}"
+                os.makedirs(temp_dir, exist_ok=True)
                 
-                return {
-                    "background_removed": True,
-                    "video_guid": video_guid,
-                    "original_crops_folder": original_crops_folder,
-                    "modified_crops_folder": modified_crops_folder,
-                    "crops_processed": crops_processed,
-                    "total_crops_downloaded": len(downloaded_crops)
-                }
-                
-            finally:
-                # Clean up temporary directory
-                if os.path.exists(temp_dir):
-                    try:
-                        shutil.rmtree(temp_dir)
-                        logger.debug(f"Cleaned up temporary background removal directory: {temp_dir}")
-                    except Exception as cleanup_error:
-                        logger.warning(f"Failed to cleanup temporary directory {temp_dir}: {cleanup_error}")
+                try:
+                    # Download all original crops from Google Storage
+                    temp_original_dir = os.path.join(temp_dir, "original")
+                    os.makedirs(temp_original_dir, exist_ok=True)
+                    
+                    # List all blobs in the original crops folder
+                    blobs = self.tenant_storage.list_blobs(prefix=f"{original_crops_folder}/")
+                    
+                    downloaded_crops = []
+                    crops_processed = 0
+                    
+                    for blob_name in blobs:
+                        if blob_name.endswith('.jpg'):
+                            # Calculate local path maintaining directory structure
+                            rel_path = blob_name[len(f"{original_crops_folder}/"):]
+                            local_path = os.path.join(temp_original_dir, rel_path)
+                            
+                            # Create directory structure if needed
+                            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                            
+                            # Download the crop
+                            if self.tenant_storage.download_blob(blob_name, local_path):
+                                downloaded_crops.append((blob_name, local_path, rel_path))
+                                logger.debug(f"Downloaded crop: {blob_name}")
+                            else:
+                                logger.warning(f"Failed to download crop: {blob_name}")
+                    
+                    logger.info(f"Downloaded {len(downloaded_crops)} crops for background removal")
+                    
+                    # Process each crop to remove background
+                    for blob_name, local_path, rel_path in downloaded_crops:
+                        try:
+                            # Read the crop image
+                            crop_img = cv2.imread(local_path)
+                            
+                            if crop_img is None:
+                                logger.warning(f"Failed to read crop image: {local_path}")
+                                continue
+                            
+                            # Remove background using the grass mask detector
+                            processed_result = self.background_mask_detector.remove_background(
+                                crop_img, 
+                                input_format='BGR'
+                            )
+                            
+                            # Ensure we have a single image (not a list)
+                            if isinstance(processed_result, list):
+                                processed_crop = processed_result[0]
+                            else:
+                                processed_crop = processed_result
+                            
+                            # Save the processed crop to temporary location
+                            temp_modified_path = os.path.join(temp_dir, "modified", rel_path)
+                            os.makedirs(os.path.dirname(temp_modified_path), exist_ok=True)
+                            
+                            if cv2.imwrite(temp_modified_path, processed_crop):
+                                # Upload the modified crop to Google Storage
+                                storage_modified_path = f"{modified_crops_folder}/{rel_path}"
+                                
+                                if self.tenant_storage.upload_from_file(storage_modified_path, temp_modified_path):
+                                    crops_processed += 1
+                                    logger.debug(f"Processed and uploaded crop: {storage_modified_path}")
+                                else:
+                                    logger.warning(f"Failed to upload modified crop: {storage_modified_path}")
+                            else:
+                                logger.warning(f"Failed to save modified crop: {temp_modified_path}")
+                                
+                        except Exception as crop_error:
+                            logger.warning(f"Failed to process crop {local_path}: {crop_error}")
+                            continue
+                    
+                    logger.info(f"Successfully removed background from {crops_processed} crops for video: {video_guid}")
+                    
+                    return {
+                        "background_removed": True,
+                        "video_guid": video_guid,
+                        "original_crops_folder": original_crops_folder,
+                        "modified_crops_folder": modified_crops_folder,
+                        "crops_processed": crops_processed,
+                        "total_crops_downloaded": len(downloaded_crops),
+                        "optimization_used": "fallback_storage"
+                    }
+                    
+                finally:
+                    # Clean up temporary directory
+                    if os.path.exists(temp_dir):
+                        try:
+                            shutil.rmtree(temp_dir)
+                            logger.debug(f"Cleaned up temporary background removal directory: {temp_dir}")
+                        except Exception as cleanup_error:
+                            logger.warning(f"Failed to cleanup temporary directory {temp_dir}: {cleanup_error}")
                         
         except Exception as e:
             logger.error(f"Failed to remove background from crops for video {video_guid}: {e}")
@@ -598,16 +688,28 @@ class TrainPipeline(Pipeline):
         Returns:
             Dictionary with augmentation results
         """
-        # Placeholder implementation
         background_removed = context.get("background_removed", False)
         modified_crops_folder = context.get("modified_crops_folder")
+        modified_crops_in_memory = context.get("modified_crops_in_memory", {})
         crops_processed = context.get("crops_processed", 0)
         video_guid = context.get("video_guid")
         
         if background_removed and modified_crops_folder and crops_processed > 0:
             logger.info(f"Augmenting {crops_processed} crops for video: {video_guid}")
             logger.info(f"Using modified crops from: {modified_crops_folder}")
-            return {"crops_augmented": True, "video_guid": video_guid, "modified_crops_folder": modified_crops_folder}
+            
+            # OPTIMIZATION: Pass through in-memory data if available
+            result = {
+                "crops_augmented": True, 
+                "video_guid": video_guid, 
+                "modified_crops_folder": modified_crops_folder
+            }
+            
+            if modified_crops_in_memory:
+                result["modified_crops_in_memory"] = modified_crops_in_memory
+                logger.info(f"Passing {len(modified_crops_in_memory)} crops in memory to next step")
+            
+            return result
         else:
             logger.warning("No background-removed crops to augment")
             return {"crops_augmented": False}
@@ -622,38 +724,233 @@ class TrainPipeline(Pipeline):
         Returns:
             Dictionary with dataset creation results
         """
-        # Placeholder implementation
         crops_augmented = context.get("crops_augmented", False)
+        modified_crops_folder = context.get("modified_crops_folder")
         video_guid = context.get("video_guid")
-        if crops_augmented:
+        
+        if not crops_augmented or not modified_crops_folder:
+            logger.warning("No augmented crops or modified crops folder to create datasets from")
+            return {"datasets_created": False, "error": "No augmented crops available"}
+        
+        try:
             logger.info(f"Creating training and validation sets for video: {video_guid}")
-            return {"datasets_created": True, "video_guid": video_guid, "training_samples": 100}
-        else:
-            logger.warning("No augmented crops to create datasets from")
-            return {"datasets_created": False}
-    
-    def _serialize_detections(self, detections: Detections) -> List[Dict[str, Any]]:
-        """
-        Serialize detections to JSON-compatible format.
-        
-        Args:
-            detections: Supervision detections object
             
-        Returns:
-            List of serialized detection dictionaries
-        """
-        serialized = []
-        
-        for i in range(len(detections.xyxy)):
-            detection = {
-                "bbox": detections.xyxy[i].tolist(),
-                "confidence": float(detections.confidence[i]) if detections.confidence is not None else 0.0,
-                "class_id": int(detections.class_id[i]) if detections.class_id is not None else 0,
-                "tracker_id": int(detections.tracker_id[i]) if detections.tracker_id is not None else None
-            }
-            serialized.append(detection)
-        
-        return serialized
+            # Get the video folder and create datasets folder
+            video_folder = context.get("video_folder", f"{self.run_folder}/video_{video_guid}")
+            datasets_folder = f"{video_folder}/datasets"
+            
+            # OPTIMIZATION: Use in-memory crops if available
+            modified_crops_in_memory = context.get("modified_crops_in_memory", {})
+            
+            if modified_crops_in_memory:
+                logger.info(f"Using {len(modified_crops_in_memory)} modified crops from memory (optimized)")
+                
+                # Create temporary directory for processing
+                temp_dir = f"/tmp/datasets_{video_guid}"
+                os.makedirs(temp_dir, exist_ok=True)
+                
+                try:
+                    # Create crops directory structure from in-memory data
+                    temp_crops_dir = os.path.join(temp_dir, "crops")
+                    os.makedirs(temp_crops_dir, exist_ok=True)
+                    
+                    track_folders = set()
+                    
+                    # Save in-memory crops to temporary directory for train/val split
+                    for rel_path, crop_img in modified_crops_in_memory.items():
+                        local_path = os.path.join(temp_crops_dir, rel_path)
+                        
+                        # Extract track folder from path (assuming structure like track_X/crop_Y.jpg)
+                        track_folder = rel_path.split('/')[0] if '/' in rel_path else 'unknown'
+                        track_folders.add(track_folder)
+                        
+                        # Create directory structure if needed
+                        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                        
+                        # Save crop to temporary location
+                        cv2.imwrite(local_path, crop_img)
+                    
+                    logger.info(f"Prepared {len(modified_crops_in_memory)} crops from {len(track_folders)} tracks")
+                    
+                    # Create train/val split using crop_utils
+                    temp_datasets_dir = os.path.join(temp_dir, "datasets")
+                    create_train_val_split(
+                        source_folder=temp_crops_dir,
+                        destin_folder=temp_datasets_dir,
+                        train_ratio=0.8
+                    )
+                    
+                    # Upload train and val datasets to Google Storage
+                    train_samples = 0
+                    val_samples = 0
+                    
+                    # Upload train dataset
+                    train_local_dir = os.path.join(temp_datasets_dir, "train")
+                    if os.path.exists(train_local_dir):
+                        for root, dirs, files in os.walk(train_local_dir):
+                            for file in files:
+                                if file.endswith('.jpg'):
+                                    local_path = os.path.join(root, file)
+                                    rel_path = os.path.relpath(local_path, train_local_dir)
+                                    storage_path = f"{datasets_folder}/train/{rel_path}"
+                                    
+                                    if self.tenant_storage.upload_from_file(storage_path, local_path):
+                                        train_samples += 1
+                                        logger.debug(f"Uploaded train sample: {storage_path}")
+                                    else:
+                                        logger.warning(f"Failed to upload train sample: {storage_path}")
+                    
+                    # Upload val dataset
+                    val_local_dir = os.path.join(temp_datasets_dir, "val")
+                    if os.path.exists(val_local_dir):
+                        for root, dirs, files in os.walk(val_local_dir):
+                            for file in files:
+                                if file.endswith('.jpg'):
+                                    local_path = os.path.join(root, file)
+                                    rel_path = os.path.relpath(local_path, val_local_dir)
+                                    storage_path = f"{datasets_folder}/val/{rel_path}"
+                                    
+                                    if self.tenant_storage.upload_from_file(storage_path, local_path):
+                                        val_samples += 1
+                                        logger.debug(f"Uploaded val sample: {storage_path}")
+                                    else:
+                                        logger.warning(f"Failed to upload val sample: {storage_path}")
+                    
+                    logger.info(f"Successfully created training and validation sets for video: {video_guid}")
+                    logger.info(f"Training samples: {train_samples}, Validation samples: {val_samples}")
+                    
+                    return {
+                        "datasets_created": True,
+                        "video_guid": video_guid,
+                        "datasets_folder": datasets_folder,
+                        "training_samples": train_samples,
+                        "validation_samples": val_samples,
+                        "total_crops_processed": len(modified_crops_in_memory),
+                        "tracks_processed": len(track_folders),
+                        "optimization_used": "in_memory_processing"
+                    }
+                    
+                finally:
+                    # Clean up temporary directory
+                    if os.path.exists(temp_dir):
+                        try:
+                            shutil.rmtree(temp_dir)
+                            logger.debug(f"Cleaned up temporary datasets directory: {temp_dir}")
+                        except Exception as cleanup_error:
+                            logger.warning(f"Failed to cleanup temporary directory {temp_dir}: {cleanup_error}")
+            
+            else:
+                # FALLBACK: Original implementation using Google Storage
+                logger.info("Using fallback implementation with Google Storage downloads")
+                
+                # Create temporary directory for processing
+                temp_dir = f"/tmp/datasets_{video_guid}"
+                os.makedirs(temp_dir, exist_ok=True)
+                
+                try:
+                    # Download all modified crops from Google Storage
+                    temp_crops_dir = os.path.join(temp_dir, "crops")
+                    os.makedirs(temp_crops_dir, exist_ok=True)
+                    
+                    # List all blobs in the modified crops folder
+                    blobs = self.tenant_storage.list_blobs(prefix=f"{modified_crops_folder}/")
+                    
+                    downloaded_crops = []
+                    track_folders = set()
+                    
+                    for blob_name in blobs:
+                        if blob_name.endswith('.jpg'):
+                            # Calculate local path maintaining directory structure
+                            rel_path = blob_name[len(f"{modified_crops_folder}/"):]
+                            local_path = os.path.join(temp_crops_dir, rel_path)
+                            
+                            # Extract track folder from path (assuming structure like track_X/crop_Y.jpg)
+                            track_folder = rel_path.split('/')[0] if '/' in rel_path else 'unknown'
+                            track_folders.add(track_folder)
+                            
+                            # Create directory structure if needed
+                            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                            
+                            # Download the crop
+                            if self.tenant_storage.download_blob(blob_name, local_path):
+                                downloaded_crops.append((blob_name, local_path, rel_path))
+                                logger.debug(f"Downloaded crop: {blob_name}")
+                            else:
+                                logger.warning(f"Failed to download crop: {blob_name}")
+                    
+                    logger.info(f"Downloaded {len(downloaded_crops)} crops from {len(track_folders)} tracks")
+                    
+                    # Create train/val split using crop_utils
+                    temp_datasets_dir = os.path.join(temp_dir, "datasets")
+                    create_train_val_split(
+                        source_folder=temp_crops_dir,
+                        destin_folder=temp_datasets_dir,
+                        train_ratio=0.8
+                    )
+                    
+                    # Upload train and val datasets to Google Storage
+                    train_samples = 0
+                    val_samples = 0
+                    
+                    # Upload train dataset
+                    train_local_dir = os.path.join(temp_datasets_dir, "train")
+                    if os.path.exists(train_local_dir):
+                        for root, dirs, files in os.walk(train_local_dir):
+                            for file in files:
+                                if file.endswith('.jpg'):
+                                    local_path = os.path.join(root, file)
+                                    rel_path = os.path.relpath(local_path, train_local_dir)
+                                    storage_path = f"{datasets_folder}/train/{rel_path}"
+                                    
+                                    if self.tenant_storage.upload_from_file(storage_path, local_path):
+                                        train_samples += 1
+                                        logger.debug(f"Uploaded train sample: {storage_path}")
+                                    else:
+                                        logger.warning(f"Failed to upload train sample: {storage_path}")
+                    
+                    # Upload val dataset
+                    val_local_dir = os.path.join(temp_datasets_dir, "val")
+                    if os.path.exists(val_local_dir):
+                        for root, dirs, files in os.walk(val_local_dir):
+                            for file in files:
+                                if file.endswith('.jpg'):
+                                    local_path = os.path.join(root, file)
+                                    rel_path = os.path.relpath(local_path, val_local_dir)
+                                    storage_path = f"{datasets_folder}/val/{rel_path}"
+                                    
+                                    if self.tenant_storage.upload_from_file(storage_path, local_path):
+                                        val_samples += 1
+                                        logger.debug(f"Uploaded val sample: {storage_path}")
+                                    else:
+                                        logger.warning(f"Failed to upload val sample: {storage_path}")
+                    
+                    logger.info(f"Successfully created training and validation sets for video: {video_guid}")
+                    logger.info(f"Training samples: {train_samples}, Validation samples: {val_samples}")
+                    
+                    return {
+                        "datasets_created": True,
+                        "video_guid": video_guid,
+                        "datasets_folder": datasets_folder,
+                        "training_samples": train_samples,
+                        "validation_samples": val_samples,
+                        "total_crops_processed": len(downloaded_crops),
+                        "tracks_processed": len(track_folders),
+                        "optimization_used": "fallback_storage"
+                    }
+                    
+                finally:
+                    # Clean up temporary directory
+                    if os.path.exists(temp_dir):
+                        try:
+                            shutil.rmtree(temp_dir)
+                            logger.debug(f"Cleaned up temporary datasets directory: {temp_dir}")
+                        except Exception as cleanup_error:
+                            logger.warning(f"Failed to cleanup temporary directory {temp_dir}: {cleanup_error}")
+                        
+        except Exception as e:
+            logger.error(f"Failed to create training and validation sets for video {video_guid}: {e}")
+            return {"datasets_created": False, "error": str(e)}
+    
     
     def _validate_video_resolution(self, video_path: str) -> bool:
         """
@@ -872,10 +1169,10 @@ class TrainPipeline(Pipeline):
             return {"status": StepStatus.ERROR.value, "error": str(e)}
 
 
-def run_training_pipeline(tenant_id: str = "tenant1", video_path: str = "", delete_original_raw_videos: bool = False, frames_per_video: int = 20, verbose: bool = False, save_intermediate: bool = False) -> Dict[str, Any]:
+def run_dataprep_pipeline(tenant_id: str = "tenant1", video_path: str = "", delete_original_raw_videos: bool = False, frames_per_video: int = 20, verbose: bool = False, save_intermediate: bool = False) -> Dict[str, Any]:
     """
-    Convenience function to run the training pipeline.
-    
+    Convenience function to run the data preparation pipeline.
+
     Args:
         tenant_id: The tenant ID to process videos for (default: "tenant1")
         video_path: Path to the video file to process
@@ -890,13 +1187,31 @@ def run_training_pipeline(tenant_id: str = "tenant1", video_path: str = "", dele
     config = DetectionConfig()
     config.delete_original_raw_videos = delete_original_raw_videos
     config.frames_per_video = frames_per_video
-    pipeline = TrainPipeline(config, tenant_id=tenant_id, verbose=verbose, save_intermediate=save_intermediate)
+    pipeline = DataPrepPipeline(config, tenant_id=tenant_id, verbose=verbose, save_intermediate=save_intermediate)
 
     # Ensure that the video path is correct
     if not video_path:
         raise ValueError("Video path must be provided")
 
     return pipeline.run(video_path)
+
+
+def run_training_pipeline(tenant_id: str = "tenant1", video_path: str = "", delete_original_raw_videos: bool = False, frames_per_video: int = 20, verbose: bool = False, save_intermediate: bool = False) -> Dict[str, Any]:
+    """
+    Backward compatibility function for run_dataprep_pipeline.
+    
+    Args:
+        tenant_id: The tenant ID to process videos for (default: "tenant1")
+        video_path: Path to the video file to process
+        delete_original_raw_videos: Whether to delete original raw video files after processing (default: False)
+        frames_per_video: Number of frames to extract per video (default: 20)
+        verbose: Whether to enable verbose logging (default: False)
+        save_intermediate: Whether to save intermediate results (default: False)
+        
+    Returns:
+        Dictionary with pipeline results
+    """
+    return run_dataprep_pipeline(tenant_id, video_path, delete_original_raw_videos, frames_per_video, verbose, save_intermediate)
 
 
 if __name__ == "__main__":
@@ -908,7 +1223,7 @@ if __name__ == "__main__":
     verbose = True  # Enable verbose logging
     save_intermediate = True  # Save intermediate results
     
-    results = run_training_pipeline(tenant_id=tenant_id, video_path="/path/to/video.mp4", delete_original_raw_videos=delete_original_raw_videos, frames_per_video=frames_per_video, verbose=verbose, save_intermediate=save_intermediate)
+    results = run_dataprep_pipeline(tenant_id=tenant_id, video_path="/path/to/video.mp4", delete_original_raw_videos=delete_original_raw_videos, frames_per_video=frames_per_video, verbose=verbose, save_intermediate=save_intermediate)
     
     print("Pipeline Results:")
     print(json.dumps(results, indent=2))

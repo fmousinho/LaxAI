@@ -188,6 +188,31 @@ class GoogleStorageClient:
             logger.error(f"Failed to download blob: {e}")
             return False
     
+    def download_as_string(self, source_blob_name: str) -> Optional[str]:
+        """
+        Download a blob from the bucket as a string.
+        
+        Args:
+            source_blob_name: Name of the blob in the bucket (will be prefixed with user_path)
+            
+        Returns:
+            str: Content of the blob as string, or None if download failed
+        """
+        if not self._ensure_authenticated():
+            logger.error("Failed to authenticate with Google Cloud Storage")
+            return None
+        
+        try:
+            # Add user_path prefix to source
+            full_source = f"{self.config.user_path}/{source_blob_name}"
+            blob = self._bucket.blob(full_source)
+            content = blob.download_as_text()
+            logger.info(f"Blob {full_source} downloaded as string")
+            return content
+        except Exception as e:
+            logger.error(f"Failed to download blob as string: {e}")
+            return None
+    
     def upload_from_string(self, destination_blob_name: str, data: str) -> bool:
         """
         Upload string data to a blob.

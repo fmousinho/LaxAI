@@ -9,14 +9,16 @@ from .augmentation import (
     test_augmentation
 )
 
-from .train_pipeline import (
-    TrainPipeline,
-    run_training_pipeline
+from .dataprep_pipeline import (
+    DataPrepPipeline,
+    run_training_pipeline,
+    run_dataprep_pipeline
 )
 
 __all__ = [
     'augment_images',
     'test_augmentation',
-    'TrainPipeline',
-    'run_training_pipeline'
+    'DataPrepPipeline',
+    'run_training_pipeline',
+    'run_dataprep_pipeline'
 ]

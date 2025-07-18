@@ -17,7 +17,6 @@ import supervision as sv
 
 from config.all_config import detection_config
 from config.transforms import ensure_rgb_format
-from modules.utils import log_progress
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +65,9 @@ def extract_crops_from_video(
     crop_heights = []
     
     for frame in frame_generator:
-        log_progress(logger, "Processing frames for crop extraction", frame_idx, total_frames)
+        # Log progress every 10 frames
+        if frame_idx % 10 == 0:
+            logger.info(f"Processing frame {frame_idx}/{total_frames} for crop extraction")
         
         if not all_detections_dq:
             break
