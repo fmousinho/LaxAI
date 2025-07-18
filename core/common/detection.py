@@ -1,13 +1,23 @@
 import logging
 import os
+import sys
 import tempfile
-from typing import List, Optional, Union
+import hashlib
+import json
+from typing import List, Optional, Union, Dict, Any
+from pathlib import Path
 
 import numpy as np
 import supervision as sv
 import torch
 from PIL import Image
 from rfdetr import RFDETRBase  # type: ignore
+
+# Add the project root to the Python path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(current_dir))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from core.common.google_storage import get_storage
 from config.all_config import detection_config
@@ -29,7 +39,6 @@ class DetectionModel:
     def __init__(
         self,
         model_dict: str = detection_config.model_checkpoint,
-        model_dir: Optional[str] = None,
         device: Optional[torch.device] = None,
     ): 
         """
@@ -38,8 +47,6 @@ class DetectionModel:
         Args:
             model_dict: The name of the model dictionary (checkpoint file) from Google Storage.
                         Defaults to `detection_config.model_checkpoint`.
-            model_dir: The path within the storage where the model dictionary resides.
-                       Defaults to `detection_config.checkpoint_dir`.
             device: The torch.device (cpu or cuda) to load the model onto.
             storage_user_path: The user-specific path in Google Storage. If None, uses default.
         """
@@ -47,8 +54,13 @@ class DetectionModel:
         self.storage_user_path = detection_config.default_storage_user_path
         self.storage_client = get_storage(self.storage_user_path)
         self.model_dict = model_dict
-        self.model_dir = model_dir
         
+        # Set up caching directory
+        self.cache_dir = Path("/var/tmp/laxai_models")
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.cached_model_path = self.cache_dir / f"{model_dict}"
+        self.cache_metadata_path = self.cache_dir / f"{model_dict}.meta"
+
         if device is None:
             if torch.cuda.is_available():
                 self.device = torch.device("cuda")
@@ -64,62 +76,207 @@ class DetectionModel:
             logger.info(f"Detection threshold: {detection_config.prediction_threshold}")
             logger.info(f"Model loaded onto device: {self.device}")
         else:
-            raise RuntimeError(f"Failed to load '{self.model_dict}' from '{self.model_dir}/{self.model_dict}'.")
+            raise RuntimeError(f"Failed to load '{self.model_dict}' from '{self.storage_user_path}/{self.model_dict}'.")
 
     def _load_model(self) -> bool:
         """
-        Downloads the model file from Google Storage and loads it onto the specified device.
+        Downloads the model file from Google Storage with caching support.
+        Checks if a newer version exists and downloads only if necessary.
 
         Returns:
             True if the model was loaded successfully, False otherwise.
         """
         try:
-            # Construct the blob name for the model file
-            if self.model_dir:
-                blob_name = f"{self.model_dir}/{self.model_dict}"
-            else:
-                blob_name = self.model_dict
+            # The blob name is just the model filename since Google Storage client
+            # automatically adds the user_path prefix
+            blob_name = self.model_dict
             
             # Check if the model file exists in storage
             if not self.storage_client.blob_exists(blob_name):
-                logger.error(f"Model file '{blob_name}' not found in Google Storage at path '{self.storage_user_path}'")
+                logger.error(f"Model file '{self.model_dict}' not found in Google Storage at path '{self.storage_user_path}'")
                 return False
             
-            # Create a temporary file to download the model
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pth") as tmp_f:
-                temp_checkpoint_path = tmp_f.name
+            # Get remote model metadata
+            remote_metadata = self._get_remote_model_metadata(blob_name)
+            if not remote_metadata:
+                logger.error(f"Failed to get metadata for model '{blob_name}'")
+                return False
             
-            try:
-                # Download the model file from Google Storage
-                logger.info(f"Downloading model '{blob_name}' from Google Storage...")
-                if not self.storage_client.download_blob(blob_name, temp_checkpoint_path):
-                    logger.error(f"Failed to download model file '{blob_name}' from Google Storage")
-                    return False
-                
-                logger.info(f"Model downloaded successfully to: {temp_checkpoint_path}")
-                
-                # Load the model from the downloaded file
-                self.model = RFDETRBase(
-                    device=self.device.type, 
-                    pretrain_weights=temp_checkpoint_path, 
-                    num_classes=6
-                )
-                
-                logger.info(f"Model loaded successfully from Google Storage")
-                return True
-                
-            finally:
-                # Ensure cleanup even if model loading fails
-                if os.path.exists(temp_checkpoint_path):
-                    try:
-                        os.remove(temp_checkpoint_path)
-                        logger.debug(f"Temporary checkpoint file removed: {temp_checkpoint_path}")
-                    except OSError as e:
-                        logger.warning(f"Error removing temporary checkpoint file {temp_checkpoint_path}: {e}")
+            # Check if we need to download the model
+            model_path = self._get_or_download_model(blob_name, remote_metadata)
+            if not model_path:
+                return False
+            
+            # Load the model from the cached/downloaded file
+            self.model = RFDETRBase(
+                device=self.device.type, 
+                pretrain_weights=str(model_path), 
+                num_classes=6
+            )
+            
+            logger.info(f"Model loaded successfully from: {model_path}")
+            return True
 
         except Exception as e:
             logger.error(f"Error loading detection model from Google Storage: {e}", exc_info=True)
             return False
+    
+    def _get_remote_model_metadata(self, blob_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Get metadata about the remote model file.
+        
+        Args:
+            blob_name: The blob name of the model file
+            
+        Returns:
+            Dictionary with model metadata or None if failed
+        """
+        try:
+            # Download a small portion of the file to get its hash
+            # We'll use a temporary file to get the full file info
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pth") as tmp_f:
+                temp_path = tmp_f.name
+            
+            try:
+                # Download the model file to get its hash
+                if not self.storage_client.download_blob(blob_name, temp_path):
+                    logger.error(f"Failed to download model file '{blob_name}' for metadata")
+                    return None
+                
+                # Calculate file hash
+                file_hash = self._calculate_file_hash(temp_path)
+                file_size = os.path.getsize(temp_path)
+                
+                # Clean up temporary file
+                os.remove(temp_path)
+                
+                return {
+                    "hash": file_hash,
+                    "size": file_size,
+                    "blob_name": blob_name
+                }
+                
+            except Exception as e:
+                # Clean up temporary file if it exists
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                raise e
+                
+        except Exception as e:
+            logger.error(f"Error getting remote model metadata: {e}")
+            return None
+    
+    def _calculate_file_hash(self, file_path: str) -> str:
+        """
+        Calculate SHA256 hash of a file.
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            SHA256 hash as hex string
+        """
+        hash_sha256 = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_sha256.update(chunk)
+        return hash_sha256.hexdigest()
+    
+    def _get_cached_model_metadata(self) -> Optional[Dict[str, Any]]:
+        """
+        Get metadata about the cached model file.
+        
+        Returns:
+            Dictionary with cached model metadata or None if no cache exists
+        """
+        try:
+            if not self.cache_metadata_path.exists():
+                return None
+                
+            with open(self.cache_metadata_path, 'r') as f:
+                return json.load(f)
+                
+        except Exception as e:
+            logger.warning(f"Error reading cached model metadata: {e}")
+            return None
+    
+    def _save_cached_model_metadata(self, metadata: Dict[str, Any]) -> None:
+        """
+        Save metadata about the cached model file.
+        
+        Args:
+            metadata: Dictionary with model metadata
+        """
+        try:
+            with open(self.cache_metadata_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+                
+        except Exception as e:
+            logger.warning(f"Error saving cached model metadata: {e}")
+    
+    def _get_or_download_model(self, blob_name: str, remote_metadata: Dict[str, Any]) -> Optional[Path]:
+        """
+        Get the model file, either from cache or by downloading.
+        
+        Args:
+            blob_name: The blob name of the model file
+            remote_metadata: Metadata about the remote model file
+            
+        Returns:
+            Path to the model file or None if failed
+        """
+        try:
+            # Check if we have a cached version
+            cached_metadata = self._get_cached_model_metadata()
+            
+            # Check if cached model exists and is up to date
+            if (cached_metadata and 
+                self.cached_model_path.exists() and 
+                cached_metadata.get("hash") == remote_metadata.get("hash")):
+                
+                logger.info(f"Using cached model: {self.cached_model_path}")
+                return self.cached_model_path
+            
+            # Need to download the model
+            logger.info(f"Downloading model '{blob_name}' from Google Storage...")
+            
+            # Download to temporary file first
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pth") as tmp_f:
+                temp_path = tmp_f.name
+            
+            try:
+                if not self.storage_client.download_blob(blob_name, temp_path):
+                    logger.error(f"Failed to download model file '{blob_name}' from Google Storage")
+                    return None
+                
+                # Verify the downloaded file hash
+                downloaded_hash = self._calculate_file_hash(temp_path)
+                if downloaded_hash != remote_metadata.get("hash"):
+                    logger.error(f"Downloaded model hash mismatch. Expected: {remote_metadata.get('hash')}, Got: {downloaded_hash}")
+                    os.remove(temp_path)
+                    return None
+                
+                # Move the downloaded file to cache
+                if self.cached_model_path.exists():
+                    self.cached_model_path.unlink()
+                
+                os.rename(temp_path, str(self.cached_model_path))
+                
+                # Save metadata
+                self._save_cached_model_metadata(remote_metadata)
+                
+                logger.info(f"Model downloaded and cached successfully: {self.cached_model_path}")
+                return self.cached_model_path
+                
+            except Exception as e:
+                # Clean up temporary file if it exists
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                raise e
+                
+        except Exception as e:
+            logger.error(f"Error getting or downloading model: {e}")
+            return None
 
     def generate_detections(
         self,
@@ -151,13 +308,72 @@ class DetectionModel:
 
         return self.model.predict(images, threshold=threshold, **kwargs)
 
+    def clear_cache(self) -> bool:
+        """
+        Clear the cached model and metadata files.
+        
+        Returns:
+            True if cache was cleared successfully, False otherwise
+        """
+        try:
+            cache_cleared = False
+            
+            # Remove cached model file
+            if self.cached_model_path.exists():
+                self.cached_model_path.unlink()
+                logger.info(f"Removed cached model: {self.cached_model_path}")
+                cache_cleared = True
+            
+            # Remove cached metadata file
+            if self.cache_metadata_path.exists():
+                self.cache_metadata_path.unlink()
+                logger.info(f"Removed cached metadata: {self.cache_metadata_path}")
+                cache_cleared = True
+            
+            if not cache_cleared:
+                logger.info("No cache files to clear")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error clearing cache: {e}")
+            return False
+    
+    @classmethod
+    def clear_all_cache(cls) -> bool:
+        """
+        Clear all cached model files in the cache directory.
+        
+        Returns:
+            True if cache was cleared successfully, False otherwise
+        """
+        try:
+            cache_dir = Path("/var/tmp/laxai_models")
+            
+            if not cache_dir.exists():
+                logger.info("Cache directory does not exist")
+                return True
+            
+            # Remove all files in cache directory
+            files_removed = 0
+            for file_path in cache_dir.glob("*"):
+                if file_path.is_file():
+                    file_path.unlink()
+                    files_removed += 1
+            
+            logger.info(f"Cleared {files_removed} files from cache directory: {cache_dir}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error clearing all cache: {e}")
+            return False
+
     def empty_detections(self):
         """Returns an empty Detections object."""
         return sv.Detections.empty()
 
 def get_model(
     model_dict: str = detection_config.model_checkpoint,
-    model_dir: Optional[str] = None,
     device: Optional[torch.device] = None
 ) -> DetectionModel:
     """
@@ -166,8 +382,6 @@ def get_model(
     Args:
         model_dict: The name of the model dictionary (checkpoint file) from Google Storage.
                     Defaults to `detection_config.model_checkpoint`.
-        model_dir: The path within the storage where the model dictionary resides.
-                   Defaults to `detection_config.checkpoint_dir`.
         device: The torch.device (cpu or cuda) to load the model onto.
 
     Returns:
@@ -175,7 +389,6 @@ def get_model(
     """
     return DetectionModel(
         model_dict=model_dict,
-        model_dir=model_dir,
         device=device,
     )
 

@@ -338,6 +338,48 @@ class GoogleStorageClient:
         except Exception as e:
             logger.error(f"Failed to delete blob: {e}")
             return False
+        
+
+    def move_blob(self, source_blob_name: str, destination_blob_name: str) -> bool:
+        """
+        Move a blob from one location to another within the bucket.
+        
+        Args:
+            source_blob_name: Name of the source blob (will be prefixed with user_path)
+            destination_blob_name: Name of the destination blob (will be prefixed with user_path)
+            
+        Returns:
+            bool: True if move successful, False otherwise
+        """
+        if not self._ensure_authenticated():
+            logger.error("Failed to authenticate with Google Cloud Storage")
+            return False
+        
+        try:
+            # Add user_path prefix to both source and destination
+            full_source = f"{self.config.user_path}/{source_blob_name}"
+            full_destination = f"{self.config.user_path}/{destination_blob_name}"
+            
+            # Get source blob
+            source_blob = self._bucket.blob(full_source)
+            
+            # Check if source blob exists
+            if not source_blob.exists():
+                logger.error(f"Source blob {full_source} does not exist")
+                return False
+            
+            # Copy the blob to the new destination
+            new_blob = self._bucket.copy_blob(source_blob, self._bucket, new_name=full_destination)
+            
+            # Delete the original blob
+            source_blob.delete()
+            
+            logger.info(f"Blob moved from {full_source} to {full_destination}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to move blob: {e}")
+            return False
 
 
 def get_storage(user_path: str) -> GoogleStorageClient:
@@ -370,7 +412,7 @@ if __name__ == "__main__":
     print("-" * 40)
     
     # Example user path - caller must provide this
-    user_path = "Tenant1/User"
+    user_path = "Common/Models"
     storage_client = get_storage(user_path)
     
     # Print configuration being used

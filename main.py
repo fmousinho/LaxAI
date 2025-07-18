@@ -116,8 +116,8 @@ def main() -> int:
     import tempfile, shutil
     TEMP_DIR = tempfile.mkdtemp(prefix="laxai_", suffix="_temp")
     logger.info(f"Created temporary directory: {TEMP_DIR}")
+    error_occurred = False
     try:
-        with Store() as store:
             if not store.is_initialized():
                 logger.critical("Store initialization failed. Exiting.")
                 return 1
@@ -132,6 +132,7 @@ def main() -> int:
                     device=selected_device
                     )
                 logger.info("Analysis completed successfully.")
+                shutil.rmtree(TEMP_DIR)
                 return 0
             app.run_application(
                 store=store,
@@ -145,15 +146,18 @@ def main() -> int:
             )
         logger.info("Application run completed successfully.")
         return 0
+
     except Exception as e:
         logger.critical(
             f"An unhandled exception occurred in the main application:\n"
             f"  {type(e).__name__}: {e}",
             exc_info=True
         )
+        error_occurred = True
         return 1
     finally:
-        if os.path.exists(TEMP_DIR):
+        # Clean up temporary directory, even if errors occurred
+        if os.path.exists(TEMP_DIR) and not error_occurred:
             logger.info(f"Cleaning up temporary directory: {TEMP_DIR}")
             shutil.rmtree(TEMP_DIR)
         logger.info("---------- LaxAI Application Finished ----------")

@@ -18,14 +18,7 @@ from .player_association import (
 
 from .augmentation import (
     augment_images,
-    test_augmentation,
-    augment_images_with_config
-)
-
-from .background_mask import (
-    BackgroundMaskDetector,
-    create_frame_generator_from_video,
-    create_frame_generator_from_images
+    test_augmentation
 )
 
 __all__ = [
@@ -39,9 +32,5 @@ __all__ = [
     'create_representative_embedding',
     'update_detection_metadata',
     'augment_images',
-    'test_augmentation',
-    'augment_images_with_config',
-    'BackgroundMaskDetector',
-    'create_frame_generator_from_video',
-    'create_frame_generator_from_images'
+    'test_augmentation'
 ]

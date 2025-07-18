@@ -21,13 +21,13 @@ from tools.store_driver import Store
 from modules.tracker import AffineAwareByteTrack, TrackData
 from modules.clustering_processor import ClusteringProcessor
 from modules.siamesenet import SiameseNet 
-from modules.det_processor import DetectionProcessor
+from core.common.detection_utils import process_frames, load_detections_from_json
 from core.common.crop_extractor import extract_crops_from_video, reorganize_crops_by_stitched_tracks, create_train_val_split
 from modules.dataset import LacrossePlayerDataset
 from modules.emb_processor import EmbeddingsProcessor
 from modules.writer_processor import VideoWriterProcessor
 from modules.player_association import associate_tracks_to_players_with_stitching, stitch_tracks
-from modules.background_mask import initialize_background_removal, refresh_transform_instances
+from config.transforms import initialize_background_removal, refresh_transform_instances
 
 
 
@@ -99,25 +99,28 @@ def run_application (
         detection_save_path = debug_config.save_detections_file
     else:
         detection_save_path = os.path.join(TEMP_DIR, "detections.json")
-    detection_processor = DetectionProcessor(detection_model, tracker, detection_save_path)
 
     if detections_import_path and os.path.exists(detections_import_path):
         logger.info(f"Loading existing detections from {detections_import_path}")
-        with open(detections_import_path, 'r') as f:
-            multi_frame_detections = detection_processor.json_to_detections(
-                detections_import_path, 
-                update_tracker_state=True, 
-                video_source=input_video
-            )
+        multi_frame_detections = load_detections_from_json(
+            detection_model,
+            tracker,
+            detections_import_path,
+            input_video,
+            update_tracker_state=True
+        )
         logger.info(f"Loaded detections for {len(multi_frame_detections)} frames.")
     else:
         if detections_import_path and not os.path.exists(detections_import_path):
             logger.warning(f"Detections import path does not exist: {detections_import_path}")
             logger.warning("Proceeding to generate detections from the video.")
         logger.info("Generating new detections from video.")
-        multi_frame_detections = detection_processor.process_frames(
-            frames_generator=frames_generator,
-            frame_target=FRAME_TARGET
+        multi_frame_detections = process_frames(
+            detection_model,
+            tracker,
+            frames_generator,
+            FRAME_TARGET,
+            detection_save_path
         )
 
 

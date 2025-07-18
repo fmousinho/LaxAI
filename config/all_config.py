@@ -66,14 +66,17 @@ class DetectionConfig:
     nms_iou_threshold: Optional[float] = None
     player_class_id: int = 3
     prediction_threshold: float = 0.6
-    model_checkpoint: str = "checkpoint_latest.pth"
+    model_checkpoint: str = "detection_latest.pth"
     output_video_path: str = "results.mp4"
     crop_extract_interval: int = 5
     # Google Storage configuration
-    default_storage_user_path: str = "Common/Models"  # Default path for model storage in Google Storage
+    default_storage_user_path: str = "common/models"  # Default path for model storage in Google Storage
     # Color space handling
     color_space: str = "RGB"  # Expected color space for processing
-    convert_bgr_to_rgb: bool = True  # Auto-convert OpenCV BGR to RG
+    convert_bgr_to_rgb: bool = True  # Auto-convert OpenCV BGR to RGB
+    # Training pipeline configuration
+    delete_original_raw_videos: bool = False  # Whether to delete original raw video files after processing
+    frames_per_video: int = 20  # Number of frames to extract per video
 
 
 @dataclass
