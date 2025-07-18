@@ -1222,8 +1222,9 @@ if __name__ == "__main__":
     frames_per_video = 20  # Number of frames to extract per video
     verbose = True  # Enable verbose logging
     save_intermediate = True  # Save intermediate results
-    
-    results = run_dataprep_pipeline(tenant_id=tenant_id, video_path="/path/to/video.mp4", delete_original_raw_videos=delete_original_raw_videos, frames_per_video=frames_per_video, verbose=verbose, save_intermediate=save_intermediate)
+    video_path = "GRIT Dallas-Houston 2027 vs Capital 2027 Orange - 9-00am_summary.mp4"
+
+    results = run_dataprep_pipeline(tenant_id=tenant_id, video_path=video_path, delete_original_raw_videos=delete_original_raw_videos, frames_per_video=frames_per_video, verbose=verbose, save_intermediate=save_intermediate)
     
     print("Pipeline Results:")
     print(json.dumps(results, indent=2))
