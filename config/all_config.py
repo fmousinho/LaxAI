@@ -144,9 +144,9 @@ class BackgroundMaskConfig:
     verbose: bool = True  # Whether to print progress information
     
     # Frame processing parameters
-    top_crop_ratio: float = 0.5  # Remove top 50% of frame
-    bottom_crop_ratio: float = 0.1  # Remove bottom 10% of frame
-    
+    top_crop_ratio: float = 0  # Remove top 0% of frame
+    bottom_crop_ratio: float = 0  # Remove bottom 0% of frame
+
     # HSV color space limits
     hsv_min_values: Tuple[int, int, int] = (0, 0, 0)  # Minimum HSV values
     hsv_max_values: Tuple[int, int, int] = (179, 255, 255)  # Maximum HSV values

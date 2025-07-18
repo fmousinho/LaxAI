@@ -16,7 +16,7 @@ from .player_association import (
     update_detection_metadata
 )
 
-from .augmentation import (
+from core.train.augmentation import (
     augment_images,
     test_augmentation
 )

@@ -4,6 +4,7 @@ import json
 import uuid
 import logging
 import time
+import shutil
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 from enum import Enum
@@ -24,6 +25,9 @@ from core.common.pipeline_step import PipelineStep, StepStatus
 from core.common.pipeline import Pipeline, PipelineStatus
 from config.all_config import DetectionConfig
 from config import logging_config
+from core.common.background_mask import BackgroundMaskDetector, create_frame_generator_from_images
+from core.common.crop_extractor import extract_crops_from_video
+from core.train.augmentation import augment_images
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +57,7 @@ class TrainPipeline(Pipeline):
         self.config = config
         self.tenant_id = tenant_id
         self.frames_per_video = config.frames_per_video
+        self.background_mask_detector = BackgroundMaskDetector()
         
         # Get storage clients
         self.storage_admin = get_storage("common")  # For accessing common resources
@@ -79,6 +84,10 @@ class TrainPipeline(Pipeline):
             "extract_frames": {
                 "description": "Extract frames with sufficient detections for processing",
                 "function": self._extract_frames_for_detections
+            },
+            "calculate_grass_mask": {
+                "description": "Calculate grass mask for each frame",
+                "function": self._initialize_grass_mask
             },
             "detect_players": {
                 "description": "Process detection results and save to storage",
@@ -344,24 +353,114 @@ class TrainPipeline(Pipeline):
         Extract and save player crops from detections.
         
         Args:
-            context: Pipeline context containing detection_result
+            context: Pipeline context containing detection_result and frames_data
             
         Returns:
             Dictionary with crop extraction results
         """
-        # Placeholder implementation
         detection_result = context.get("detection_result")
-        if detection_result:
-            video_guid = detection_result.get("video_guid")
+        frames_data = context.get("frames_data")
+        video_guid = context.get("video_guid")
+        
+        if not detection_result or not frames_data:
+            logger.warning("No detection result or frames data found for crop extraction")
+            return {"status": StepStatus.ERROR.value, "error": "No detection result or frames data provided"}
+        
+        try:
             logger.info(f"Extracting crops for video: {video_guid}")
-            return {"crops_extracted": True, "video_guid": video_guid}
-        else:
-            logger.warning("No detection result found for crop extraction")
-            return {"crops_extracted": False}
+            
+            # Get the video folder
+            video_folder = context.get("video_folder", f"{self.run_folder}/video_{video_guid}")
+            
+            # Create crops directory structure
+            crops_folder = f"{video_folder}/crops"
+            original_crops_folder = f"{crops_folder}/original"
+            
+            # Create a temporary directory for crop extraction
+            temp_dir = f"/tmp/crops_{video_guid}"
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            try:
+                # Create frame generator from the extracted frames
+                frame_generator = create_frame_generator_from_images(frames_data, input_format='BGR')
+                
+                # We need to run detection on each frame individually to get per-frame detections
+                # Since the detection model doesn't currently support batch processing,
+                # we'll process each frame individually
+                all_detections = []
+                frame_idx = 0
+                
+                for frame in frames_data:
+                    # Run detection on this single frame
+                    frame_detections = self.detection_model.generate_detections(frame)
+                    
+                    # Add frame_id to the detection data
+                    if frame_detections.data is None:
+                        frame_detections.data = {}
+                    frame_detections.data["frame_id"] = np.full(len(frame_detections), frame_idx)
+                    
+                    all_detections.append(frame_detections)
+                    frame_idx += 1
+                
+                # Create frame generator again (since the first one was consumed)
+                frame_generator = create_frame_generator_from_images(frames_data, input_format='BGR')
+                
+                # Extract crops using the crop extractor utility
+                crops_dir, all_crops_dir = extract_crops_from_video(
+                    frame_generator,
+                    all_detections,
+                    temp_dir,
+                    crop_extract_interval=1  # Extract from all frames since we have limited frames
+                )
+                
+                # Upload crops to Google Storage
+                crops_uploaded = 0
+                if os.path.exists(all_crops_dir):
+                    # Walk through all crop files and upload them
+                    for root, dirs, files in os.walk(all_crops_dir):
+                        for file in files:
+                            if file.endswith('.jpg'):
+                                local_crop_path = os.path.join(root, file)
+                                
+                                # Calculate relative path from all_crops_dir
+                                rel_path = os.path.relpath(local_crop_path, all_crops_dir)
+                                
+                                # Upload to Google Storage
+                                storage_crop_path = f"{original_crops_folder}/{rel_path}"
+                                
+                                if self.tenant_storage.upload_from_file(storage_crop_path, local_crop_path):
+                                    crops_uploaded += 1
+                                    logger.debug(f"Uploaded crop: {storage_crop_path}")
+                                else:
+                                    logger.warning(f"Failed to upload crop: {storage_crop_path}")
+                
+                logger.info(f"Successfully extracted and uploaded {crops_uploaded} crops for video: {video_guid}")
+                
+                return {
+                    "crops_extracted": True,
+                    "video_guid": video_guid,
+                    "crops_folder": crops_folder,
+                    "original_crops_folder": original_crops_folder,
+                    "crops_uploaded": crops_uploaded,
+                    "total_detections": len(all_detections)
+                }
+                
+            finally:
+                # Clean up temporary directory
+                if os.path.exists(temp_dir):
+                    try:
+                        shutil.rmtree(temp_dir)
+                        logger.debug(f"Cleaned up temporary crops directory: {temp_dir}")
+                    except Exception as cleanup_error:
+                        logger.warning(f"Failed to cleanup temporary crops directory {temp_dir}: {cleanup_error}")
+                        
+        except Exception as e:
+            logger.error(f"Failed to extract crops for video {video_guid}: {e}")
+            return {"status": StepStatus.ERROR.value, "error": str(e)}
     
     def _remove_crop_background(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Remove background from player crops.
+        Remove background from player crops using the initialized grass mask detector.
         
         Args:
             context: Pipeline context containing crop extraction results
@@ -369,15 +468,125 @@ class TrainPipeline(Pipeline):
         Returns:
             Dictionary with background removal results
         """
-        # Placeholder implementation
         crops_extracted = context.get("crops_extracted", False)
         video_guid = context.get("video_guid")
-        if crops_extracted:
+        original_crops_folder = context.get("original_crops_folder")
+        grass_mask_initialized = context.get("grass_mask_initialized", False)
+        
+        if not crops_extracted or not original_crops_folder:
+            logger.warning("No crops extracted or original crops folder not found")
+            return {"status": StepStatus.ERROR.value, "error": "No crops extracted or original crops folder not found"}
+        
+        if not grass_mask_initialized:
+            logger.warning("Grass mask detector not initialized")
+            return {"status": StepStatus.ERROR.value, "error": "Grass mask detector not initialized"}
+        
+        try:
             logger.info(f"Removing background from crops for video: {video_guid}")
-            return {"background_removed": True, "video_guid": video_guid}
-        else:
-            logger.warning("No crops to remove background from")
-            return {"background_removed": False}
+            
+            # Get the video folder and create modified crops folder
+            video_folder = context.get("video_folder", f"{self.run_folder}/video_{video_guid}")
+            crops_folder = f"{video_folder}/crops"
+            modified_crops_folder = f"{crops_folder}/modified"
+            
+            # Create temporary directory for processing
+            temp_dir = f"/tmp/background_removal_{video_guid}"
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            try:
+                # Download all original crops from Google Storage
+                temp_original_dir = os.path.join(temp_dir, "original")
+                os.makedirs(temp_original_dir, exist_ok=True)
+                
+                # List all blobs in the original crops folder
+                blobs = self.tenant_storage.list_blobs(prefix=f"{original_crops_folder}/")
+                
+                downloaded_crops = []
+                crops_processed = 0
+                
+                for blob_name in blobs:
+                    if blob_name.endswith('.jpg'):
+                        # Calculate local path maintaining directory structure
+                        rel_path = blob_name[len(f"{original_crops_folder}/"):]
+                        local_path = os.path.join(temp_original_dir, rel_path)
+                        
+                        # Create directory structure if needed
+                        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                        
+                        # Download the crop
+                        if self.tenant_storage.download_blob(blob_name, local_path):
+                            downloaded_crops.append((blob_name, local_path, rel_path))
+                            logger.debug(f"Downloaded crop: {blob_name}")
+                        else:
+                            logger.warning(f"Failed to download crop: {blob_name}")
+                
+                logger.info(f"Downloaded {len(downloaded_crops)} crops for background removal")
+                
+                # Process each crop to remove background
+                for blob_name, local_path, rel_path in downloaded_crops:
+                    try:
+                        # Read the crop image
+                        crop_img = cv2.imread(local_path)
+                        
+                        if crop_img is None:
+                            logger.warning(f"Failed to read crop image: {local_path}")
+                            continue
+                        
+                        # Remove background using the grass mask detector
+                        processed_result = self.background_mask_detector.remove_background(
+                            crop_img, 
+                            input_format='BGR'
+                        )
+                        
+                        # Ensure we have a single image (not a list)
+                        if isinstance(processed_result, list):
+                            processed_crop = processed_result[0]
+                        else:
+                            processed_crop = processed_result
+                        
+                        # Save the processed crop to temporary location
+                        temp_modified_path = os.path.join(temp_dir, "modified", rel_path)
+                        os.makedirs(os.path.dirname(temp_modified_path), exist_ok=True)
+                        
+                        if cv2.imwrite(temp_modified_path, processed_crop):
+                            # Upload the modified crop to Google Storage
+                            storage_modified_path = f"{modified_crops_folder}/{rel_path}"
+                            
+                            if self.tenant_storage.upload_from_file(storage_modified_path, temp_modified_path):
+                                crops_processed += 1
+                                logger.debug(f"Processed and uploaded crop: {storage_modified_path}")
+                            else:
+                                logger.warning(f"Failed to upload modified crop: {storage_modified_path}")
+                        else:
+                            logger.warning(f"Failed to save modified crop: {temp_modified_path}")
+                            
+                    except Exception as crop_error:
+                        logger.warning(f"Failed to process crop {local_path}: {crop_error}")
+                        continue
+                
+                logger.info(f"Successfully removed background from {crops_processed} crops for video: {video_guid}")
+                
+                return {
+                    "background_removed": True,
+                    "video_guid": video_guid,
+                    "original_crops_folder": original_crops_folder,
+                    "modified_crops_folder": modified_crops_folder,
+                    "crops_processed": crops_processed,
+                    "total_crops_downloaded": len(downloaded_crops)
+                }
+                
+            finally:
+                # Clean up temporary directory
+                if os.path.exists(temp_dir):
+                    try:
+                        shutil.rmtree(temp_dir)
+                        logger.debug(f"Cleaned up temporary background removal directory: {temp_dir}")
+                    except Exception as cleanup_error:
+                        logger.warning(f"Failed to cleanup temporary directory {temp_dir}: {cleanup_error}")
+                        
+        except Exception as e:
+            logger.error(f"Failed to remove background from crops for video {video_guid}: {e}")
+            return {"status": StepStatus.ERROR.value, "error": str(e)}
     
     def _augment_crops(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -391,10 +600,14 @@ class TrainPipeline(Pipeline):
         """
         # Placeholder implementation
         background_removed = context.get("background_removed", False)
+        modified_crops_folder = context.get("modified_crops_folder")
+        crops_processed = context.get("crops_processed", 0)
         video_guid = context.get("video_guid")
-        if background_removed:
-            logger.info(f"Augmenting crops for video: {video_guid}")
-            return {"crops_augmented": True, "video_guid": video_guid}
+        
+        if background_removed and modified_crops_folder and crops_processed > 0:
+            logger.info(f"Augmenting {crops_processed} crops for video: {video_guid}")
+            logger.info(f"Using modified crops from: {modified_crops_folder}")
+            return {"crops_augmented": True, "video_guid": video_guid, "modified_crops_folder": modified_crops_folder}
         else:
             logger.warning("No background-removed crops to augment")
             return {"crops_augmented": False}
@@ -607,7 +820,56 @@ class TrainPipeline(Pipeline):
                     logger.debug(f"Cleaned up temporary file: {temp_path}")
                 except Exception as cleanup_error:
                     logger.warning(f"Failed to cleanup temporary file {temp_path}: {cleanup_error}")
-    
+
+
+    def _initialize_grass_mask(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Initialize the grass mask detector using the extracted frames.
+        
+        Args:
+            context: Pipeline context containing frames_data
+            
+        Returns:
+            Dictionary with grass mask initialization results
+        """
+        frames_data = context.get("frames_data")
+        video_guid = context.get("video_guid")
+        
+        if not frames_data:
+            logger.warning("No frames data for grass mask initialization")
+            return {"status": StepStatus.ERROR.value, "error": "No frames data provided"}
+        
+        try:
+            logger.info(f"Initializing grass mask detector for video: {video_guid}")
+            
+            # Create frame generator from the extracted frames
+            frame_generator = create_frame_generator_from_images(frames_data, input_format='BGR')
+            
+            # Initialize the background mask detector with the frames
+            self.background_mask_detector.initialize(frame_generator)
+            
+            # Get background statistics for logging
+            stats = self.background_mask_detector.get_stats()
+            
+            logger.info(f"Grass mask detector initialized successfully for video: {video_guid}")
+            logger.debug(f"Background color statistics: {stats}")
+            
+            return {
+                "grass_mask_initialized": True,
+                "video_guid": video_guid,
+                "background_stats": {
+                    "mean_hsv": stats['mean_hsv'].tolist() if stats['mean_hsv'] is not None else None,
+                    "std_hsv": stats['std_hsv'].tolist() if stats['std_hsv'] is not None else None,
+                    "lower_bound": stats['lower_bound'].tolist() if stats['lower_bound'] is not None else None,
+                    "upper_bound": stats['upper_bound'].tolist() if stats['upper_bound'] is not None else None,
+                    "std_dev_multiplier": stats['std_dev_multiplier'],
+                    "replacement_color": stats['replacement_color']
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize grass mask detector for video {video_guid}: {e}")
+            return {"status": StepStatus.ERROR.value, "error": str(e)}
 
 
 def run_training_pipeline(tenant_id: str = "tenant1", video_path: str = "", delete_original_raw_videos: bool = False, frames_per_video: int = 20, verbose: bool = False, save_intermediate: bool = False) -> Dict[str, Any]:

@@ -22,20 +22,22 @@ Configuration Options:
 
 Usage Examples:
     # Using global default configuration
-    detector = BackgroundMaskDetector(frame_generator)
+    detector = BackgroundMaskDetector()
+    detector.initialize(frame_generator)
     
     # Using custom configuration
     custom_config = BackgroundMaskConfig(sample_frames=3, replacement_color=(0, 255, 0))
-    detector = BackgroundMaskDetector(frame_generator, config=custom_config)
+    detector = BackgroundMaskDetector(config=custom_config)
+    detector.initialize(frame_generator)
     
     # Using parameter overrides (any config field can be overridden)
     detector = BackgroundMaskDetector(
-        frame_generator, 
         sample_frames=2, 
         verbose=False,
         top_crop_ratio=0.3,
         replacement_color=(255, 0, 0)
     )
+    detector.initialize(frame_generator)
     
     # Dynamic updates
     detector.update_replacement_color((255, 0, 0))
@@ -62,7 +64,6 @@ class BackgroundMaskDetector:
     
     def __init__(
         self,
-        frame_generator: Generator[np.ndarray, None, None],
         config: Optional[BackgroundMaskConfig] = None,
         **kwargs
     ):
@@ -70,7 +71,6 @@ class BackgroundMaskDetector:
         Initialize the background mask detector.
         
         Args:
-            frame_generator: Generator that yields BGR frames from video
             config: BackgroundMaskConfig instance (uses global config if None)
             **kwargs: Override any config parameters (sample_frames, std_dev_multiplier, 
                      replacement_color, verbose, top_crop_ratio, bottom_crop_ratio, etc.)
@@ -96,6 +96,15 @@ class BackgroundMaskDetector:
         self.lower_bound: Optional[np.ndarray] = None
         self.upper_bound: Optional[np.ndarray] = None
         
+        logger.info("BackgroundMaskDetector created. Call initialize() to detect background color.")
+    
+    def initialize(self, frame_generator: Generator[np.ndarray, None, None]):
+        """
+        Initialize the detector by analyzing frames to detect background color.
+        
+        Args:
+            frame_generator: Generator that yields BGR frames from video
+        """
         # Detect background color from frames
         self._detect_background_color(frame_generator)
         logger.info("BackgroundMaskDetector initialized successfully.")
@@ -478,10 +487,8 @@ if __name__ == "__main__":
     
     # Test 1: Using default configuration
     print("\n=== Test 1: Default Configuration ===")
-    detector = BackgroundMaskDetector(
-        frame_generator=frame_gen,
-        verbose=True
-    )
+    detector = BackgroundMaskDetector(verbose=True)
+    detector.initialize(frame_gen)
     
     # Test background removal
     test_image = test_frames[0]
@@ -507,10 +514,8 @@ if __name__ == "__main__":
     )
     
     frame_gen2 = create_frame_generator_from_images(test_frames)
-    detector2 = BackgroundMaskDetector(
-        frame_generator=frame_gen2,
-        config=custom_config
-    )
+    detector2 = BackgroundMaskDetector(config=custom_config)
+    detector2.initialize(frame_gen2)
     
     result2 = detector2.remove_background(test_image)
     print(f"Custom config test completed with blue replacement color.")
@@ -519,11 +524,11 @@ if __name__ == "__main__":
     print("\n=== Test 3: Parameter Override ===")
     frame_gen3 = create_frame_generator_from_images(test_frames)
     detector3 = BackgroundMaskDetector(
-        frame_generator=frame_gen3,
         sample_frames=2,  # Override config
         replacement_color=(255, 255, 0),  # Yellow replacement
         verbose=True
     )
+    detector3.initialize(frame_gen3)
     
     result3 = detector3.remove_background(test_image)
     print(f"Parameter override test completed with yellow replacement color.")

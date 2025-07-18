@@ -1,5 +1,28 @@
 {
     "python.analysis.extraPaths": [
         "./tools"
+    ],
+    "python.analysis.exclude": [
+        "**/.git",
+        "**/.venv*",
+        "**/__pycache__",
+        "**/.pytest_cache",
+        "**/node_modules",
+        "**/.DS_Store",
+        "**/runs/**",
+        "**/notebooks/**",
+        "**/documentation/**",
+        "**/examples/**",
+        "**/*.md",
+        "**/*.json",
+        "**/*.txt",
+        "**/*.yml",
+        "**/*.yaml",
+        "**/*.env*",
+        "**/.file_cache/**",
+        "**/detections.json",
+        "**/tracks.json",
+        "**/*.pth",
+        "**/*.ipynb"
     ]
 }
