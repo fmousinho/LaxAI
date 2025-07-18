@@ -185,7 +185,14 @@ class DataPrepPipeline(Pipeline):
             if video_path.startswith("gs://"):
                 imported_video = self._import_single_video(video_path, video_guid, video_folder)
             else:
-                imported_video = video_path
+                # Check if it's a local file that exists
+                if os.path.exists(video_path):
+                    imported_video = video_path
+                else:
+                    # Assume it's a filename in the tenant's raw directory
+                    raw_video_path = f"raw/{video_path}"
+                    logger.info(f"Video not found locally, looking in tenant raw directory: {raw_video_path}")
+                    imported_video = self._import_single_video(raw_video_path, video_guid, video_folder)
 
             # Check if the import succeeded
             if not imported_video:
@@ -268,26 +275,30 @@ class DataPrepPipeline(Pipeline):
         video_guid = context.get("video_guid")
         
         if not imported_video:
-            logger.warning("No imported video to load")
+            logger.error("No imported video to load")
             return {"status": StepStatus.ERROR.value, "error": "No imported video provided"}
         
         # Create a robust temporary file path
         temp_video_path = f"/tmp/processing_{video_guid}.mp4"
         
         try:
-            # If it's a Google Storage path, download it
-            if imported_video.startswith("gs://") or "/" in imported_video:
-                if not self.tenant_storage.download_blob(imported_video, temp_video_path):
-                    raise RuntimeError(f"Failed to download video for processing: {imported_video}")
-            else:
+            # Check if the video file exists locally or in Google Storage
+            if os.path.exists(imported_video):
                 # It's a local file, use it directly
                 temp_video_path = imported_video
+                logger.info(f"Using local video file: {imported_video}")
+            else:
+                # It's a Google Storage path, download it
+                logger.info(f"Downloading video from storage: {imported_video}")
+                if not self.tenant_storage.download_blob(imported_video, temp_video_path):
+                    raise RuntimeError(f"Failed to download video for processing: {imported_video}")
             
             # Validate video resolution
+            logger.info(f"Validating video resolution: {temp_video_path}")
             if not self._validate_video_resolution(temp_video_path):
-                raise RuntimeError(f"Video resolution too low: {imported_video}")
+                raise RuntimeError(f"Video resolution validation failed for: {imported_video}. Video must be at least 1920x1080 pixels.")
             
-            logger.info(f"Loaded video for processing: {imported_video}")
+            logger.info(f"Successfully loaded video for processing: {imported_video}")
             
             return {
                 "loaded_video": {
@@ -298,7 +309,7 @@ class DataPrepPipeline(Pipeline):
             }
             
         except Exception as e:
-            logger.error(f"Failed to load video {imported_video}: {e}")
+            logger.error(f"Critical error loading video {imported_video}: {e}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
         finally:
             # Note: We don't cleanup the temp file here because it's needed for subsequent steps
@@ -319,24 +330,90 @@ class DataPrepPipeline(Pipeline):
         video_guid = context.get("video_guid")
         
         if not frames_data:
-            logger.warning("No frames data for player detection")
-            return {"status": StepStatus.ERROR.value, "error": "No frames data provided"}
+            # If frames_data is missing (e.g., when resuming from checkpoint), try to regenerate it
+            logger.warning("No frames data for player detection - attempting to regenerate from video")
+            
+            # Try to get loaded_video info to re-extract frames
+            loaded_video = context.get("loaded_video")
+            if loaded_video and loaded_video.get("temp_path"):
+                logger.info("Attempting to re-extract frames for detection")
+                # Re-extract frames for this step
+                frames_result = self._extract_frames_for_detections(context)
+                if frames_result.get("status") == StepStatus.ERROR.value:
+                    return frames_result
+                frames_data = frames_result.get("frames_data")
+                # Update context with re-extracted frames
+                context["frames_data"] = frames_data
+            
+            if not frames_data:
+                logger.error("No frames data for player detection - previous step failed or frames unavailable")
+                return {"status": StepStatus.ERROR.value, "error": "No frames data provided - frame extraction failed"}
+        
+        if not video_guid:
+            logger.error("No video GUID for player detection")
+            return {"status": StepStatus.ERROR.value, "error": "No video GUID provided"}
         
         try:
-            detections = self.detection_model.generate_detections(frames_data)
+            logger.info(f"Starting player detection for video: {video_guid} with {len(frames_data)} frames")
+            
+            # Process each frame individually since the detection model expects individual frames
+            all_detections = []
+            for i, frame in enumerate(frames_data):
+                try:
+                    # Ensure frame is a numpy array with correct format
+                    if not isinstance(frame, np.ndarray):
+                        logger.warning(f"Frame {i} is not a numpy array, skipping")
+                        continue
+                    
+                    # Convert from BGR to RGB if needed (OpenCV uses BGR, models usually expect RGB)
+                    if len(frame.shape) == 3 and frame.shape[2] == 3:
+                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    else:
+                        frame_rgb = frame
+                    
+                    # Generate detections for this single frame
+                    frame_detections = self.detection_model.generate_detections(frame_rgb)
+                    
+                    if frame_detections is not None and len(frame_detections) > 0:
+                        all_detections.extend(frame_detections)
+                        logger.debug(f"Frame {i}: Found {len(frame_detections)} detections")
+                    else:
+                        logger.debug(f"Frame {i}: No detections found")
+                        
+                except Exception as frame_error:
+                    logger.warning(f"Failed to process frame {i}: {frame_error}")
+                    continue
 
-            if len(detections) == 0:
-                raise RuntimeError(f"Could not extract {self.frames_per_video} frames with sufficient detections")
+            if len(all_detections) == 0:
+                logger.error(f"Could not extract detections from {len(frames_data)} frames for video {video_guid}")
+                return {"status": StepStatus.ERROR.value, "error": f"No detections found in {len(frames_data)} frames"}
 
-            # Save detections
+            # Save detections - convert to JSON-serializable format
             video_folder = context.get("video_folder", f"{self.run_folder}/video_{video_guid}")
             detections_blob = f"{video_folder}/detections.json"
 
-            detections_content = json.dumps(detections, indent=2)
+            # Convert detections to JSON-serializable format
+            serializable_detections = []
+            for detection in all_detections:
+                if hasattr(detection, 'xyxy') and hasattr(detection, 'confidence') and hasattr(detection, 'class_id'):
+                    # Convert supervision.Detections to dictionary
+                    detection_dict = {
+                        "boxes": detection.xyxy.tolist() if hasattr(detection.xyxy, 'tolist') else detection.xyxy,
+                        "confidence": detection.confidence.tolist() if hasattr(detection.confidence, 'tolist') else detection.confidence,
+                        "class_id": detection.class_id.tolist() if hasattr(detection.class_id, 'tolist') else detection.class_id,
+                        "tracker_id": detection.tracker_id.tolist() if detection.tracker_id is not None and hasattr(detection.tracker_id, 'tolist') else detection.tracker_id
+                    }
+                    serializable_detections.append(detection_dict)
+                else:
+                    # If it's already a dict or other serializable format, keep it as is
+                    serializable_detections.append(detection)
+
+            detections_content = json.dumps(serializable_detections, indent=2)
             if not self.tenant_storage.upload_from_string(detections_blob, detections_content):
-                raise RuntimeError(f"Failed to save detections for video: {video_guid}")
+                logger.error(f"Failed to save detections for video: {video_guid}")
+                return {"status": StepStatus.ERROR.value, "error": f"Failed to save detections to storage: {detections_blob}"}
             
-            logger.info(f"Completed detection for video: {video_guid}")
+            logger.info(f"Completed detection for video: {video_guid} - found {len(all_detections)} detections")
             
             return {
                 "detection_result": {
@@ -347,7 +424,7 @@ class DataPrepPipeline(Pipeline):
             }
             
         except Exception as e:
-            logger.error(f"Failed player detection for video {video_guid}: {e}")
+            logger.error(f"Critical error in player detection for video {video_guid}: {e}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
     
     def _extract_crops(self, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -962,21 +1039,44 @@ class DataPrepPipeline(Pipeline):
         Returns:
             True if resolution is adequate, False otherwise
         """
-        cap = cv2.VideoCapture(video_path)
-        
-        if not cap.isOpened():
-            logger.error(f"Could not open video: {video_path}")
+        try:
+            # Check if file exists
+            if not os.path.exists(video_path):
+                logger.error(f"Video file does not exist: {video_path}")
+                return False
+            
+            # Check if file is not empty
+            if os.path.getsize(video_path) == 0:
+                logger.error(f"Video file is empty: {video_path}")
+                return False
+            
+            cap = cv2.VideoCapture(video_path)
+            
+            if not cap.isOpened():
+                logger.error(f"OpenCV could not open video file: {video_path}")
+                logger.error("This could be due to:")
+                logger.error("1. Unsupported video format")
+                logger.error("2. Corrupted video file")
+                logger.error("3. Missing codecs")
+                logger.error("4. File permissions issue")
+                return False
+            
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            
+            cap.release()
+            
+            is_valid = width >= 1920 and height >= 1080
+            logger.info(f"Video resolution: {width}x{height}, Valid: {is_valid}")
+            
+            if not is_valid:
+                logger.error(f"Video resolution {width}x{height} is below minimum requirement of 1920x1080")
+            
+            return is_valid
+            
+        except Exception as e:
+            logger.error(f"Error validating video resolution for {video_path}: {e}")
             return False
-        
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        
-        cap.release()
-        
-        is_valid = width >= 1920 and height >= 1080
-        logger.info(f"Video resolution: {width}x{height}, Valid: {is_valid}")
-        
-        return is_valid
     
     def _extract_video_metadata(self, video_path: str, original_blob_name: str, video_guid: str) -> Dict[str, Any]:
         """
@@ -1036,8 +1136,8 @@ class DataPrepPipeline(Pipeline):
         loaded_video = context.get("loaded_video")
         
         if not loaded_video:
-            logger.warning("No loaded video for frame extraction")
-            return {"status": StepStatus.ERROR.value, "error": "No loaded video provided"}
+            logger.error("No loaded video for frame extraction - previous step failed")
+            return {"status": StepStatus.ERROR.value, "error": "No loaded video provided - video loading failed"}
         
         temp_path = loaded_video["temp_path"]
         video_guid = loaded_video["video_guid"]
@@ -1049,6 +1149,9 @@ class DataPrepPipeline(Pipeline):
                 raise RuntimeError(f"Could not open video for frame extraction: {temp_path}")
             
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+            if total_frames <= 0:
+                raise RuntimeError(f"Video has no frames or invalid frame count: {total_frames}")
             
             # Calculate initial frame positions (frames_per_video frames equally spaced)
             frame_positions = [int(i * total_frames / self.frames_per_video) for i in range(self.frames_per_video)]
@@ -1094,6 +1197,9 @@ class DataPrepPipeline(Pipeline):
             
             cap.release()
 
+            if len(frames_data) == 0:
+                raise RuntimeError(f"No frames could be extracted from video")
+
             logger.info(f"Extracted and saved {len(frames_data)} frames to {selected_frames_folder}")
             
             return {
@@ -1105,7 +1211,7 @@ class DataPrepPipeline(Pipeline):
             }
             
         except Exception as e:
-            logger.error(f"Failed to extract frames from video {video_guid}: {e}")
+            logger.error(f"Critical error extracting frames from video {video_guid}: {e}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
         finally:
             # Clean up temporary file after frame extraction
@@ -1133,8 +1239,24 @@ class DataPrepPipeline(Pipeline):
         video_guid = context.get("video_guid")
         
         if not frames_data:
-            logger.warning("No frames data for grass mask initialization")
-            return {"status": StepStatus.ERROR.value, "error": "No frames data provided"}
+            # If frames_data is missing (e.g., when resuming from checkpoint), try to regenerate it
+            logger.warning("No frames data for grass mask initialization - attempting to regenerate from video")
+            
+            # Try to get loaded_video info to re-extract frames
+            loaded_video = context.get("loaded_video")
+            if loaded_video and loaded_video.get("temp_path"):
+                logger.info("Attempting to re-extract frames for grass mask initialization")
+                # Re-extract frames for this step
+                frames_result = self._extract_frames_for_detections(context)
+                if frames_result.get("status") == StepStatus.ERROR.value:
+                    return frames_result
+                frames_data = frames_result.get("frames_data")
+                # Update context with re-extracted frames
+                context["frames_data"] = frames_data
+            
+            if not frames_data:
+                logger.warning("No frames data for grass mask initialization")
+                return {"status": StepStatus.ERROR.value, "error": "No frames data provided"}
         
         try:
             logger.info(f"Initializing grass mask detector for video: {video_guid}")
@@ -1151,17 +1273,23 @@ class DataPrepPipeline(Pipeline):
             logger.info(f"Grass mask detector initialized successfully for video: {video_guid}")
             logger.debug(f"Background color statistics: {stats}")
             
+            # Convert numpy arrays to lists for JSON serialization
+            background_stats = {}
+            for key, value in stats.items():
+                if hasattr(value, 'tolist'):  # numpy array
+                    background_stats[key] = value.tolist()
+                elif hasattr(value, '__iter__') and not isinstance(value, (str, bytes)):  # other iterables
+                    try:
+                        background_stats[key] = list(value)
+                    except:
+                        background_stats[key] = str(value)
+                else:
+                    background_stats[key] = value
+            
             return {
                 "grass_mask_initialized": True,
                 "video_guid": video_guid,
-                "background_stats": {
-                    "mean_hsv": stats['mean_hsv'].tolist() if stats['mean_hsv'] is not None else None,
-                    "std_hsv": stats['std_hsv'].tolist() if stats['std_hsv'] is not None else None,
-                    "lower_bound": stats['lower_bound'].tolist() if stats['lower_bound'] is not None else None,
-                    "upper_bound": stats['upper_bound'].tolist() if stats['upper_bound'] is not None else None,
-                    "std_dev_multiplier": stats['std_dev_multiplier'],
-                    "replacement_color": stats['replacement_color']
-                }
+                "background_stats": background_stats
             }
             
         except Exception as e:
@@ -1222,7 +1350,34 @@ if __name__ == "__main__":
     frames_per_video = 20  # Number of frames to extract per video
     verbose = True  # Enable verbose logging
     save_intermediate = True  # Save intermediate results
-    video_path = "GRIT Dallas-Houston 2027 vs Capital 2027 Orange - 9-00am_summary.mp4"
+    
+    # Get the first video from the raw directory
+    try:
+        # Get storage client for the tenant
+        tenant_storage = get_storage(f"{tenant_id}/user")
+        
+        # List all blobs in the raw directory
+        raw_blobs = tenant_storage.list_blobs(prefix="raw/")
+        
+        # Find the first MP4 video file
+        video_path = None
+        for blob_name in raw_blobs:
+            if blob_name.endswith('.mp4') and blob_name != "raw/":
+                # Extract just the filename from the full path
+                video_path = blob_name.split("/")[-1]
+                break
+        
+        if not video_path:
+            print("No MP4 videos found in the raw directory")
+            exit(1)
+        
+        print(f"Processing first video found: {video_path}")
+        
+    except Exception as e:
+        print(f"Error accessing raw directory: {e}")
+        # Fallback to a default video name
+        video_path = "GRIT Dallas-Houston 2027 vs Team 91 2027 National - 7-30am_summary.mp4"
+        print(f"Using fallback video: {video_path}")
 
     results = run_dataprep_pipeline(tenant_id=tenant_id, video_path=video_path, delete_original_raw_videos=delete_original_raw_videos, frames_per_video=frames_per_video, verbose=verbose, save_intermediate=save_intermediate)
     

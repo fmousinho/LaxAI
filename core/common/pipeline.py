@@ -170,6 +170,12 @@ class Pipeline:
         
         try:
             result = func(*args, **kwargs)
+            
+            # Check if the result indicates an error
+            if isinstance(result, dict) and result.get("status") == StepStatus.ERROR.value:
+                error_msg = result.get("error", "Unknown error")
+                raise RuntimeError(f"Step returned error status: {error_msg}")
+            
             step.complete(metadata={"args_count": len(args), "kwargs_count": len(kwargs)})
             self._log_step(step_name, f"Completed successfully in {step.duration:.2f}s")
             return result
@@ -265,13 +271,38 @@ class Pipeline:
             True if checkpoint saved successfully, False otherwise
         """
         try:
+            # Create a serializable copy of context, excluding numpy arrays and other non-serializable objects
+            serializable_context = {}
+            for key, value in context.items():
+                if key == "frames_data":
+                    # Skip frames_data as it contains numpy arrays
+                    serializable_context[key] = f"<numpy_array_data_excluded_{len(value) if hasattr(value, '__len__') else 'unknown'}_items>"
+                elif hasattr(value, 'tolist'):  # numpy array
+                    serializable_context[key] = value.tolist()
+                elif hasattr(value, '__iter__') and not isinstance(value, (str, bytes, dict)):  # other iterables
+                    try:
+                        # Try to convert to list, but skip if it contains complex objects
+                        serializable_items = []
+                        for item in value:
+                            if hasattr(item, 'tolist'):
+                                serializable_items.append(item.tolist())
+                            elif isinstance(item, (str, int, float, bool, type(None))):
+                                serializable_items.append(item)
+                            else:
+                                serializable_items.append(str(item))
+                        serializable_context[key] = serializable_items
+                    except:
+                        serializable_context[key] = str(value)
+                else:
+                    serializable_context[key] = value
+                    
             checkpoint_data = {
                 "pipeline_name": self.pipeline_name,
                 "run_guid": self.run_guid,
                 "run_folder": self.run_folder,
                 "timestamp": datetime.now().isoformat(),
                 "completed_steps": completed_steps,
-                "context": context,
+                "context": serializable_context,
                 "steps_summary": {name: step.to_dict() for name, step in self.steps.items()},
                 "checkpoint_version": "1.0"
             }

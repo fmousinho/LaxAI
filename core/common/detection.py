@@ -1,5 +1,8 @@
-import logging
+# Enable MPS fallback for PyTorch operations on macOS (must be set before torch import)
 import os
+os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+
+import logging
 import sys
 import tempfile
 import hashlib
