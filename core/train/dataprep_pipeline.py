@@ -375,7 +375,8 @@ class DataPrepPipeline(Pipeline):
                     frame_detections = self.detection_model.generate_detections(frame_rgb)
                     
                     if frame_detections is not None and len(frame_detections) > 0:
-                        all_detections.extend(frame_detections)
+                        # Append the entire Detections object to the list
+                        all_detections.append(frame_detections)
                         logger.debug(f"Frame {i}: Found {len(frame_detections)} detections")
                     else:
                         logger.debug(f"Frame {i}: No detections found")
@@ -394,19 +395,22 @@ class DataPrepPipeline(Pipeline):
 
             # Convert detections to JSON-serializable format
             serializable_detections = []
-            for detection in all_detections:
-                if hasattr(detection, 'xyxy') and hasattr(detection, 'confidence') and hasattr(detection, 'class_id'):
-                    # Convert supervision.Detections to dictionary
-                    detection_dict = {
-                        "boxes": detection.xyxy.tolist() if hasattr(detection.xyxy, 'tolist') else detection.xyxy,
-                        "confidence": detection.confidence.tolist() if hasattr(detection.confidence, 'tolist') else detection.confidence,
-                        "class_id": detection.class_id.tolist() if hasattr(detection.class_id, 'tolist') else detection.class_id,
-                        "tracker_id": detection.tracker_id.tolist() if detection.tracker_id is not None and hasattr(detection.tracker_id, 'tolist') else detection.tracker_id
+            for frame_idx, detection_obj in enumerate(all_detections):
+                # Each detection_obj is a supervision.Detections object
+                if hasattr(detection_obj, 'xyxy') and hasattr(detection_obj, 'confidence') and hasattr(detection_obj, 'class_id'):
+                    # Convert supervision.Detections to dictionary with frame information
+                    frame_detections = {
+                        "frame_index": frame_idx,
+                        "boxes": detection_obj.xyxy.tolist() if hasattr(detection_obj.xyxy, 'tolist') else detection_obj.xyxy,
+                        "confidence": detection_obj.confidence.tolist() if hasattr(detection_obj.confidence, 'tolist') else detection_obj.confidence,
+                        "class_id": detection_obj.class_id.tolist() if hasattr(detection_obj.class_id, 'tolist') else detection_obj.class_id,
+                        "tracker_id": detection_obj.tracker_id.tolist() if detection_obj.tracker_id is not None and hasattr(detection_obj.tracker_id, 'tolist') else detection_obj.tracker_id,
+                        "num_detections": len(detection_obj)
                     }
-                    serializable_detections.append(detection_dict)
+                    serializable_detections.append(frame_detections)
                 else:
                     # If it's already a dict or other serializable format, keep it as is
-                    serializable_detections.append(detection)
+                    serializable_detections.append(detection_obj)
 
             detections_content = json.dumps(serializable_detections, indent=2)
             if not self.tenant_storage.upload_from_string(detections_blob, detections_content):
@@ -460,29 +464,114 @@ class DataPrepPipeline(Pipeline):
             os.makedirs(temp_dir, exist_ok=True)
             
             try:
-                # Create frame generator from the extracted frames
-                frame_generator = create_frame_generator_from_images(frames_data, input_format='BGR')
+                # Load the saved detection results instead of re-running detection
+                detections_blob = detection_result.get("detections_blob")
+                if not detections_blob:
+                    raise RuntimeError("No detections blob found in detection result")
                 
-                # We need to run detection on each frame individually to get per-frame detections
-                # Since the detection model doesn't currently support batch processing,
-                # we'll process each frame individually
+                # Download the detection results
+                temp_detections_path = f"/tmp/detections_{video_guid}.json"
+                if not self.tenant_storage.download_blob(detections_blob, temp_detections_path):
+                    raise RuntimeError(f"Failed to download detection results: {detections_blob}")
+                
+                # Load the detection results
+                with open(temp_detections_path, 'r') as f:
+                    saved_detections = json.load(f)
+                
+                logger.info(f"Loaded {len(saved_detections)} detection frames from storage")
+                
+                # Convert saved detections back to supervision.Detections format
                 all_detections = []
-                frame_idx = 0
+                for frame_idx, frame_detection in enumerate(saved_detections):
+                    if isinstance(frame_detection, dict) and "boxes" in frame_detection:
+                        # Convert back to supervision.Detections format
+                        boxes = np.array(frame_detection["boxes"])
+                        confidence = np.array(frame_detection["confidence"])
+                        class_id = np.array(frame_detection["class_id"])
+                        
+                        # Debug: Check the actual detection data
+                        logger.info(f"Frame {frame_idx}: {len(boxes)} boxes, confidence range: {confidence.min():.3f}-{confidence.max():.3f}")
+                        logger.info(f"  Sample box: {boxes[0] if len(boxes) > 0 else 'No boxes'}")
+                        
+                        # Create supervision.Detections object
+                        detections = sv.Detections(
+                            xyxy=boxes,
+                            confidence=confidence,
+                            class_id=class_id
+                        )
+                        
+                        # Add frame_id to the detection data
+                        if detections.data is None:
+                            detections.data = {}
+                        detections.data["frame_id"] = np.full(len(detections), frame_idx)
+                        
+                        all_detections.append(detections)
+                        logger.debug(f"Converted frame {frame_idx}: {len(detections)} detections")
+                    else:
+                        logger.warning(f"Skipping frame {frame_idx}: Invalid detection format")
                 
-                for frame in frames_data:
-                    # Run detection on this single frame
-                    frame_detections = self.detection_model.generate_detections(frame)
-                    
-                    # Add frame_id to the detection data
-                    if frame_detections.data is None:
-                        frame_detections.data = {}
-                    frame_detections.data["frame_id"] = np.full(len(frame_detections), frame_idx)
-                    
-                    all_detections.append(frame_detections)
-                    frame_idx += 1
+                if len(all_detections) == 0:
+                    raise RuntimeError("No valid detections found in saved results")
                 
-                # Create frame generator again (since the first one was consumed)
-                frame_generator = create_frame_generator_from_images(frames_data, input_format='BGR')
+                logger.info(f"Successfully converted {len(all_detections)} detection frames")
+                
+                # Debug: Log detection statistics
+                total_detections = sum(len(det) for det in all_detections)
+                logger.info(f"Total detections across all frames: {total_detections}")
+                
+                # Load the actual frame images from storage
+                frames_folder = context.get("frames_folder")
+                if not frames_folder:
+                    # Use selected_frames folder instead
+                    frames_folder = f"{video_folder}/selected_frames"
+                
+                # Download all frame images to a temporary directory
+                temp_frames_dir = f"/tmp/frames_{video_guid}"
+                os.makedirs(temp_frames_dir, exist_ok=True)
+                
+                # First, list all available frames in the selected_frames folder
+                selected_frames_blobs = self.tenant_storage.list_blobs(frames_folder)
+                available_frames = []
+                for blob in selected_frames_blobs:
+                    if blob.endswith('.jpg'):
+                        # Extract frame number from filename like 'frame_375.jpg'
+                        frame_name = blob.split('/')[-1]  # Get just the filename
+                        if frame_name.startswith('frame_'):
+                            frame_number = int(frame_name.split('_')[1].split('.')[0])
+                            # Remove the user_path prefix from the blob path if present
+                            user_path_prefix = f"{self.tenant_storage.config.user_path}/"
+                            clean_blob_path = blob
+                            if blob.startswith(user_path_prefix):
+                                clean_blob_path = blob[len(user_path_prefix):]
+                            available_frames.append((frame_number, clean_blob_path))
+                
+                # Sort by frame number
+                available_frames.sort(key=lambda x: x[0])
+                
+                logger.info(f"Found {len(available_frames)} available frames for crop extraction")
+                
+                frame_images = []
+                for frame_number, frame_blob in available_frames:
+                    temp_frame_path = f"{temp_frames_dir}/frame_{frame_number}.jpg"
+                    
+                    if self.tenant_storage.download_blob(frame_blob, temp_frame_path):
+                        # Load the frame image
+                        frame_image = cv2.imread(temp_frame_path)
+                        if frame_image is not None:
+                            frame_images.append(frame_image)
+                            logger.debug(f"Loaded frame {frame_number} from {frame_blob}")
+                        else:
+                            logger.warning(f"Failed to load frame image: {temp_frame_path}")
+                    else:
+                        logger.warning(f"Failed to download frame: {frame_blob}")
+                
+                if len(frame_images) == 0:
+                    raise RuntimeError("No frame images could be loaded")
+                
+                logger.info(f"Loaded {len(frame_images)} frame images for crop extraction")
+                
+                # Create frame generator from the loaded frame images
+                frame_generator = create_frame_generator_from_images(frame_images, input_format='BGR')
                 
                 # Extract crops using the crop extractor utility
                 crops_dir, all_crops_dir = extract_crops_from_video(
@@ -508,6 +597,7 @@ class DataPrepPipeline(Pipeline):
                                 
                                 # Load crop into memory
                                 crop_img = cv2.imread(local_crop_path)
+                                crop_img = cv2.cvtColor(crop_img, cv2.COLOR_BGR2RGB)  # Convert to RGB
                                 if crop_img is not None:
                                     crops_in_memory[rel_path] = crop_img
                                     
@@ -530,17 +620,26 @@ class DataPrepPipeline(Pipeline):
                     "original_crops_folder": original_crops_folder,
                     "crops_uploaded": crops_uploaded,
                     "total_detections": len(all_detections),
-                    "crops_in_memory": crops_in_memory  # OPTIMIZATION: Pass crops in memory
+                    "crops_in_memory": crops_in_memory  # OPTIMIZATION: Pass crops in memory to next step
                 }
                 
             finally:
-                # Clean up temporary directory
+                # Clean up temporary files
                 if os.path.exists(temp_dir):
                     try:
                         shutil.rmtree(temp_dir)
                         logger.debug(f"Cleaned up temporary crops directory: {temp_dir}")
                     except Exception as cleanup_error:
                         logger.warning(f"Failed to cleanup temporary crops directory {temp_dir}: {cleanup_error}")
+                
+                # Clean up temporary detections file
+                temp_detections_path = f"/tmp/detections_{video_guid}.json"
+                if os.path.exists(temp_detections_path):
+                    try:
+                        os.remove(temp_detections_path)
+                        logger.debug(f"Cleaned up temporary detections file: {temp_detections_path}")
+                    except Exception as cleanup_error:
+                        logger.warning(f"Failed to cleanup temporary detections file {temp_detections_path}: {cleanup_error}")
                         
         except Exception as e:
             logger.error(f"Failed to extract crops for video {video_guid}: {e}")
@@ -580,8 +679,16 @@ class DataPrepPipeline(Pipeline):
             # OPTIMIZATION: Use in-memory crops if available
             crops_in_memory = context.get("crops_in_memory", {})
             
+            logger.info(f"Background removal - crops_in_memory available: {len(crops_in_memory)} crops")
+            
             if crops_in_memory:
                 logger.info(f"Using {len(crops_in_memory)} crops from memory (optimized)")
+                
+                # Log sample crop information for debugging
+                if len(crops_in_memory) > 0:
+                    sample_path, sample_crop = next(iter(crops_in_memory.items()))
+                    logger.debug(f"Sample crop: {sample_path}, shape: {sample_crop.shape}, dtype: {sample_crop.dtype}")
+                    logger.debug(f"Sample crop pixel [0,0]: {sample_crop[0,0]}")
                 
                 # Process crops directly from memory
                 modified_crops_in_memory = {}
@@ -595,9 +702,10 @@ class DataPrepPipeline(Pipeline):
                     for rel_path, crop_img in crops_in_memory.items():
                         try:
                             # Remove background using the grass mask detector
+                            # Note: crops_in_memory contains RGB images, so we specify RGB input format
                             processed_result = self.background_mask_detector.remove_background(
                                 crop_img, 
-                                input_format='BGR'
+                                input_format='RGB'
                             )
                             
                             # Ensure we have a single image (not a list)
@@ -606,24 +714,48 @@ class DataPrepPipeline(Pipeline):
                             else:
                                 processed_crop = processed_result
                             
-                            # Store in memory and save to temporary location for upload
+                            # Log background removal results for debugging
+                            if crops_processed < 3:  # Only log first few crops to avoid spam
+                                logger.debug(f"Crop {rel_path}: Original pixel [0,0]: {crop_img[0,0]}")
+                                logger.debug(f"Crop {rel_path}: Processed pixel [0,0]: {processed_crop[0,0]}")
+                            
+                            # Store in memory for next step
                             modified_crops_in_memory[rel_path] = processed_crop
                             
-                            # Save the processed crop to temporary location
-                            temp_modified_path = os.path.join(temp_dir, rel_path)
-                            os.makedirs(os.path.dirname(temp_modified_path), exist_ok=True)
-                            
-                            if cv2.imwrite(temp_modified_path, processed_crop):
-                                # Upload the modified crop to Google Storage
-                                storage_modified_path = f"{modified_crops_folder}/{rel_path}"
+                            # Parse crop information from rel_path (format: frame_{frame_id}/{frame_id}_{tracker_id}_{confidence}.jpg)
+                            path_parts = rel_path.split('/')
+                            if len(path_parts) >= 2:
+                                frame_folder = path_parts[0]  # e.g., "frame_123"
+                                crop_filename = path_parts[1]  # e.g., "123_456_0.850.jpg"
                                 
-                                if self.tenant_storage.upload_from_file(storage_modified_path, temp_modified_path):
-                                    crops_processed += 1
-                                    logger.debug(f"Processed and uploaded crop: {storage_modified_path}")
+                                # Extract frame_id and tracker_id from filename
+                                name_parts = crop_filename.split('_')
+                                if len(name_parts) >= 2:
+                                    frame_id = name_parts[0]
+                                    tracker_id = name_parts[1]
+                                    
+                                    # Create new path structure: video_folder/crops/modified/frame{frame_id}/crop_{tracker_id}/crop.jpg
+                                    new_storage_path = f"{modified_crops_folder}/frame{frame_id}/crop_{tracker_id}/crop.jpg"
+                                    
+                                    # Save the processed crop to temporary location
+                                    temp_modified_path = os.path.join(temp_dir, f"frame{frame_id}", f"crop_{tracker_id}", "crop.jpg")
+                                    os.makedirs(os.path.dirname(temp_modified_path), exist_ok=True)
+                                    
+                                    # Convert RGB to BGR for OpenCV saving (which will result in RGB on disk)
+                                    crop_bgr = cv2.cvtColor(processed_crop, cv2.COLOR_RGB2BGR)
+                                    if cv2.imwrite(temp_modified_path, crop_bgr):
+                                        # Upload the modified crop to Google Storage
+                                        if self.tenant_storage.upload_from_file(new_storage_path, temp_modified_path):
+                                            crops_processed += 1
+                                            logger.debug(f"Processed and uploaded crop: {new_storage_path}")
+                                        else:
+                                            logger.warning(f"Failed to upload modified crop: {new_storage_path}")
+                                    else:
+                                        logger.warning(f"Failed to save modified crop: {temp_modified_path}")
                                 else:
-                                    logger.warning(f"Failed to upload modified crop: {storage_modified_path}")
+                                    logger.warning(f"Invalid crop filename format: {crop_filename}")
                             else:
-                                logger.warning(f"Failed to save modified crop: {temp_modified_path}")
+                                logger.warning(f"Invalid crop path format: {rel_path}")
                                 
                         except Exception as crop_error:
                             logger.warning(f"Failed to process crop {rel_path}: {crop_error}")
@@ -667,26 +799,70 @@ class DataPrepPipeline(Pipeline):
                     # List all blobs in the original crops folder
                     blobs = self.tenant_storage.list_blobs(prefix=f"{original_crops_folder}/")
                     
+                    if not blobs:
+                        logger.error(f"No blobs found in original crops folder: {original_crops_folder}")
+                        return {"status": StepStatus.ERROR.value, "error": f"No crops found in {original_crops_folder}"}
+                    
                     downloaded_crops = []
                     crops_processed = 0
+                    failed_downloads = 0
+                    
+                    logger.info(f"Found {len(blobs)} blobs in original crops folder: {original_crops_folder}")
+                    logger.debug(f"User path prefix: {self.tenant_storage.config.user_path}/")
+                    logger.debug(f"Full crops folder path: {self.tenant_storage.config.user_path}/{original_crops_folder}")
                     
                     for blob_name in blobs:
                         if blob_name.endswith('.jpg'):
                             # Calculate local path maintaining directory structure
-                            rel_path = blob_name[len(f"{original_crops_folder}/"):]
+                            # blob_name includes user_path prefix, so we need to calculate rel_path correctly
+                            user_path_prefix = f"{self.tenant_storage.config.user_path}/"
+                            full_original_crops_folder = f"{user_path_prefix}{original_crops_folder}"
+                            
+                            if blob_name.startswith(f"{full_original_crops_folder}/"):
+                                rel_path = blob_name[len(f"{full_original_crops_folder}/"):]
+                            else:
+                                # Fallback: try with just the original_crops_folder
+                                rel_path = blob_name[len(f"{original_crops_folder}/"):]
+                            
                             local_path = os.path.join(temp_original_dir, rel_path)
                             
                             # Create directory structure if needed
                             os.makedirs(os.path.dirname(local_path), exist_ok=True)
                             
+                            # Debug: Log the blob path being downloaded
+                            logger.debug(f"Attempting to download blob: {blob_name}")
+                            
+                            # IMPORTANT: The blob_name from list_blobs includes the user_path prefix,
+                            # but download_blob expects a path without the user_path prefix
+                            # So we need to strip the user_path prefix from the blob_name
+                            user_path_prefix = f"{self.tenant_storage.config.user_path}/"
+                            if blob_name.startswith(user_path_prefix):
+                                blob_path_for_download = blob_name[len(user_path_prefix):]
+                            else:
+                                blob_path_for_download = blob_name
+                            
+                            logger.debug(f"Downloading blob path: {blob_path_for_download}")
+                            
                             # Download the crop
-                            if self.tenant_storage.download_blob(blob_name, local_path):
+                            if self.tenant_storage.download_blob(blob_path_for_download, local_path):
                                 downloaded_crops.append((blob_name, local_path, rel_path))
                                 logger.debug(f"Downloaded crop: {blob_name}")
                             else:
+                                failed_downloads += 1
                                 logger.warning(f"Failed to download crop: {blob_name}")
+                                logger.warning(f"  Original blob name: {blob_name}")
+                                logger.warning(f"  Download path used: {blob_path_for_download}")
                     
-                    logger.info(f"Downloaded {len(downloaded_crops)} crops for background removal")
+                    # Check if too many downloads failed - this indicates a systemic issue
+                    if failed_downloads > 0 and len(downloaded_crops) == 0:
+                        logger.error(f"Failed to download any crops from {original_crops_folder}. This indicates a path or storage issue.")
+                        return {"status": StepStatus.ERROR.value, "error": f"Failed to download any crops from storage. Check paths and storage configuration."}
+                    
+                    if failed_downloads > len(downloaded_crops):
+                        logger.error(f"More downloads failed ({failed_downloads}) than succeeded ({len(downloaded_crops)}). This indicates a systemic issue.")
+                        return {"status": StepStatus.ERROR.value, "error": f"Majority of crop downloads failed. Check paths and storage configuration."}
+                    
+                    logger.info(f"Downloaded {len(downloaded_crops)} crops for background removal (failed: {failed_downloads})")
                     
                     # Process each crop to remove background
                     for blob_name, local_path, rel_path in downloaded_crops:
@@ -698,10 +874,13 @@ class DataPrepPipeline(Pipeline):
                                 logger.warning(f"Failed to read crop image: {local_path}")
                                 continue
                             
+                            # Convert BGR to RGB since cv2.imread returns BGR but our crops are stored as RGB
+                            crop_rgb = cv2.cvtColor(crop_img, cv2.COLOR_BGR2RGB)
+                            
                             # Remove background using the grass mask detector
                             processed_result = self.background_mask_detector.remove_background(
-                                crop_img, 
-                                input_format='BGR'
+                                crop_rgb, 
+                                input_format='RGB'
                             )
                             
                             # Ensure we have a single image (not a list)
@@ -710,21 +889,40 @@ class DataPrepPipeline(Pipeline):
                             else:
                                 processed_crop = processed_result
                             
-                            # Save the processed crop to temporary location
-                            temp_modified_path = os.path.join(temp_dir, "modified", rel_path)
-                            os.makedirs(os.path.dirname(temp_modified_path), exist_ok=True)
-                            
-                            if cv2.imwrite(temp_modified_path, processed_crop):
-                                # Upload the modified crop to Google Storage
-                                storage_modified_path = f"{modified_crops_folder}/{rel_path}"
+                            # Parse crop information from rel_path (format: frame_{frame_id}/{frame_id}_{tracker_id}_{confidence}.jpg)
+                            path_parts = rel_path.split('/')
+                            if len(path_parts) >= 2:
+                                frame_folder = path_parts[0]  # e.g., "frame_123"
+                                crop_filename = path_parts[1]  # e.g., "123_456_0.850.jpg"
                                 
-                                if self.tenant_storage.upload_from_file(storage_modified_path, temp_modified_path):
-                                    crops_processed += 1
-                                    logger.debug(f"Processed and uploaded crop: {storage_modified_path}")
+                                # Extract frame_id and tracker_id from filename
+                                name_parts = crop_filename.split('_')
+                                if len(name_parts) >= 2:
+                                    frame_id = name_parts[0]
+                                    tracker_id = name_parts[1]
+                                    
+                                    # Create new path structure: video_folder/crops/modified/frame{frame_id}/crop_{tracker_id}/crop.jpg
+                                    new_storage_path = f"{modified_crops_folder}/frame{frame_id}/crop_{tracker_id}/crop.jpg"
+                                    
+                                    # Save the processed crop to temporary location
+                                    temp_modified_path = os.path.join(temp_dir, "modified", f"frame{frame_id}", f"crop_{tracker_id}", "crop.jpg")
+                                    os.makedirs(os.path.dirname(temp_modified_path), exist_ok=True)
+                                    
+                                    # Convert RGB to BGR for OpenCV saving (which will result in RGB on disk)
+                                    crop_bgr = cv2.cvtColor(processed_crop, cv2.COLOR_RGB2BGR)
+                                    if cv2.imwrite(temp_modified_path, crop_bgr):
+                                        # Upload the modified crop to Google Storage
+                                        if self.tenant_storage.upload_from_file(new_storage_path, temp_modified_path):
+                                            crops_processed += 1
+                                            logger.debug(f"Processed and uploaded crop: {new_storage_path}")
+                                        else:
+                                            logger.warning(f"Failed to upload modified crop: {new_storage_path}")
+                                    else:
+                                        logger.warning(f"Failed to save modified crop: {temp_modified_path}")
                                 else:
-                                    logger.warning(f"Failed to upload modified crop: {storage_modified_path}")
+                                    logger.warning(f"Invalid crop filename format: {crop_filename}")
                             else:
-                                logger.warning(f"Failed to save modified crop: {temp_modified_path}")
+                                logger.warning(f"Invalid crop path format: {rel_path}")
                                 
                         except Exception as crop_error:
                             logger.warning(f"Failed to process crop {local_path}: {crop_error}")
@@ -757,7 +955,7 @@ class DataPrepPipeline(Pipeline):
     
     def _augment_crops(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Augment player crops for training.
+        Augment player crops for training and store them in the same directories as source crops.
         
         Args:
             context: Pipeline context containing background removal results
@@ -771,25 +969,220 @@ class DataPrepPipeline(Pipeline):
         crops_processed = context.get("crops_processed", 0)
         video_guid = context.get("video_guid")
         
-        if background_removed and modified_crops_folder and crops_processed > 0:
+        if not background_removed or not modified_crops_folder or crops_processed == 0:
+            logger.warning("No background-removed crops to augment")
+            return {"crops_augmented": False, "error": "No background-removed crops available"}
+        
+        try:
             logger.info(f"Augmenting {crops_processed} crops for video: {video_guid}")
             logger.info(f"Using modified crops from: {modified_crops_folder}")
             
-            # OPTIMIZATION: Pass through in-memory data if available
-            result = {
-                "crops_augmented": True, 
-                "video_guid": video_guid, 
-                "modified_crops_folder": modified_crops_folder
-            }
-            
+            # OPTIMIZATION: Use in-memory crops if available
             if modified_crops_in_memory:
-                result["modified_crops_in_memory"] = modified_crops_in_memory
-                logger.info(f"Passing {len(modified_crops_in_memory)} crops in memory to next step")
+                logger.info(f"Using {len(modified_crops_in_memory)} crops from memory (optimized)")
+                
+                # Process crops directly from memory
+                augmented_crops_in_memory = {}
+                total_augmented = 0
+                
+                # Create temporary directory for saving augmented crops
+                temp_dir = f"/tmp/augmentation_{video_guid}"
+                os.makedirs(temp_dir, exist_ok=True)
+                
+                try:
+                    for rel_path, crop_img in modified_crops_in_memory.items():
+                        try:
+                            # Parse crop information from rel_path to determine storage structure
+                            path_parts = rel_path.split('/')
+                            if len(path_parts) >= 2:
+                                frame_folder = path_parts[0]  # e.g., "frame_123"
+                                crop_filename = path_parts[1]  # e.g., "123_456_0.850.jpg"
+                                
+                                # Extract frame_id and tracker_id from filename
+                                name_parts = crop_filename.split('_')
+                                if len(name_parts) >= 2:
+                                    frame_id = name_parts[0]
+                                    tracker_id = name_parts[1]
+                                    
+                                    # Generate augmented images
+                                    augmented_images = augment_images([crop_img])
+                                    
+                                    # Store original crop (already processed)
+                                    augmented_crops_in_memory[rel_path] = crop_img
+                                    
+                                    # Store each augmented image in the same directory as the source crop
+                                    for i, aug_img in enumerate(augmented_images[1:], 1):  # Skip original (index 0)
+                                        # Create storage path in same directory: frame{frame_id}/crop_{tracker_id}/crop_aug{i}.jpg
+                                        aug_storage_path = f"{modified_crops_folder}/frame{frame_id}/crop_{tracker_id}/crop_aug{i}.jpg"
+                                        aug_rel_path = f"frame{frame_id}/crop_{tracker_id}/crop_aug{i}.jpg"
+                                        
+                                        # Store in memory
+                                        augmented_crops_in_memory[aug_rel_path] = aug_img
+                                        
+                                        # Save to temporary location for upload
+                                        temp_aug_path = os.path.join(temp_dir, f"frame{frame_id}", f"crop_{tracker_id}", f"crop_aug{i}.jpg")
+                                        os.makedirs(os.path.dirname(temp_aug_path), exist_ok=True)
+                                        
+                                        # Convert RGB to BGR for OpenCV saving
+                                        aug_bgr = cv2.cvtColor(aug_img, cv2.COLOR_RGB2BGR)
+                                        if cv2.imwrite(temp_aug_path, aug_bgr):
+                                            # Upload the augmented crop to Google Storage
+                                            if self.tenant_storage.upload_from_file(aug_storage_path, temp_aug_path):
+                                                total_augmented += 1
+                                                logger.debug(f"Augmented and uploaded crop: {aug_storage_path}")
+                                            else:
+                                                logger.warning(f"Failed to upload augmented crop: {aug_storage_path}")
+                                        else:
+                                            logger.warning(f"Failed to save augmented crop: {temp_aug_path}")
+                                
+                                else:
+                                    logger.warning(f"Invalid crop filename format: {crop_filename}")
+                            else:
+                                logger.warning(f"Invalid crop path format: {rel_path}")
+                                
+                        except Exception as crop_error:
+                            logger.warning(f"Failed to augment crop {rel_path}: {crop_error}")
+                            continue
+                    
+                    logger.info(f"Successfully augmented {total_augmented} crops from {len(modified_crops_in_memory)} source crops for video: {video_guid}")
+                    
+                    return {
+                        "crops_augmented": True,
+                        "video_guid": video_guid,
+                        "modified_crops_folder": modified_crops_folder,
+                        "total_augmented": total_augmented,
+                        "source_crops": len(modified_crops_in_memory),
+                        "augmented_crops_in_memory": augmented_crops_in_memory,  # Pass to next step
+                        "optimization_used": "in_memory_processing"
+                    }
+                    
+                finally:
+                    # Clean up temporary directory
+                    if os.path.exists(temp_dir):
+                        try:
+                            shutil.rmtree(temp_dir)
+                            logger.debug(f"Cleaned up temporary augmentation directory: {temp_dir}")
+                        except Exception as cleanup_error:
+                            logger.warning(f"Failed to cleanup temporary directory {temp_dir}: {cleanup_error}")
             
-            return result
-        else:
-            logger.warning("No background-removed crops to augment")
-            return {"crops_augmented": False}
+            else:
+                # FALLBACK: Download crops from storage, augment, and upload back
+                logger.info("Using fallback implementation with Google Storage downloads")
+                
+                # Create temporary directory for processing
+                temp_dir = f"/tmp/augmentation_{video_guid}"
+                os.makedirs(temp_dir, exist_ok=True)
+                
+                try:
+                    # Download all modified crops from Google Storage
+                    temp_crops_dir = os.path.join(temp_dir, "crops")
+                    os.makedirs(temp_crops_dir, exist_ok=True)
+                    
+                    # List all blobs in the modified crops folder
+                    blobs = self.tenant_storage.list_blobs(prefix=f"{modified_crops_folder}/")
+                    
+                    downloaded_crops = []
+                    total_augmented = 0
+                    
+                    for blob_name in blobs:
+                        if blob_name.endswith('.jpg') and 'crop.jpg' in blob_name:  # Only process original crops, not existing augmentations
+                            # Calculate relative path
+                            user_path_prefix = f"{self.tenant_storage.config.user_path}/"
+                            if blob_name.startswith(user_path_prefix):
+                                blob_path_for_download = blob_name[len(user_path_prefix):]
+                            else:
+                                blob_path_for_download = blob_name
+                            
+                            # Extract the relative path structure
+                            if blob_name.startswith(f"{user_path_prefix}{modified_crops_folder}/"):
+                                rel_path = blob_name[len(f"{user_path_prefix}{modified_crops_folder}/"):]
+                            else:
+                                rel_path = blob_name[len(f"{modified_crops_folder}/"):]
+                            
+                            local_path = os.path.join(temp_crops_dir, rel_path)
+                            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                            
+                            # Download the crop
+                            if self.tenant_storage.download_blob(blob_path_for_download, local_path):
+                                downloaded_crops.append((blob_name, local_path, rel_path))
+                            else:
+                                logger.warning(f"Failed to download crop: {blob_name}")
+                    
+                    logger.info(f"Downloaded {len(downloaded_crops)} crops for augmentation")
+                    
+                    # Process each crop to create augmentations
+                    for blob_name, local_path, rel_path in downloaded_crops:
+                        try:
+                            # Read the crop image
+                            crop_img = cv2.imread(local_path)
+                            if crop_img is None:
+                                logger.warning(f"Failed to read crop image: {local_path}")
+                                continue
+                            
+                            # Convert BGR to RGB
+                            crop_rgb = cv2.cvtColor(crop_img, cv2.COLOR_BGR2RGB)
+                            
+                            # Parse path to get frame_id and tracker_id
+                            # rel_path format: frame123/crop_456/crop.jpg
+                            path_parts = rel_path.split('/')
+                            if len(path_parts) >= 3:
+                                frame_folder = path_parts[0]  # e.g., "frame123"
+                                crop_folder = path_parts[1]   # e.g., "crop_456"
+                                
+                                frame_id = frame_folder.replace('frame', '')
+                                tracker_id = crop_folder.replace('crop_', '')
+                                
+                                # Generate augmented images
+                                augmented_images = augment_images([crop_rgb])
+                                
+                                # Save each augmented image in the same directory
+                                for i, aug_img in enumerate(augmented_images[1:], 1):  # Skip original (index 0)
+                                    # Create storage path: frame{frame_id}/crop_{tracker_id}/crop_aug{i}.jpg
+                                    aug_storage_path = f"{modified_crops_folder}/frame{frame_id}/crop_{tracker_id}/crop_aug{i}.jpg"
+                                    
+                                    # Save to temporary location
+                                    temp_aug_path = os.path.join(temp_dir, "augmented", f"frame{frame_id}", f"crop_{tracker_id}", f"crop_aug{i}.jpg")
+                                    os.makedirs(os.path.dirname(temp_aug_path), exist_ok=True)
+                                    
+                                    # Convert RGB to BGR for OpenCV saving
+                                    aug_bgr = cv2.cvtColor(aug_img, cv2.COLOR_RGB2BGR)
+                                    if cv2.imwrite(temp_aug_path, aug_bgr):
+                                        # Upload the augmented crop to Google Storage
+                                        if self.tenant_storage.upload_from_file(aug_storage_path, temp_aug_path):
+                                            total_augmented += 1
+                                            logger.debug(f"Augmented and uploaded crop: {aug_storage_path}")
+                                        else:
+                                            logger.warning(f"Failed to upload augmented crop: {aug_storage_path}")
+                                    else:
+                                        logger.warning(f"Failed to save augmented crop: {temp_aug_path}")
+                            
+                        except Exception as crop_error:
+                            logger.warning(f"Failed to augment crop {local_path}: {crop_error}")
+                            continue
+                    
+                    logger.info(f"Successfully augmented {total_augmented} crops from {len(downloaded_crops)} source crops for video: {video_guid}")
+                    
+                    return {
+                        "crops_augmented": True,
+                        "video_guid": video_guid,
+                        "modified_crops_folder": modified_crops_folder,
+                        "total_augmented": total_augmented,
+                        "source_crops": len(downloaded_crops),
+                        "optimization_used": "fallback_storage"
+                    }
+                    
+                finally:
+                    # Clean up temporary directory
+                    if os.path.exists(temp_dir):
+                        try:
+                            shutil.rmtree(temp_dir)
+                            logger.debug(f"Cleaned up temporary augmentation directory: {temp_dir}")
+                        except Exception as cleanup_error:
+                            logger.warning(f"Failed to cleanup temporary directory {temp_dir}: {cleanup_error}")
+            
+        except Exception as e:
+            logger.error(f"Failed to augment crops for video {video_guid}: {e}")
+            return {"status": StepStatus.ERROR.value, "error": str(e)}
     
     def _create_training_and_validation_sets(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -816,11 +1209,11 @@ class DataPrepPipeline(Pipeline):
             video_folder = context.get("video_folder", f"{self.run_folder}/video_{video_guid}")
             datasets_folder = f"{video_folder}/datasets"
             
-            # OPTIMIZATION: Use in-memory crops if available
-            modified_crops_in_memory = context.get("modified_crops_in_memory", {})
+            # OPTIMIZATION: Use in-memory crops if available (now includes augmented crops)
+            augmented_crops_in_memory = context.get("augmented_crops_in_memory", {})
             
-            if modified_crops_in_memory:
-                logger.info(f"Using {len(modified_crops_in_memory)} modified crops from memory (optimized)")
+            if augmented_crops_in_memory:
+                logger.info(f"Using {len(augmented_crops_in_memory)} augmented crops from memory (optimized)")
                 
                 # Create temporary directory for processing
                 temp_dir = f"/tmp/datasets_{video_guid}"
@@ -834,20 +1227,27 @@ class DataPrepPipeline(Pipeline):
                     track_folders = set()
                     
                     # Save in-memory crops to temporary directory for train/val split
-                    for rel_path, crop_img in modified_crops_in_memory.items():
+                    for rel_path, crop_img in augmented_crops_in_memory.items():
                         local_path = os.path.join(temp_crops_dir, rel_path)
                         
-                        # Extract track folder from path (assuming structure like track_X/crop_Y.jpg)
-                        track_folder = rel_path.split('/')[0] if '/' in rel_path else 'unknown'
+                        # Extract track folder from path 
+                        # New format: frame123/crop_456/crop.jpg or frame123/crop_456/crop_aug1.jpg
+                        path_parts = rel_path.split('/')
+                        if len(path_parts) >= 2:
+                            track_folder = f"{path_parts[0]}_{path_parts[1]}"  # e.g., "frame123_crop_456"
+                        else:
+                            track_folder = 'unknown'
                         track_folders.add(track_folder)
                         
                         # Create directory structure if needed
                         os.makedirs(os.path.dirname(local_path), exist_ok=True)
                         
                         # Save crop to temporary location
-                        cv2.imwrite(local_path, crop_img)
+                        # Convert RGB to BGR for OpenCV saving (which will result in RGB on disk)
+                        crop_bgr = cv2.cvtColor(crop_img, cv2.COLOR_RGB2BGR)
+                        cv2.imwrite(local_path, crop_bgr)
                     
-                    logger.info(f"Prepared {len(modified_crops_in_memory)} crops from {len(track_folders)} tracks")
+                    logger.info(f"Prepared {len(augmented_crops_in_memory)} crops from {len(track_folders)} tracks")
                     
                     # Create train/val split using crop_utils
                     temp_datasets_dir = os.path.join(temp_dir, "datasets")
@@ -902,7 +1302,7 @@ class DataPrepPipeline(Pipeline):
                         "datasets_folder": datasets_folder,
                         "training_samples": train_samples,
                         "validation_samples": val_samples,
-                        "total_crops_processed": len(modified_crops_in_memory),
+                        "total_crops_processed": len(augmented_crops_in_memory),
                         "tracks_processed": len(track_folders),
                         "optimization_used": "in_memory_processing"
                     }
@@ -929,7 +1329,7 @@ class DataPrepPipeline(Pipeline):
                     temp_crops_dir = os.path.join(temp_dir, "crops")
                     os.makedirs(temp_crops_dir, exist_ok=True)
                     
-                    # List all blobs in the modified crops folder
+                    # List all blobs in the modified crops folder (now includes augmented crops)
                     blobs = self.tenant_storage.list_blobs(prefix=f"{modified_crops_folder}/")
                     
                     downloaded_crops = []
@@ -937,25 +1337,40 @@ class DataPrepPipeline(Pipeline):
                     
                     for blob_name in blobs:
                         if blob_name.endswith('.jpg'):
-                            # Calculate local path maintaining directory structure
-                            rel_path = blob_name[len(f"{modified_crops_folder}/"):]
-                            local_path = os.path.join(temp_crops_dir, rel_path)
+                            # Calculate relative path
+                            user_path_prefix = f"{self.tenant_storage.config.user_path}/"
+                            if blob_name.startswith(user_path_prefix):
+                                blob_path_for_download = blob_name[len(user_path_prefix):]
+                            else:
+                                blob_path_for_download = blob_name
                             
-                            # Extract track folder from path (assuming structure like track_X/crop_Y.jpg)
-                            track_folder = rel_path.split('/')[0] if '/' in rel_path else 'unknown'
+                            # Extract the relative path structure
+                            if blob_name.startswith(f"{user_path_prefix}{modified_crops_folder}/"):
+                                rel_path = blob_name[len(f"{user_path_prefix}{modified_crops_folder}/"):]
+                            else:
+                                rel_path = blob_name[len(f"{modified_crops_folder}/"):]
+                            
+                            # Extract track folder from path
+                            path_parts = rel_path.split('/')
+                            if len(path_parts) >= 2:
+                                track_folder = f"{path_parts[0]}_{path_parts[1]}"  # e.g., "frame123_crop_456"
+                            else:
+                                track_folder = 'unknown'
                             track_folders.add(track_folder)
                             
-                            # Create directory structure if needed
+                            local_path = os.path.join(temp_crops_dir, rel_path)
                             os.makedirs(os.path.dirname(local_path), exist_ok=True)
                             
                             # Download the crop
-                            if self.tenant_storage.download_blob(blob_name, local_path):
+                            if self.tenant_storage.download_blob(blob_path_for_download, local_path):
                                 downloaded_crops.append((blob_name, local_path, rel_path))
                                 logger.debug(f"Downloaded crop: {blob_name}")
                             else:
                                 logger.warning(f"Failed to download crop: {blob_name}")
+                                logger.warning(f"  Original blob name: {blob_name}")
+                                logger.warning(f"  Download path used: {blob_path_for_download}")
                     
-                    logger.info(f"Downloaded {len(downloaded_crops)} crops from {len(track_folders)} tracks")
+                    logger.info(f"Downloaded {len(downloaded_crops)} augmented crops from {len(track_folders)} tracks")
                     
                     # Create train/val split using crop_utils
                     temp_datasets_dir = os.path.join(temp_dir, "datasets")
@@ -1167,7 +1582,7 @@ class DataPrepPipeline(Pipeline):
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
                 ret, frame = cap.read()
                 if ret:
-                    frames_data.append(frame)
+                    frames_data.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                     frame_ids.append(frame_id)
                     
                     # Save frame to Google Storage
@@ -1262,7 +1677,7 @@ class DataPrepPipeline(Pipeline):
             logger.info(f"Initializing grass mask detector for video: {video_guid}")
             
             # Create frame generator from the extracted frames
-            frame_generator = create_frame_generator_from_images(frames_data, input_format='BGR')
+            frame_generator = create_frame_generator_from_images(frames_data, input_format='RGB')
             
             # Initialize the background mask detector with the frames
             self.background_mask_detector.initialize(frame_generator)

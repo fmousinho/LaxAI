@@ -143,8 +143,9 @@ def _extract_crops_from_frame(
         else:
             confidence = 0.0
             
+        # If tracker_id is None, generate a unique numeric ID for this detection
         if tracker_id is None:
-            continue
+            tracker_id = frame_idx * 1000 + i  # Ensure uniqueness across frames
         
         # Extract and validate crop
         crop_rgb = _extract_and_validate_crop(frame, bbox)
@@ -200,22 +201,27 @@ def _save_crop(
     all_crops_dir: str
 ) -> bool:
     """
-    Save a crop to the appropriate directory.
+    Save a crop to the appropriate directory organized by frame.
+    
+    The crop is expected to be in RGB format but will be converted to BGR
+    for saving with OpenCV, which will result in RGB format on disk.
     
     Returns:
         True if successful, False otherwise
     """
-    # Ensure the directory for this tracker_id exists
-    tracker_dir = os.path.join(all_crops_dir, str(tracker_id))
-    os.makedirs(tracker_dir, exist_ok=True)
+    # Ensure the directory for this frame exists
+    frame_dir = os.path.join(all_crops_dir, f"frame_{frame_id}")
+    os.makedirs(frame_dir, exist_ok=True)
     
     # Save crop with filename: frame_id_tracker_id_confidence.jpg
     crop_filename = f"{frame_id}_{tracker_id}_{confidence:.3f}.jpg"
-    crop_path = os.path.join(tracker_dir, crop_filename)
+    crop_path = os.path.join(frame_dir, crop_filename)
     
     # Validate crop before writing
     if crop_rgb is not None and crop_rgb.size > 0:
-        success = cv2.imwrite(crop_path, crop_rgb)
+        # Convert RGB to BGR for OpenCV saving (which will result in RGB on disk)
+        crop_bgr = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2BGR)
+        success = cv2.imwrite(crop_path, crop_bgr)
         if not success:
             logger.warning(f"Failed to write crop to {crop_path}")
         return success
@@ -366,8 +372,11 @@ def create_train_val_split(
     """
     Splits the extracted crops into training and validation sets, maintaining per-track structure.
     
+    The source_folder is expected to have a frame-based organization (frame_xxx folders),
+    but the destination will be organized by tracker_id for training purposes.
+    
     Args:
-        source_folder: Directory containing the source crops folders (each folder contains images)
+        source_folder: Directory containing frame folders (frame_xxx) with crop images
         destin_folder: Directory where train and val folders will be created
         train_ratio: Ratio of data to use for training (default: 0.8)
         
@@ -390,38 +399,64 @@ def create_train_val_split(
     
     random.seed(42)  # For reproducibility
     
-    # For each tracker_id directory in source_folder
-    for track_id in os.listdir(source_folder):
-        track_path = os.path.join(source_folder, track_id)
-        if not os.path.isdir(track_path):
+    # First, collect all crops organized by tracker_id
+    tracker_crops = {}  # tracker_id -> list of (frame_folder, crop_filename)
+    
+    # Walk through frame folders
+    for frame_folder in os.listdir(source_folder):
+        frame_path = os.path.join(source_folder, frame_folder)
+        if not os.path.isdir(frame_path) or not frame_folder.startswith('frame_'):
             continue
         
-        # List all crop files for this track
-        crop_files = [f for f in os.listdir(track_path) if f.endswith('.jpg')]
-        random.shuffle(crop_files)
+        # Process all crop files in this frame folder
+        for crop_file in os.listdir(frame_path):
+            if not crop_file.endswith('.jpg'):
+                continue
+            
+            # Extract tracker_id from filename: frame_id_tracker_id_confidence.jpg
+            try:
+                parts = crop_file.split('_')
+                if len(parts) >= 3:
+                    tracker_id = parts[1]  # tracker_id is the second part
+                    
+                    if tracker_id not in tracker_crops:
+                        tracker_crops[tracker_id] = []
+                    
+                    tracker_crops[tracker_id].append((frame_folder, crop_file))
+            except (ValueError, IndexError):
+                logger.warning(f"Skipping crop file with invalid naming: {crop_file}")
+                continue
+    
+    logger.info(f"Found crops for {len(tracker_crops)} different tracker IDs")
+    
+    # For each tracker_id, create train/val split
+    for tracker_id, crop_list in tracker_crops.items():
+        random.shuffle(crop_list)
         
-        split_idx = int(train_ratio * len(crop_files))
-        train_files = crop_files[:split_idx]
-        val_files = crop_files[split_idx:]
+        split_idx = int(train_ratio * len(crop_list))
+        train_crops = crop_list[:split_idx]
+        val_crops = crop_list[split_idx:]
         
         # Create per-track folders in train/ and val/
-        train_track_dir = os.path.join(train_dir, track_id)
-        val_track_dir = os.path.join(val_dir, track_id)
+        train_track_dir = os.path.join(train_dir, tracker_id)
+        val_track_dir = os.path.join(val_dir, tracker_id)
         os.makedirs(train_track_dir, exist_ok=True)
         os.makedirs(val_track_dir, exist_ok=True)
         
-        # Copy files
-        for fname in train_files:
-            src = os.path.join(track_path, fname)
-            dst = os.path.join(train_track_dir, fname)
+        # Copy training files
+        for frame_folder, crop_file in train_crops:
+            src = os.path.join(source_folder, frame_folder, crop_file)
+            dst = os.path.join(train_track_dir, crop_file)
             shutil.copy2(src, dst)
         
-        for fname in val_files:
-            src = os.path.join(track_path, fname)
-            dst = os.path.join(val_track_dir, fname)
+        # Copy validation files
+        for frame_folder, crop_file in val_crops:
+            src = os.path.join(source_folder, frame_folder, crop_file)
+            dst = os.path.join(val_track_dir, crop_file)
             shutil.copy2(src, dst)
     
     logger.info(f"Crops split with {train_ratio*100:.0f}% for training and {100 - train_ratio*100:.0f}% for validation.")
+    logger.info(f"Created train/val datasets for {len(tracker_crops)} tracker IDs")
 
 
 # Backward compatibility wrapper class (optional - can be removed later)

@@ -272,29 +272,7 @@ class Pipeline:
         """
         try:
             # Create a serializable copy of context, excluding numpy arrays and other non-serializable objects
-            serializable_context = {}
-            for key, value in context.items():
-                if key == "frames_data":
-                    # Skip frames_data as it contains numpy arrays
-                    serializable_context[key] = f"<numpy_array_data_excluded_{len(value) if hasattr(value, '__len__') else 'unknown'}_items>"
-                elif hasattr(value, 'tolist'):  # numpy array
-                    serializable_context[key] = value.tolist()
-                elif hasattr(value, '__iter__') and not isinstance(value, (str, bytes, dict)):  # other iterables
-                    try:
-                        # Try to convert to list, but skip if it contains complex objects
-                        serializable_items = []
-                        for item in value:
-                            if hasattr(item, 'tolist'):
-                                serializable_items.append(item.tolist())
-                            elif isinstance(item, (str, int, float, bool, type(None))):
-                                serializable_items.append(item)
-                            else:
-                                serializable_items.append(str(item))
-                        serializable_context[key] = serializable_items
-                    except:
-                        serializable_context[key] = str(value)
-                else:
-                    serializable_context[key] = value
+            serializable_context = self._make_json_serializable(context)
                     
             checkpoint_data = {
                 "pipeline_name": self.pipeline_name,
@@ -322,6 +300,72 @@ class Pipeline:
         except Exception as e:
             logger.error(f"Error saving checkpoint: {e}")
             return False
+    
+    def _make_json_serializable(self, obj):
+        """
+        Recursively convert any object to a JSON-serializable format.
+        
+        Args:
+            obj: The object to convert
+            
+        Returns:
+            JSON-serializable representation of the object
+        """
+        import numpy as np
+        
+        # Handle None
+        if obj is None:
+            return None
+            
+        # Handle basic types
+        if isinstance(obj, (str, int, float, bool)):
+            return obj
+            
+        # Handle numpy arrays
+        if hasattr(obj, 'tolist'):
+            try:
+                return obj.tolist()
+            except:
+                return f"<numpy_array_shape_{getattr(obj, 'shape', 'unknown')}>"
+        
+        # Handle supervision.Detections objects
+        if hasattr(obj, 'xyxy') and hasattr(obj, 'confidence'):
+            return f"<supervision_detections_object_len_{len(obj) if hasattr(obj, '__len__') else 'unknown'}>"
+        
+        # Handle dictionaries
+        if isinstance(obj, dict):
+            result = {}
+            for key, value in obj.items():
+                # Skip known problematic keys
+                if key in ["frames_data", "detections", "loaded_video"]:
+                    result[key] = f"<{key}_excluded_for_serialization>"
+                else:
+                    result[key] = self._make_json_serializable(value)
+            return result
+        
+        # Handle lists and tuples
+        if isinstance(obj, (list, tuple)):
+            try:
+                result = []
+                for item in obj:
+                    result.append(self._make_json_serializable(item))
+                return result
+            except:
+                return f"<list_or_tuple_len_{len(obj) if hasattr(obj, '__len__') else 'unknown'}_excluded>"
+        
+        # Handle sets
+        if isinstance(obj, set):
+            try:
+                return list(obj)
+            except:
+                return f"<set_len_{len(obj) if hasattr(obj, '__len__') else 'unknown'}_excluded>"
+        
+        # Handle complex objects by converting to string
+        try:
+            # Try to convert to string representation
+            return str(obj)
+        except:
+            return f"<object_type_{type(obj).__name__}_excluded>"
     
     def _load_checkpoint(self) -> Optional[Dict[str, Any]]:
         """
