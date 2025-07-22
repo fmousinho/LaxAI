@@ -60,22 +60,22 @@ def augment_images(images: List[np.ndarray]) -> List[np.ndarray]:
         rotated_neg = cv2.warpAffine(img, rotation_matrix_neg, (w, h), borderMode=cv2.BORDER_REFLECT)
         augmented_images.append(rotated_neg)
         
-        # # 3. 10% stretching (horizontal and vertical)
-        # stretch_factor = 1.1
+        # # 3. 100% stretching (horizontal and vertical)
+        stretch_factor = 2.0
         
-        # # Horizontal stretch
-        # stretched_h = cv2.resize(img, (int(w * stretch_factor), h))
-        # # Crop back to original size from center
-        # start_x = (stretched_h.shape[1] - w) // 2
-        # stretched_h_cropped = stretched_h[:, start_x:start_x + w]
-        # augmented_images.append(stretched_h_cropped)
+        # Horizontal stretch
+        stretched_h = cv2.resize(img, (int(w * stretch_factor), h))
+        # Crop back to original size from center
+        start_x = (stretched_h.shape[1] - w) // 2
+        stretched_h_cropped = stretched_h[:, start_x:start_x + w]
+        augmented_images.append(stretched_h_cropped)
         
-        # # Vertical stretch
-        # stretched_v = cv2.resize(img, (w, int(h * stretch_factor)))
-        # # Crop back to original size from center
-        # start_y = (stretched_v.shape[0] - h) // 2
-        # stretched_v_cropped = stretched_v[start_y:start_y + h, :]
-        # augmented_images.append(stretched_v_cropped)
+        # Vertical stretch
+        stretched_v = cv2.resize(img, (w, int(h * stretch_factor)))
+        # Crop back to original size from center
+        start_y = (stretched_v.shape[0] - h) // 2
+        stretched_v_cropped = stretched_v[start_y:start_y + h, :]
+        augmented_images.append(stretched_v_cropped)
         
         # 4. Crops
         
@@ -93,23 +93,23 @@ def augment_images(images: List[np.ndarray]) -> List[np.ndarray]:
 
         #4.3 Half body crop
         HALF_CROP = .5
-        half_cropped = img[:, :int(w * (1 - HALF_CROP)), :]  # Crop to half body (top 50% pixels)
+        half_cropped = img[:, :int(w * (1 - HALF_CROP)), :]  # Left side of body
         augmented_images.append(half_cropped.copy())
-        half_cropped_lr = img[:, int(w * HALF_CROP):, :]  # Crop to half body (bottom 50% pixels)
+        half_cropped_lr = img[:, int(w * HALF_CROP):, :]  # Right side of body
         augmented_images.append(half_cropped_lr.copy())
 
         
         # 5. Random occlusion - adaptive size based on image dimensions
-        OCC_SAMPLES = 10  # Number of occluded images generated
+        OCC_SAMPLES = 5  # Number of occluded images generated
 
         # Calculate occlusion size as percentage of image (minimum 5x5, maximum 15x15)
-        occ_size = min(15, max(5, min(h, w) // 5))
+        occ_size = min(15, max(5, min(h, w) // 4))
         
         # Only add occlusion if image is large enough
-     
-        num_occlusions = random.randint(3, 10)  # 3-10 occlusions per image
-        for _ in range(OCC_SAMPLES):
-            occluded = img.copy()
+        if h >= occ_size and w >= occ_size:
+            num_occlusions = random.randint(3, 10)  # 3-10 occlusions per image
+            for _ in range(OCC_SAMPLES):
+                occluded = img.copy()
             for _ in range(num_occlusions):
                 occ_y = random.randint(0, h - occ_size)
                 occ_x = random.randint(0, w - occ_size)
@@ -119,9 +119,9 @@ def augment_images(images: List[np.ndarray]) -> List[np.ndarray]:
             augmented_images.append(occluded.copy())
         
         # 6. Noise (Gaussian noise)
-        noise = np.random.normal(0, 15, img.shape).astype(np.int16)
-        noisy = np.clip(img.astype(np.int16) + noise, 0, 255).astype(np.uint8)
-        augmented_images.append(noisy)
+        # noise = np.random.normal(0, 15, img.shape).astype(np.int16)
+        # noisy = np.clip(img.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+        # augmented_images.append(noisy)
         
         # 7. Saturation/Darkness (simulating sun exposure)
         # Convert RGB to HSV for saturation adjustment

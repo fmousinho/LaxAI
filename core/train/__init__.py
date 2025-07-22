@@ -11,7 +11,6 @@ from .augmentation import (
 
 from .dataprep_pipeline import (
     DataPrepPipeline,
-    run_training_pipeline,
     run_dataprep_pipeline
 )
 
@@ -19,6 +18,5 @@ __all__ = [
     'augment_images',
     'test_augmentation',
     'DataPrepPipeline',
-    'run_training_pipeline',
     'run_dataprep_pipeline'
 ]

@@ -977,212 +977,190 @@ class DataPrepPipeline(Pipeline):
             logger.info(f"Augmenting {crops_processed} crops for video: {video_guid}")
             logger.info(f"Using modified crops from: {modified_crops_folder}")
             
-            # OPTIMIZATION: Use in-memory crops if available
-            if modified_crops_in_memory:
-                logger.info(f"Using {len(modified_crops_in_memory)} crops from memory (optimized)")
-                
-                # Process crops directly from memory
-                augmented_crops_in_memory = {}
-                total_augmented = 0
-                
-                # Create temporary directory for saving augmented crops
-                temp_dir = f"/tmp/augmentation_{video_guid}"
-                os.makedirs(temp_dir, exist_ok=True)
-                
-                try:
-                    for rel_path, crop_img in modified_crops_in_memory.items():
-                        try:
-                            # Parse crop information from rel_path to determine storage structure
-                            path_parts = rel_path.split('/')
-                            if len(path_parts) >= 2:
-                                frame_folder = path_parts[0]  # e.g., "frame_123"
-                                crop_filename = path_parts[1]  # e.g., "123_456_0.850.jpg"
-                                
-                                # Extract frame_id and tracker_id from filename
-                                name_parts = crop_filename.split('_')
-                                if len(name_parts) >= 2:
-                                    frame_id = name_parts[0]
-                                    tracker_id = name_parts[1]
-                                    
-                                    # Generate augmented images
-                                    augmented_images = augment_images([crop_img])
-                                    
-                                    # Store original crop (already processed)
-                                    augmented_crops_in_memory[rel_path] = crop_img
-                                    
-                                    # Store each augmented image in the same directory as the source crop
-                                    for i, aug_img in enumerate(augmented_images[1:], 1):  # Skip original (index 0)
-                                        # Create storage path in same directory: frame{frame_id}/crop_{tracker_id}/crop_aug{i}.jpg
-                                        aug_storage_path = f"{modified_crops_folder}/frame{frame_id}/crop_{tracker_id}/crop_aug{i}.jpg"
-                                        aug_rel_path = f"frame{frame_id}/crop_{tracker_id}/crop_aug{i}.jpg"
-                                        
-                                        # Store in memory
-                                        augmented_crops_in_memory[aug_rel_path] = aug_img
-                                        
-                                        # Save to temporary location for upload
-                                        temp_aug_path = os.path.join(temp_dir, f"frame{frame_id}", f"crop_{tracker_id}", f"crop_aug{i}.jpg")
-                                        os.makedirs(os.path.dirname(temp_aug_path), exist_ok=True)
-                                        
-                                        # Convert RGB to BGR for OpenCV saving
-                                        aug_bgr = cv2.cvtColor(aug_img, cv2.COLOR_RGB2BGR)
-                                        if cv2.imwrite(temp_aug_path, aug_bgr):
-                                            # Upload the augmented crop to Google Storage
-                                            if self.tenant_storage.upload_from_file(aug_storage_path, temp_aug_path):
-                                                total_augmented += 1
-                                                logger.debug(f"Augmented and uploaded crop: {aug_storage_path}")
-                                            else:
-                                                logger.warning(f"Failed to upload augmented crop: {aug_storage_path}")
-                                        else:
-                                            logger.warning(f"Failed to save augmented crop: {temp_aug_path}")
-                                
-                                else:
-                                    logger.warning(f"Invalid crop filename format: {crop_filename}")
-                            else:
-                                logger.warning(f"Invalid crop path format: {rel_path}")
-                                
-                        except Exception as crop_error:
-                            logger.warning(f"Failed to augment crop {rel_path}: {crop_error}")
-                            continue
-                    
-                    logger.info(f"Successfully augmented {total_augmented} crops from {len(modified_crops_in_memory)} source crops for video: {video_guid}")
-                    
-                    return {
-                        "crops_augmented": True,
-                        "video_guid": video_guid,
-                        "modified_crops_folder": modified_crops_folder,
-                        "total_augmented": total_augmented,
-                        "source_crops": len(modified_crops_in_memory),
-                        "augmented_crops_in_memory": augmented_crops_in_memory,  # Pass to next step
-                        "optimization_used": "in_memory_processing"
-                    }
-                    
-                finally:
-                    # Clean up temporary directory
-                    if os.path.exists(temp_dir):
-                        try:
-                            shutil.rmtree(temp_dir)
-                            logger.debug(f"Cleaned up temporary augmentation directory: {temp_dir}")
-                        except Exception as cleanup_error:
-                            logger.warning(f"Failed to cleanup temporary directory {temp_dir}: {cleanup_error}")
+            # Create temporary directory for saving augmented crops
+            temp_dir = f"/tmp/augmentation_{video_guid}"
+            os.makedirs(temp_dir, exist_ok=True)
             
-            else:
-                # FALLBACK: Download crops from storage, augment, and upload back
-                logger.info("Using fallback implementation with Google Storage downloads")
+            augmented_crops_in_memory = {}
+            total_augmented = 0
+            source_crops = 0
+            
+            try:
+                # Use in-memory crops if available, otherwise download from storage
+                if modified_crops_in_memory:
+                    logger.info(f"Using {len(modified_crops_in_memory)} crops from memory (optimized)")
+                    crops_to_process = modified_crops_in_memory.items()
+                    source_crops = len(modified_crops_in_memory)
+                else:
+                    logger.info("Downloading crops from storage for augmentation")
+                    crops_to_process = self._download_crops_for_augmentation(modified_crops_folder, temp_dir)
+                    source_crops = len(list(crops_to_process)) if hasattr(crops_to_process, '__len__') else 0
                 
-                # Create temporary directory for processing
-                temp_dir = f"/tmp/augmentation_{video_guid}"
-                os.makedirs(temp_dir, exist_ok=True)
-                
-                try:
-                    # Download all modified crops from Google Storage
-                    temp_crops_dir = os.path.join(temp_dir, "crops")
-                    os.makedirs(temp_crops_dir, exist_ok=True)
-                    
-                    # List all blobs in the modified crops folder
-                    blobs = self.tenant_storage.list_blobs(prefix=f"{modified_crops_folder}/")
-                    
-                    downloaded_crops = []
-                    total_augmented = 0
-                    
-                    for blob_name in blobs:
-                        if blob_name.endswith('.jpg') and 'crop.jpg' in blob_name:  # Only process original crops, not existing augmentations
-                            # Calculate relative path
-                            user_path_prefix = f"{self.tenant_storage.config.user_path}/"
-                            if blob_name.startswith(user_path_prefix):
-                                blob_path_for_download = blob_name[len(user_path_prefix):]
-                            else:
-                                blob_path_for_download = blob_name
-                            
-                            # Extract the relative path structure
-                            if blob_name.startswith(f"{user_path_prefix}{modified_crops_folder}/"):
-                                rel_path = blob_name[len(f"{user_path_prefix}{modified_crops_folder}/"):]
-                            else:
-                                rel_path = blob_name[len(f"{modified_crops_folder}/"):]
-                            
-                            local_path = os.path.join(temp_crops_dir, rel_path)
-                            os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                            
-                            # Download the crop
-                            if self.tenant_storage.download_blob(blob_path_for_download, local_path):
-                                downloaded_crops.append((blob_name, local_path, rel_path))
-                            else:
-                                logger.warning(f"Failed to download crop: {blob_name}")
-                    
-                    logger.info(f"Downloaded {len(downloaded_crops)} crops for augmentation")
-                    
-                    # Process each crop to create augmentations
-                    for blob_name, local_path, rel_path in downloaded_crops:
-                        try:
-                            # Read the crop image
-                            crop_img = cv2.imread(local_path)
-                            if crop_img is None:
-                                logger.warning(f"Failed to read crop image: {local_path}")
-                                continue
-                            
-                            # Convert BGR to RGB
-                            crop_rgb = cv2.cvtColor(crop_img, cv2.COLOR_BGR2RGB)
-                            
-                            # Parse path to get frame_id and tracker_id
-                            # rel_path format: frame123/crop_456/crop.jpg
-                            path_parts = rel_path.split('/')
-                            if len(path_parts) >= 3:
-                                frame_folder = path_parts[0]  # e.g., "frame123"
-                                crop_folder = path_parts[1]   # e.g., "crop_456"
-                                
-                                frame_id = frame_folder.replace('frame', '')
-                                tracker_id = crop_folder.replace('crop_', '')
-                                
-                                # Generate augmented images
-                                augmented_images = augment_images([crop_rgb])
-                                
-                                # Save each augmented image in the same directory
-                                for i, aug_img in enumerate(augmented_images[1:], 1):  # Skip original (index 0)
-                                    # Create storage path: frame{frame_id}/crop_{tracker_id}/crop_aug{i}.jpg
-                                    aug_storage_path = f"{modified_crops_folder}/frame{frame_id}/crop_{tracker_id}/crop_aug{i}.jpg"
-                                    
-                                    # Save to temporary location
-                                    temp_aug_path = os.path.join(temp_dir, "augmented", f"frame{frame_id}", f"crop_{tracker_id}", f"crop_aug{i}.jpg")
-                                    os.makedirs(os.path.dirname(temp_aug_path), exist_ok=True)
-                                    
-                                    # Convert RGB to BGR for OpenCV saving
-                                    aug_bgr = cv2.cvtColor(aug_img, cv2.COLOR_RGB2BGR)
-                                    if cv2.imwrite(temp_aug_path, aug_bgr):
-                                        # Upload the augmented crop to Google Storage
-                                        if self.tenant_storage.upload_from_file(aug_storage_path, temp_aug_path):
-                                            total_augmented += 1
-                                            logger.debug(f"Augmented and uploaded crop: {aug_storage_path}")
-                                        else:
-                                            logger.warning(f"Failed to upload augmented crop: {aug_storage_path}")
-                                    else:
-                                        logger.warning(f"Failed to save augmented crop: {temp_aug_path}")
-                            
-                        except Exception as crop_error:
-                            logger.warning(f"Failed to augment crop {local_path}: {crop_error}")
+                # Process each crop for augmentation
+                for rel_path, crop_img in crops_to_process:
+                    try:
+                        # Parse crop path to extract frame_id and tracker_id
+                        frame_id, tracker_id = self._parse_crop_path(rel_path)
+                        if not frame_id or not tracker_id:
+                            logger.warning(f"Could not parse crop path: {rel_path}")
                             continue
-                    
-                    logger.info(f"Successfully augmented {total_augmented} crops from {len(downloaded_crops)} source crops for video: {video_guid}")
-                    
-                    return {
-                        "crops_augmented": True,
-                        "video_guid": video_guid,
-                        "modified_crops_folder": modified_crops_folder,
-                        "total_augmented": total_augmented,
-                        "source_crops": len(downloaded_crops),
-                        "optimization_used": "fallback_storage"
-                    }
-                    
-                finally:
-                    # Clean up temporary directory
-                    if os.path.exists(temp_dir):
-                        try:
-                            shutil.rmtree(temp_dir)
-                            logger.debug(f"Cleaned up temporary augmentation directory: {temp_dir}")
-                        except Exception as cleanup_error:
-                            logger.warning(f"Failed to cleanup temporary directory {temp_dir}: {cleanup_error}")
+                        
+                        # Generate augmented images (crop_img is expected to be RGB format)
+                        augmented_images = augment_images([crop_img])
+                        
+                        # Store original crop
+                        augmented_crops_in_memory[rel_path] = crop_img
+                        
+                        # Process and store each augmented image
+                        for i, aug_img in enumerate(augmented_images[1:], 1):  # Skip original at index 0
+                            aug_storage_path = f"{modified_crops_folder}/frame{frame_id}/crop_{tracker_id}/crop_aug{i}.jpg"
+                            aug_rel_path = f"frame{frame_id}/crop_{tracker_id}/crop_aug{i}.jpg"
+                            
+                            # Store in memory for next pipeline step
+                            augmented_crops_in_memory[aug_rel_path] = aug_img
+                            
+                            # Save and upload augmented crop
+                            if self._save_and_upload_crop(aug_img, aug_storage_path, temp_dir, frame_id, tracker_id, f"crop_aug{i}.jpg"):
+                                total_augmented += 1
+                            
+                    except Exception as crop_error:
+                        logger.warning(f"Failed to augment crop {rel_path}: {crop_error}")
+                        continue
+                
+                logger.info(f"Successfully augmented {total_augmented} crops from {source_crops} source crops for video: {video_guid}")
+                
+                return {
+                    "crops_augmented": True,
+                    "video_guid": video_guid,
+                    "modified_crops_folder": modified_crops_folder,
+                    "total_augmented": total_augmented,
+                    "source_crops": source_crops,
+                    "augmented_crops_in_memory": augmented_crops_in_memory,
+                    "optimization_used": "in_memory_processing" if modified_crops_in_memory else "fallback_storage"
+                }
+                
+            finally:
+                # Clean up temporary directory
+                if os.path.exists(temp_dir):
+                    try:
+                        shutil.rmtree(temp_dir)
+                        logger.debug(f"Cleaned up temporary augmentation directory: {temp_dir}")
+                    except Exception as cleanup_error:
+                        logger.warning(f"Failed to cleanup temporary directory {temp_dir}: {cleanup_error}")
             
         except Exception as e:
             logger.error(f"Failed to augment crops for video {video_guid}: {e}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
+    
+    def _download_crops_for_augmentation(self, modified_crops_folder: str, temp_dir: str):
+        """
+        Download crops from storage for augmentation processing.
+        
+        Args:
+            modified_crops_folder: Storage path to modified crops
+            temp_dir: Temporary directory for downloads
+            
+        Yields:
+            Tuples of (rel_path, crop_image_rgb)
+        """
+        temp_crops_dir = os.path.join(temp_dir, "crops")
+        os.makedirs(temp_crops_dir, exist_ok=True)
+        
+        # List all blobs in the modified crops folder
+        blobs = self.tenant_storage.list_blobs(prefix=f"{modified_crops_folder}/")
+        
+        for blob_name in blobs:
+            if blob_name.endswith('.jpg') and 'crop.jpg' in blob_name:  # Only process original crops
+                # Calculate download path
+                user_path_prefix = f"{self.tenant_storage.config.user_path}/"
+                blob_path_for_download = blob_name[len(user_path_prefix):] if blob_name.startswith(user_path_prefix) else blob_name
+                
+                # Extract relative path
+                if blob_name.startswith(f"{user_path_prefix}{modified_crops_folder}/"):
+                    rel_path = blob_name[len(f"{user_path_prefix}{modified_crops_folder}/"):]
+                else:
+                    rel_path = blob_name[len(f"{modified_crops_folder}/"):]
+                
+                local_path = os.path.join(temp_crops_dir, rel_path)
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                
+                # Download and read the crop
+                if self.tenant_storage.download_blob(blob_path_for_download, local_path):
+                    crop_img = cv2.imread(local_path)
+                    if crop_img is not None:
+                        # Convert BGR to RGB (crops are stored as RGB but cv2.imread returns BGR)
+                        crop_rgb = cv2.cvtColor(crop_img, cv2.COLOR_BGR2RGB)
+                        yield rel_path, crop_rgb
+                    else:
+                        logger.warning(f"Failed to read crop image: {local_path}")
+                else:
+                    logger.warning(f"Failed to download crop: {blob_name}")
+    
+    def _parse_crop_path(self, rel_path: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Parse crop path to extract frame_id and tracker_id.
+        
+        Args:
+            rel_path: Relative path like "frame_123/123_456_0.850.jpg" or "frame123/crop_456/crop.jpg"
+            
+        Returns:
+            Tuple of (frame_id, tracker_id) or (None, None) if parsing fails
+        """
+        path_parts = rel_path.split('/')
+        
+        # Handle old format: frame_123/123_456_0.850.jpg
+        if len(path_parts) >= 2 and path_parts[0].startswith('frame_'):
+            frame_folder = path_parts[0]  # e.g., "frame_123"
+            crop_filename = path_parts[1]  # e.g., "123_456_0.850.jpg"
+            
+            # Extract frame_id and tracker_id from filename
+            name_parts = crop_filename.split('_')
+            if len(name_parts) >= 2:
+                return name_parts[0], name_parts[1]
+        
+        # Handle new format: frame123/crop_456/crop.jpg
+        elif len(path_parts) >= 3:
+            frame_folder = path_parts[0]  # e.g., "frame123"
+            crop_folder = path_parts[1]   # e.g., "crop_456"
+            
+            frame_id = frame_folder.replace('frame', '')
+            tracker_id = crop_folder.replace('crop_', '')
+            return frame_id, tracker_id
+        
+        return None, None
+    
+    def _save_and_upload_crop(self, crop_img: np.ndarray, storage_path: str, temp_dir: str, 
+                             frame_id: str, tracker_id: str, filename: str) -> bool:
+        """
+        Save crop image to temporary location and upload to storage.
+        
+        Args:
+            crop_img: RGB crop image
+            storage_path: Full storage path for upload
+            temp_dir: Temporary directory
+            frame_id: Frame identifier
+            tracker_id: Tracker identifier  
+            filename: Final filename
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        temp_path = os.path.join(temp_dir, f"frame{frame_id}", f"crop_{tracker_id}", filename)
+        os.makedirs(os.path.dirname(temp_path), exist_ok=True)
+        
+        # Convert RGB to BGR for OpenCV saving (results in correct RGB on disk)
+        crop_bgr = cv2.cvtColor(crop_img, cv2.COLOR_RGB2BGR)
+        
+        if cv2.imwrite(temp_path, crop_bgr):
+            if self.tenant_storage.upload_from_file(storage_path, temp_path):
+                logger.debug(f"Saved and uploaded crop: {storage_path}")
+                return True
+            else:
+                logger.warning(f"Failed to upload crop: {storage_path}")
+        else:
+            logger.warning(f"Failed to save crop: {temp_path}")
+        
+        return False
     
     def _create_training_and_validation_sets(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1220,88 +1198,116 @@ class DataPrepPipeline(Pipeline):
                 os.makedirs(temp_dir, exist_ok=True)
                 
                 try:
-                    # Create crops directory structure from in-memory data
-                    temp_crops_dir = os.path.join(temp_dir, "crops")
-                    os.makedirs(temp_crops_dir, exist_ok=True)
-                    
+                    # Organize crops by frame for frame-specific train/val splits
+                    crops_by_frame = {}
                     track_folders = set()
                     
-                    # Save in-memory crops to temporary directory for train/val split
+                    # Group crops by frame
                     for rel_path, crop_img in augmented_crops_in_memory.items():
-                        local_path = os.path.join(temp_crops_dir, rel_path)
-                        
-                        # Extract track folder from path 
-                        # New format: frame123/crop_456/crop.jpg or frame123/crop_456/crop_aug1.jpg
+                        # Extract frame information from path 
+                        # Format: frame123/crop_456/crop.jpg or frame123/crop_456/crop_aug1.jpg
                         path_parts = rel_path.split('/')
                         if len(path_parts) >= 2:
-                            track_folder = f"{path_parts[0]}_{path_parts[1]}"  # e.g., "frame123_crop_456"
+                            frame_id = path_parts[0]  # e.g., "frame123"
+                            crop_folder = path_parts[1]  # e.g., "crop_456"
+                            track_folder = f"{frame_id}_{crop_folder}"
                         else:
+                            frame_id = 'unknown_frame'
                             track_folder = 'unknown'
+                        
                         track_folders.add(track_folder)
                         
-                        # Create directory structure if needed
-                        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                        if frame_id not in crops_by_frame:
+                            crops_by_frame[frame_id] = {}
+                        crops_by_frame[frame_id][rel_path] = crop_img
+                    
+                    logger.info(f"Prepared {len(augmented_crops_in_memory)} crops from {len(track_folders)} tracks across {len(crops_by_frame)} frames")
+                    
+                    # Process each frame separately
+                    total_train_samples = 0
+                    total_val_samples = 0
+                    
+                    for frame_id, frame_crops in crops_by_frame.items():
+                        logger.info(f"Processing frame {frame_id} with {len(frame_crops)} crops")
                         
-                        # Save crop to temporary location
-                        # Convert RGB to BGR for OpenCV saving (which will result in RGB on disk)
-                        crop_bgr = cv2.cvtColor(crop_img, cv2.COLOR_RGB2BGR)
-                        cv2.imwrite(local_path, crop_bgr)
-                    
-                    logger.info(f"Prepared {len(augmented_crops_in_memory)} crops from {len(track_folders)} tracks")
-                    
-                    # Create train/val split using crop_utils
-                    temp_datasets_dir = os.path.join(temp_dir, "datasets")
-                    create_train_val_split(
-                        source_folder=temp_crops_dir,
-                        destin_folder=temp_datasets_dir,
-                        train_ratio=0.8
-                    )
-                    
-                    # Upload train and val datasets to Google Storage
-                    train_samples = 0
-                    val_samples = 0
-                    
-                    # Upload train dataset
-                    train_local_dir = os.path.join(temp_datasets_dir, "train")
-                    if os.path.exists(train_local_dir):
-                        for root, dirs, files in os.walk(train_local_dir):
-                            for file in files:
-                                if file.endswith('.jpg'):
-                                    local_path = os.path.join(root, file)
-                                    rel_path = os.path.relpath(local_path, train_local_dir)
-                                    storage_path = f"{datasets_folder}/train/{rel_path}"
-                                    
-                                    if self.tenant_storage.upload_from_file(storage_path, local_path):
-                                        train_samples += 1
-                                        logger.debug(f"Uploaded train sample: {storage_path}")
-                                    else:
-                                        logger.warning(f"Failed to upload train sample: {storage_path}")
-                    
-                    # Upload val dataset
-                    val_local_dir = os.path.join(temp_datasets_dir, "val")
-                    if os.path.exists(val_local_dir):
-                        for root, dirs, files in os.walk(val_local_dir):
-                            for file in files:
-                                if file.endswith('.jpg'):
-                                    local_path = os.path.join(root, file)
-                                    rel_path = os.path.relpath(local_path, val_local_dir)
-                                    storage_path = f"{datasets_folder}/val/{rel_path}"
-                                    
-                                    if self.tenant_storage.upload_from_file(storage_path, local_path):
-                                        val_samples += 1
-                                        logger.debug(f"Uploaded val sample: {storage_path}")
-                                    else:
-                                        logger.warning(f"Failed to upload val sample: {storage_path}")
+                        # Create temporary frame directory
+                        temp_frame_dir = os.path.join(temp_dir, frame_id)
+                        temp_crops_dir = os.path.join(temp_frame_dir, "crops")
+                        os.makedirs(temp_crops_dir, exist_ok=True)
+                        
+                        # Save crops for this frame to temporary directory
+                        for rel_path, crop_img in frame_crops.items():
+                            # Use just the crop part of the path (remove frame prefix)
+                            crop_local_path = '/'.join(rel_path.split('/')[1:])  # Remove "frame123/" part
+                            local_path = os.path.join(temp_crops_dir, crop_local_path)
+                            
+                            # Create directory structure if needed
+                            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                            
+                            # Save crop to temporary location
+                            # Convert RGB to BGR for OpenCV saving (which will result in RGB on disk)
+                            crop_bgr = cv2.cvtColor(crop_img, cv2.COLOR_RGB2BGR)
+                            cv2.imwrite(local_path, crop_bgr)
+                        
+                        # Create train/val split for this frame
+                        temp_frame_datasets_dir = os.path.join(temp_frame_dir, "datasets")
+                        create_train_val_split(
+                            source_folder=temp_crops_dir,
+                            destin_folder=temp_frame_datasets_dir,
+                            train_ratio=0.8
+                        )
+                        
+                        # Upload frame-specific train and val datasets to Google Storage
+                        frame_train_samples = 0
+                        frame_val_samples = 0
+                        
+                        # Upload train dataset for this frame
+                        train_local_dir = os.path.join(temp_frame_datasets_dir, "train")
+                        if os.path.exists(train_local_dir):
+                            for root, dirs, files in os.walk(train_local_dir):
+                                for file in files:
+                                    if file.endswith('.jpg'):
+                                        local_path = os.path.join(root, file)
+                                        rel_path = os.path.relpath(local_path, train_local_dir)
+                                        storage_path = f"{datasets_folder}/{frame_id}/train/{rel_path}"
+                                        
+                                        if self.tenant_storage.upload_from_file(storage_path, local_path):
+                                            frame_train_samples += 1
+                                            logger.debug(f"Uploaded train sample: {storage_path}")
+                                        else:
+                                            logger.warning(f"Failed to upload train sample: {storage_path}")
+                        
+                        # Upload val dataset for this frame
+                        val_local_dir = os.path.join(temp_frame_datasets_dir, "val")
+                        if os.path.exists(val_local_dir):
+                            for root, dirs, files in os.walk(val_local_dir):
+                                for file in files:
+                                    if file.endswith('.jpg'):
+                                        local_path = os.path.join(root, file)
+                                        rel_path = os.path.relpath(local_path, val_local_dir)
+                                        storage_path = f"{datasets_folder}/{frame_id}/val/{rel_path}"
+                                        
+                                        if self.tenant_storage.upload_from_file(storage_path, local_path):
+                                            frame_val_samples += 1
+                                            logger.debug(f"Uploaded val sample: {storage_path}")
+                                        else:
+                                            logger.warning(f"Failed to upload val sample: {storage_path}")
+                        
+                        total_train_samples += frame_train_samples
+                        total_val_samples += frame_val_samples
+                        
+                        logger.info(f"Frame {frame_id}: {frame_train_samples} train samples, {frame_val_samples} val samples")
                     
                     logger.info(f"Successfully created training and validation sets for video: {video_guid}")
-                    logger.info(f"Training samples: {train_samples}, Validation samples: {val_samples}")
+                    logger.info(f"Total training samples: {total_train_samples}, Total validation samples: {total_val_samples}")
                     
                     return {
                         "datasets_created": True,
                         "video_guid": video_guid,
                         "datasets_folder": datasets_folder,
-                        "training_samples": train_samples,
-                        "validation_samples": val_samples,
+                        "training_samples": total_train_samples,
+                        "validation_samples": total_val_samples,
+                        "frames_processed": len(crops_by_frame),
                         "total_crops_processed": len(augmented_crops_in_memory),
                         "tracks_processed": len(track_folders),
                         "optimization_used": "in_memory_processing"
@@ -1332,7 +1338,8 @@ class DataPrepPipeline(Pipeline):
                     # List all blobs in the modified crops folder (now includes augmented crops)
                     blobs = self.tenant_storage.list_blobs(prefix=f"{modified_crops_folder}/")
                     
-                    downloaded_crops = []
+                    # Organize crops by frame
+                    crops_by_frame = {}
                     track_folders = set()
                     
                     for blob_name in blobs:
@@ -1350,82 +1357,116 @@ class DataPrepPipeline(Pipeline):
                             else:
                                 rel_path = blob_name[len(f"{modified_crops_folder}/"):]
                             
-                            # Extract track folder from path
+                            # Extract frame information from path
                             path_parts = rel_path.split('/')
                             if len(path_parts) >= 2:
-                                track_folder = f"{path_parts[0]}_{path_parts[1]}"  # e.g., "frame123_crop_456"
+                                frame_id = path_parts[0]  # e.g., "frame123"
+                                crop_folder = path_parts[1]  # e.g., "crop_456"
+                                track_folder = f"{frame_id}_{crop_folder}"
                             else:
+                                frame_id = 'unknown_frame'
                                 track_folder = 'unknown'
+                            
                             track_folders.add(track_folder)
                             
-                            local_path = os.path.join(temp_crops_dir, rel_path)
+                            if frame_id not in crops_by_frame:
+                                crops_by_frame[frame_id] = []
+                            
+                            crops_by_frame[frame_id].append((blob_name, blob_path_for_download, rel_path))
+                    
+                    logger.info(f"Found {sum(len(crops) for crops in crops_by_frame.values())} augmented crops across {len(crops_by_frame)} frames from {len(track_folders)} tracks")
+                    
+                    # Process each frame separately
+                    total_train_samples = 0
+                    total_val_samples = 0
+                    
+                    for frame_id, frame_crop_blobs in crops_by_frame.items():
+                        logger.info(f"Processing frame {frame_id} with {len(frame_crop_blobs)} crops")
+                        
+                        # Create temporary frame directory
+                        temp_frame_dir = os.path.join(temp_dir, frame_id)
+                        temp_frame_crops_dir = os.path.join(temp_frame_dir, "crops")
+                        os.makedirs(temp_frame_crops_dir, exist_ok=True)
+                        
+                        # Download crops for this frame
+                        downloaded_crops = []
+                        for blob_name, blob_path_for_download, rel_path in frame_crop_blobs:
+                            # Use just the crop part of the path (remove frame prefix)
+                            crop_local_path = '/'.join(rel_path.split('/')[1:])  # Remove "frame123/" part
+                            local_path = os.path.join(temp_frame_crops_dir, crop_local_path)
                             os.makedirs(os.path.dirname(local_path), exist_ok=True)
                             
                             # Download the crop
                             if self.tenant_storage.download_blob(blob_path_for_download, local_path):
-                                downloaded_crops.append((blob_name, local_path, rel_path))
+                                downloaded_crops.append((blob_name, local_path, crop_local_path))
                                 logger.debug(f"Downloaded crop: {blob_name}")
                             else:
                                 logger.warning(f"Failed to download crop: {blob_name}")
                                 logger.warning(f"  Original blob name: {blob_name}")
                                 logger.warning(f"  Download path used: {blob_path_for_download}")
-                    
-                    logger.info(f"Downloaded {len(downloaded_crops)} augmented crops from {len(track_folders)} tracks")
-                    
-                    # Create train/val split using crop_utils
-                    temp_datasets_dir = os.path.join(temp_dir, "datasets")
-                    create_train_val_split(
-                        source_folder=temp_crops_dir,
-                        destin_folder=temp_datasets_dir,
-                        train_ratio=0.8
-                    )
-                    
-                    # Upload train and val datasets to Google Storage
-                    train_samples = 0
-                    val_samples = 0
-                    
-                    # Upload train dataset
-                    train_local_dir = os.path.join(temp_datasets_dir, "train")
-                    if os.path.exists(train_local_dir):
-                        for root, dirs, files in os.walk(train_local_dir):
-                            for file in files:
-                                if file.endswith('.jpg'):
-                                    local_path = os.path.join(root, file)
-                                    rel_path = os.path.relpath(local_path, train_local_dir)
-                                    storage_path = f"{datasets_folder}/train/{rel_path}"
-                                    
-                                    if self.tenant_storage.upload_from_file(storage_path, local_path):
-                                        train_samples += 1
-                                        logger.debug(f"Uploaded train sample: {storage_path}")
-                                    else:
-                                        logger.warning(f"Failed to upload train sample: {storage_path}")
-                    
-                    # Upload val dataset
-                    val_local_dir = os.path.join(temp_datasets_dir, "val")
-                    if os.path.exists(val_local_dir):
-                        for root, dirs, files in os.walk(val_local_dir):
-                            for file in files:
-                                if file.endswith('.jpg'):
-                                    local_path = os.path.join(root, file)
-                                    rel_path = os.path.relpath(local_path, val_local_dir)
-                                    storage_path = f"{datasets_folder}/val/{rel_path}"
-                                    
-                                    if self.tenant_storage.upload_from_file(storage_path, local_path):
-                                        val_samples += 1
-                                        logger.debug(f"Uploaded val sample: {storage_path}")
-                                    else:
-                                        logger.warning(f"Failed to upload val sample: {storage_path}")
+                        
+                        logger.info(f"Downloaded {len(downloaded_crops)} crops for frame {frame_id}")
+                        
+                        # Create train/val split for this frame
+                        temp_frame_datasets_dir = os.path.join(temp_frame_dir, "datasets")
+                        create_train_val_split(
+                            source_folder=temp_frame_crops_dir,
+                            destin_folder=temp_frame_datasets_dir,
+                            train_ratio=0.8
+                        )
+                        
+                        # Upload frame-specific train and val datasets to Google Storage
+                        frame_train_samples = 0
+                        frame_val_samples = 0
+                        
+                        # Upload train dataset for this frame
+                        train_local_dir = os.path.join(temp_frame_datasets_dir, "train")
+                        if os.path.exists(train_local_dir):
+                            for root, dirs, files in os.walk(train_local_dir):
+                                for file in files:
+                                    if file.endswith('.jpg'):
+                                        local_path = os.path.join(root, file)
+                                        rel_path = os.path.relpath(local_path, train_local_dir)
+                                        storage_path = f"{datasets_folder}/{frame_id}/train/{rel_path}"
+                                        
+                                        if self.tenant_storage.upload_from_file(storage_path, local_path):
+                                            frame_train_samples += 1
+                                            logger.debug(f"Uploaded train sample: {storage_path}")
+                                        else:
+                                            logger.warning(f"Failed to upload train sample: {storage_path}")
+                        
+                        # Upload val dataset for this frame
+                        val_local_dir = os.path.join(temp_frame_datasets_dir, "val")
+                        if os.path.exists(val_local_dir):
+                            for root, dirs, files in os.walk(val_local_dir):
+                                for file in files:
+                                    if file.endswith('.jpg'):
+                                        local_path = os.path.join(root, file)
+                                        rel_path = os.path.relpath(local_path, val_local_dir)
+                                        storage_path = f"{datasets_folder}/{frame_id}/val/{rel_path}"
+                                        
+                                        if self.tenant_storage.upload_from_file(storage_path, local_path):
+                                            frame_val_samples += 1
+                                            logger.debug(f"Uploaded val sample: {storage_path}")
+                                        else:
+                                            logger.warning(f"Failed to upload val sample: {storage_path}")
+                        
+                        total_train_samples += frame_train_samples
+                        total_val_samples += frame_val_samples
+                        
+                        logger.info(f"Frame {frame_id}: {frame_train_samples} train samples, {frame_val_samples} val samples")
                     
                     logger.info(f"Successfully created training and validation sets for video: {video_guid}")
-                    logger.info(f"Training samples: {train_samples}, Validation samples: {val_samples}")
+                    logger.info(f"Total training samples: {total_train_samples}, Total validation samples: {total_val_samples}")
                     
                     return {
                         "datasets_created": True,
                         "video_guid": video_guid,
                         "datasets_folder": datasets_folder,
-                        "training_samples": train_samples,
-                        "validation_samples": val_samples,
-                        "total_crops_processed": len(downloaded_crops),
+                        "training_samples": total_train_samples,
+                        "validation_samples": total_val_samples,
+                        "frames_processed": len(crops_by_frame),
+                        "total_crops_processed": sum(len(crops) for crops in crops_by_frame.values()),
                         "tracks_processed": len(track_folders),
                         "optimization_used": "fallback_storage"
                     }
@@ -1738,23 +1779,6 @@ def run_dataprep_pipeline(tenant_id: str = "tenant1", video_path: str = "", dele
 
     return pipeline.run(video_path)
 
-
-def run_training_pipeline(tenant_id: str = "tenant1", video_path: str = "", delete_original_raw_videos: bool = False, frames_per_video: int = 20, verbose: bool = False, save_intermediate: bool = False) -> Dict[str, Any]:
-    """
-    Backward compatibility function for run_dataprep_pipeline.
-    
-    Args:
-        tenant_id: The tenant ID to process videos for (default: "tenant1")
-        video_path: Path to the video file to process
-        delete_original_raw_videos: Whether to delete original raw video files after processing (default: False)
-        frames_per_video: Number of frames to extract per video (default: 20)
-        verbose: Whether to enable verbose logging (default: False)
-        save_intermediate: Whether to save intermediate results (default: False)
-        
-    Returns:
-        Dictionary with pipeline results
-    """
-    return run_dataprep_pipeline(tenant_id, video_path, delete_original_raw_videos, frames_per_video, verbose, save_intermediate)
 
 
 if __name__ == "__main__":

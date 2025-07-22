@@ -400,32 +400,72 @@ def create_train_val_split(
     random.seed(42)  # For reproducibility
     
     # First, collect all crops organized by tracker_id
-    tracker_crops = {}  # tracker_id -> list of (frame_folder, crop_filename)
+    tracker_crops = {}  # tracker_id -> list of (crop_folder, crop_filename)
     
-    # Walk through frame folders
-    for frame_folder in os.listdir(source_folder):
-        frame_path = os.path.join(source_folder, frame_folder)
-        if not os.path.isdir(frame_path) or not frame_folder.startswith('frame_'):
-            continue
+    # Check the structure - could be frame-based or crop-folder-based
+    items_in_source = os.listdir(source_folder)
+    
+    # Detect structure type
+    has_frame_folders = any(item.startswith('frame_') and os.path.isdir(os.path.join(source_folder, item)) for item in items_in_source)
+    has_crop_folders = any(item.startswith('crop_') and os.path.isdir(os.path.join(source_folder, item)) for item in items_in_source)
+    
+    if has_crop_folders:
+        # New structure: source_folder/crop_xxx/crop.jpg, crop_aug1.jpg, etc.
+        logger.info("Detected new crop folder structure")
         
-        # Process all crop files in this frame folder
-        for crop_file in os.listdir(frame_path):
-            if not crop_file.endswith('.jpg'):
+        for crop_folder in os.listdir(source_folder):
+            crop_path = os.path.join(source_folder, crop_folder)
+            if not os.path.isdir(crop_path) or not crop_folder.startswith('crop_'):
                 continue
             
-            # Extract tracker_id from filename: frame_id_tracker_id_confidence.jpg
+            # Extract tracker_id from crop folder name: crop_456 -> 456
             try:
-                parts = crop_file.split('_')
-                if len(parts) >= 3:
-                    tracker_id = parts[1]  # tracker_id is the second part
-                    
-                    if tracker_id not in tracker_crops:
-                        tracker_crops[tracker_id] = []
-                    
-                    tracker_crops[tracker_id].append((frame_folder, crop_file))
+                tracker_id = crop_folder.split('_')[1]  # crop_456 -> 456
+                
+                if tracker_id not in tracker_crops:
+                    tracker_crops[tracker_id] = []
+                
+                # Process all crop files in this crop folder
+                for crop_file in os.listdir(crop_path):
+                    if crop_file.endswith('.jpg'):
+                        tracker_crops[tracker_id].append((crop_folder, crop_file))
+                        
             except (ValueError, IndexError):
-                logger.warning(f"Skipping crop file with invalid naming: {crop_file}")
+                logger.warning(f"Skipping crop folder with invalid naming: {crop_folder}")
                 continue
+                
+    elif has_frame_folders:
+        # Old structure: source_folder/frame_xxx/frame_id_tracker_id_confidence.jpg
+        logger.info("Detected old frame folder structure")
+        
+        # Walk through frame folders
+        for frame_folder in os.listdir(source_folder):
+            frame_path = os.path.join(source_folder, frame_folder)
+            if not os.path.isdir(frame_path) or not frame_folder.startswith('frame_'):
+                continue
+            
+            # Process all crop files in this frame folder
+            for crop_file in os.listdir(frame_path):
+                if not crop_file.endswith('.jpg'):
+                    continue
+                
+                # Extract tracker_id from filename: frame_id_tracker_id_confidence.jpg
+                try:
+                    parts = crop_file.split('_')
+                    if len(parts) >= 3:
+                        tracker_id = parts[1]  # tracker_id is the second part
+                        
+                        if tracker_id not in tracker_crops:
+                            tracker_crops[tracker_id] = []
+                        
+                        tracker_crops[tracker_id].append((frame_folder, crop_file))
+                except (ValueError, IndexError):
+                    logger.warning(f"Skipping crop file with invalid naming: {crop_file}")
+                    continue
+    else:
+        logger.warning(f"No recognizable crop structure found in {source_folder}")
+        logger.warning(f"Items in folder: {items_in_source}")
+        return
     
     logger.info(f"Found crops for {len(tracker_crops)} different tracker IDs")
     
@@ -444,14 +484,24 @@ def create_train_val_split(
         os.makedirs(val_track_dir, exist_ok=True)
         
         # Copy training files
-        for frame_folder, crop_file in train_crops:
-            src = os.path.join(source_folder, frame_folder, crop_file)
+        for source_folder_name, crop_file in train_crops:
+            if has_crop_folders:
+                # New structure: source_folder/crop_456/crop.jpg -> train/456/crop.jpg
+                src = os.path.join(source_folder, source_folder_name, crop_file)
+            else:
+                # Old structure: source_folder/frame_123/123_456_0.900.jpg -> train/456/123_456_0.900.jpg
+                src = os.path.join(source_folder, source_folder_name, crop_file)
             dst = os.path.join(train_track_dir, crop_file)
             shutil.copy2(src, dst)
         
         # Copy validation files
-        for frame_folder, crop_file in val_crops:
-            src = os.path.join(source_folder, frame_folder, crop_file)
+        for source_folder_name, crop_file in val_crops:
+            if has_crop_folders:
+                # New structure: source_folder/crop_456/crop.jpg -> val/456/crop.jpg
+                src = os.path.join(source_folder, source_folder_name, crop_file)
+            else:
+                # Old structure: source_folder/frame_123/123_456_0.900.jpg -> val/456/123_456_0.900.jpg
+                src = os.path.join(source_folder, source_folder_name, crop_file)
             dst = os.path.join(val_track_dir, crop_file)
             shutil.copy2(src, dst)
     

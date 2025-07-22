@@ -6,8 +6,10 @@ Contains all image preprocessing pipelines and transform functions.
 import torchvision.transforms as transforms
 import cv2
 import numpy as np
+import torch
+import random
 from .all_config import model_config, transform_config, detection_config, background_mask_config
-from typing import Optional, List
+from typing import Optional, List, Union, Tuple
 from PIL import Image
 
 
@@ -182,6 +184,271 @@ def create_background_removal_transform(override_detector: Optional['BackgroundM
     return BackgroundRemovalTransform(override_detector)
 
 
+# ============================================================================
+# ADVANCED AUGMENTATION TRANSFORMS (replaces offline augmentation module)
+# ============================================================================
+
+class RandomRotationTransform:
+    """
+    Custom rotation transform that applies fixed angle rotations similar to augmentation module.
+    """
+    
+    def __init__(self, angles: List[float] = [30, -30], prob: float = 0.5):
+        """
+        Args:
+            angles: List of rotation angles to choose from
+            prob: Probability of applying rotation
+        """
+        self.angles = angles
+        self.prob = prob
+    
+    def __call__(self, image):
+        if random.random() > self.prob:
+            return image
+            
+        angle = random.choice(self.angles)
+        
+        if isinstance(image, Image.Image):
+            return image.rotate(angle, expand=False, fillcolor=(255, 255, 255))
+        else:
+            # Handle numpy arrays
+            h, w = image.shape[:2]
+            center = (w // 2, h // 2)
+            matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+            rotated = cv2.warpAffine(image, matrix, (w, h), borderMode=cv2.BORDER_REFLECT)
+            return rotated
+
+
+class StretchTransform:
+    """
+    Applies horizontal or vertical stretching followed by center cropping.
+    """
+    
+    def __init__(self, stretch_factor: float = 2.0, prob: float = 0.3):
+        """
+        Args:
+            stretch_factor: Factor to stretch by (2.0 = 100% stretch)
+            prob: Probability of applying stretch
+        """
+        self.stretch_factor = stretch_factor
+        self.prob = prob
+    
+    def __call__(self, image):
+        if random.random() > self.prob:
+            return image
+            
+        stretch_direction = random.choice(['horizontal', 'vertical'])
+        
+        if isinstance(image, Image.Image):
+            w, h = image.size
+            if stretch_direction == 'horizontal':
+                # Horizontal stretch
+                stretched = image.resize((int(w * self.stretch_factor), h))
+                # Center crop back to original size
+                left = (stretched.size[0] - w) // 2
+                cropped = stretched.crop((left, 0, left + w, h))
+            else:
+                # Vertical stretch
+                stretched = image.resize((w, int(h * self.stretch_factor)))
+                # Center crop back to original size
+                top = (stretched.size[1] - h) // 2
+                cropped = stretched.crop((0, top, w, top + h))
+            return cropped
+        else:
+            # Handle numpy arrays
+            h, w = image.shape[:2]
+            if stretch_direction == 'horizontal':
+                stretched = cv2.resize(image, (int(w * self.stretch_factor), h))
+                start_x = (stretched.shape[1] - w) // 2
+                return stretched[:, start_x:start_x + w]
+            else:
+                stretched = cv2.resize(image, (w, int(h * self.stretch_factor)))
+                start_y = (stretched.shape[0] - h) // 2
+                return stretched[start_y:start_y + h, :]
+
+
+class BodyPartCropTransform:
+    """
+    Applies body part cropping (legs, arms, half-body) similar to augmentation module.
+    """
+    
+    def __init__(self, crop_types: List[str] = ['legs', 'arms_legs', 'half_left', 'half_right'], prob: float = 0.4):
+        """
+        Args:
+            crop_types: Types of crops to apply
+            prob: Probability of applying crop
+        """
+        self.crop_types = crop_types
+        self.prob = prob
+    
+    def __call__(self, image):
+        if random.random() > self.prob:
+            return image
+            
+        crop_type = random.choice(self.crop_types)
+        
+        if isinstance(image, Image.Image):
+            w, h = image.size
+            
+            if crop_type == 'legs':
+                # Remove bottom 50% (legs)
+                cropped = image.crop((0, 0, w, int(h * 0.5)))
+            elif crop_type == 'arms_legs':
+                # Remove arms (15% from sides) and legs (50% from bottom)
+                arm_crop = 0.15
+                leg_crop = 0.5
+                cropped = image.crop((int(w * arm_crop), 0, int(w * (1 - arm_crop)), int(h * (1 - leg_crop))))
+            elif crop_type == 'half_left':
+                # Left half of body
+                cropped = image.crop((0, 0, int(w * 0.5), h))
+            elif crop_type == 'half_right':
+                # Right half of body
+                cropped = image.crop((int(w * 0.5), 0, w, h))
+            else:
+                return image
+                
+            return cropped
+        else:
+            # Handle numpy arrays
+            h, w = image.shape[:2]
+            
+            if crop_type == 'legs':
+                return image[:int(h * 0.5), :, :]
+            elif crop_type == 'arms_legs':
+                arm_crop = 0.15
+                leg_crop = 0.5
+                return image[:int(h * (1 - leg_crop)), int(w * arm_crop):int(w * (1 - arm_crop)), :]
+            elif crop_type == 'half_left':
+                return image[:, :int(w * 0.5), :]
+            elif crop_type == 'half_right':
+                return image[:, int(w * 0.5):, :]
+            else:
+                return image
+
+
+class RandomOcclusionTransform:
+    """
+    Applies random occlusion patches to simulate partial object visibility.
+    """
+    
+    def __init__(self, num_occlusions: Tuple[int, int] = (3, 10), occlusion_ratio: float = 0.25, prob: float = 0.3):
+        """
+        Args:
+            num_occlusions: Range of number of occlusion patches
+            occlusion_ratio: Size of occlusion as ratio of min(width, height)
+            prob: Probability of applying occlusion
+        """
+        self.num_occlusions = num_occlusions
+        self.occlusion_ratio = occlusion_ratio
+        self.prob = prob
+    
+    def __call__(self, image):
+        if random.random() > self.prob:
+            return image
+            
+        if isinstance(image, Image.Image):
+            image_array = np.array(image)
+            occluded = self._apply_occlusion(image_array)
+            return Image.fromarray(occluded)
+        else:
+            return self._apply_occlusion(image.copy())
+    
+    def _apply_occlusion(self, image_array):
+        h, w = image_array.shape[:2]
+        occ_size = max(5, min(15, int(min(h, w) * self.occlusion_ratio)))
+        
+        if h < occ_size or w < occ_size:
+            return image_array
+            
+        num_patches = random.randint(*self.num_occlusions)
+        
+        for _ in range(num_patches):
+            occ_y = random.randint(0, h - occ_size)
+            occ_x = random.randint(0, w - occ_size)
+            random_color = [random.randint(0, 255) for _ in range(3)]
+            image_array[occ_y:occ_y + occ_size, occ_x:occ_x + occ_size] = random_color
+            
+        return image_array
+
+
+class HSVAdjustmentTransform:
+    """
+    Applies HSV adjustments for lighting condition variations (darkness/oversaturation).
+    """
+    
+    def __init__(self, variations: List[str] = ['darken', 'oversaturate'], prob: float = 0.4):
+        """
+        Args:
+            variations: Types of HSV adjustments ['darken', 'oversaturate']
+            prob: Probability of applying adjustment
+        """
+        self.variations = variations
+        self.prob = prob
+    
+    def __call__(self, image):
+        if random.random() > self.prob:
+            return image
+            
+        variation = random.choice(self.variations)
+        
+        if isinstance(image, Image.Image):
+            image_array = np.array(image)
+            adjusted = self._apply_hsv_adjustment(image_array, variation)
+            return Image.fromarray(adjusted)
+        else:
+            return self._apply_hsv_adjustment(image.copy(), variation)
+    
+    def _apply_hsv_adjustment(self, image_array, variation):
+        # Convert RGB to HSV
+        hsv = cv2.cvtColor(image_array, cv2.COLOR_RGB2HSV)
+        hsv_float = hsv.astype(np.float32)
+        
+        if variation == 'darken':
+            # Reduce saturation and brightness (simulating shadow/darkness)
+            hsv_float[:, :, 1] *= 0.7  # Reduce saturation by 30%
+            hsv_float[:, :, 2] *= 0.6  # Reduce brightness by 40%
+        elif variation == 'oversaturate':
+            # Increase saturation (simulating bright sunlight)
+            hsv_float[:, :, 1] *= 1.3  # Increase saturation by 30%
+            hsv_float[:, :, 2] *= 0.9  # Slightly reduce brightness
+        
+        # Clip values and convert back to RGB
+        hsv_adjusted = np.clip(hsv_float, 0, 255).astype(np.uint8)
+        rgb_adjusted = cv2.cvtColor(hsv_adjusted, cv2.COLOR_HSV2RGB)
+        
+        return rgb_adjusted
+
+
+class MultiAugmentationTransform:
+    """
+    Composite transform that applies multiple augmentations in sequence.
+    This replaces the offline augmentation module functionality.
+    """
+    
+    def __init__(self, enable_all: bool = True):
+        """
+        Args:
+            enable_all: Whether to enable all augmentation types
+        """
+        self.transforms = []
+        
+        if enable_all:
+            # Add all augmentation transforms with probabilities
+            self.transforms.extend([
+                RandomRotationTransform(angles=[30, -30], prob=0.3),
+                StretchTransform(stretch_factor=2.0, prob=0.2),
+                BodyPartCropTransform(prob=0.25),
+                RandomOcclusionTransform(prob=0.2),
+                HSVAdjustmentTransform(prob=0.3),
+            ])
+    
+    def __call__(self, image):
+        # Apply transforms with some probability
+        for transform in self.transforms:
+            image = transform(image)
+        return image
+
+
 def create_training_transforms():
     """Create training transforms with data augmentation."""
     transforms_list = []
@@ -193,6 +460,42 @@ def create_training_transforms():
     # Add standard transforms
     transforms_list.extend([
         transforms.Resize((model_config.input_height, model_config.input_width)),
+        transforms.RandomHorizontalFlip(p=transform_config.hflip_prob),
+        transforms.ColorJitter(
+            brightness=transform_config.colorjitter_brightness,
+            contrast=transform_config.colorjitter_contrast,
+            saturation=transform_config.colorjitter_saturation,
+            hue=transform_config.colorjitter_hue
+        ),
+        transforms.RandomRotation(transform_config.random_rotation_degrees),
+        transforms.RandomAffine(
+            degrees=transform_config.random_affine_degrees,
+            translate=transform_config.random_affine_translate
+        ),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=model_config.imagenet_mean, std=model_config.imagenet_std)
+    ])
+    
+    return transforms.Compose(transforms_list)
+
+
+def create_advanced_training_transforms():
+    """Create advanced training transforms with comprehensive augmentation (replaces offline augmentation)."""
+    transforms_list = []
+    
+    # Add background removal if enabled
+    if transform_config.enable_background_removal:
+        transforms_list.append(BackgroundRemovalTransform())
+    
+    # Add advanced augmentation transforms (replaces augmentation module)
+    transforms_list.extend([
+        # Multi-augmentation transform that combines various techniques
+        MultiAugmentationTransform(enable_all=True),
+        
+        # Resize to target size
+        transforms.Resize((model_config.input_height, model_config.input_width)),
+        
+        # Standard transforms
         transforms.RandomHorizontalFlip(p=transform_config.hflip_prob),
         transforms.ColorJitter(
             brightness=transform_config.colorjitter_brightness,
@@ -293,6 +596,45 @@ def create_opencv_safe_training_transforms():
     return transforms.Compose(transforms_list)
 
 
+def create_opencv_safe_advanced_training_transforms():
+    """Create advanced training transforms that handle OpenCV BGR input safely (replaces offline augmentation)."""
+    transforms_list = [
+        transforms.Lambda(lambda x: ensure_rgb_format(x, "BGR") if isinstance(x, np.ndarray) else x),
+        transforms.ToPILImage(),
+    ]
+    
+    # Add background removal if enabled
+    if transform_config.enable_background_removal:
+        transforms_list.append(BackgroundRemovalTransform())
+    
+    # Add advanced augmentation transforms (replaces augmentation module)
+    transforms_list.extend([
+        # Multi-augmentation transform that combines various techniques
+        MultiAugmentationTransform(enable_all=True),
+        
+        # Resize to target size
+        transforms.Resize((model_config.input_height, model_config.input_width)),
+        
+        # Standard transforms
+        transforms.RandomHorizontalFlip(p=transform_config.hflip_prob),
+        transforms.ColorJitter(
+            brightness=transform_config.colorjitter_brightness,
+            contrast=transform_config.colorjitter_contrast,
+            saturation=transform_config.colorjitter_saturation,
+            hue=transform_config.colorjitter_hue
+        ),
+        transforms.RandomRotation(transform_config.random_rotation_degrees),
+        transforms.RandomAffine(
+            degrees=transform_config.random_affine_degrees,
+            translate=transform_config.random_affine_translate
+        ),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=model_config.imagenet_mean, std=model_config.imagenet_std)
+    ])
+    
+    return transforms.Compose(transforms_list)
+
+
 def refresh_transform_instances():
     """
     Refresh all transform instances to pick up configuration changes.
@@ -300,40 +642,49 @@ def refresh_transform_instances():
     """
     global training_transforms, inference_transforms, validation_transforms
     global opencv_safe_transforms, opencv_safe_training_transforms, TRANSFORMS
+    global advanced_training_transforms, opencv_safe_advanced_training_transforms
     
     # Recreate all transform instances
     training_transforms = create_training_transforms()
+    advanced_training_transforms = create_advanced_training_transforms()
     inference_transforms = create_inference_transforms()
     validation_transforms = inference_transforms  # Same as inference
     opencv_safe_transforms = create_opencv_safe_transforms()
     opencv_safe_training_transforms = create_opencv_safe_training_transforms()
+    opencv_safe_advanced_training_transforms = create_opencv_safe_advanced_training_transforms()
     
     # Update the transforms dictionary
     TRANSFORMS.update({
         'training': training_transforms,
+        'advanced_training': advanced_training_transforms,
         'inference': inference_transforms,
         'validation': validation_transforms,
         'opencv_safe': opencv_safe_transforms,
-        'opencv_safe_training': opencv_safe_training_transforms
+        'opencv_safe_training': opencv_safe_training_transforms,
+        'opencv_safe_advanced_training': opencv_safe_advanced_training_transforms
     })
 
 
 # Create transform instances
 training_transforms = create_training_transforms()
+advanced_training_transforms = create_advanced_training_transforms()
 inference_transforms = create_inference_transforms()
 validation_transforms = inference_transforms  # Same as inference
 tensor_to_pil = create_tensor_to_pil_transforms()
 opencv_safe_transforms = create_opencv_safe_transforms()
 opencv_safe_training_transforms = create_opencv_safe_training_transforms()
+opencv_safe_advanced_training_transforms = create_opencv_safe_advanced_training_transforms()
 
 # Dictionary for easy access to all transforms
 TRANSFORMS = {
     'training': training_transforms,
+    'advanced_training': advanced_training_transforms,
     'inference': inference_transforms,
     'validation': validation_transforms,
     'tensor_to_pil': tensor_to_pil,
     'opencv_safe': opencv_safe_transforms,
-    'opencv_safe_training': opencv_safe_training_transforms
+    'opencv_safe_training': opencv_safe_training_transforms,
+    'opencv_safe_advanced_training': opencv_safe_advanced_training_transforms
 }
 
 

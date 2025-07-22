@@ -11,8 +11,6 @@
         "**/.DS_Store",
         "**/runs/**",
         "**/notebooks/**",
-        "**/documentation/**",
-        "**/examples/**",
         "**/*.md",
         "**/*.json",
         "**/*.txt",

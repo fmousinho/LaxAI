@@ -129,7 +129,20 @@ class Pipeline:
             
             # Serialize the data
             if isinstance(data, (dict, list)):
-                content = json.dumps(data, indent=2, default=str)
+                # For dictionaries, filter out large data keys before serialization
+                if isinstance(data, dict):
+                    filtered_data = {}
+                    for key, value in data.items():
+                        # Skip keys that contain large data or non-serializable objects
+                        if key in ["frames_data", "detections", "loaded_video", "crops_in_memory", 
+                                  "modified_crops_in_memory", "augmented_crops_in_memory"]:
+                            filtered_data[key] = f"<{key}_excluded_for_serialization>"
+                        else:
+                            filtered_data[key] = self._make_json_serializable(value)
+                    content = json.dumps(filtered_data, indent=2, default=str)
+                else:
+                    # For lists, use the serialization method directly
+                    content = json.dumps(self._make_json_serializable(data), indent=2, default=str)
             else:
                 content = str(data)
             
@@ -336,8 +349,9 @@ class Pipeline:
         if isinstance(obj, dict):
             result = {}
             for key, value in obj.items():
-                # Skip known problematic keys
-                if key in ["frames_data", "detections", "loaded_video"]:
+                # Skip known problematic keys that contain large data or non-serializable objects
+                if key in ["frames_data", "detections", "loaded_video", "crops_in_memory", 
+                          "modified_crops_in_memory", "augmented_crops_in_memory"]:
                     result[key] = f"<{key}_excluded_for_serialization>"
                 else:
                     result[key] = self._make_json_serializable(value)
