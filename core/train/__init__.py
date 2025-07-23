@@ -14,9 +14,15 @@ from .dataprep_pipeline import (
     run_dataprep_pipeline
 )
 
+from .siamesenet import SiameseNet
+
+from .training import Training
+
 __all__ = [
     'augment_images',
     'test_augmentation',
     'DataPrepPipeline',
-    'run_dataprep_pipeline'
+    'run_dataprep_pipeline',
+    'SiameseNet',
+    'Training'
 ]

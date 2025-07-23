@@ -43,39 +43,39 @@ def augment_images(images: List[np.ndarray]) -> List[np.ndarray]:
         # Original image
         augmented_images.append(img.copy())
         
-        # 1. Left-to-right flip
-        flipped = cv2.flip(img, 1)
-        augmented_images.append(flipped)
+        # # 1. Left-to-right flip
+        # flipped = cv2.flip(img, 1)
+        # augmented_images.append(flipped)
 
-        # 2. Rotations (+30 and -30 degrees)
-        center = (w // 2, h // 2)
+        # # 2. Rotations (+30 and -30 degrees)
+        # center = (w // 2, h // 2)
 
-        # +30 degree rotation
-        rotation_matrix_pos = cv2.getRotationMatrix2D(center, 30, 1.0)
-        rotated_pos = cv2.warpAffine(img, rotation_matrix_pos, (w, h), borderMode=cv2.BORDER_REFLECT)
-        augmented_images.append(rotated_pos)
+        # # +30 degree rotation
+        # rotation_matrix_pos = cv2.getRotationMatrix2D(center, 30, 1.0)
+        # rotated_pos = cv2.warpAffine(img, rotation_matrix_pos, (w, h), borderMode=cv2.BORDER_REFLECT)
+        # augmented_images.append(rotated_pos)
 
-        # -30 degree rotation
-        rotation_matrix_neg = cv2.getRotationMatrix2D(center, -30, 1.0)
-        rotated_neg = cv2.warpAffine(img, rotation_matrix_neg, (w, h), borderMode=cv2.BORDER_REFLECT)
-        augmented_images.append(rotated_neg)
+        # # -30 degree rotation
+        # rotation_matrix_neg = cv2.getRotationMatrix2D(center, -30, 1.0)
+        # rotated_neg = cv2.warpAffine(img, rotation_matrix_neg, (w, h), borderMode=cv2.BORDER_REFLECT)
+        # augmented_images.append(rotated_neg)
         
-        # # 3. 100% stretching (horizontal and vertical)
-        stretch_factor = 2.0
+        # # # 3. 100% stretching (horizontal and vertical)
+        # stretch_factor = 2.0
         
-        # Horizontal stretch
-        stretched_h = cv2.resize(img, (int(w * stretch_factor), h))
-        # Crop back to original size from center
-        start_x = (stretched_h.shape[1] - w) // 2
-        stretched_h_cropped = stretched_h[:, start_x:start_x + w]
-        augmented_images.append(stretched_h_cropped)
+        # # Horizontal stretch
+        # stretched_h = cv2.resize(img, (int(w * stretch_factor), h))
+        # # Crop back to original size from center
+        # start_x = (stretched_h.shape[1] - w) // 2
+        # stretched_h_cropped = stretched_h[:, start_x:start_x + w]
+        # augmented_images.append(stretched_h_cropped)
         
-        # Vertical stretch
-        stretched_v = cv2.resize(img, (w, int(h * stretch_factor)))
-        # Crop back to original size from center
-        start_y = (stretched_v.shape[0] - h) // 2
-        stretched_v_cropped = stretched_v[start_y:start_y + h, :]
-        augmented_images.append(stretched_v_cropped)
+        # # Vertical stretch
+        # stretched_v = cv2.resize(img, (w, int(h * stretch_factor)))
+        # # Crop back to original size from center
+        # start_y = (stretched_v.shape[0] - h) // 2
+        # stretched_v_cropped = stretched_v[start_y:start_y + h, :]
+        # augmented_images.append(stretched_v_cropped)
         
         # 4. Crops
         
@@ -123,31 +123,31 @@ def augment_images(images: List[np.ndarray]) -> List[np.ndarray]:
         # noisy = np.clip(img.astype(np.int16) + noise, 0, 255).astype(np.uint8)
         # augmented_images.append(noisy)
         
-        # 7. Saturation/Darkness (simulating sun exposure)
-        # Convert RGB to HSV for saturation adjustment
-        hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
-        hsv_float = hsv.astype(np.float32)
+        # # 7. Saturation/Darkness (simulating sun exposure)
+        # # Convert RGB to HSV for saturation adjustment
+        # hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+        # hsv_float = hsv.astype(np.float32)
         
-        # Reduce saturation and value (brightness)
-        hsv_float[:, :, 1] *= 0.7  # Reduce saturation by 30%
-        hsv_float[:, :, 2] *= 0.6  # Reduce brightness by 40%
+        # # Reduce saturation and value (brightness)
+        # hsv_float[:, :, 1] *= 0.7  # Reduce saturation by 30%
+        # hsv_float[:, :, 2] *= 0.6  # Reduce brightness by 40%
         
-        # Clip values and convert back
-        hsv_adjusted = np.clip(hsv_float, 0, 255).astype(np.uint8)
-        darkened = cv2.cvtColor(hsv_adjusted, cv2.COLOR_HSV2RGB)
-        augmented_images.append(darkened)
+        # # Clip values and convert back
+        # hsv_adjusted = np.clip(hsv_float, 0, 255).astype(np.uint8)
+        # darkened = cv2.cvtColor(hsv_adjusted, cv2.COLOR_HSV2RGB)
+        # augmented_images.append(darkened)
         
-        # 8. Additional saturation variation (oversaturated)
-        hsv_over = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
-        hsv_over_float = hsv_over.astype(np.float32)
+        # # 8. Additional saturation variation (oversaturated)
+        # hsv_over = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+        # hsv_over_float = hsv_over.astype(np.float32)
         
-        # Increase saturation
-        hsv_over_float[:, :, 1] *= 1.3  # Increase saturation by 30%
-        hsv_over_float[:, :, 2] *= 0.9  # Slightly reduce brightness
+        # # Increase saturation
+        # hsv_over_float[:, :, 1] *= 1.3  # Increase saturation by 30%
+        # hsv_over_float[:, :, 2] *= 0.9  # Slightly reduce brightness
         
-        hsv_over_adjusted = np.clip(hsv_over_float, 0, 255).astype(np.uint8)
-        oversaturated = cv2.cvtColor(hsv_over_adjusted, cv2.COLOR_HSV2RGB)
-        augmented_images.append(oversaturated)
+        # hsv_over_adjusted = np.clip(hsv_over_float, 0, 255).astype(np.uint8)
+        # oversaturated = cv2.cvtColor(hsv_over_adjusted, cv2.COLOR_HSV2RGB)
+        # augmented_images.append(oversaturated)
     
     return augmented_images
 
