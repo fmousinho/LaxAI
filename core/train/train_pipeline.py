@@ -5,12 +5,14 @@ from typing import Any, Dict, List, Optional
 
 
 from core.common.pipeline_step import PipelineStep, StepStatus
-from core.common.google_storage import GoogleStorageClient
+from core.common.google_storage import GoogleStorageClient, get_storage
 from core.common.pipeline import Pipeline, PipelineStatus
 from core.train.dataset import LacrossePlayerDataset
 from core.train.training import Training
 from core.train.siamesenet import SiameseNet
 from config.transforms import get_transforms
+from config.all_config import training_config, debug_config
+
 
 
 logger = logging.getLogger(__name__)
@@ -18,8 +20,13 @@ logger = logging.getLogger(__name__)
 
 class TrainPipeline(Pipeline):
 
-    def __init__(self, storage_client: GoogleStorageClient):
-        self.storage_client = storage_client
+    def __init__(self, tenant_id: str = "tenant1", verbose: bool = True, save_intermediate: bool = True):
+        self.verbose = verbose
+        self.save_intermediate = save_intermediate
+        self.verbose
+        self.storage_client = get_storage(tenant_id)
+        self.storage_admin = get_storage("common")
+        self.model_path = training_config.model_save_path
 
         step_definitions = {
             "create_dataset": {
@@ -39,7 +46,7 @@ class TrainPipeline(Pipeline):
         # Initialize base pipeline
         super().__init__(
             pipeline_name="training_pipeline",
-            storage_client=storage_client,
+            storage_client=self.storage_client,
             step_definitions=step_definitions,
             verbose=True,
             save_intermediate=False
@@ -229,10 +236,18 @@ class TrainPipeline(Pipeline):
                 return {"status": StepStatus.ERROR.value, "error": error_msg}
             
             logger.info(f"Starting model training with dataset from: {dataset_path}")
+
             
             # Initialize Training class
-            training = Training(train_dir=dataset_path)
-            
+            try:
+                training = Training(
+                    train_dir=dataset_path,
+                    model_save_path=self.model_path
+                )
+            except Exception as e:
+                logger.error(f"Failed to initialize Training class: {e}")
+                return {"status": StepStatus.ERROR.value, "error": f"Failed to initialize Training class: {str(e)}"}
+
             # Get training transforms
             try:
                 transform = get_transforms('training')
@@ -240,7 +255,8 @@ class TrainPipeline(Pipeline):
             except Exception as e:
                 logger.warning(f"Failed to load training transforms: {e}, using default")
                 transform = None
-            
+                return {"status": StepStatus.ERROR.value, "error": f"Failed to load training transforms: {str(e)}"}
+
             # Execute complete training pipeline
             logger.info("Executing training pipeline...")
             trained_model = training.train_and_save(

@@ -52,7 +52,7 @@ class TrainingConfig:
     num_epochs: int = 15
     margin: float = 0.5
     weight_decay: float = 1e-4  # L2 regularization weight decay
-    model_save_path: str = 'lacrosse_reid_model.pth'
+    model_save_path: str = '/common/model/embeddings_latest.pth'
     train_ratio: float = 0.8
     min_images_per_player: int = 3
     num_workers: int = 4 if sys.platform != "darwin" else 0  # Number of DataLoader workers
@@ -157,6 +157,22 @@ class BackgroundMaskConfig:
     max_std_multiplier: float = 3.0  # Maximum allowed std deviation multiplier
 
 
+@dataclass
+class WandbConfig:
+    enabled: bool = True
+    project: str = "LaxAI"
+    entity: str = "fmousinho76"
+    team: str = "fmousinho76-home"
+    tags: List[str] = field(default_factory=lambda: ["dev"])
+    log_frequency: int = 10
+    save_model_artifacts: bool = True
+    log_sample_images: bool = True
+    sample_images_count: int = 20
+    log_all_images: bool = True
+    model_name: str = "siamese-net-embeddings"
+    
+
+
 # Global config instances - these can be imported and used directly
 model_config = ModelConfig()
 tracker_config = TrackerConfig()
@@ -168,3 +184,4 @@ track_stitching_config = TrackStitchingConfig()
 transform_config = TransformConfig()
 background_mask_config = BackgroundMaskConfig()
 debug_config = DebugConfig()
+wandb_config = WandbConfig()

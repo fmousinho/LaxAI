@@ -3,9 +3,10 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import logging
-from typing import Optional, Any
+from typing import Optional, Any, Dict
 
-from config.all_config import model_config, training_config
+from config.all_config import model_config, training_config, wandb_config
+from .wandb_logger import wandb_logger
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +150,22 @@ class Training:
             logger.info(f"Loss function: TripletMarginLoss (margin={self.margin})")
             logger.info(f"Optimizer: Adam (lr={self.learning_rate}, weight_decay={getattr(training_config, 'weight_decay', 1e-4)})")
             
+            # Initialize wandb run with training configuration
+            if wandb_config.enabled:
+                config = {
+                    "embedding_dim": self.embedding_dim,
+                    "learning_rate": self.learning_rate,
+                    "batch_size": self.batch_size,
+                    "num_epochs": self.num_epochs,
+                    "margin": self.margin,
+                    "weight_decay": getattr(training_config, 'weight_decay', 1e-4),
+                    "device": str(self.device),
+                    "model_save_path": self.model_save_path,
+                    "train_dir": self.train_dir
+                }
+                wandb_logger.init_run(config=config, run_name=f"training_{os.path.basename(self.train_dir)}")
+                wandb_logger.watch_model(self.model)
+            
         except Exception as e:
             logger.error(f"Model setup failed: {e}")
             raise RuntimeError(f"Failed to setup model: {e}")
@@ -170,6 +187,23 @@ class Training:
             raise RuntimeError("Optimizer and loss function must be setup before training")
         
         logger.info(f"Starting training for {self.num_epochs} epochs")
+
+        # Log dataset info to wandb
+        if hasattr(self, 'dataset') and wandb_config.enabled:
+            dataset_size = len(self.dataset)
+            num_players = len(self.dataset.players)
+            player_stats = {player: len(self.dataset.player_to_images[player]) 
+                           for player in self.dataset.players}
+            
+            wandb_logger.log_dataset_info(
+                dataset_path=self.train_dir,
+                dataset_size=dataset_size,
+                num_players=num_players,
+                player_stats=player_stats
+            )
+            
+            # Log sample images
+            wandb_logger.log_sample_images(self.dataset)
 
         # Early stopping configuration
         early_stopping_threshold = training_config.early_stopping_loss_ratio * self.margin
@@ -209,11 +243,28 @@ class Training:
                 
                 running_loss += loss.item()
                 batch_count += 1
+                
+                # Log batch metrics to wandb
+                if wandb_config.enabled and i % wandb_config.log_frequency == 0:
+                    step = epoch * len(self.dataloader) + i
+                    wandb_logger.log_metrics({
+                        "batch_loss": loss.item(),
+                        "learning_rate": self.learning_rate,
+                        "epoch": epoch + 1
+                    }, step=step)
 
             # Calculate and log epoch summary
             epoch_loss = running_loss / batch_count if batch_count > 0 else 0.0
             logger.info(f"=== Epoch {epoch+1}/{self.num_epochs} Summary ===")
             logger.info(f"Average Loss: {epoch_loss:.4f}")
+            
+            # Log epoch metrics to wandb
+            if wandb_config.enabled:
+                wandb_logger.log_metrics({
+                    "epoch_loss": epoch_loss,
+                    "epoch": epoch + 1,
+                    "best_loss": best_loss if epoch_loss >= best_loss else epoch_loss
+                }, step=epoch + 1)
             
             # Early stopping based on loss threshold
             if epoch_loss < early_stopping_threshold:
@@ -258,6 +309,16 @@ class Training:
         torch.save(self.model.state_dict(), path)
         logger.info(f"Model weights saved to {path}")
         print(f"✓ Model saved to: {path}")
+        
+        # Log model artifact to wandb
+        if wandb_config.enabled:
+            metadata = {
+                "embedding_dim": self.embedding_dim,
+                "device": str(self.device),
+                "num_epochs": self.num_epochs,
+                "final_loss": getattr(self, 'final_loss', None)
+            }
+            wandb_logger.log_model_artifact(path, metadata=metadata)
 
     def train_and_save(self, model_class, dataset_class, transform: Optional[Any] = None, force_pretrained: bool = False):
         """
@@ -293,6 +354,10 @@ class Training:
             # Save
             logger.info("Saving model...")
             self.save_model()
+            
+            # Finish wandb run
+            if wandb_config.enabled:
+                wandb_logger.finish()
             
             logger.info("Training pipeline completed successfully")
             print(f"🎉 Training completed successfully!")
