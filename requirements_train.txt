@@ -1,0 +1,14 @@
+google-cloud-storage
+matplotlib
+numpy
+opencv-python
+Pillow
+python-dotenv
+python-json-logger
+rfdetr
+scikit-learn
+seaborn
+supervision
+torch
+torchvision
+wandb
