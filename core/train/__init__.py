@@ -1,34 +1,29 @@
 """
-LaxAI Core Training Package
+LaxAI Training Package
 
-This package contains the core training modules for the LaxAI lacrosse video analysis system.
+This package contains all modules related to data preparation, model training,
+and evaluation for the LaxAI project.
 """
 
-from .augmentation import (
-    augment_images,
-    test_augmentation
-)
-
-from .dataprep_pipeline import (
-    DataPrepPipeline,
-    run_dataprep_pipeline
-)
-
-from .siamesenet import SiameseNet
-
-from .training import Training
-
+from .augmentation import augment_images
+from .dataprep_pipeline import DataPrepPipeline, run_dataprep_pipeline
+from .dataset import LacrossePlayerDataset
 from .evaluator import ModelEvaluator
-
-from .wandb_logger import wandb_logger
+from .siamesenet import SiameseNet
+from .train_pipeline import TrainPipeline
 
 __all__ = [
+    # augmentation
     'augment_images',
-    'test_augmentation',
+    # dataprep_pipeline
     'DataPrepPipeline',
     'run_dataprep_pipeline',
-    'SiameseNet',
-    'Training',
+    # dataset
+    'LacrossePlayerDataset',
+    # evaluator
     'ModelEvaluator',
-    'wandb_logger'
+    # siamesenet
+    'SiameseNet',
+    # train_pipeline
+    'TrainPipeline',
 ]

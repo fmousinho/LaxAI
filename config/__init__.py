@@ -1,10 +1,13 @@
 """
 LaxAI Configuration Package
 
-This package contains configuration classes and transform functions for the LaxAI system.
+This package centralizes all configuration classes, instances, and transform
+functions for the LaxAI system, providing a single point of access for all modules.
 """
 
+# Import configuration instances and classes from all_config.py
 from .all_config import (
+    # Instances
     model_config,
     tracker_config,
     training_config,
@@ -15,6 +18,7 @@ from .all_config import (
     transform_config,
     background_mask_config,
     debug_config,
+    # Classes
     ModelConfig,
     TrackerConfig,
     TrainingConfig,
@@ -27,20 +31,25 @@ from .all_config import (
     DebugConfig
 )
 
+# Import transform-related functions and instances from transforms.py
 from .transforms import (
+    # Main transform getter
     get_transforms,
-    create_transforms_with_background_removal,
-    BackgroundRemovalTransform,
-    create_background_removal_transform,
-    ensure_rgb_format,
+    # Transform instances
     TRANSFORMS,
     training_transforms,
     inference_transforms,
     validation_transforms,
-    tensor_to_pil,
     opencv_safe_transforms,
     opencv_safe_training_transforms,
-    # New centralized background removal functions
+    # Utility functions
+    tensor_to_pil,
+    ensure_rgb_format,
+    # Background removal components
+    BackgroundRemovalTransform,
+    create_background_removal_transform,
+    create_transforms_with_background_removal,
+    # Global background detector management
     set_global_background_detector,
     get_global_background_detector,
     initialize_background_removal,
@@ -49,8 +58,13 @@ from .transforms import (
     create_background_detector_from_images
 )
 
+# Import logging configuration (inferred from usage in dataprep_pipeline.py)
+from . import logging_config
+
+
+# Define the public API for the config package
 __all__ = [
-    # Configuration instances
+    # --- Configuration Instances ---
     'model_config',
     'tracker_config',
     'training_config',
@@ -61,7 +75,9 @@ __all__ = [
     'transform_config',
     'background_mask_config',
     'debug_config',
-    # Configuration classes
+    'logging_config',
+
+    # --- Configuration Classes ---
     'ModelConfig',
     'TrackerConfig',
     'TrainingConfig',
@@ -72,24 +88,28 @@ __all__ = [
     'TransformConfig',
     'BackgroundMaskConfig',
     'DebugConfig',
-    # Transform functions
+
+    # --- Transform Functions & Components ---
     'get_transforms',
     'create_transforms_with_background_removal',
     'BackgroundRemovalTransform',
     'create_background_removal_transform',
     'ensure_rgb_format',
+    'tensor_to_pil',
+
+    # --- Transform Instances ---
+    'TRANSFORMS',
+    'training_transforms',
+    'inference_transforms',
+    'validation_transforms',
+    'opencv_safe_transforms',
+    'opencv_safe_training_transforms',
+
+    # --- Background Removal API ---
     'set_global_background_detector',
     'get_global_background_detector',
     'initialize_background_removal',
     'is_background_removal_enabled',
     'refresh_transform_instances',
     'create_background_detector_from_images',
-    # Transform instances
-    'TRANSFORMS',
-    'training_transforms',
-    'inference_transforms',
-    'validation_transforms',
-    'tensor_to_pil',
-    'opencv_safe_transforms',
-    'opencv_safe_training_transforms'
 ]
