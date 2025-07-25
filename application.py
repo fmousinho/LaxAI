@@ -1,6 +1,14 @@
 import logging
-from config.transforms import get_transforms
-from config.all_config import model_config, detection_config, track_stitching_config, debug_config, transform_config
+from config import (
+    debug_config,
+    detection_config,
+    get_transforms,
+    initialize_background_removal,
+    model_config,
+    refresh_transform_instances,
+    track_stitching_config,
+    transform_config,
+)
 from modules.utils import log_progress
 from typing import Optional, List, Dict, Tuple
 import datetime
@@ -15,19 +23,22 @@ import tempfile
 import shutil
 
 from tools import reporting
-from core.common.detection import DetectionModel
+from core.common import (
+    DetectionModel,
+    create_train_val_split,
+    extract_crops_from_video,
+    load_detections_from_json,
+    process_frames,
+    reorganize_crops_by_stitched_tracks,
+)
 from modules.player import Player
 from tools.store_driver import Store
 from modules.tracker import AffineAwareByteTrack, TrackData
 from modules.clustering_processor import ClusteringProcessor
-from core.train.siamesenet import SiameseNet 
-from core.common.detection_utils import process_frames, load_detections_from_json
-from core.common.crop_utils import extract_crops_from_video, reorganize_crops_by_stitched_tracks, create_train_val_split
-from core.train.dataset import LacrossePlayerDataset
+from core.train import LacrossePlayerDataset, SiameseNet
 from modules.emb_processor import EmbeddingsProcessor
 from modules.writer_processor import VideoWriterProcessor
 from modules.player_association import associate_tracks_to_players_with_stitching, stitch_tracks
-from config.transforms import initialize_background_removal, refresh_transform_instances
 
 
 
@@ -457,4 +468,3 @@ def run_player_training_pipeline(
     logger.info(f"Created {len(players)} players for {len(tracks_data)} tracks.")
     
     return players, track_to_player, updated_multi_frame_detections
-
