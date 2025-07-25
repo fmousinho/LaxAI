@@ -1,3 +1,9 @@
+"""
+Dataset utilities for the LaxAI project.
+
+This module defines the LacrossePlayerDataset class and related utilities for loading and augmenting
+lacrosse player image crops for training deep learning models, especially for triplet loss setups.
+"""
 import torch
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms

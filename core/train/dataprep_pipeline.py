@@ -1,3 +1,9 @@
+"""
+Data preparation pipeline for LaxAI project.
+
+This module defines the DataPrepPipeline class and related utilities for processing raw video data,
+including downloading from Google Storage, extracting frames, augmenting images, and preparing datasets for training.
+"""
 import os
 import sys
 import json

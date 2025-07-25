@@ -1,3 +1,9 @@
+"""
+Detection utilities for the LaxAI project.
+
+This module provides functions for running detection and tracking on video frames,
+including integration with detection models and trackers, and saving results.
+"""
 import logging
 import os
 import supervision as sv

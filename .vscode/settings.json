@@ -47,5 +47,6 @@
         "**/*.mov",
         "**/*.mkv",
         "**/*.webm"
-    ]
+    ],
+    "python.analysis.diagnosticMode": "openFilesOnly"
 }

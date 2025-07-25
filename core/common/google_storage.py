@@ -1,3 +1,9 @@
+"""
+Google Cloud Storage utilities for the LaxAI project.
+
+This module provides a client and helpers for interacting with Google Cloud Storage,
+including error handling, credential management, and common operations.
+"""
 #===========================================================
 # Google Cloud Storage Client with Error Handling and Common Operations
 #
