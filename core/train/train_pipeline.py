@@ -10,6 +10,7 @@ from core.common.pipeline import Pipeline, PipelineStatus
 from core.train.dataset import LacrossePlayerDataset
 from core.train.training import Training
 from core.train.siamesenet import SiameseNet
+from core.train.evaluator import ModelEvaluator
 from config.transforms import get_transforms
 from config.all_config import training_config, debug_config
 
@@ -293,15 +294,112 @@ class TrainPipeline(Pipeline):
 
     def _evaluate_model(self, context: dict) -> Dict[str, Any]:
         """
-        Placeholder for model evaluation step.
+        Comprehensive model evaluation using multiple methodologies.
         
         Args:
-            context: Pipeline context containing trained model
+            context: Pipeline context containing trained model and dataset
             
         Returns:
             Updated context with evaluation results
         """
-        # Implement model evaluation logic here
-        logger.info("Evaluating model... (functionality not yet implemented)")
-        
-        return context
+        try:
+            # Validate input context
+            if not isinstance(context, dict):
+                error_msg = "Context must be a dictionary"
+                logger.error(error_msg)
+                return {"status": StepStatus.ERROR.value, "error": error_msg}
+            
+            # Check for required inputs
+            trained_model = context.get('trained_model')
+            if trained_model is None:
+                error_msg = "Trained model must be available in context (run train_model step first)"
+                logger.error(error_msg)
+                return {"status": StepStatus.ERROR.value, "error": error_msg}
+            
+            dataset = context.get('dataset')
+            if dataset is None:
+                error_msg = "Dataset must be created before evaluation (run create_dataset step first)"
+                logger.error(error_msg)
+                return {"status": StepStatus.ERROR.value, "error": error_msg}
+            
+            dataset_path = context.get('dataset_path')
+            if not dataset_path:
+                error_msg = "dataset_path is required in context for evaluation"
+                logger.error(error_msg)
+                return {"status": StepStatus.ERROR.value, "error": error_msg}
+            
+            training_info = context.get('training_info', {})
+            device = training_info.get('device', 'cpu')
+            
+            logger.info("Starting comprehensive model evaluation...")
+            logger.info(f"Evaluation device: {device}")
+            
+            # Initialize evaluator
+            try:
+                evaluator = ModelEvaluator(
+                    model=trained_model,
+                    device=device,
+                    threshold=0.5,  # Default similarity threshold
+                    k_folds=5      # 5-fold cross-validation
+                )
+                logger.info("Model evaluator initialized successfully")
+            except Exception as e:
+                error_msg = f"Failed to initialize model evaluator: {str(e)}"
+                logger.error(error_msg)
+                return {"status": StepStatus.ERROR.value, "error": error_msg}
+            
+            # Run comprehensive evaluation
+            logger.info("Running comprehensive evaluation suite...")
+            evaluation_results = evaluator.evaluate_comprehensive(
+                dataset_path=dataset_path,
+                use_validation_split=True  # Use existing train/val split
+            )
+            
+            # Generate human-readable report
+            evaluation_report = evaluator.generate_evaluation_report(evaluation_results)
+            
+            # Log summary to console
+            logger.info("✅ Model evaluation completed successfully")
+            logger.info("Evaluation Summary:")
+            
+            # Log key metrics
+            cls_metrics = evaluation_results.get('classification_metrics', {})
+            rank_metrics = evaluation_results.get('ranking_metrics', {})
+            
+            logger.info(f"  📊 Classification Accuracy: {cls_metrics.get('accuracy', 0):.4f}")
+            logger.info(f"  📊 F1-Score: {cls_metrics.get('f1_score', 0):.4f}")
+            logger.info(f"  🏆 Rank-1 Accuracy: {rank_metrics.get('rank_1_accuracy', 0):.4f}")
+            logger.info(f"  🏆 Rank-5 Accuracy: {rank_metrics.get('rank_5_accuracy', 0):.4f}")
+            logger.info(f"  📈 Mean Average Precision: {rank_metrics.get('mean_average_precision', 0):.4f}")
+            
+            # Cross-validation summary
+            cv_metrics = evaluation_results.get('cross_validation', {})
+            if cv_metrics:
+                logger.info(f"  🔄 CV Accuracy: {cv_metrics.get('accuracy_mean', 0):.4f} ± {cv_metrics.get('accuracy_std', 0):.4f}")
+                logger.info(f"  🔄 CV Rank-1: {cv_metrics.get('rank_1_accuracy_mean', 0):.4f} ± {cv_metrics.get('rank_1_accuracy_std', 0):.4f}")
+            
+            # Update context with evaluation results
+            context.update({
+                'evaluation_results': evaluation_results,
+                'evaluation_report': evaluation_report,
+                'evaluation_summary': {
+                    'accuracy': cls_metrics.get('accuracy', 0),
+                    'f1_score': cls_metrics.get('f1_score', 0),
+                    'rank_1_accuracy': rank_metrics.get('rank_1_accuracy', 0),
+                    'rank_5_accuracy': rank_metrics.get('rank_5_accuracy', 0),
+                    'mean_average_precision': rank_metrics.get('mean_average_precision', 0)
+                },
+                'status': StepStatus.SUCCESS.value
+            })
+            
+            # Print report to console if verbose
+            if self.verbose:
+                print("\n" + evaluation_report)
+            
+            return context
+            
+        except Exception as e:
+            error_msg = f"Model evaluation failed: {str(e)}"
+            logger.error(error_msg)
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return {"status": StepStatus.ERROR.value, "error": error_msg}

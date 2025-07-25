@@ -18,11 +18,17 @@ from .siamesenet import SiameseNet
 
 from .training import Training
 
+from .evaluator import ModelEvaluator
+
+from .wandb_logger import wandb_logger
+
 __all__ = [
     'augment_images',
     'test_augmentation',
     'DataPrepPipeline',
     'run_dataprep_pipeline',
     'SiameseNet',
-    'Training'
+    'Training',
+    'ModelEvaluator',
+    'wandb_logger'
 ]
