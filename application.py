@@ -30,9 +30,9 @@ from core.common import (
     load_detections_from_json,
     process_frames,
     reorganize_crops_by_stitched_tracks,
+    get_storage,
 )
 from modules.player import Player
-from tools.store_driver import Store
 from modules.tracker import AffineAwareByteTrack, TrackData
 from modules.clustering_processor import ClusteringProcessor
 from core.train import LacrossePlayerDataset, SiameseNet
@@ -54,7 +54,7 @@ _TEAM_COLORS =  {
 }
 
 def run_application (
-        store: Store,
+        tenant_id: str,
         input_video: str,
         output_video_path: str = detection_config.output_video_path,
         device: torch.device = torch.device("cpu"),
@@ -67,7 +67,7 @@ def run_application (
     """
     Main entry point for the video processing application.
     Args:
-        store: The Store instance for file management.
+        tenant_id: The tenant ID for GCS operations.
         input_video: Path to the input video file.
         output_video_path: Path where the processed video will be saved.
         device: The torch device to use for processing (e.g., "cpu", "cuda").
@@ -77,7 +77,7 @@ def run_application (
 
     logger.info("")
     logger.info("run_application called with arguments:")
-    logger.info(f"  store:            {type(store).__name__}")
+    logger.info(f"  tenant_id:        {tenant_id}")
     logger.info(f"  input_video:      {input_video}")
     logger.info(f"  output_video_path:{output_video_path}")
     logger.info(f"  device:           {device}")
@@ -100,7 +100,8 @@ def run_application (
     FRAME_TARGET:int = debug_max_frames if debug_max_frames is not None else video_info.total_frames #type: ignore
 
     detection_device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu") #MPS workaround
-    detection_model = DetectionModel(device=detection_device)    
+    admin_storage = get_storage("common")
+    detection_model = DetectionModel(store=admin_storage, device=detection_device)
     tracker = AffineAwareByteTrack() 
 
 
@@ -183,7 +184,7 @@ def run_application (
 
         players: set[Player] = set()  # Set to store unique Player objects
         track_to_player: Dict[int, Player] = {}  # Mapping from tracker ID to Player object
-        tracks_data = detection_processor.tracker.get_tracks_data()
+        tracks_data = tracker.get_tracks_data()
 
         if not debug_config.bypass_player_creation:
             players, track_to_player, multi_frame_detections = run_player_training_pipeline(

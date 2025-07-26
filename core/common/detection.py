@@ -11,7 +11,7 @@ from PIL import Image
 from rfdetr import RFDETRBase  # type: ignore
 
 from config.all_config import detection_config
-from tools.store_driver import Store
+from core.common.google_storage import GoogleStorageClient
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ class DetectionModel:
 
     def __init__(
         self,
-        store: Store,
+        store: GoogleStorageClient,
         model_dict: str = detection_config.model_checkpoint,
         model_dir: Optional[str] = detection_config.checkpoint_dir,
         device: Optional[torch.device] = None,
@@ -37,7 +37,7 @@ class DetectionModel:
         Initializes the DetectionModel.
 
         Args:
-            store: An initialized Store object for file access. This is required for model loading.
+            store: An initialized GoogleStorageClient object for GCS file access.
             model_dict: The name of the model dictionary (checkpoint file) from the store object.
                         Defaults to `MODEL_CHECKPOINT`.
             model_dir: The path within the store object where the model dictionary resides.
@@ -58,9 +58,6 @@ class DetectionModel:
         else:
             self.device = device
         
-        if not store.is_initialized():
-            raise RuntimeError("Store object is not initialized. Please initialize it before using DetectionModel.")
-        
         if self._load_model():
             logger.info(f"Detection model '{self.model.__class__.__name__}' successfully initialized")
             logger.info(f"Detection threshold: {detection_config.prediction_threshold}")
@@ -70,45 +67,47 @@ class DetectionModel:
 
     def _load_model(self) -> bool:
         """
-        Downloads the model file from the store provided and loads it onto the specified device.
+        Downloads the model file from the GCS store and loads it onto the specified device.
 
         Returns:
             True if the model was loaded successfully, False otherwise.
         """
+        temp_checkpoint_path = None
         try:
-            checkpoint_buffer = self.store.get_file_by_name(
-                file_name=self.model_dict, folder_path=self.model_dir
-            )
-            if checkpoint_buffer is None:
-                logger.error(f"Failed to retrieve checkpoint buffer for '{self.model_dict}' from store.")
-                return False
-
-            # Use context manager for proper cleanup
+            # Create a temporary file to download the model to.
+            # delete=False is needed to pass the path to another process/function.
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pth") as tmp_f:
-                tmp_f.write(checkpoint_buffer.getvalue())
                 temp_checkpoint_path = tmp_f.name
 
-            try:
-                logger.info(f"Checkpoint saved.")
-                logger.info(f"Temp file: {temp_checkpoint_path}")
-                self.model = RFDETRBase(
-                    device=self.device.type, 
-                    pretrain_weights=temp_checkpoint_path, 
-                    num_classes=6
-                )
-                return True
-            finally:
-                # Ensure cleanup even if model loading fails
-                if os.path.exists(temp_checkpoint_path):
-                    try:
-                        os.remove(temp_checkpoint_path)
-                        logger.debug(f"Temporary checkpoint file removed: {temp_checkpoint_path}")
-                    except OSError as e:
-                        logger.warning(f"Error removing temporary checkpoint file {temp_checkpoint_path}: {e}")
+            # The destination blob name is a combination of model_dir and model_dict
+            # GCS uses forward slashes for paths.
+            destination_blob_name = f"{self.model_dir}/{self.model_dict}"
+
+            # Download the model from GCS to the temporary file
+            if not self.store.download_blob(destination_blob_name, temp_checkpoint_path):
+                logger.error(f"Failed to download '{destination_blob_name}' from GCS.")
+                return False
+
+            logger.info(f"Checkpoint downloaded to temporary file: {temp_checkpoint_path}")
+            
+            self.model = RFDETRBase(
+                device=self.device.type, 
+                pretrain_weights=temp_checkpoint_path, 
+                num_classes=6
+            )
+            return True
 
         except Exception as e:
             logger.error(f"Error loading detection model: {e}", exc_info=True)
             return False
+        finally:
+            # Ensure the temporary file is cleaned up
+            if temp_checkpoint_path and os.path.exists(temp_checkpoint_path):
+                try:
+                    os.remove(temp_checkpoint_path)
+                    logger.debug(f"Temporary checkpoint file removed: {temp_checkpoint_path}")
+                except OSError as e:
+                    logger.warning(f"Error removing temporary checkpoint file {temp_checkpoint_path}: {e}")
 
     def generate_detections(
         self,

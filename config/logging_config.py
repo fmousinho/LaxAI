@@ -1,7 +1,8 @@
 import logging.config
 import sys
 import time
-from .constants import LOGGING_LINE_SIZE
+
+LOGGING_LINE_SIZE = 110
 
 def _is_notebook() -> bool:
     """Check if the code is running in a Jupyter-like environment."""

@@ -71,7 +71,7 @@ class DataPrepPipeline(Pipeline):
         
         # Detection model is required for training pipeline
         try:
-            self.detection_model = DetectionModel()
+            self.detection_model = DetectionModel(store=self.storage_admin)
             logger.info("Detection model successfully loaded")
         except RuntimeError as e:
             logger.critical(f"CRITICAL ERROR: Detection model is required for training pipeline but failed to load: {e}")

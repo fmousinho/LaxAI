@@ -10,6 +10,8 @@ runs/
 analyse/reports/
 notebooks/data/
 temp
+data/
+wandb/
 
 # Python cache files
 __pycache__/

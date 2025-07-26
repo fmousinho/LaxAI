@@ -53,9 +53,21 @@ class TrainPipeline(Pipeline):
             save_intermediate=False
         )
 
-    def run(self, dataset_path: str) -> Dict[str, Any]:
-        # Implement the training pipeline logic here
-        pass
+    def run(self, dataset_path: str, resume_from_checkpoint: bool = True) -> Dict[str, Any]:
+        """
+        Execute the complete training pipeline for a given dataset.
+
+        Args:
+            dataset_path: Path to the training dataset directory.
+            resume_from_checkpoint: Whether to check for and resume from an existing checkpoint.
+
+        Returns:
+            Dictionary with pipeline results and statistics.
+        """
+        if not dataset_path:
+            return {"status": PipelineStatus.ERROR.value, "error": "No dataset path provided"}
+        initial_context = {"dataset_path": dataset_path}
+        return super().run(initial_context, resume_from_checkpoint=resume_from_checkpoint)
 
 
     def _create_dataset(self, context: dict) -> Dict[str, Any]:
