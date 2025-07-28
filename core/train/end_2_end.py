@@ -21,6 +21,9 @@ project_root = os.path.dirname(os.path.dirname(current_script_dir))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+# Enable MPS fallback for unsupported operations, as recommended by PyTorch.
+os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+
 from core.common.google_storage import get_storage
 from core.train.dataprep_pipeline import DataPrepPipeline
 from core.train.train_pipeline import TrainPipeline
@@ -32,6 +35,8 @@ from config import logging_config
 # If not, uncomment the following lines for basic logging.
 # from config import logging_config
 logger = logging.getLogger(__name__)
+
+
 
 
 def main(tenant_id: str, frames_per_video: int, verbose: bool, save_intermediate: bool):
@@ -80,11 +85,6 @@ def main(tenant_id: str, frames_per_video: int, verbose: bool, save_intermediate
             logger.error(f"Details: {json.dumps(dataprep_results.get('errors'), indent=2)}")
             continue
 
-        # 3. Run TrainPipeline for each resulting dataset
-        datasets_folder = dataprep_results.get("context", {}).get("datasets_folder")
-        if not datasets_folder:
-            logger.error(f"Could not find 'datasets_folder' in dataprep results for {video_file}. Skipping training.")
-            continue
 
         logger.info(f"Data prep successful. Starting training for datasets in: {datasets_folder}")
        

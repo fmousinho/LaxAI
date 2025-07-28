@@ -101,34 +101,44 @@ class TrainPipeline(Pipeline):
                 logger.error(f"Dataset path must be a string, got {type(dataset_path)}")
                 return {"status": StepStatus.ERROR.value, "error": f"Dataset path must be a string, got {type(dataset_path)}"}
             
-            # Normalize and validate path
-            dataset_path = os.path.normpath(dataset_path.strip())
+            # Normalize and validate GCS blob path
+            dataset_path = dataset_path.strip()
             if not dataset_path or dataset_path in ['.', '..']:
                 logger.error(f"Invalid dataset path: {dataset_path}")
                 return {"status": StepStatus.ERROR.value, "error": f"Invalid dataset path: {dataset_path}"}
             
-            # Check if dataset path exists
-            if not os.path.exists(dataset_path):
-                logger.error(f"Dataset path does not exist: {dataset_path}")
-                return {"status": StepStatus.ERROR.value, "error": f"Dataset path does not exist: {dataset_path}"}
-            
-            # Check if it's a directory
-            if not os.path.isdir(dataset_path):
-                logger.error(f"Dataset path is not a directory: {dataset_path}")
-                return {"status": StepStatus.ERROR.value, "error": f"Dataset path is not a directory: {dataset_path}"}
-            
-            # Check directory permissions
-            if not os.access(dataset_path, os.R_OK):
-                logger.error(f"No read permission for dataset path: {dataset_path}")
-                return {"status": StepStatus.ERROR.value, "error": f"No read permission for dataset path: {dataset_path}"}
-            
-            # Quick validation of directory structure
-            subdirs = [d for d in os.listdir(dataset_path) if os.path.isdir(os.path.join(dataset_path, d))]
-            if len(subdirs) == 0:
-                logger.error(f"No subdirectories found in dataset path: {dataset_path}")
-                return {"status": StepStatus.ERROR.value, "error": f"No player directories found in dataset path: {dataset_path}"}
-            
-            logger.info(f"Found {len(subdirs)} potential player directories in: {dataset_path}")
+            # Check if dataset path exists in Google Storage by listing blobs with the prefix
+            try:
+                blobs = self.storage_client.list_blobs(prefix=dataset_path)
+                if not blobs:
+                    logger.error(f"Dataset path does not exist in Google Storage: {dataset_path}")
+                    return {"status": StepStatus.ERROR.value, "error": f"Dataset path does not exist in Google Storage: {dataset_path}"}
+                
+                # Filter for image files and get player directories
+                image_blobs = [b for b in blobs if b.lower().endswith(('.jpg', '.png', '.jpeg'))]
+                if not image_blobs:
+                    logger.error(f"No image files found in dataset path: {dataset_path}")
+                    return {"status": StepStatus.ERROR.value, "error": f"No image files found in dataset path: {dataset_path}"}
+                
+                # Extract player directories from blob paths
+                players = set()
+                for blob in image_blobs:
+                    # Remove dataset_path prefix and get the first directory component (player)
+                    relative_path = blob[len(dataset_path):].lstrip('/')
+                    parts = relative_path.split('/')
+                    if len(parts) >= 2:  # Should be player/image_file
+                        players.add(parts[0])
+                
+                if len(players) == 0:
+                    logger.error(f"No player directories found in dataset path: {dataset_path}")
+                    return {"status": StepStatus.ERROR.value, "error": f"No player directories found in dataset path: {dataset_path}"}
+                
+                logger.info(f"Found {len(players)} potential player directories in GCS: {dataset_path}")
+                logger.info(f"Players: {list(players)}")
+                
+            except Exception as e:
+                logger.error(f"Failed to validate dataset path in Google Storage: {e}")
+                return {"status": StepStatus.ERROR.value, "error": f"Failed to validate dataset path in Google Storage: {str(e)}"}
             
             # Validate transforms
             try:
@@ -149,12 +159,13 @@ class TrainPipeline(Pipeline):
                 min_images_per_player = 5
             
             # Create the dataset with error handling
-            logger.info(f"Creating dataset from: {dataset_path}")
+            logger.info(f"Creating dataset from GCS path: {dataset_path}")
             logger.info(f"Minimum images per player: {min_images_per_player}")
             
             try:
                 dataset = LacrossePlayerDataset(
                     image_dir=dataset_path, 
+                    storage_client=self.storage_client,  # Pass the storage client
                     transform=transforms,
                     min_images_per_player=min_images_per_player
                 )
@@ -275,6 +286,7 @@ class TrainPipeline(Pipeline):
             trained_model = training.train_and_save(
                 model_class=SiameseNet,
                 dataset_class=LacrossePlayerDataset, 
+                storage_client=self.storage_client,  # Pass storage client to training
                 transform=transform,
                 force_pretrained=False  # Use existing weights if available
             )

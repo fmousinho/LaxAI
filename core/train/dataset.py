@@ -18,44 +18,46 @@ from config.all_config import training_config
 class LacrossePlayerDataset(Dataset):
     """
     Custom Dataset for loading lacrosse player crops for triplet loss.
-    Each player's crops are expected to be in a separate folder.
+    Each player's crops are expected to be in a separate folder (prefix in GCS).
     """
-    def __init__(self, image_dir, transform=None, min_images_per_player=training_config.min_images_per_player):
+    def __init__(self, image_dir, storage_client, transform=None, min_images_per_player=training_config.min_images_per_player):
         self.image_dir = image_dir
-        # Get default training transforms from centralized config
-        # NOTE: Now supports advanced online augmentation transforms that replace offline augmentation
-        # Use 'advanced_training' mode for comprehensive augmentation (replaces augmentation.py module)
-        # Available modes: 'training', 'advanced_training', 'inference', 'validation', 'opencv_safe_training', 'opencv_safe_advanced_training'
+        self.storage_client = storage_client
         self.transform = transform if transform is not None else get_ad('training')
         self.min_images_per_player = min_images_per_player
-        
-        # Get all player directories
-        all_players = [d for d in os.listdir(image_dir) if os.path.isdir(os.path.join(image_dir, d))]
-        
+
+        # List all blobs under image_dir
+        all_blobs = self.storage_client.list_blobs(prefix=image_dir)
+        # Filter for image files
+        image_blobs = [b for b in all_blobs if b.lower().endswith(('.jpg', '.png', '.jpeg'))]
+
+        # Group by player (assume player is the immediate subfolder under image_dir)
+        player_to_images = {}
+        for blob in image_blobs:
+            parts = blob[len(image_dir):].lstrip('/').split('/')
+            if len(parts) < 2:
+                continue  # Not in a player subfolder
+            player = parts[0]
+            player_to_images.setdefault(player, []).append(blob)
+
         # Filter players with sufficient images
         self.players = []
         self.player_to_images = {}
-        
-        for player in all_players:
-            player_images = [os.path.join(image_dir, player, img) 
-                           for img in os.listdir(os.path.join(image_dir, player))
-                           if img.lower().endswith(('.jpg', '.png', '.jpeg'))]
-            
-            # Only include players with enough images for triplet sampling
-            if len(player_images) >= self.min_images_per_player:
+        for player, imgs in player_to_images.items():
+            if len(imgs) >= self.min_images_per_player:
                 self.players.append(player)
-                self.player_to_images[player] = player_images
-        
+                self.player_to_images[player] = imgs
+
         if len(self.players) < 2:
             raise ValueError(f"Need at least 2 players with {min_images_per_player}+ images each. Found {len(self.players)} valid players.")
-        
+
         # Create list of all valid images
         self.all_images = []
         for player in self.players:
             self.all_images.extend(self.player_to_images[player])
-        
+
         self.player_indices = {player: i for i, player in enumerate(self.players)}
-        
+
         import logging
         logger = logging.getLogger(__name__)
         logger.info(f"Dataset initialized with {len(self.players)} players and {len(self.all_images)} total images")
@@ -65,81 +67,75 @@ class LacrossePlayerDataset(Dataset):
 
     def __getitem__(self, index):
         # Anchor image
-        anchor_path = self.all_images[index]
-        anchor_player = os.path.basename(os.path.dirname(anchor_path))
+        anchor_blob = self.all_images[index]
+        anchor_player = anchor_blob[len(self.image_dir):].lstrip('/').split('/')[0]
         anchor_label = self.player_indices[anchor_player]
-        
+
         try:
-            anchor_img = Image.open(anchor_path).convert('RGB')
+            anchor_img = self._load_image_from_gcs(anchor_blob)
         except Exception as e:
-            print(f"Error loading anchor image {anchor_path}: {e}")
-            # Return the first valid image as fallback
-            anchor_path = self.all_images[0]
-            anchor_player = os.path.basename(os.path.dirname(anchor_path))
+            print(f"Error loading anchor image {anchor_blob}: {e}")
+            anchor_blob = self.all_images[0]
+            anchor_player = anchor_blob[len(self.image_dir):].lstrip('/').split('/')[0]
             anchor_label = self.player_indices[anchor_player]
-            anchor_img = Image.open(anchor_path).convert('RGB')
+            anchor_img = self._load_image_from_gcs(anchor_blob)
 
         # Select a positive image (different image of the same player)
         positive_list = self.player_to_images[anchor_player]
         if len(positive_list) < 2:
-            # If only one image, use the same image (shouldn't happen due to filtering)
-            positive_path = anchor_path
+            positive_blob = anchor_blob
         else:
-            # Ensure positive is different from anchor
-            positive_candidates = [p for p in positive_list if p != anchor_path]
+            positive_candidates = [p for p in positive_list if p != anchor_blob]
             if positive_candidates:
-                positive_path = random.choice(positive_candidates)
+                positive_blob = random.choice(positive_candidates)
             else:
-                positive_path = random.choice(positive_list)  # Fallback
-        
+                positive_blob = random.choice(positive_list)
         try:
-            positive_img = Image.open(positive_path).convert('RGB')
+            positive_img = self._load_image_from_gcs(positive_blob)
         except Exception as e:
-            print(f"Error loading positive image {positive_path}: {e}")
-            positive_img = anchor_img  # Use anchor as fallback
-        
+            print(f"Error loading positive image {positive_blob}: {e}")
+            positive_img = anchor_img
+
         # Select a negative image (image of a different player)
         negative_candidates = [p for p in self.players if p != anchor_player]
         if not negative_candidates:
-            # This shouldn't happen if we have at least 2 players
             negative_player = anchor_player
         else:
             negative_player = random.choice(negative_candidates)
-        
-        negative_path = random.choice(self.player_to_images[negative_player])
-        
+        negative_blob = random.choice(self.player_to_images[negative_player])
         try:
-            negative_img = Image.open(negative_path).convert('RGB')
+            negative_img = self._load_image_from_gcs(negative_blob)
         except Exception as e:
-            print(f"Error loading negative image {negative_path}: {e}")
-            negative_img = anchor_img  # Use anchor as fallback
+            print(f"Error loading negative image {negative_blob}: {e}")
+            negative_img = anchor_img
 
         # Apply transformations
         if self.transform:
             try:
-                # Always convert PIL Images to numpy arrays for transforms
-                # This works with both regular and OpenCV-safe transforms
                 anchor_array = np.array(anchor_img)
-                positive_array = np.array(positive_img) 
+                positive_array = np.array(positive_img)
                 negative_array = np.array(negative_img)
-                
                 anchor_img = self.transform(anchor_array)
                 positive_img = self.transform(positive_array)
                 negative_img = self.transform(negative_array)
             except Exception as e:
                 print(f"Error applying transforms: {e}")
-                print(f"Transform type: {type(self.transform)}")
-                print(f"Transform: {self.transform}")
-                # Return tensors without transforms as fallback
                 anchor_img = transforms.ToTensor()(anchor_img)
                 positive_img = transforms.ToTensor()(positive_img)
                 negative_img = transforms.ToTensor()(negative_img)
         else:
-            # If no transforms provided, at minimum convert to tensor
             anchor_img = transforms.ToTensor()(anchor_img)
             positive_img = transforms.ToTensor()(positive_img)
             negative_img = transforms.ToTensor()(negative_img)
 
         return anchor_img, positive_img, negative_img, torch.tensor(anchor_label)
+
+    def _load_image_from_gcs(self, blob_path):
+        # Download blob to a temporary file and open with PIL
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=os.path.splitext(blob_path)[-1]) as tmp:
+            if not self.storage_client.download_blob(blob_path, tmp.name):
+                raise IOError(f"Failed to download blob: {blob_path}")
+            return Image.open(tmp.name).convert('RGB')
 
 

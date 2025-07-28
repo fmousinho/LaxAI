@@ -465,6 +465,16 @@ def create_train_val_split(
     else:
         logger.warning(f"No recognizable crop structure found in {source_folder}")
         logger.warning(f"Items in folder: {items_in_source}")
+        
+        # Provide more detailed debugging information
+        for item in items_in_source[:10]:  # Show first 10 items to avoid spam
+            item_path = os.path.join(source_folder, item)
+            if os.path.isdir(item_path):
+                sub_items = os.listdir(item_path)[:5]  # Show first 5 sub-items
+                logger.warning(f"  Directory {item}: {sub_items}")
+            else:
+                logger.warning(f"  File: {item}")
+        
         return
     
     logger.info(f"Found crops for {len(tracker_crops)} different tracker IDs")

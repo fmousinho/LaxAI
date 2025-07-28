@@ -1,4 +1,3 @@
-
 import logging
 import os
 import tempfile
@@ -7,13 +6,18 @@ from typing import List, Optional, Union
 import numpy as np
 import supervision as sv
 import torch
+from dotenv import load_dotenv
 from PIL import Image
 from rfdetr import RFDETRBase  # type: ignore
+import wandb
 
-from config.all_config import detection_config
-from core.common.google_storage import GoogleStorageClient
+from config.all_config import detection_config, wandb_config
 
 logger = logging.getLogger(__name__)
+
+REGISTRY_NAME = "wandb-registry-model"
+COLLECTION_NAME = "Detections"
+ALIAS = "latest"
 
 
 class DetectionModel:
@@ -28,26 +32,21 @@ class DetectionModel:
 
     def __init__(
         self,
-        store: GoogleStorageClient,
-        model_dict: str = detection_config.model_checkpoint,
-        model_dir: Optional[str] = detection_config.checkpoint_dir,
+        registry: str = REGISTRY_NAME,
+        model_dir: str = COLLECTION_NAME,
+        model_version: str = ALIAS,
         device: Optional[torch.device] = None,
     ): 
         """
         Initializes the DetectionModel.
 
         Args:
-            store: An initialized GoogleStorageClient object for GCS file access.
-            model_dict: The name of the model dictionary (checkpoint file) from the store object.
-                        Defaults to `MODEL_CHECKPOINT`.
-            model_dir: The path within the store object where the model dictionary resides.
-                       Defaults to `DEFAULT_CHECKPOINT_DIR`. # type: ignore
+            registry: The name of the model registry.
+            device: The device to run the model on (CPU or GPU).
             device: The torch.device (cpu or cuda) to load the model onto.
         """
         self.model: RFDETRBase
-        self.store = store
-        self.model_dict = model_dict
-        self.model_dir = model_dir
+        self.model_artifact = f"{registry}/{model_dir}:{model_version}"
         if device is None:
             if torch.cuda.is_available():
                 self.device = torch.device("cuda")
@@ -63,7 +62,7 @@ class DetectionModel:
             logger.info(f"Detection threshold: {detection_config.prediction_threshold}")
             logger.info(f"Model loaded onto device: {self.device}")
         else:
-            raise RuntimeError(f"Failed to load '{self.model_dict}' from '{self.model_dir}/{self.model_dict}'.")
+            raise RuntimeError(f"Failed to load '{self.model_artifact}' from wandb.")
 
     def _load_model(self) -> bool:
         """
@@ -73,33 +72,69 @@ class DetectionModel:
             True if the model was loaded successfully, False otherwise.
         """
         temp_checkpoint_path = None
+
+        load_dotenv()
+        wandb_api_key = os.getenv("WANDB_API_KEY")
+
+        if not wandb_api_key:
+            logger.error("WANDB_API_KEY not found in environment variables or .env file.")
+            return
+        else:
+            logger.info("WANDB_API_KEY found in environment variables or .env file.")
+        wandb.login(key=wandb_api_key)
+       
+
         try:
-            # Create a temporary file to download the model to.
-            # delete=False is needed to pass the path to another process/function.
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pth") as tmp_f:
-                temp_checkpoint_path = tmp_f.name
-
-            # The destination blob name is a combination of model_dir and model_dict
-            # GCS uses forward slashes for paths.
-            destination_blob_name = f"{self.model_dir}/{self.model_dict}"
-
-            # Download the model from GCS to the temporary file
-            if not self.store.download_blob(destination_blob_name, temp_checkpoint_path):
-                logger.error(f"Failed to download '{destination_blob_name}' from GCS.")
-                return False
-
-            logger.info(f"Checkpoint downloaded to temporary file: {temp_checkpoint_path}")
-            
-            self.model = RFDETRBase(
-                device=self.device.type, 
-                pretrain_weights=temp_checkpoint_path, 
-                num_classes=6
+            run = wandb.init(
+                entity=wandb_config.team,
+                project=wandb_config.project,
+                job_type="download-model"
             )
-            return True
 
-        except Exception as e:
-            logger.error(f"Error loading detection model: {e}", exc_info=True)
+            logger.info(f"Attempting to fetch artifact: {self.model_artifact}")
+            fetched_artifact = run.use_artifact(artifact_or_name=self.model_artifact, type='model')
+
+            # Create a temporary directory to download the model to.
+            with tempfile.TemporaryDirectory() as temp_dir:
+                logger.info(f"Downloading artifact to directory: {temp_dir}")
+                download_path = fetched_artifact.download(root=temp_dir)
+
+                if not download_path:
+                    logger.error(f"Failed to download artifact: {self.model_artifact}")
+                    return False
+
+                # Log the contents of the download directory
+                downloaded_files = os.listdir(temp_dir)
+                logger.info(f"Files in download directory: {downloaded_files}")
+
+                # Dynamically locate the model file
+                for file_name in downloaded_files:
+                    if file_name.endswith(".pth"):
+                        temp_checkpoint_path = os.path.join(temp_dir, file_name)
+                        break
+                else:
+                    logger.error("No .pth file found in the downloaded artifact.")
+                    return False
+
+                logger.info(f"Checkpoint file located at: {temp_checkpoint_path}")
+
+                self.model = RFDETRBase(
+                    device=self.device.type,
+                    pretrain_weights=temp_checkpoint_path,
+                    num_classes=6
+                )
+                return True
+
+        except wandb.errors.CommError as comm_err:
+            logger.error(f"Communication error with wandb: {comm_err}", exc_info=True)
             return False
+        except wandb.errors.UsageError as usage_err:
+            logger.error(f"Usage error with wandb: {usage_err}", exc_info=True)
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error while loading detection model: {e}", exc_info=True)
+            return False
+
         finally:
             # Ensure the temporary file is cleaned up
             if temp_checkpoint_path and os.path.exists(temp_checkpoint_path):

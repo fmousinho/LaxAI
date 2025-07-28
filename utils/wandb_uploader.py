@@ -58,11 +58,6 @@ def upload_detection_model_to_wandb(
     else:
         logger.info("WANDB_API_KEY found in environment variables or .env file.")
 
-
-    wandb.login(key=wandb_api_key)
-
-    logger.info("logged in")
-
     try:
         logger.info("Logging into wandb")
 

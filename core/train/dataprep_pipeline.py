@@ -4,6 +4,8 @@ Data preparation pipeline for LaxAI project.
 This module defines the DataPrepPipeline class and related utilities for processing raw video data,
 including downloading from Google Storage, extracting frames, augmenting images, and preparing datasets for training.
 """
+
+
 import os
 import sys
 import json
@@ -71,7 +73,7 @@ class DataPrepPipeline(Pipeline):
         
         # Detection model is required for training pipeline
         try:
-            self.detection_model = DetectionModel(store=self.storage_admin)
+            self.detection_model = DetectionModel()
             logger.info("Detection model successfully loaded")
         except RuntimeError as e:
             logger.critical(f"CRITICAL ERROR: Detection model is required for training pipeline but failed to load: {e}")
@@ -187,18 +189,18 @@ class DataPrepPipeline(Pipeline):
             video_guid = str(uuid.uuid4())
             video_folder = f"{self.run_folder}/video_{video_guid}"
 
-            # Check if it's in the cloud or local
+            # Check if it's a GCS URL, local file, or blob path
             if video_path.startswith("gs://"):
                 imported_video = self._import_single_video(video_path, video_guid, video_folder)
+            elif "/" in video_path:
+                # It's a blob path (contains slashes), treat as Google Storage blob
+                logger.info(f"Processing video blob: {video_path}")
+                imported_video = self._import_single_video(video_path, video_guid, video_folder)
             else:
-                # Check if it's a local file that exists
-                if os.path.exists(video_path):
-                    imported_video = video_path
-                else:
-                    # Assume it's a filename in the tenant's raw directory
-                    raw_video_path = f"raw/{video_path}"
-                    logger.info(f"Video not found locally, looking in tenant raw directory: {raw_video_path}")
-                    imported_video = self._import_single_video(raw_video_path, video_guid, video_folder)
+                # It's just a filename, assume it's in the tenant's raw directory
+                raw_video_path = f"raw/{video_path}"
+                logger.info(f"Video filename provided, looking in tenant raw directory: {raw_video_path}")
+                imported_video = self._import_single_video(raw_video_path, video_guid, video_folder)
 
             # Check if the import succeeded
             if not imported_video:
@@ -288,16 +290,10 @@ class DataPrepPipeline(Pipeline):
         temp_video_path = f"/tmp/processing_{video_guid}.mp4"
         
         try:
-            # Check if the video file exists locally or in Google Storage
-            if os.path.exists(imported_video):
-                # It's a local file, use it directly
-                temp_video_path = imported_video
-                logger.info(f"Using local video file: {imported_video}")
-            else:
-                # It's a Google Storage path, download it
-                logger.info(f"Downloading video from storage: {imported_video}")
-                if not self.tenant_storage.download_blob(imported_video, temp_video_path):
-                    raise RuntimeError(f"Failed to download video for processing: {imported_video}")
+            # Always download from Google Storage as we're now blob-based
+            logger.info(f"Downloading video from storage: {imported_video}")
+            if not self.tenant_storage.download_blob(imported_video, temp_video_path):
+                raise RuntimeError(f"Failed to download video for processing: {imported_video}")
             
             # Validate video resolution
             logger.info(f"Validating video resolution: {temp_video_path}")
@@ -591,8 +587,12 @@ class DataPrepPipeline(Pipeline):
                 crops_in_memory = {}
                 crops_uploaded = 0
                 
+                # Process the extracted crops and upload them to Google Storage
+                crops_in_memory = {}
+                crops_uploaded = 0
+                
                 if os.path.exists(all_crops_dir):
-                    # Walk through all crop files and load them into memory
+                    # Walk through all crop files and process them
                     for root, dirs, files in os.walk(all_crops_dir):
                         for file in files:
                             if file.endswith('.jpg'):
@@ -607,7 +607,7 @@ class DataPrepPipeline(Pipeline):
                                 if crop_img is not None:
                                     crops_in_memory[rel_path] = crop_img
                                     
-                                    # Upload to Google Storage (still needed for persistence)
+                                    # Upload to Google Storage
                                     storage_crop_path = f"{original_crops_folder}/{rel_path}"
                                     
                                     if self.tenant_storage.upload_from_file(storage_crop_path, local_crop_path):
@@ -615,6 +615,8 @@ class DataPrepPipeline(Pipeline):
                                         logger.debug(f"Uploaded crop: {storage_crop_path}")
                                     else:
                                         logger.warning(f"Failed to upload crop: {storage_crop_path}")
+                else:
+                    logger.warning(f"Local crops directory not found: {all_crops_dir}")
                 
                 logger.info(f"Successfully extracted and uploaded {crops_uploaded} crops for video: {video_guid}")
                 logger.info(f"Loaded {len(crops_in_memory)} crops into memory for next step")
@@ -1184,7 +1186,10 @@ class DataPrepPipeline(Pipeline):
         
         if not crops_augmented or not modified_crops_folder:
             logger.warning("No augmented crops or modified crops folder to create datasets from")
-            return {"datasets_created": False, "error": "No augmented crops available"}
+            # Still need to return datasets_folder for consistency
+            video_folder = context.get("video_folder", f"{self.run_folder}/video_{video_guid}")
+            datasets_folder = f"{video_folder}/datasets"
+            return {"datasets_created": False, "error": "No augmented crops available", "datasets_folder": datasets_folder}
         
         try:
             logger.info(f"Creating training and validation sets for video: {video_guid}")
@@ -1234,6 +1239,11 @@ class DataPrepPipeline(Pipeline):
                     total_val_samples = 0
                     
                     for frame_id, frame_crops in crops_by_frame.items():
+                        # Skip frames with no crops
+                        if not frame_crops:
+                            logger.warning(f"Skipping frame {frame_id} - no crops available")
+                            continue
+                            
                         logger.info(f"Processing frame {frame_id} with {len(frame_crops)} crops")
                         
                         # Create temporary frame directory
@@ -1242,6 +1252,7 @@ class DataPrepPipeline(Pipeline):
                         os.makedirs(temp_crops_dir, exist_ok=True)
                         
                         # Save crops for this frame to temporary directory
+                        saved_crops_count = 0
                         for rel_path, crop_img in frame_crops.items():
                             # Use just the crop part of the path (remove frame prefix)
                             crop_local_path = '/'.join(rel_path.split('/')[1:])  # Remove "frame123/" part
@@ -1253,15 +1264,38 @@ class DataPrepPipeline(Pipeline):
                             # Save crop to temporary location
                             # Convert RGB to BGR for OpenCV saving (which will result in RGB on disk)
                             crop_bgr = cv2.cvtColor(crop_img, cv2.COLOR_RGB2BGR)
-                            cv2.imwrite(local_path, crop_bgr)
+                            if cv2.imwrite(local_path, crop_bgr):
+                                saved_crops_count += 1
+                                logger.debug(f"Saved crop: {local_path}")
+                            else:
+                                logger.warning(f"Failed to save crop: {local_path}")
+                        
+                        logger.info(f"Saved {saved_crops_count} crops to {temp_crops_dir}")
+                        
+                        # Debug: List the actual structure created
+                        if os.path.exists(temp_crops_dir):
+                            items_in_crops_dir = os.listdir(temp_crops_dir)
+                            logger.info(f"Items in {temp_crops_dir}: {items_in_crops_dir}")
+                        else:
+                            logger.warning(f"Crops directory doesn't exist: {temp_crops_dir}")
                         
                         # Create train/val split for this frame
                         temp_frame_datasets_dir = os.path.join(temp_frame_dir, "datasets")
-                        create_train_val_split(
-                            source_folder=temp_crops_dir,
-                            destin_folder=temp_frame_datasets_dir,
-                            train_ratio=0.8
-                        )
+                        
+                        # Only attempt train/val split if we have crops
+                        if saved_crops_count > 0:
+                            try:
+                                create_train_val_split(
+                                    source_folder=temp_crops_dir,
+                                    destin_folder=temp_frame_datasets_dir,
+                                    train_ratio=0.8
+                                )
+                                logger.info(f"Successfully created train/val split for frame {frame_id}")
+                            except Exception as split_error:
+                                logger.warning(f"Failed to create train/val split for frame {frame_id}: {split_error}")
+                                continue
+                        else:
+                            logger.warning(f"No crops saved for frame {frame_id}, skipping train/val split")
                         
                         # Upload frame-specific train and val datasets to Google Storage
                         frame_train_samples = 0
@@ -1387,6 +1421,11 @@ class DataPrepPipeline(Pipeline):
                     total_val_samples = 0
                     
                     for frame_id, frame_crop_blobs in crops_by_frame.items():
+                        # Skip frames with no crops
+                        if not frame_crop_blobs:
+                            logger.warning(f"Skipping frame {frame_id} - no crops available")
+                            continue
+                            
                         logger.info(f"Processing frame {frame_id} with {len(frame_crop_blobs)} crops")
                         
                         # Create temporary frame directory
@@ -1415,11 +1454,21 @@ class DataPrepPipeline(Pipeline):
                         
                         # Create train/val split for this frame
                         temp_frame_datasets_dir = os.path.join(temp_frame_dir, "datasets")
-                        create_train_val_split(
-                            source_folder=temp_frame_crops_dir,
-                            destin_folder=temp_frame_datasets_dir,
-                            train_ratio=0.8
-                        )
+                        
+                        # Only attempt train/val split if we have crops
+                        if len(downloaded_crops) > 0:
+                            try:
+                                create_train_val_split(
+                                    source_folder=temp_frame_crops_dir,
+                                    destin_folder=temp_frame_datasets_dir,
+                                    train_ratio=0.8
+                                )
+                                logger.info(f"Successfully created train/val split for frame {frame_id}")
+                            except Exception as split_error:
+                                logger.warning(f"Failed to create train/val split for frame {frame_id}: {split_error}")
+                                continue
+                        else:
+                            logger.warning(f"No crops downloaded for frame {frame_id}, skipping train/val split")
                         
                         # Upload frame-specific train and val datasets to Google Storage
                         frame_train_samples = 0
@@ -1488,7 +1537,10 @@ class DataPrepPipeline(Pipeline):
                         
         except Exception as e:
             logger.error(f"Failed to create training and validation sets for video {video_guid}: {e}")
-            return {"datasets_created": False, "error": str(e)}
+            # Still need to return datasets_folder for consistency
+            video_folder = context.get("video_folder", f"{self.run_folder}/video_{video_guid}")
+            datasets_folder = f"{video_folder}/datasets"
+            return {"datasets_created": False, "error": str(e), "datasets_folder": datasets_folder}
     
     
     def _validate_video_resolution(self, video_path: str) -> bool:

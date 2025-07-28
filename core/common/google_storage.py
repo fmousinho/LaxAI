@@ -162,7 +162,7 @@ class GoogleStorageClient:
             full_destination = f"{self.config.user_path}/{destination_blob_name}"
             blob = self._bucket.blob(full_destination)
             blob.upload_from_filename(source_file_path)
-            logger.info(f"File {source_file_path} uploaded to {full_destination}")
+            logger.debug(f"File {source_file_path} uploaded to {full_destination}")
             return True
         except Exception as e:
             logger.error(f"Failed to upload file: {e}")
