@@ -11,6 +11,7 @@ analyse/reports/
 notebooks/data/
 temp
 data/
+artifacts/
 wandb/
 
 # Python cache files

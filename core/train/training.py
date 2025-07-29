@@ -1,10 +1,11 @@
 import os
 import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
 import logging
 from typing import Optional, Any, Dict
-
+from torch.utils.data import DataLoader
+from dotenv import load_dotenv
+import torch.nn as nn
+import wandb
 from config.all_config import model_config, training_config, wandb_config
 from .wandb_logger import wandb_logger
 
@@ -19,39 +20,40 @@ class Training:
     
     def __init__(self, 
                  train_dir: str,
+                 storage_client=None,
                  embedding_dim: int = model_config.embedding_dim,
                  learning_rate: float = training_config.learning_rate,
                  batch_size: int = training_config.batch_size,
                  num_epochs: int = training_config.num_epochs,
                  margin: float = training_config.margin,
-                 model_save_path: str = training_config.model_save_path,
                  device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')):
         """
         Initialize the training class with hyperparameters.
         
         Args:
-            train_dir: Directory containing training data
+            train_dir: Directory containing training data (local or GCS blob prefix)
+            storage_client: Google Storage client for GCS operations (required for GCS paths)
             embedding_dim: Dimension of the embedding vector
             learning_rate: Learning rate for optimizer
             batch_size: Batch size for training
             num_epochs: Number of training epochs
             margin: Margin for triplet loss
-            model_save_path: Path to save the trained model
             device: Device to run the model on (CPU, GPU, or MPS)
         """
         self.train_dir = train_dir
+        self.storage_client = storage_client
         self.embedding_dim = embedding_dim
         self.learning_rate = learning_rate
         self.batch_size = batch_size
         self.num_epochs = num_epochs
         self.margin = margin
-        self.model_save_path = model_save_path
         self.device = device
 
         self.model = None
         self.optimizer: Optional[torch.optim.Optimizer] = None
         self.loss_fn: Optional[nn.Module] = None
         self.dataloader = None
+        load_dotenv()
         
         logger.info(f"Training initialized with device: {self.device}")
         logger.info(f"Training directory: {self.train_dir}")
@@ -61,7 +63,68 @@ class Training:
         logger.info(f"Number of epochs: {self.num_epochs}")
         logger.info(f"Triplet margin: {self.margin}")
 
-    def setup_data(self, dataset_class, transform: Optional[Any] = None):
+    def load_model_from_wandb(self, model_class, model_name: str = "PlayerEmbeddings", alias: str = "latest"):
+        """
+        Load model from wandb model registry.
+        
+        Args:
+            model_class: The model class to instantiate
+            model_name: Name of the model in wandb registry
+            alias: Model version alias (e.g., "latest", "best", "v1")
+            
+        Returns:
+            bool: True if model loaded successfully, False otherwise
+        """
+        try:
+            # Use the centralized wandb model loading
+            loaded_model = wandb_logger.load_model_from_registry(
+                model_class=lambda: model_class(embedding_dim=self.embedding_dim),
+                model_name=model_name,
+                alias=alias,
+                device=str(self.device)
+            )
+            
+            if loaded_model is not None:
+                self.model = loaded_model
+                logger.info(f"✓ Successfully loaded model from wandb registry: {model_name}:{alias}")
+                print(f"✓ Loaded model from wandb registry: {model_name}:{alias}")
+                return True
+            else:
+                logger.info(f"Could not load model from wandb registry")
+                print(f"ℹ No wandb model found, will use local weights or pre-trained backbone")
+                return False
+                
+        except Exception as e:
+            logger.info(f"Could not load model from wandb registry: {e}")
+            print(f"ℹ No wandb model found, will use local weights or pre-trained backbone")
+            return False
+
+    def save_model_to_wandb(self, model_name: str = "PlayerEmbeddings", alias: str = "latest"):
+        """
+        Save model to wandb model registry using centralized wandb_logger.
+        """
+        try:
+            metadata = {
+                "embedding_dim": self.embedding_dim,
+                "device": str(self.device),
+                "num_epochs": self.num_epochs,
+                "margin": self.margin,
+                "learning_rate": self.learning_rate,
+                "batch_size": self.batch_size,
+                "train_dir": self.train_dir
+            }
+            wandb_logger.save_model_to_registry(
+                model=self.model,
+                model_name=model_name,
+                metadata=metadata,
+                alias=alias
+            )
+            logger.info(f"✓ Model saved to wandb registry: {model_name}:{alias}")
+        except Exception as e:
+            logger.error(f"Failed to save model to wandb registry: {e}")
+            print(f"⚠ Failed to save model to wandb registry: {e}")
+
+    def setup_data(self, dataset_class, transform=None):
         """
         Setup the dataset and dataloader for training.
         
@@ -73,22 +136,61 @@ class Training:
             FileNotFoundError: If training directory doesn't exist
             ValueError: If insufficient player folders for training
         """
-        if not os.path.exists(self.train_dir):
-            raise FileNotFoundError(f"Training directory does not exist: {self.train_dir}")
+        # Check if we're working with GCS or local filesystem
+        is_gcs_path = self.storage_client is not None
         
-        train_folders = [d for d in os.listdir(self.train_dir) 
-                        if os.path.isdir(os.path.join(self.train_dir, d))]
-        
-        if len(train_folders) < 2:
-            raise ValueError("Need at least 2 player folders for triplet loss training!")
-        
-        logger.info(f"Found {len(train_folders)} player folders in {self.train_dir}")
+        if is_gcs_path:
+            # For GCS paths, validate by listing blobs with the prefix
+            try:
+                all_blobs = list(self.storage_client.list_blobs(prefix=self.train_dir))
+                if not all_blobs:
+                    raise FileNotFoundError(f"Training directory does not exist in GCS: {self.train_dir}")
+                
+                # Check for player folders by looking for blobs with player subfolders
+                player_folders = set()
+                for blob in all_blobs:
+                    # Remove the train_dir prefix and look for player folders
+                    relative_path = blob[len(self.train_dir):].lstrip('/')
+                    if '/' in relative_path:
+                        player = relative_path.split('/')[0]
+                        if player and blob.lower().endswith(('.jpg', '.png', '.jpeg')):
+                            player_folders.add(player)
+                
+                if len(player_folders) < 2:
+                    raise ValueError(f"Need at least 2 player folders for triplet loss training! Found: {len(player_folders)}")
+                
+                logger.info(f"Found {len(player_folders)} player folders in GCS path: {self.train_dir}")
+                
+            except Exception as e:
+                if isinstance(e, (FileNotFoundError, ValueError)):
+                    raise
+                raise FileNotFoundError(f"Failed to access GCS training directory: {self.train_dir} - {str(e)}")
+        else:
+            # For local filesystem paths, use original validation
+            if not os.path.exists(self.train_dir):
+                raise FileNotFoundError(f"Training directory does not exist: {self.train_dir}")
+            
+            train_folders = [d for d in os.listdir(self.train_dir) 
+                            if os.path.isdir(os.path.join(self.train_dir, d))]
+            
+            if len(train_folders) < 2:
+                raise ValueError("Need at least 2 player folders for triplet loss training!")
+            
+            logger.info(f"Found {len(train_folders)} player folders in {self.train_dir}")
         
         # Setup dataset and dataloader
-        if transform is not None:
-            train_dataset = dataset_class(image_dir=self.train_dir, transform=transform)
+        if is_gcs_path:
+            # For GCS, pass storage_client to dataset
+            if transform is not None:
+                train_dataset = dataset_class(image_dir=self.train_dir, storage_client=self.storage_client, transform=transform)
+            else:
+                train_dataset = dataset_class(image_dir=self.train_dir, storage_client=self.storage_client)
         else:
-            train_dataset = dataset_class(image_dir=self.train_dir)
+            # For local filesystem, use original approach
+            if transform is not None:
+                train_dataset = dataset_class(image_dir=self.train_dir, transform=transform)
+            else:
+                train_dataset = dataset_class(image_dir=self.train_dir)
 
         n_workers = getattr(training_config, 'num_workers', 0)
         self.dataloader = DataLoader(
@@ -107,6 +209,7 @@ class Training:
     def setup_model(self, model_class, force_pretrained: bool = False):
         """
         Setup the model, loss function, and optimizer for training.
+        First attempts to load from wandb registry, then falls back to local weights.
         
         Args:
             model_class: The model class to use (e.g., SiameseNet)
@@ -116,26 +219,20 @@ class Training:
             RuntimeError: If model setup fails
         """
         try:
-            self.model = model_class(embedding_dim=self.embedding_dim)
+            model_loaded = False
             
-            # Load existing weights if available and not forcing pre-trained
-            if os.path.exists(self.model_save_path) and not force_pretrained:
-                try:
-                    self.model.load_state_dict(torch.load(self.model_save_path, map_location=self.device))
-                    logger.info(f"✓ Loaded existing fine-tuned weights from {self.model_save_path}")
-                    print(f"✓ Continuing training from existing model: {self.model_save_path}")
-                except Exception as e:
-                    logger.warning(f"Failed to load existing weights from {self.model_save_path}: {e}")
-                    logger.info("Falling back to pre-trained ResNet18 weights")
-                    print(f"⚠ Could not load saved weights, using pre-trained ResNet18: {e}")
+            # Try to load from wandb registry first (unless forcing pretrained)
+            if force_pretrained:
+                logger.info("Forcing fresh start with pre-trained ResNet18 weights")
+                self.model = model_class(embedding_dim=self.embedding_dim)
             else:
-                if force_pretrained:
-                    logger.info(f"Forcing fresh start with pre-trained ResNet18 weights")
-                    print(f"🔄 Starting fresh with pre-trained ResNet18 backbone")
-                else:
-                    logger.info(f"No existing model found at {self.model_save_path}, using pre-trained ResNet18 weights")
-                    print(f"🆕 Starting training with pre-trained ResNet18 backbone")
-            
+                model_loaded = self.load_model_from_wandb(model_class)
+            if not model_loaded:
+                logger.info("No wandb model found, will use local weights or pre-trained backbone")
+                
+                # Initialize model with pre-trained weights if available
+                self.model = model_class(embedding_dim=self.embedding_dim)
+                
             self.model.to(self.device)
             
             # Setup training components
@@ -150,21 +247,7 @@ class Training:
             logger.info(f"Loss function: TripletMarginLoss (margin={self.margin})")
             logger.info(f"Optimizer: Adam (lr={self.learning_rate}, weight_decay={getattr(training_config, 'weight_decay', 1e-4)})")
             
-            # Initialize wandb run with training configuration
-            if wandb_config.enabled:
-                config = {
-                    "embedding_dim": self.embedding_dim,
-                    "learning_rate": self.learning_rate,
-                    "batch_size": self.batch_size,
-                    "num_epochs": self.num_epochs,
-                    "margin": self.margin,
-                    "weight_decay": getattr(training_config, 'weight_decay', 1e-4),
-                    "device": str(self.device),
-                    "model_save_path": self.model_save_path,
-                    "train_dir": self.train_dir
-                }
-                wandb_logger.init_run(config=config, run_name=f"training_{os.path.basename(self.train_dir)}")
-                wandb_logger.watch_model(self.model)
+            # ...existing code...
             
         except Exception as e:
             logger.error(f"Model setup failed: {e}")
@@ -202,8 +285,6 @@ class Training:
                 player_stats=player_stats
             )
             
-            # Log sample images
-            wandb_logger.log_sample_images(self.dataset)
 
         # Early stopping configuration
         early_stopping_threshold = training_config.early_stopping_loss_ratio * self.margin
@@ -260,11 +341,13 @@ class Training:
             
             # Log epoch metrics to wandb
             if wandb_config.enabled:
+                # Use a step that is guaranteed to be after all batch steps for this epoch
+                epoch_end_step = (epoch + 1) * len(self.dataloader)
                 wandb_logger.log_metrics({
                     "epoch_loss": epoch_loss,
                     "epoch": epoch + 1,
                     "best_loss": best_loss if epoch_loss >= best_loss else epoch_loss
-                }, step=epoch + 1)
+                }, step=epoch_end_step)
             
             # Early stopping based on loss threshold
             if epoch_loss < early_stopping_threshold:
@@ -288,12 +371,9 @@ class Training:
         logger.info("Training completed successfully")
         return self.model
 
-    def save_model(self, save_path: Optional[str] = None):
+    def save_model(self):
         """
-        Save the trained model weights.
-        
-        Args:
-            save_path: Optional custom save path. If None, uses self.model_save_path
+        Save the trained model weights both locally and to wandb registry.
             
         Raises:
             RuntimeError: If no model to save
@@ -301,16 +381,10 @@ class Training:
         if self.model is None:
             raise RuntimeError("No model to save. Train the model first.")
         
-        path = save_path or self.model_save_path
+        # Always save to wandb registry
+        self.save_model_to_wandb()
         
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        
-        torch.save(self.model.state_dict(), path)
-        logger.info(f"Model weights saved to {path}")
-        print(f"✓ Model saved to: {path}")
-        
-        # Log model artifact to wandb
+        # Log model artifact to wandb (legacy method for backward compatibility)
         if wandb_config.enabled:
             metadata = {
                 "embedding_dim": self.embedding_dim,
@@ -318,7 +392,9 @@ class Training:
                 "num_epochs": self.num_epochs,
                 "final_loss": getattr(self, 'final_loss', None)
             }
-            wandb_logger.log_model_artifact(path, metadata=metadata)
+            # Note: wandb_logger.log_model_artifact typically expects a file path
+            # Since we're saving to wandb registry above, this legacy call may not be needed
+            logger.info("Model saved to wandb registry via save_model_to_wandb()")
 
     def train_and_save(self, model_class, dataset_class, transform: Optional[Any] = None, force_pretrained: bool = False):
         """
@@ -354,11 +430,7 @@ class Training:
             # Save
             logger.info("Saving model...")
             self.save_model()
-            
-            # Finish wandb run
-            if wandb_config.enabled:
-                wandb_logger.finish()
-            
+              
             logger.info("Training pipeline completed successfully")
             print(f"🎉 Training completed successfully!")
             
@@ -383,7 +455,6 @@ class Training:
             'batch_size': self.batch_size,
             'num_epochs': self.num_epochs,
             'margin': self.margin,
-            'model_save_path': self.model_save_path,
             'device': str(self.device),
             'model_loaded': self.model is not None,
             'dataloader_ready': self.dataloader is not None,

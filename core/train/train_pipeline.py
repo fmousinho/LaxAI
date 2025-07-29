@@ -1,5 +1,6 @@
 import os
 import logging
+from core.train.wandb_logger import wandb_logger
 import traceback
 from typing import Any, Dict, List, Optional
 
@@ -26,7 +27,6 @@ class TrainPipeline(Pipeline):
         self.save_intermediate = save_intermediate
         self.verbose
         self.storage_client = get_storage(tenant_id)
-        self.storage_admin = get_storage("common")
         self.model_path = training_config.model_save_path
 
         step_definitions = {
@@ -64,10 +64,25 @@ class TrainPipeline(Pipeline):
         Returns:
             Dictionary with pipeline results and statistics.
         """
-        if not dataset_path:
-            return {"status": PipelineStatus.ERROR.value, "error": "No dataset path provided"}
-        initial_context = {"dataset_path": dataset_path}
-        return super().run(initial_context, resume_from_checkpoint=resume_from_checkpoint)
+        from config.all_config import wandb_config
+        if wandb_config.enabled:
+            config = {
+                "dataset_path": dataset_path,
+                "pipeline": "training_pipeline"
+            }
+            wandb_logger.init_run(config=config, run_name=f"training_pipeline_{os.path.basename(dataset_path)}")
+        try:
+            if not dataset_path:
+                return {"status": PipelineStatus.ERROR.value, "error": "No dataset path provided"}
+            initial_context = {"dataset_path": dataset_path}
+            results = super().run(initial_context, resume_from_checkpoint=resume_from_checkpoint)
+            # Log evaluation results to wandb if available
+            if wandb_config.enabled and results.get('evaluation_results'):
+                wandb_logger.log_metrics(results['evaluation_results'])
+            return results
+        finally:
+            if wandb_config.enabled:
+                wandb_logger.finish()
 
 
     def _create_dataset(self, context: dict) -> Dict[str, Any]:
@@ -102,20 +117,21 @@ class TrainPipeline(Pipeline):
                 return {"status": StepStatus.ERROR.value, "error": f"Dataset path must be a string, got {type(dataset_path)}"}
             
             # Normalize and validate GCS blob path
-            dataset_path = dataset_path.strip()
             if not dataset_path or dataset_path in ['.', '..']:
                 logger.error(f"Invalid dataset path: {dataset_path}")
                 return {"status": StepStatus.ERROR.value, "error": f"Invalid dataset path: {dataset_path}"}
             
             # Check if dataset path exists in Google Storage by listing blobs with the prefix
             try:
-                blobs = self.storage_client.list_blobs(prefix=dataset_path)
+                blobs = list(self.storage_client.list_blobs(prefix=dataset_path))
+                logger.info(f"Found {len(blobs)} blobs with prefix: {dataset_path}")
                 if not blobs:
                     logger.error(f"Dataset path does not exist in Google Storage: {dataset_path}")
                     return {"status": StepStatus.ERROR.value, "error": f"Dataset path does not exist in Google Storage: {dataset_path}"}
                 
                 # Filter for image files and get player directories
                 image_blobs = [b for b in blobs if b.lower().endswith(('.jpg', '.png', '.jpeg'))]
+                logger.info(f"Found {len(image_blobs)} image files out of {len(blobs)} total blobs")
                 if not image_blobs:
                     logger.error(f"No image files found in dataset path: {dataset_path}")
                     return {"status": StepStatus.ERROR.value, "error": f"No image files found in dataset path: {dataset_path}"}
@@ -153,22 +169,26 @@ class TrainPipeline(Pipeline):
                 return {"status": StepStatus.ERROR.value, "error": f"Failed to load transforms: {str(e)}"}
             
             # Set minimum images per player with validation
-            min_images_per_player = context.get("min_images_per_player", 5)
-            if not isinstance(min_images_per_player, int) or min_images_per_player < 1:
-                logger.warning(f"Invalid min_images_per_player: {min_images_per_player}, using default: 5")
-                min_images_per_player = 5
+            min_images_per_player = context.get("min_images_per_player")
             
             # Create the dataset with error handling
             logger.info(f"Creating dataset from GCS path: {dataset_path}")
-            logger.info(f"Minimum images per player: {min_images_per_player}")
+            if min_images_per_player is not None:
+                logger.info(f"Minimum images per player: {min_images_per_player}")
+            else:
+                logger.info("No minimum images per player specified - using dataset default")
             
             try:
-                dataset = LacrossePlayerDataset(
-                    image_dir=dataset_path, 
-                    storage_client=self.storage_client,  # Pass the storage client
-                    transform=transforms,
-                    min_images_per_player=min_images_per_player
-                )
+                # Conditionally pass min_images_per_player parameter
+                dataset_kwargs = {
+                    'image_dir': dataset_path,
+                    'storage_client': self.storage_client,
+                    'transform': transforms
+                }
+                if min_images_per_player is not None:
+                    dataset_kwargs['min_images_per_player'] = min_images_per_player
+                
+                dataset = LacrossePlayerDataset(**dataset_kwargs)
             except ValueError as e:
                 # Handle specific dataset creation errors (e.g., insufficient players/images)
                 logger.error(f"Dataset validation failed: {e}")
@@ -205,6 +225,7 @@ class TrainPipeline(Pipeline):
             context['dataset_size'] = dataset_size
             context['num_players'] = num_players
             context['min_images_per_player'] = min_images_per_player
+            context['status'] = StepStatus.COMPLETED.value
             
             # Log success
             logger.info(f"✅ Dataset created successfully:")
@@ -266,7 +287,7 @@ class TrainPipeline(Pipeline):
             try:
                 training = Training(
                     train_dir=dataset_path,
-                    model_save_path=self.model_path
+                    storage_client=self.storage_client,
                 )
             except Exception as e:
                 logger.error(f"Failed to initialize Training class: {e}")
@@ -285,8 +306,7 @@ class TrainPipeline(Pipeline):
             logger.info("Executing training pipeline...")
             trained_model = training.train_and_save(
                 model_class=SiameseNet,
-                dataset_class=LacrossePlayerDataset, 
-                storage_client=self.storage_client,  # Pass storage client to training
+                dataset_class=LacrossePlayerDataset,
                 transform=transform,
                 force_pretrained=False  # Use existing weights if available
             )
@@ -294,18 +314,24 @@ class TrainPipeline(Pipeline):
             # Get training info for context
             training_info = training.get_training_info()
             
+            # Validate that the trained model is actually a PyTorch model
+            import torch.nn
+            if not isinstance(trained_model, torch.nn.Module):
+                error_msg = f"Training returned invalid model type {type(trained_model)}: {trained_model}"
+                logger.error(error_msg)
+                return {"status": StepStatus.ERROR.value, "error": error_msg}
+            
             logger.info("✅ Model training completed successfully")
-            logger.info(f"   Model saved to: {training_info['model_save_path']}")
             logger.info(f"   Training device: {training_info['device']}")
             logger.info(f"   Embedding dimension: {training_info['embedding_dim']}")
+            logger.info(f"   Model type: {type(trained_model)}")
             
             # Update context with training results
             context.update({
                 'trained_model': trained_model,
                 'training_info': training_info,
-                'model_save_path': training_info['model_save_path'],
                 'training_device': training_info['device'],
-                'status': StepStatus.SUCCESS.value
+                'status': StepStatus.COMPLETED
             })
             
             return context
@@ -339,6 +365,44 @@ class TrainPipeline(Pipeline):
                 error_msg = "Trained model must be available in context (run train_model step first)"
                 logger.error(error_msg)
                 return {"status": StepStatus.ERROR.value, "error": error_msg}
+            
+            # Validate that trained_model is actually a PyTorch model, not a string or other type
+            import torch.nn
+            if not isinstance(trained_model, torch.nn.Module):
+                # If we have a placeholder string, try to reload the model from wandb
+                if isinstance(trained_model, str) and "excluded_for_serialization" in trained_model:
+                    logger.info("Model object not found in context (checkpoint resume), attempting to reload from wandb...")
+                    try:
+                        from .wandb_logger import wandb_logger
+                        training_info = context.get('training_info', {})
+                        device = training_info.get('device', 'cpu')
+                        embedding_dim = training_info.get('embedding_dim', 128)
+                        
+                        # Try to load the model from wandb using centralized function
+                        reloaded_model = wandb_logger.load_model_from_registry(
+                            model_class=lambda: SiameseNet(embedding_dim=embedding_dim),
+                            model_name="PlayerEmbeddings",
+                            alias="latest",
+                            device=device
+                        )
+                        
+                        if reloaded_model is not None:
+                            logger.info("Successfully reloaded model from wandb for evaluation")
+                            # Update context with the reloaded model
+                            context['trained_model'] = reloaded_model
+                            trained_model = reloaded_model
+                        else:
+                            error_msg = "Failed to reload model from wandb - no saved model found"
+                            logger.error(error_msg)
+                            return {"status": StepStatus.ERROR.value, "error": error_msg}
+                    except Exception as e:
+                        error_msg = f"Failed to reload model from wandb: {str(e)}"
+                        logger.error(error_msg)
+                        return {"status": StepStatus.ERROR.value, "error": error_msg}
+                else:
+                    error_msg = f"Expected trained_model to be a PyTorch model (torch.nn.Module), but got {type(trained_model)}: {trained_model}"
+                    logger.error(error_msg)
+                    return {"status": StepStatus.ERROR.value, "error": error_msg}
             
             dataset = context.get('dataset')
             if dataset is None:
@@ -376,6 +440,7 @@ class TrainPipeline(Pipeline):
             logger.info("Running comprehensive evaluation suite...")
             evaluation_results = evaluator.evaluate_comprehensive(
                 dataset_path=dataset_path,
+                storage_client=self.storage_client,  # Pass storage client for GCS support
                 use_validation_split=True  # Use existing train/val split
             )
             
@@ -413,7 +478,7 @@ class TrainPipeline(Pipeline):
                     'rank_5_accuracy': rank_metrics.get('rank_5_accuracy', 0),
                     'mean_average_precision': rank_metrics.get('mean_average_precision', 0)
                 },
-                'status': StepStatus.SUCCESS.value
+                'status': StepStatus.COMPLETED.value
             })
             
             # Print report to console if verbose

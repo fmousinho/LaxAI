@@ -131,12 +131,8 @@ class GoogleStorageClient:
             raise RuntimeError("Failed to authenticate with Google Cloud Storage")
         
         try:
-            # Combine user_path with optional prefix
-            full_prefix = self.config.user_path
-            if prefix:
-                full_prefix = f"{self.config.user_path}/{prefix}"
-            
-            blobs = self._client.list_blobs(self.config.bucket_name, prefix=full_prefix)
+
+            blobs = self._client.list_blobs(self.config.bucket_name, prefix=prefix)
             return [blob.name for blob in blobs]
         except Exception as e:
             logger.error(f"Failed to list blobs: {e}")
@@ -159,7 +155,9 @@ class GoogleStorageClient:
         
         try:
             # Add user_path prefix to destination
-            full_destination = f"{self.config.user_path}/{destination_blob_name}"
+            if len(self.config.user_path) > 0 and not self.config.user_path.endswith('/'):
+                self.config.user_path += '/'
+            full_destination = f"{self.config.user_path}{destination_blob_name}"
             blob = self._bucket.blob(full_destination)
             blob.upload_from_filename(source_file_path)
             logger.debug(f"File {source_file_path} uploaded to {full_destination}")
@@ -184,11 +182,15 @@ class GoogleStorageClient:
             return False
         
         try:
-            # Add user_path prefix to source
-            full_source = f"{self.config.user_path}/{source_blob_name}"
+            # Get the blob object and download it
+            # If the source_blob_name already starts with user_path, don't prefix it again
+            if self.config.user_path and source_blob_name.startswith(self.config.user_path + "/"):
+                full_source = source_blob_name
+            else:
+                full_source = f"{self.config.user_path}/{source_blob_name}" if self.config.user_path else source_blob_name
             blob = self._bucket.blob(full_source)
             blob.download_to_filename(destination_file_path)
-            logger.info(f"Blob {full_source} downloaded to {destination_file_path}")
+            logger.debug(f"Blob {full_source} downloaded to {destination_file_path}")
             return True
         except Exception as e:
             logger.error(f"Failed to download blob: {e}")
@@ -209,8 +211,11 @@ class GoogleStorageClient:
             return None
         
         try:
-            # Add user_path prefix to source
-            full_source = f"{self.config.user_path}/{source_blob_name}"
+            # Add user_path prefix to source, but avoid double prefixing
+            if self.config.user_path and source_blob_name.startswith(self.config.user_path + "/"):
+                full_source = source_blob_name
+            else:
+                full_source = f"{self.config.user_path}/{source_blob_name}" if self.config.user_path else source_blob_name
             blob = self._bucket.blob(full_source)
             content = blob.download_as_text()
             logger.info(f"Blob {full_source} downloaded as string")
@@ -306,44 +311,6 @@ class GoogleStorageClient:
             logger.error(f"Failed to check if blob exists: {e}")
             return False
     
-    def upload_from_string(self, destination_blob_name: str, data: str) -> bool:
-        """
-        Upload string data to a blob.
-        
-        Args:
-            destination_blob_name: Name of the blob in the bucket (will be prefixed with user_path)
-            data: String data to upload
-            
-        Returns:
-            bool: True if upload successful, False otherwise
-        """
-        if not self._ensure_authenticated():
-            logger.error("Failed to authenticate with Google Cloud Storage")
-            return False
-        
-        try:
-            # Add user_path prefix to destination
-            full_destination = f"{self.config.user_path}/{destination_blob_name}"
-            blob = self._bucket.blob(full_destination)
-            blob.upload_from_string(data)
-            logger.info(f"String data uploaded to {full_destination}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to upload string data: {e}")
-            return False
-    
-    def upload_from_file(self, destination_blob_name: str, file_path: str) -> bool:
-        """
-        Upload a file to the bucket (alias for upload_blob for consistency).
-        
-        Args:
-            destination_blob_name: Name of the blob in the bucket (will be prefixed with user_path)
-            file_path: Path to the file to upload
-            
-        Returns:
-            bool: True if upload successful, False otherwise
-        """
-        return self.upload_blob(file_path, destination_blob_name)
     
     def delete_blob(self, blob_name: str) -> bool:
         """

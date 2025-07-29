@@ -17,6 +17,7 @@ from core.train.wandb_logger import wandb_logger
 
 logger = logging.getLogger(__name__)
 
+N_PLAYERS_FOR_VAL = 1
 
 class ModelEvaluator:
     """
@@ -51,12 +52,14 @@ class ModelEvaluator:
         self.embeddings_cache = {}
         
     def evaluate_comprehensive(self, dataset_path: str, 
+                             storage_client=None,
                              use_validation_split: bool = True) -> Dict[str, Any]:
         """
         Run comprehensive evaluation including all metrics.
         
         Args:
             dataset_path: Path to the dataset directory (should contain train/ and val/ folders)
+            storage_client: Google Storage client for GCS operations (required for GCS paths)
             use_validation_split: If True, use existing val/ folder; if False, create random split
             
         Returns:
@@ -65,11 +68,27 @@ class ModelEvaluator:
         logger.info("Starting comprehensive model evaluation...")
         
         if use_validation_split:
-            # Use existing train/val split
-            train_dir = os.path.join(dataset_path, "train")
-            val_dir = os.path.join(dataset_path, "val")
+            # The `dataset_path` is the path to the training data, e.g., .../datasets/frame19/train
+            # The validation data is in a sibling directory, e.g., .../datasets/frame19/val
             
-            if not os.path.exists(val_dir):
+            # The train_dir is the dataset_path itself.
+            train_dir = dataset_path.rstrip('/')
+            
+            # To get the validation directory, go to parent and join with 'val'.
+            base_path = os.path.dirname(train_dir)
+            val_dir = os.path.join(base_path, "val")
+            
+            # Check if validation directory exists
+            val_exists = False
+            if storage_client:
+                # For GCS, check if validation directory has any blobs
+                val_blobs = list(storage_client.list_blobs(prefix=val_dir.rstrip('/')))
+                val_exists = len(val_blobs) > 0
+            else:
+                # For local filesystem
+                val_exists = os.path.exists(val_dir)
+            
+            if not val_exists:
                 logger.warning(f"Validation directory not found: {val_dir}")
                 logger.info("Falling back to random split from training data")
                 use_validation_split = False
@@ -81,22 +100,51 @@ class ModelEvaluator:
                 # Create dataset from validation directory
                 from config.transforms import get_transforms
                 val_transforms = get_transforms('validation')  # Use validation transforms
-                val_dataset = LacrossePlayerDataset(
-                    image_dir=val_dir,
-                    transform=val_transforms
-                )
-                
-                # Also create training dataset for cross-validation
-                train_transforms = get_transforms('training')
-                train_dataset = LacrossePlayerDataset(
-                    image_dir=train_dir,
-                    transform=train_transforms
-                )
+                if storage_client:
+                    val_dataset = LacrossePlayerDataset(
+                        image_dir=val_dir,
+                        storage_client=storage_client,
+                        transform=val_transforms,
+                        min_images_per_player= N_PLAYERS_FOR_VAL
+                    )
+                    train_transforms = get_transforms('training')
+                    train_dataset = LacrossePlayerDataset(
+                        image_dir=train_dir,
+                        storage_client=storage_client,
+                        transform=train_transforms,
+                        min_images_per_player=N_PLAYERS_FOR_VAL
+                    )
+                else:
+                    val_dataset = LacrossePlayerDataset(
+                        image_dir=val_dir,
+                        transform=val_transforms,
+                        min_images_per_player=N_PLAYERS_FOR_VAL
+                    )
+                    train_transforms = get_transforms('training')
+                    train_dataset = LacrossePlayerDataset(
+                        image_dir=train_dir,
+                        transform=train_transforms,
+                        min_images_per_player=N_PLAYERS_FOR_VAL
+                    )
+                # Check if enough valid players exist in validation set
+                if len(val_dataset.players) < 2:
+                    logger.warning(f"Validation set does not have enough valid players (found {len(val_dataset.players)}). Falling back to random split.")
+                    use_validation_split = False
         
         if not use_validation_split:
             # Fallback: create random split from dataset (old behavior)
             logger.info("Creating random split from provided dataset")
-            dataset = LacrossePlayerDataset(image_dir=dataset_path)
+            if storage_client:
+                dataset = LacrossePlayerDataset(
+                    image_dir=dataset_path,
+                    storage_client=storage_client,
+                    min_images_per_player=N_PLAYERS_FOR_VAL  # For evaluation, 1 image is sufficient
+                )
+            else:
+                dataset = LacrossePlayerDataset(
+                    image_dir=dataset_path,
+                    min_images_per_player=N_PLAYERS_FOR_VAL  # For evaluation, 1 image is sufficient
+                )
             train_dataset, val_dataset = self._split_dataset(dataset, test_split=0.2)
         
         # Generate embeddings for validation set
@@ -179,6 +227,10 @@ class ModelEvaluator:
         subset_dataset.transform = dataset.transform
         subset_dataset.min_images_per_player = dataset.min_images_per_player
         
+        # Copy storage_client if it exists
+        if hasattr(dataset, 'storage_client'):
+            subset_dataset.storage_client = dataset.storage_client
+        
         # Filter to only include specified players
         subset_dataset.players = [p for p in players if p in dataset.players]
         subset_dataset.player_to_images = {
@@ -226,10 +278,16 @@ class ModelEvaluator:
                         # Fallback for different dataset formats
                         image, label = data[0], data[-1]
                     
-                    image = image.unsqueeze(0).to(self.device)
+                    # If image is not a tensor, convert to tensor
+                    if not isinstance(image, torch.Tensor):
+                        import torchvision.transforms as T
+                        image = T.ToTensor()(image)
+                    # Ensure tensor is on the correct device before unsqueezing
+                    image = image.to(self.device)
+                    image_tensor = image.unsqueeze(0)
                     
                     # Get embedding from model
-                    embedding = self.model(image)  # Use regular forward method
+                    embedding = self.model(image_tensor)  # Use regular forward method
                     embedding = F.normalize(embedding, p=2, dim=1)  # L2 normalize
                     
                     embeddings.append(embedding.cpu().numpy().flatten())
@@ -237,7 +295,6 @@ class ModelEvaluator:
                     
                     # Create a simple image path identifier
                     image_paths.append(f"image_{i}")
-                        
                 except Exception as e:
                     logger.warning(f"Failed to process image {i}: {e}")
                     continue
@@ -315,9 +372,32 @@ class ModelEvaluator:
         
         # Compute metrics
         accuracy = accuracy_score(y_true, y_pred)
-        precision, recall, f1, _ = precision_recall_fscore_support(
-            y_true, y_pred, average='binary', zero_division=0
-        )
+        
+        # Add debugging information
+        logger.info(f"Classification evaluation: {len(y_true)} pairs generated")
+        logger.info(f"True labels distribution: Same={sum(y_true)}, Different={len(y_true)-sum(y_true)}")
+        logger.info(f"Predictions distribution: Same={sum(y_pred)}, Different={len(y_pred)-sum(y_pred)}")
+        logger.info(f"Similarity scores range: [{min(y_scores):.4f}, {max(y_scores):.4f}]")
+        logger.info(f"Threshold used: {self.threshold}")
+        
+        # Check if we have both classes in predictions and true labels
+        unique_true = set(y_true)
+        unique_pred = set(y_pred)
+        
+        if len(unique_true) < 2:
+            logger.warning(f"Only one class present in true labels: {unique_true}")
+            precision = recall = f1 = 0.0
+        elif len(unique_pred) < 2:
+            logger.warning(f"Only one class present in predictions: {unique_pred}")
+            # Use macro average to handle single-class predictions better
+            precision, recall, f1, _ = precision_recall_fscore_support(
+                y_true, y_pred, average='macro', zero_division=0
+            )
+        else:
+            # Standard binary classification
+            precision, recall, f1, _ = precision_recall_fscore_support(
+                y_true, y_pred, average='binary', zero_division=0, pos_label=1
+            )
         
         try:
             auc = roc_auc_score(y_true, y_scores)
@@ -514,11 +594,11 @@ class ModelEvaluator:
         
         # Dataset info
         dataset_info = results['dataset_info']
-        report.append(f"\nDataset Information:")
-        report.append(f"  Total samples: {dataset_info['total_samples']}")
-        report.append(f"  Test samples: {dataset_info['test_samples']}")
-        report.append(f"  Number of players: {dataset_info['num_players']}")
-        report.append(f"  Test players: {dataset_info['test_players']}")
+        report.append("\nDataset Information:")
+        report.append(f"  Training samples: {dataset_info.get('training_samples', 'N/A')}")
+        report.append(f"  Validation samples: {dataset_info.get('validation_samples', 'N/A')}")
+        report.append(f"  Training players: {dataset_info.get('train_players', 'N/A')}")
+        report.append(f"  Validation players: {dataset_info.get('val_players', 'N/A')}")
         
         # Classification metrics
         cls_metrics = results['classification_metrics']

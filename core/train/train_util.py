@@ -59,7 +59,6 @@ def train(tenant_id: str, frames_per_video: int, verbose: bool, save_intermediat
             save_intermediate=save_intermediate
             )
 
-        train_pipeline_dir = f"{project_root}/process/train_pipeline/"  # Use Google Storage path
 
         # Use Google Storage functions to list directories
         storage_client = get_storage(tenant_id)
@@ -68,85 +67,42 @@ def train(tenant_id: str, frames_per_video: int, verbose: bool, save_intermediat
         logger.info(f"Total blobs found: {len(all_blobs)}")
         
         # Debug: Show sample blobs that contain /datasets/ and /train/
-        sample_blobs = [blob for blob in all_blobs if '/datasets/' in blob and '/train/' in blob][:10]
-        logger.info(f"Sample blobs with /datasets/ and /train/: {sample_blobs}")
-        
-        # Find all unique parent directories containing /datasets/ (up to /video_GUID/)
-        parent_paths = set()
-        for blob in all_blobs:
+        train_blobs = [blob for blob in all_blobs if '/train/' in blob]
+        for blob in train_blobs[:5]:
+            logger.info(f"Sample blob: {blob}")
+
+        # Find all unique parent directories containing /train
+        train_paths = set()
+        for blob in train_blobs:
+            # Extract the full path including frame directory: .../datasets/frameN/train/
             if '/datasets/' in blob and '/train/' in blob:
-                # Extract path up to just before /datasets/ (the video directory)
                 datasets_index = blob.find('/datasets/')
-                if datasets_index != -1:
-                    parent = blob[:datasets_index + 1]  # Include the trailing slash but stop before datasets
-                    parent_paths.add(parent)
-        logger.info(f"Found {len(parent_paths)} parent video roots: {parent_paths}")
+                train_index = blob.find('/train/', datasets_index)
+                if datasets_index != -1 and train_index != -1:
+                    # Include everything up to and including /train/
+                    full_path = blob[:train_index + len('/train/')]
+                    train_paths.add(full_path)
+        logger.info(f"Found {len(train_paths)} directories containing training data.")
 
         total_folders = 0
         processed_folders = 0
-        for video_root in parent_paths:
-            # Get all blobs under this video's datasets directory
-            datasets_prefix = video_root + "datasets/"
-            blobs = list(storage_client.list_blobs(prefix=datasets_prefix))
-            logger.info(f"Found {len(blobs)} blobs under datasets prefix: {datasets_prefix}")
-            if len(blobs) > 0:
-                logger.info(f"Sample blobs: {blobs[:5]}")
-
-
-            # Debug: Show the relative paths after datasets/ for the first 20 blobs
-            rel_paths = [blob[len(datasets_prefix):].lstrip("/") for blob in blobs[:20]]
-            logger.info(f"First 20 relative paths after datasets/: {rel_paths}")
-
-            # Find all unique numeric frame directories under /datasets/
-            frame_dirs = set()
-            for blob in blobs:
-                rel = blob[len(datasets_prefix):].lstrip("/")
-                if rel:
-                    parts = rel.split("/")
-                    logger.debug(f"Checking blob {blob}, after datasets/: {rel}, parts: {parts}")
-                    if parts[0].isdigit():
-                        frame_dirs.add(parts[0])
-
-            if not frame_dirs:
-                logger.error(f"No numeric frame directories found under datasets prefix: {datasets_prefix}")
-                logger.info(f"All datasets blobs: {blobs[:10]}")
-                logger.info(f"First 20 relative paths after datasets/: {rel_paths}")
+        for train_path in train_paths:
+            # Validate that this path has the expected structure: .../datasets/frameN/train/
+            if '/datasets/' not in train_path or '/datasets/frame' not in train_path or not train_path.rstrip('/').endswith('/train'):
+                logger.warning(f"Skipping invalid train path structure: {train_path}")
                 continue
 
-            logger.info(f"Found frame directories: {sorted(frame_dirs, key=lambda x: int(x))}")
+            logger.info(f"Running train pipeline for dataset: {train_path}")
+            train_results = train_pipeline.run(dataset_path=train_path)
 
-            for frame_dir in sorted(frame_dirs, key=lambda x: int(x)):
-                frame_path = datasets_prefix + f"{frame_dir}/"
-                logger.info(f"Running train pipeline for dataset: {frame_path}")
-                frame_blobs = list(storage_client.list_blobs(prefix=frame_path))
-                image_blobs = [b for b in frame_blobs if b.lower().endswith((".jpg", ".jpeg", ".png"))]
-                player_dirs = set()
-                player_image_count = {}
-                for blob in image_blobs:
-                    rel = blob[len(frame_path):].lstrip("/")
-                    parts = rel.split("/")
-                    if len(parts) >= 2 and parts[0] == "train" and parts[1].isdigit():
-                        player_id = parts[1]
-                        player_dirs.add(player_id)
-                        player_image_count.setdefault(player_id, 0)
-                        player_image_count[player_id] += 1
-                if not player_dirs:
-                    logger.error(f"Frame directory does not contain any train/{{player_id}}/image.jpg directories with images in Google Storage: {frame_path}")
-                    logger.info(f"Found {len(frame_blobs)} total blobs, {len(image_blobs)} image files")
-                    continue
-                logger.info(f"Found {len(player_dirs)} player directories with images in frame: {frame_path}")
+            if train_results.get("status") == "completed":
+                logger.info(f"Successfully completed training for dataset: {train_path}")
+            else:
+                logger.error(f"Training pipeline failed for dataset: {train_path}")
+                logger.error(f"Details: {json.dumps(train_results.get('errors'), indent=2)}")
 
-                train_results = train_pipeline.run(dataset_path=frame_path)
-
-                if train_results.get("status") == "completed":
-                    logger.info(f"Successfully completed training for dataset: {frame_path}")
-                else:
-                    logger.error(f"Training pipeline failed for dataset: {frame_path}")
-                    logger.error(f"Details: {json.dumps(train_results.get('errors'), indent=2)}")
-
-                processed_folders += 1
-                logger.info(f"Completed processing frame: {frame_path} ({processed_folders})")
-                total_folders += 1
+            processed_folders += 1
+            total_folders += 1
 
         logger.info("--- End-to-End Workflow Finished ---")
 

@@ -284,8 +284,12 @@ class Pipeline:
             True if checkpoint saved successfully, False otherwise
         """
         try:
-            # Create a serializable copy of context, excluding numpy arrays and other non-serializable objects
-            serializable_context = self._make_json_serializable(context)
+            # Exclude non-serializable objects like models from context before saving
+            context_to_save = dict(context)
+            for key in ["trained_model", "model", "evaluator", "optimizer", "loss_fn"]:
+                if key in context_to_save:
+                    context_to_save[key] = f"<{key}_excluded_for_serialization>"
+            serializable_context = self._make_json_serializable(context_to_save)
                     
             checkpoint_data = {
                 "pipeline_name": self.pipeline_name,

@@ -49,8 +49,8 @@ class TrainingConfig:
     """Configuration for training parameters."""
     batch_size: int = 64
     learning_rate: float = 1e-3
-    num_epochs: int = 15
-    margin: float = 0.5
+    num_epochs: int = 20
+    margin: float = 0.2
     weight_decay: float = 1e-4  # L2 regularization weight decay
     model_save_path: str = '/common/model/embeddings_latest.pth'
     train_ratio: float = 0.8
@@ -129,7 +129,7 @@ class TransformConfig:
     random_affine_translate: Tuple[float, float] = (0.1, 0.1)
     
     # Background removal configuration
-    enable_background_removal: bool = True  # Global flag to enable/disable background removal
+    enable_background_removal: bool = False  # Global flag to enable/disable background removal
     background_detector_sample_frames: int = 5  # Frames to use for background detector training
     background_detector_auto_train: bool = True  # Whether to auto-train detector from sample images
 

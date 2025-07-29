@@ -82,7 +82,7 @@ def augment_images(images: List[np.ndarray]) -> List[np.ndarray]:
         #4.1 Remove legs
         LEG_CROP = .5
         
-        leg_cropped = img[:int(h - h * LEG_CROP), :, :]  # Crop legs (bottom 50% pixels)
+        leg_cropped = img[:int(h - h * LEG_CROP), :, :]  
         augmented_images.append(leg_cropped.copy())
 
         #4.2 Leg and arms cropped

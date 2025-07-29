@@ -20,33 +20,61 @@ class LacrossePlayerDataset(Dataset):
     Custom Dataset for loading lacrosse player crops for triplet loss.
     Each player's crops are expected to be in a separate folder (prefix in GCS).
     """
-    def __init__(self, image_dir, storage_client, transform=None, min_images_per_player=training_config.min_images_per_player):
+    def __init__(self, image_dir, storage_client=None, transform=None, min_images_per_player=training_config.min_images_per_player):
         self.image_dir = image_dir
         self.storage_client = storage_client
-        self.transform = transform if transform is not None else get_ad('training')
+        self.transform = transform if transform is not None else get_transforms('training')
         self.min_images_per_player = min_images_per_player
 
-        # List all blobs under image_dir
-        all_blobs = self.storage_client.list_blobs(prefix=image_dir)
-        # Filter for image files
-        image_blobs = [b for b in all_blobs if b.lower().endswith(('.jpg', '.png', '.jpeg'))]
+        if self.storage_client is not None:
+            # GCS mode - List all blobs under image_dir
+            all_blobs = self.storage_client.list_blobs(prefix=image_dir)
+            # Filter for image files
+            image_blobs = [b for b in all_blobs if b.lower().endswith(('.jpg', '.png', '.jpeg'))]
 
-        # Group by player (assume player is the immediate subfolder under image_dir)
-        player_to_images = {}
-        for blob in image_blobs:
-            parts = blob[len(image_dir):].lstrip('/').split('/')
-            if len(parts) < 2:
-                continue  # Not in a player subfolder
-            player = parts[0]
-            player_to_images.setdefault(player, []).append(blob)
+            # Group by player (assume player is the immediate subfolder under image_dir)
+            player_to_images = {}
+            for blob in image_blobs:
+                parts = blob[len(image_dir):].lstrip('/').split('/')
+                if len(parts) < 2:
+                    continue  # Not in a player subfolder
+                player = parts[0]
+                player_to_images.setdefault(player, []).append(blob)
 
-        # Filter players with sufficient images
-        self.players = []
-        self.player_to_images = {}
-        for player, imgs in player_to_images.items():
-            if len(imgs) >= self.min_images_per_player:
-                self.players.append(player)
-                self.player_to_images[player] = imgs
+            # Filter players with sufficient images
+            self.players = []
+            self.player_to_images = {}
+            for player, imgs in player_to_images.items():
+                if len(imgs) >= self.min_images_per_player:
+                    self.players.append(player)
+                    self.player_to_images[player] = imgs
+        else:
+            # Local filesystem mode
+            if not os.path.exists(image_dir):
+                raise FileNotFoundError(f"Image directory does not exist: {image_dir}")
+            
+            # Get all player directories
+            player_dirs = [d for d in os.listdir(image_dir) 
+                          if os.path.isdir(os.path.join(image_dir, d))]
+            
+            # Group by player
+            player_to_images = {}
+            for player_dir in player_dirs:
+                player_path = os.path.join(image_dir, player_dir)
+                image_files = []
+                for f in os.listdir(player_path):
+                    if f.lower().endswith(('.jpg', '.png', '.jpeg')):
+                        image_files.append(os.path.join(player_path, f))
+                if image_files:
+                    player_to_images[player_dir] = image_files
+            
+            # Filter players with sufficient images
+            self.players = []
+            self.player_to_images = {}
+            for player, imgs in player_to_images.items():
+                if len(imgs) >= self.min_images_per_player:
+                    self.players.append(player)
+                    self.player_to_images[player] = imgs
 
         if len(self.players) < 2:
             raise ValueError(f"Need at least 2 players with {min_images_per_player}+ images each. Found {len(self.players)} valid players.")
@@ -112,12 +140,9 @@ class LacrossePlayerDataset(Dataset):
         # Apply transformations
         if self.transform:
             try:
-                anchor_array = np.array(anchor_img)
-                positive_array = np.array(positive_img)
-                negative_array = np.array(negative_img)
-                anchor_img = self.transform(anchor_array)
-                positive_img = self.transform(positive_array)
-                negative_img = self.transform(negative_array)
+                anchor_img = self.transform(anchor_img)
+                positive_img = self.transform(positive_img)
+                negative_img = self.transform(negative_img)
             except Exception as e:
                 print(f"Error applying transforms: {e}")
                 anchor_img = transforms.ToTensor()(anchor_img)
