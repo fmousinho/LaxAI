@@ -26,6 +26,7 @@ from utils import load_env_or_colab
 from google.cloud import storage
 from google.cloud.exceptions import NotFound, Forbidden
 from google.auth.exceptions import DefaultCredentialsError
+from google.oauth2 import service_account
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +36,12 @@ class GoogleStorageConfig:
     project_id: str = "LaxAI"
     bucket_name: str = "laxai_dev"
     user_path: str = ""  # Will be set by caller
-    credentials_path: Optional[str] = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    credentials_name: str = "GOOGLE_APPLICATION_CREDENTIALS"
 
 class GoogleStorageClient:
     """Google Cloud Storage client with error handling and common operations."""
-    
-    def __init__(self, user_path: str):
+
+    def __init__(self, user_path: str, credentials: Optional[service_account.Credentials]):
         """
         Initialize the Google Storage client with predefined configuration.
         
@@ -62,9 +63,11 @@ class GoogleStorageClient:
         """
         try:
             # Set credentials path if provided in config (from environment variable)
-            if self.config.credentials_path:
-                os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = self.config.credentials_path
-            
+            if credentials:
+                os.environ[self.config.credentials_name] = credentials
+            elif self.config.credentials_name not in os.environ:
+                raise ValueError(f"{self.config.credentials_name} not set in environment variables")
+
             # Create client with explicit project ID if provided
             if self.config.project_id:
                 self._client = storage.Client(project=self.config.project_id)
