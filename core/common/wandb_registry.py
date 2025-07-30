@@ -1,6 +1,6 @@
 import logging
 import wandb
-from config import wandb_config
+from core.config import wandb_config
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)

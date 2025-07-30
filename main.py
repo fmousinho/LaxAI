@@ -144,8 +144,8 @@ def main() -> int:
                 detections_import_path=args.detections_import_path,
                 temp_dir=TEMP_DIR
             )
-        logger.info("Application run completed successfully.")
-        return 0
+            logger.info("Application run completed successfully.")
+            return 0
 
     except Exception as e:
         logger.critical(

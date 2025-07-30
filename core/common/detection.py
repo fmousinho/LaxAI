@@ -11,7 +11,7 @@ from PIL import Image
 from rfdetr import RFDETRBase  # type: ignore
 import wandb
 
-from config.all_config import detection_config, wandb_config
+from core.config.all_config import detection_config, wandb_config
 
 logger = logging.getLogger(__name__)
 

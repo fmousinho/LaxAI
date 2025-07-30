@@ -1,19 +1,21 @@
 import os
 import logging
-from core.train.wandb_logger import wandb_logger
+import importlib
 import traceback
 from typing import Any, Dict, List, Optional
 
 
-from core.common.pipeline_step import PipelineStep, StepStatus
-from core.common.google_storage import GoogleStorageClient, get_storage
+from core.train.wandb_logger import wandb_logger
+
+from core.common.pipeline_step import  StepStatus
+from core.common.google_storage import  get_storage
 from core.common.pipeline import Pipeline, PipelineStatus
 from core.train.dataset import LacrossePlayerDataset
 from core.train.training import Training
 from core.train.siamesenet import SiameseNet
 from core.train.evaluator import ModelEvaluator
-from config.transforms import get_transforms
-from config.all_config import training_config, debug_config
+from core.config.transforms import get_transforms
+from core.config.all_config import training_config, model_config, wandb_config
 
 
 
@@ -25,9 +27,13 @@ class TrainPipeline(Pipeline):
     def __init__(self, tenant_id: str = "tenant1", verbose: bool = True, save_intermediate: bool = True):
         self.verbose = verbose
         self.save_intermediate = save_intermediate
-        self.verbose
         self.storage_client = get_storage(tenant_id)
         self.model_path = training_config.model_save_path
+        self.collection_name = wandb_config.embeddings_model_collection
+
+        model_class_module = model_config.model_class_module
+        model_class_str = model_config.model_class_str
+        self.model_class = getattr(importlib.import_module(model_class_module), model_class_str)
 
         step_definitions = {
             "create_dataset": {
@@ -64,7 +70,6 @@ class TrainPipeline(Pipeline):
         Returns:
             Dictionary with pipeline results and statistics.
         """
-        from config.all_config import wandb_config
         if wandb_config.enabled:
             config = {
                 "dataset_path": dataset_path,
@@ -305,8 +310,9 @@ class TrainPipeline(Pipeline):
             # Execute complete training pipeline
             logger.info("Executing training pipeline...")
             trained_model = training.train_and_save(
-                model_class=SiameseNet,
+                model_class=self.model_class,
                 dataset_class=LacrossePlayerDataset,
+                model_name=self.collection_name,
                 transform=transform,
                 force_pretrained=False  # Use existing weights if available
             )
@@ -323,7 +329,6 @@ class TrainPipeline(Pipeline):
             
             logger.info("✅ Model training completed successfully")
             logger.info(f"   Training device: {training_info['device']}")
-            logger.info(f"   Embedding dimension: {training_info['embedding_dim']}")
             logger.info(f"   Model type: {type(trained_model)}")
             
             # Update context with training results
@@ -376,12 +381,11 @@ class TrainPipeline(Pipeline):
                         from .wandb_logger import wandb_logger
                         training_info = context.get('training_info', {})
                         device = training_info.get('device', 'cpu')
-                        embedding_dim = training_info.get('embedding_dim', 128)
                         
                         # Try to load the model from wandb using centralized function
                         reloaded_model = wandb_logger.load_model_from_registry(
-                            model_class=lambda: SiameseNet(embedding_dim=embedding_dim),
-                            model_name="PlayerEmbeddings",
+                            model_class=lambda: self.model_class(embedding_dim=model_config.embedding_dim),
+                            collection_name=self.collection_name,
                             alias="latest",
                             device=device
                         )

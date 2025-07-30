@@ -31,8 +31,8 @@ from core.common.google_storage import get_storage
 from core.common.detection import DetectionModel
 from core.common.pipeline_step import PipelineStep, StepStatus
 from core.common.pipeline import Pipeline, PipelineStatus
-from config.all_config import DetectionConfig
-from config import logging_config
+from core.config.all_config import DetectionConfig
+from core.config import logging_config
 from core.common.background_mask import BackgroundMaskDetector, create_frame_generator_from_images
 from core.common.crop_utils import extract_crops_from_video, create_train_val_split
 from core.train.augmentation import augment_images
