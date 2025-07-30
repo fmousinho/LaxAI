@@ -48,7 +48,6 @@ import cv2
 import numpy as np
 from typing import List, Union, Tuple, Generator, Optional
 import logging
-from config.all_config import background_mask_config, BackgroundMaskConfig
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +63,7 @@ class BackgroundMaskDetector:
     
     def __init__(
         self,
-        config: Optional[BackgroundMaskConfig] = None,
+        config: Optional["BackgroundMaskConfig"] = None,
         **kwargs
     ):
         """
@@ -76,7 +75,11 @@ class BackgroundMaskDetector:
                      replacement_color, verbose, top_crop_ratio, bottom_crop_ratio, etc.)
         """
         # Use provided config or global config
-        self.config = config if config is not None else background_mask_config
+        if config is not None:
+            self.config = config
+        else:
+            from core.config.all_config import background_mask_config
+            self.config = background_mask_config
         
         # Override config values with provided parameters
         self.sample_frames = kwargs.get('sample_frames', self.config.sample_frames)
@@ -502,7 +505,7 @@ if __name__ == "__main__":
     
     # Test 2: Using custom configuration
     print("\n=== Test 2: Custom Configuration ===")
-    from config.all_config import BackgroundMaskConfig
+    from core.config.all_config import BackgroundMaskConfig
     
     custom_config = BackgroundMaskConfig(
         sample_frames=3,

@@ -10,7 +10,7 @@ This script automates the following process:
 """
 import os
 import sys
-import logging
+import logging 
 import json
 import argparse
 
@@ -24,11 +24,11 @@ if project_root not in sys.path:
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 
+from core.config.all_config import detection_config, training_config
+from core.config import logging_config
 from core.common.google_storage import get_storage
 from core.train.dataprep_pipeline import DataPrepPipeline
 from core.train.train_pipeline import TrainPipeline
-from config.all_config import detection_config, training_config
-from config import logging_config
 
 # --- Configure Logging ---
 # Note: This script assumes logging is configured elsewhere (e.g., in config)

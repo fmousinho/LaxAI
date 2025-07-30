@@ -15,8 +15,8 @@ from typing import Tuple, List, Optional, Any
 
 import supervision as sv
 
-from config.all_config import detection_config
-from config.transforms import ensure_rgb_format
+from core.config.all_config import detection_config
+from core.config.transforms import ensure_rgb_format
 
 logger = logging.getLogger(__name__)
 

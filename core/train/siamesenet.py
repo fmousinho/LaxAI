@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 
-from config.all_config import model_config, training_config
+from core.config.all_config import model_config, training_config
 
 logger = logging.getLogger(__name__)
 

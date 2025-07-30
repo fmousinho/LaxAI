@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 from dotenv import load_dotenv
 import torch.nn as nn
 import wandb
-from config.all_config import model_config, training_config, wandb_config
+from core.config.all_config import model_config, training_config, wandb_config
 from .wandb_logger import wandb_logger
 
 logger = logging.getLogger(__name__)
@@ -63,7 +63,7 @@ class Training:
         logger.info(f"Number of epochs: {self.num_epochs}")
         logger.info(f"Triplet margin: {self.margin}")
 
-    def load_model_from_wandb(self, model_class, model_name: str = "PlayerEmbeddings", alias: str = "latest"):
+    def load_model_from_wandb(self, model_class, model_name: str, alias: str = "latest"):
         """
         Load model from wandb model registry.
         
@@ -79,7 +79,7 @@ class Training:
             # Use the centralized wandb model loading
             loaded_model = wandb_logger.load_model_from_registry(
                 model_class=lambda: model_class(embedding_dim=self.embedding_dim),
-                model_name=model_name,
+                collection_name=model_name,
                 alias=alias,
                 device=str(self.device)
             )
@@ -87,22 +87,28 @@ class Training:
             if loaded_model is not None:
                 self.model = loaded_model
                 logger.info(f"✓ Successfully loaded model from wandb registry: {model_name}:{alias}")
-                print(f"✓ Loaded model from wandb registry: {model_name}:{alias}")
                 return True
             else:
                 logger.info(f"Could not load model from wandb registry")
-                print(f"ℹ No wandb model found, will use local weights or pre-trained backbone")
                 return False
                 
         except Exception as e:
             logger.info(f"Could not load model from wandb registry: {e}")
-            print(f"ℹ No wandb model found, will use local weights or pre-trained backbone")
             return False
 
-    def save_model_to_wandb(self, model_name: str = "PlayerEmbeddings", alias: str = "latest"):
+    def save_model(self, model_name: str):
         """
-        Save model to wandb model registry using centralized wandb_logger.
+        Save the trained model weights both locally and to wandb registry.
+        
+        Args:
+            model_name: Name of the model to save in wandb registry
+            
+        Raises:
+            RuntimeError: If no model to save
         """
+        if self.model is None:
+            raise RuntimeError("No model to save. Train the model first.")
+        
         try:
             metadata = {
                 "embedding_dim": self.embedding_dim,
@@ -115,14 +121,13 @@ class Training:
             }
             wandb_logger.save_model_to_registry(
                 model=self.model,
-                model_name=model_name,
+                collection_name=model_name,
                 metadata=metadata,
-                alias=alias
+                alias="latest"
             )
-            logger.info(f"✓ Model saved to wandb registry: {model_name}:{alias}")
+            logger.info(f"✓ Model saved to wandb registry: {model_name}:latest")
         except Exception as e:
             logger.error(f"Failed to save model to wandb registry: {e}")
-            print(f"⚠ Failed to save model to wandb registry: {e}")
 
     def setup_data(self, dataset_class, transform=None):
         """
@@ -206,13 +211,14 @@ class Training:
         logger.info(f"  Number of workers: {n_workers}")
         logger.info(f"  Number of batches: {len(self.dataloader)}")
 
-    def setup_model(self, model_class, force_pretrained: bool = False):
+    def setup_model(self, model_class, model_name: str, force_pretrained: bool = False):
         """
         Setup the model, loss function, and optimizer for training.
         First attempts to load from wandb registry, then falls back to local weights.
         
         Args:
             model_class: The model class to use (e.g., SiameseNet)
+            model_name: The name of the model (used for logging and saving)
             force_pretrained: If True, ignore saved weights and start with pre-trained backbone
             
         Raises:
@@ -220,21 +226,17 @@ class Training:
         """
         try:
             model_loaded = False
-            
             # Try to load from wandb registry first (unless forcing pretrained)
             if force_pretrained:
                 logger.info("Forcing fresh start with pre-trained ResNet18 weights")
                 self.model = model_class(embedding_dim=self.embedding_dim)
             else:
-                model_loaded = self.load_model_from_wandb(model_class)
+                model_loaded = self.load_model_from_wandb(model_class, model_name=model_name, alias="latest")
             if not model_loaded:
                 logger.info("No wandb model found, will use local weights or pre-trained backbone")
-                
-                # Initialize model with pre-trained weights if available
                 self.model = model_class(embedding_dim=self.embedding_dim)
-                
+
             self.model.to(self.device)
-            
             # Setup training components
             self.loss_fn = nn.TripletMarginLoss(margin=self.margin, p=2)
             self.optimizer = torch.optim.Adam(
@@ -242,13 +244,21 @@ class Training:
                 lr=self.learning_rate, 
                 weight_decay=getattr(training_config, 'weight_decay', 1e-4)
             )
-            
+            # Scheduler uses its own patience/threshold for LR adjustment only
+            scheduler_patience = getattr(training_config, 'lr_scheduler_patience', 3)
+            scheduler_threshold = getattr(training_config, 'lr_scheduler_threshold', 1e-4)
+            self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                self.optimizer,
+                mode='min',
+                factor=training_config.lr_scheduler_factor,
+                patience=training_config.lr_scheduler_patience,
+                threshold=training_config.lr_scheduler_threshold,
+                min_lr=training_config.lr_scheduler_min_lr
+            )
             logger.info(f"Model setup complete and moved to device: {self.device}")
             logger.info(f"Loss function: TripletMarginLoss (margin={self.margin})")
             logger.info(f"Optimizer: Adam (lr={self.learning_rate}, weight_decay={getattr(training_config, 'weight_decay', 1e-4)})")
-            
-            # ...existing code...
-            
+            logger.info(f"LR Scheduler: ReduceLROnPlateau (patience={scheduler_patience}, threshold={scheduler_threshold})")
         except Exception as e:
             logger.error(f"Model setup failed: {e}")
             raise RuntimeError(f"Failed to setup model: {e}")
@@ -368,41 +378,22 @@ class Training:
                     logger.info(f"Early stopping triggered due to patience ({patience_counter} epochs without improvement)")
                     break
 
+            # Step the learning rate scheduler
+            if hasattr(self, 'lr_scheduler') and self.lr_scheduler is not None:
+                self.lr_scheduler.step(epoch_loss)
+                current_lr = self.optimizer.param_groups[0]['lr']
+                logger.info(f"Learning rate after scheduler step: {current_lr:.6f}")
         logger.info("Training completed successfully")
         return self.model
 
-    def save_model(self):
-        """
-        Save the trained model weights both locally and to wandb registry.
-            
-        Raises:
-            RuntimeError: If no model to save
-        """
-        if self.model is None:
-            raise RuntimeError("No model to save. Train the model first.")
-        
-        # Always save to wandb registry
-        self.save_model_to_wandb()
-        
-        # Log model artifact to wandb (legacy method for backward compatibility)
-        if wandb_config.enabled:
-            metadata = {
-                "embedding_dim": self.embedding_dim,
-                "device": str(self.device),
-                "num_epochs": self.num_epochs,
-                "final_loss": getattr(self, 'final_loss', None)
-            }
-            # Note: wandb_logger.log_model_artifact typically expects a file path
-            # Since we're saving to wandb registry above, this legacy call may not be needed
-            logger.info("Model saved to wandb registry via save_model_to_wandb()")
-
-    def train_and_save(self, model_class, dataset_class, transform: Optional[Any] = None, force_pretrained: bool = False):
+    def train_and_save(self, model_class, dataset_class, model_name: str, transform: Optional[Any] = None, force_pretrained: bool = False):
         """
         Complete training pipeline: setup data, setup model, train, and save.
         
         Args:
             model_class: The model class to use (e.g., SiameseNet)
             dataset_class: The dataset class to use (e.g., LacrossePlayerDataset)
+            model_name: Name of the model to save in wandb registry
             transform: Data transforms to apply
             force_pretrained: If True, ignore saved weights and start fresh
             
@@ -421,24 +412,22 @@ class Training:
             
             # Setup model
             logger.info("Setting up model...")
-            self.setup_model(model_class, force_pretrained)
-            
+            self.setup_model(model_class, model_name=model_name, force_pretrained=force_pretrained)
+
             # Train
             logger.info("Starting training...")
             trained_model = self.train()
             
             # Save
             logger.info("Saving model...")
-            self.save_model()
+            self.save_model(model_name=model_name)
               
             logger.info("Training pipeline completed successfully")
-            print(f"🎉 Training completed successfully!")
             
             return trained_model
             
         except Exception as e:
             logger.error(f"Training pipeline failed: {str(e)}")
-            print(f"❌ Training failed: {str(e)}")
             raise
 
     def get_training_info(self):

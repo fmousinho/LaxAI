@@ -15,7 +15,7 @@ import json
 from core.common.detection import DetectionModel
 from modules.tracker import AffineAwareByteTrack
 from modules.utils import log_progress
-from config.all_config import detection_config
+from core.config.all_config import detection_config
 
 logger = logging.getLogger(__name__)
 

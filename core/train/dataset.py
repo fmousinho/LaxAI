@@ -11,9 +11,9 @@ from PIL import Image
 import os
 import random
 import numpy as np
-from config.transforms import get_transforms
+from core.config.transforms import get_transforms
 
-from config.all_config import training_config
+from core.config.all_config import training_config
 
 class LacrossePlayerDataset(Dataset):
     """

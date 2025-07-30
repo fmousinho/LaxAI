@@ -10,12 +10,12 @@ from PIL import Image
 from typing import Optional, Any, List, Callable
 
 from .utils import log_progress
-from config.all_config import model_config
-from config.transforms import ensure_rgb_format
+from core.config.all_config import model_config
+from core.config.transforms import ensure_rgb_format
 
 logger = logging.getLogger(__name__)
 
-from config.all_config import model_config, training_config
+from core.config.all_config import model_config, training_config
 
 class EmbeddingsProcessor:
     """

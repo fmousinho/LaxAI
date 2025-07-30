@@ -13,6 +13,7 @@ temp
 data/
 artifacts/
 wandb/
+evaluation_results/
 
 # Python cache files
 __pycache__/
