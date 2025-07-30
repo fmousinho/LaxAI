@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 class TrainPipeline(Pipeline):
 
-    def __init__(self, tenant_id: str = "tenant1", verbose: bool = True, save_intermediate: bool = True):
+    def __init__(self, tenant_id: str = "tenant1", verbose: bool = True, save_intermediate: bool = True, training_kwargs: Optional[Dict[str, Any]] = None):
         self.verbose = verbose
         self.save_intermediate = save_intermediate
         self.storage_client = get_storage(tenant_id)
@@ -34,6 +34,7 @@ class TrainPipeline(Pipeline):
         model_class_module = model_config.model_class_module
         model_class_str = model_config.model_class_str
         self.model_class = importlib.import_module(model_class_module)
+        self.training_kwargs = training_kwargs or {}
 
         step_definitions = {
             "create_dataset": {
@@ -306,6 +307,7 @@ class TrainPipeline(Pipeline):
                 training = Training(
                     train_dir=dataset_path,
                     storage_client=self.storage_client,
+                    **self.training_kwargs
                 )
             except Exception as e:
                 logger.error(f"Failed to initialize Training class: {e}")

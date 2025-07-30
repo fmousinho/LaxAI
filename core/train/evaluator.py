@@ -320,29 +320,9 @@ class ModelEvaluator:
                     # Get embedding from model
                     embedding = self.model(image_tensor)  # Use regular forward method
                     
-                    # Debug: Check raw embedding
-                    if i < 3:  # Log first few embeddings
-                        logger.info(f"Raw embedding {i}: shape={embedding.shape}, min={embedding.min():.4f}, max={embedding.max():.4f}, mean={embedding.mean():.4f}")
-                        # Check if embedding is all zeros
-                        if torch.allclose(embedding, torch.zeros_like(embedding), atol=1e-8):
-                            logger.warning(f"Embedding {i} is all zeros!")
-                        # Check embedding norm (should be ~1.0 if model normalizes)
-                        embedding_norm = torch.norm(embedding, p=2, dim=1)
-                        logger.info(f"Raw embedding norm: {embedding_norm.item():.4f}")
-                    
-                    # Don't normalize again if model already normalizes (SiameseNet does)
-                    # Check if embedding is already normalized
-                    embedding_norm = torch.norm(embedding, p=2, dim=1)
-                    if torch.allclose(embedding_norm, torch.ones_like(embedding_norm), atol=1e-3):
-                        # Already normalized, don't normalize again
-                        final_embedding = embedding
-                        if i < 3:
-                            logger.debug(f"Embedding {i} is already normalized, skipping L2 normalization")
-                    else:
-                        # Not normalized, apply L2 normalization
-                        final_embedding = F.normalize(embedding, p=2, dim=1)
-                        if i < 3:
-                            logger.debug(f"Applied L2 normalization to embedding {i}")
+                    # The SiameseNet model's forward pass already applies L2 normalization.
+                    # No need to normalize again here.
+                    final_embedding = embedding
                     
                     # Debug: Check final embedding
                     if i < 3:  # Log first few normalized embeddings
