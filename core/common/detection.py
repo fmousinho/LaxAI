@@ -6,7 +6,7 @@ from typing import List, Optional, Union
 import numpy as np
 import supervision as sv
 import torch
-from dotenv import load_dotenv
+from utils import load_env_or_colab
 from PIL import Image
 from rfdetr import RFDETRBase  # type: ignore
 import wandb
@@ -73,7 +73,6 @@ class DetectionModel:
         """
         temp_checkpoint_path = None
 
-        load_dotenv()
         wandb_api_key = os.getenv("WANDB_API_KEY")
 
         if not wandb_api_key:

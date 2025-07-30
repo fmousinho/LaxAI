@@ -1,7 +1,7 @@
 import logging
 import wandb
+from utils import load_env_or_colab
 from core.config import wandb_config
-from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
