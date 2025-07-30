@@ -373,12 +373,17 @@ class GoogleStorageClient:
             return False
 
 
-def get_storage(user_path: str) -> GoogleStorageClient:
+def get_storage(user_path: str, credentials: Optional[service_account.Credentials] = None) -> GoogleStorageClient:
     """
     Get a Google Storage client instance.
     
     Args:
         user_path: The user-specific path within the bucket (e.g., "tenant1/user123")
+        credentials: Optional credentials for authentication
+
+    Returns:
+        GoogleStorageClient: Configured Google Storage client instance
+    """
     
     Returns:
         GoogleStorageClient: Configured Google Storage client instance
@@ -408,7 +413,6 @@ if __name__ == "__main__":
     print(f"Project ID: {storage_client.config.project_id}")
     print(f"Bucket Name: {storage_client.config.bucket_name}")
     print(f"User Path: {storage_client.config.user_path}")
-    print(f"Credentials Path: {storage_client.config.credentials_path}")
     print("-" * 40)
 
     try:
