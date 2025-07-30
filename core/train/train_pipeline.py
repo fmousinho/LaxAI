@@ -24,12 +24,13 @@ logger = logging.getLogger(__name__)
 
 class TrainPipeline(Pipeline):
 
-    def __init__(self, tenant_id: str = "tenant1", verbose: bool = True, save_intermediate: bool = True, training_kwargs: Optional[Dict[str, Any]] = None):
+    def __init__(self, tenant_id: str = "tenant1", verbose: bool = True, save_intermediate: bool = True, training_kwargs: Optional[Dict[str, Any]] = None, custom_name: Optional[str] = "run"):
         self.verbose = verbose
         self.save_intermediate = save_intermediate
         self.storage_client = get_storage(tenant_id)
         self.model_path = training_config.model_save_path
         self.collection_name = wandb_config.embeddings_model_collection
+        self.custom_name = custom_name
 
         model_class_module = model_config.model_class_module
         model_class_str = model_config.model_class_str
@@ -60,7 +61,7 @@ class TrainPipeline(Pipeline):
             save_intermediate=save_intermediate
         )
 
-    def run(self, dataset_path: str, resume_from_checkpoint: bool = True) -> Dict[str, Any]:
+    def run(self, dataset_path: str, resume_from_checkpoint: bool = True, wandb_run_tages: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Execute the complete training pipeline for a given dataset.
 
@@ -81,12 +82,13 @@ class TrainPipeline(Pipeline):
 
             config = {
                 "pipeline": "training_pipeline",
+                "custom_name": self.custom_name,
                 "video_source_id": video_source_id,
                 "frame_id": frame_id,
                 "user_run_id": user_run_id,
                 "tenant_id": tenant_id
             }
-            wandb_logger.init_run(config=config, run_name=f"training_pipeline_{os.path.basename(dataset_path)}")
+            wandb_logger.init_run(config=config, run_name=f"training_pipeline_{os.path.basename(dataset_path)}", tags=wandb_run_tags)
         try:
             if not dataset_path:
                 return {"status": PipelineStatus.ERROR.value, "error": "No dataset path provided"}
