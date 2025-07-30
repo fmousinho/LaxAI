@@ -15,7 +15,7 @@ import sys
 import logging
 import tempfile
 import wandb
-from dotenv import load_dotenv
+from utils import load_env_or_colab
 
 # --- Path Setup ---
 # Add the project root to the Python path to allow for absolute imports
@@ -48,8 +48,6 @@ def upload_detection_model_to_wandb(
         logger.info("W&B logging is disabled in the configuration. Skipping upload.")
         return
 
-    # Load environment variables from .env file
-    load_dotenv()
     wandb_api_key = os.getenv("WANDB_API_KEY")
 
     if not wandb_api_key:

@@ -22,21 +22,12 @@ import logging
 import os
 from dataclasses import dataclass
 from typing import Optional, List
-from dotenv import load_dotenv
+from utils import load_env_or_colab
 from google.cloud import storage
 from google.cloud.exceptions import NotFound, Forbidden
 from google.auth.exceptions import DefaultCredentialsError
 
 logger = logging.getLogger(__name__)
-
-# Load environment variables from .env file in the project root
-# Get the directory containing this file (core/common/)
-current_dir = os.path.dirname(os.path.abspath(__file__))
-# Go up two levels to reach the project root
-project_root = os.path.dirname(os.path.dirname(current_dir))
-# Load .env file from project root
-env_path = os.path.join(project_root, '.env')
-load_dotenv(env_path)
 
 
 @dataclass
@@ -405,8 +396,6 @@ if __name__ == "__main__":
     print("=" * 40)
     
     # Show .env file path being used
-    print(f"Loading .env from: {env_path}")
-    print(f".env file exists: {os.path.exists(env_path)}")
     print("-" * 40)
     
     # Example user path - caller must provide this

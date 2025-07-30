@@ -3,7 +3,7 @@ import torch
 import logging
 from typing import Optional, Any, Dict
 from torch.utils.data import DataLoader
-from dotenv import load_dotenv
+from utils import load_env_or_colab
 import torch.nn as nn
 import wandb
 from core.config.all_config import model_config, training_config, wandb_config
@@ -18,11 +18,11 @@ class Training:
     Focused on training lacrosse player re-identification models.
     """
     
-def __init__(self, 
-             train_dir: str,
-             storage_client: Any,
-             device: Any = None,
-             **kwargs):
+    def __init__(self, 
+                train_dir: str,
+                storage_client: Any,
+                device: Any = None,
+                **kwargs):
         """
         Initialize the training class with hyperparameters.
         
@@ -80,7 +80,6 @@ def __init__(self,
         self.optimizer: Optional[torch.optim.Optimizer] = None
         self.loss_fn: Optional[nn.Module] = None
         self.dataloader = None
-        load_dotenv()
 
     def load_model_from_wandb(self, model_class, model_name: str, alias: Optional[str]):
         """
