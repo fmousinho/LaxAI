@@ -19,6 +19,7 @@ except ImportError:
 
 
 class WandbLogger:
+
     """
     Utility class for Weights & Biases logging integration.
     Handles experiment tracking, metrics logging, and model artifacts.
@@ -403,6 +404,24 @@ class WandbLogger:
         except Exception as e:
             logger.warning(f"Failed to cleanup old model versions: {e}")
 
+    def update_run_config(self, config_dict: Dict[str, Any], tags: Optional[List[str]] = None) -> None:
+        """
+        Update the wandb run config and tags with the contents of a dictionary and a list of tags.
+        Args:
+            config_dict: Dictionary of config values to update in the wandb run
+            tags: Optional list of tags to update in the wandb run
+        """
+        if not self.enabled or not self.initialized or self.run is None:
+            return
+        try:
+            self.run.config.update(config_dict, allow_val_change=True)
+            logger.debug(f"Updated wandb run config with: {list(config_dict.keys())}")
+            if tags is not None:
+                # Update tags in the wandb run
+                self.run.tags = list(set(self.run.tags).union(set(tags)))
+                logger.debug(f"Updated wandb run tags: {self.run.tags}")
+        except Exception as e:
+            logger.warning(f"Failed to update wandb run config or tags: {e}")
 
 # Global wandb logger instance
 wandb_logger = WandbLogger()
