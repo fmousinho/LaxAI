@@ -160,8 +160,13 @@ class SiameseNet(nn.Module):
         original_resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
 
         # Modify the first conv layer to be more suitable for small images
+        # Use model_config for conv layer parameters
+        conv_kernel_size = model_config.resnet_conv_kernel_size
+        conv_stride = model_config.resnet_conv_stride
+        conv_padding = model_config.resnet_conv_padding
+        conv_bias = model_config.resnet_conv_bias
         original_resnet.conv1 = nn.Conv2d(
-            3, 64, kernel_size=3, stride=1, padding=1, bias=False
+            3, 64, kernel_size=conv_kernel_size, stride=conv_stride, padding=conv_padding, bias=conv_bias
         )
 
         # Get the number of features from the backbone's output
@@ -184,7 +189,7 @@ class SiameseNet(nn.Module):
         logger.info(f"SiameseNet initialized with embedding dimension {self.embedding_dim}")
         logger.info(f"Using ResNet18 as backbone")
         logger.info(f"Dropout rate: {self.dropout_rate}")
-        logger.info(f"First conv layer - kernel size: 3, stride: 1")
+        logger.info(f"First conv layer - kernel size: {conv_kernel_size}, stride: {conv_stride}, padding: {conv_padding}, bias: {conv_bias}")
 
     @property
     def device(self) -> torch.device:
@@ -252,28 +257,28 @@ class SiameseNet(nn.Module):
         x = self.backbone.maxpool(x)
 
         x = self.backbone.layer1(x)
-        if 'layer1' in self.backbone.attention_layers:
+        if isinstance(self.backbone, ResNetWithCBAM) and 'layer1' in self.backbone.attention_layers and 'layer1' in self.backbone.cbam_modules:
             channel_att = self.backbone.cbam_modules['layer1'].channel_attention(x)
             spatial_att = self.backbone.cbam_modules['layer1'].spatial_attention(x * channel_att)
             attention_maps['layer1'] = {'channel': channel_att, 'spatial': spatial_att}
             x = x * channel_att * spatial_att
             
         x = self.backbone.layer2(x)
-        if 'layer2' in self.backbone.attention_layers:
+        if isinstance(self.backbone, ResNetWithCBAM) and 'layer2' in self.backbone.attention_layers:
             channel_att = self.backbone.cbam_modules['layer2'].channel_attention(x)
             spatial_att = self.backbone.cbam_modules['layer2'].spatial_attention(x * channel_att)
             attention_maps['layer2'] = {'channel': channel_att, 'spatial': spatial_att}
             x = x * channel_att * spatial_att
             
         x = self.backbone.layer3(x)
-        if 'layer3' in self.backbone.attention_layers:
+        if isinstance(self.backbone, ResNetWithCBAM) and 'layer3' in self.backbone.attention_layers:
             channel_att = self.backbone.cbam_modules['layer3'].channel_attention(x)
             spatial_att = self.backbone.cbam_modules['layer3'].spatial_attention(x * channel_att)
             attention_maps['layer3'] = {'channel': channel_att, 'spatial': spatial_att}
             x = x * channel_att * spatial_att
             
         x = self.backbone.layer4(x)
-        if 'layer4' in self.backbone.attention_layers:
+        if isinstance(self.backbone, ResNetWithCBAM) and 'layer4' in self.backbone.attention_layers:
             channel_att = self.backbone.cbam_modules['layer4'].channel_attention(x)
             spatial_att = self.backbone.cbam_modules['layer4'].spatial_attention(x * channel_att)
             attention_maps['layer4'] = {'channel': channel_att, 'spatial': spatial_att}
