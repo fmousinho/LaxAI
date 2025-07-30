@@ -19,8 +19,8 @@ class ModelConfig:
     """Configuration for model dimensions and architecture."""
     input_height: int = 120
     input_width: int = 80
-    embedding_dim: int = 512
-    dropout_rate: float = 0.2  # Dropout rate for regularization
+    embedding_dim: int = 512  
+    dropout_rate: float = 0.2
     enable_grass_mask: bool = False  # Not fully implemented yet
     model_class_module: str = "core.train.siamesenet"  # Module where the model class is defined
     model_class_str: str = "SiameseNet"  # Name of the model class
@@ -49,13 +49,13 @@ class TrackerConfig:
 class TrainingConfig:
     """Configuration for training parameters."""
     batch_size: int = 64
-    learning_rate: float = 1e-4
+    learning_rate: float = 1e-3
     lr_scheduler_patience: int = 3
     lr_scheduler_threshold: float = 1e-4
     lr_scheduler_factor: float = 0.5  # Factor by which to reduce learning rate
     lr_scheduler_min_lr: float = 1e-7  # Minimum learning rate after reduction
     num_epochs: int = 30
-    margin: float = 0.2
+    margin: float = 0.3
     weight_decay: float = 1e-4  # L2 regularization weight decay
     model_save_path: str = '/common/model/embeddings_latest.pth'
     train_ratio: float = 0.8

@@ -20,13 +20,20 @@ class Training:
     
     def __init__(self, 
                  train_dir: str,
-                 storage_client=None,
-                 embedding_dim: int = model_config.embedding_dim,
-                 learning_rate: float = training_config.learning_rate,
-                 batch_size: int = training_config.batch_size,
-                 num_epochs: int = training_config.num_epochs,
+                 embedding_dim: Optional[int],
+                 dropout_rate: Optional[float],
                  margin: float = training_config.margin,
-                 device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')):
+                 storage_client=None,
+                 learning_rate=training_config.learning_rate,
+                 batch_size=training_config.batch_size,
+                 num_epochs=training_config.num_epochs,
+                 weight_decay=training_config.weight_decay,
+                 scheduler_patience = training_config.lr_scheduler_patience,
+                 scheduler_threshold = training_config.lr_scheduler_threshold,
+                 lr_scheduler_min_lr = training_config.lr_scheduler_min_lr,
+                 lr_scheduler_factor = training_config.lr_scheduler_factor,
+                 device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
+                 ):
         """
         Initialize the training class with hyperparameters.
         
@@ -43,25 +50,23 @@ class Training:
         self.train_dir = train_dir
         self.storage_client = storage_client
         self.embedding_dim = embedding_dim
+        self.dropout_rate = dropout_rate
         self.learning_rate = learning_rate
         self.batch_size = batch_size
         self.num_epochs = num_epochs
         self.margin = margin
+        self.weight_decay = weight_decay
         self.device = device
+        self.scheduler_patience = scheduler_patience
+        self.scheduler_threshold = scheduler_threshold
+        self.lr_scheduler_min_lr = lr_scheduler_min_lr
+        self.lr_scheduler_factor = lr_scheduler_factor
 
         self.model = None
         self.optimizer: Optional[torch.optim.Optimizer] = None
         self.loss_fn: Optional[nn.Module] = None
         self.dataloader = None
         load_dotenv()
-        
-        logger.info(f"Training initialized with device: {self.device}")
-        logger.info(f"Training directory: {self.train_dir}")
-        logger.info(f"Embedding dimension: {self.embedding_dim}")
-        logger.info(f"Learning rate: {self.learning_rate}")
-        logger.info(f"Batch size: {self.batch_size}")
-        logger.info(f"Number of epochs: {self.num_epochs}")
-        logger.info(f"Triplet margin: {self.margin}")
 
     def load_model_from_wandb(self, model_class, model_name: str, alias: str = "latest"):
         """
@@ -77,8 +82,9 @@ class Training:
         """
         try:
             # Use the centralized wandb model loading
+
             loaded_model = wandb_logger.load_model_from_registry(
-                model_class=lambda: model_class(embedding_dim=self.embedding_dim),
+                model_class=lambda: model_class(),
                 collection_name=model_name,
                 alias=alias,
                 device=str(self.device)
@@ -212,6 +218,7 @@ class Training:
         logger.info(f"  Number of batches: {len(self.dataloader)}")
 
     def setup_model(self, model_class, model_name: str, force_pretrained: bool = False):
+    
         """
         Setup the model, loss function, and optimizer for training.
         First attempts to load from wandb registry, then falls back to local weights.
@@ -226,39 +233,50 @@ class Training:
         """
         try:
             model_loaded = False
+            # Prepare kwargs for model initialization
+            model_kwargs = {}
+            if self.embedding_dim is not None:
+                model_kwargs['embedding_dim'] = self.embedding_dim
+            if self.dropout_rate is not None:
+                model_kwargs['dropout_rate'] = self.dropout_rate
+
             # Try to load from wandb registry first (unless forcing pretrained)
             if force_pretrained:
                 logger.info("Forcing fresh start with pre-trained ResNet18 weights")
-                self.model = model_class(embedding_dim=self.embedding_dim)
+                self.model = model_class(**model_kwargs)
             else:
-                model_loaded = self.load_model_from_wandb(model_class, model_name=model_name, alias="latest")
+                model_loaded = self.load_model_from_wandb(model_class, model_name=model_name, alias="latest", **model_kwargs)
             if not model_loaded:
                 logger.info("No wandb model found, will use local weights or pre-trained backbone")
-                self.model = model_class(embedding_dim=self.embedding_dim)
+                self.model = model_class(**model_kwargs)
 
             self.model.to(self.device)
             # Setup training components
             self.loss_fn = nn.TripletMarginLoss(margin=self.margin, p=2)
+            weight_decay = self.weight_decay
             self.optimizer = torch.optim.Adam(
                 self.model.parameters(), 
                 lr=self.learning_rate, 
-                weight_decay=getattr(training_config, 'weight_decay', 1e-4)
+                weight_decay=weight_decay
             )
             # Scheduler uses its own patience/threshold for LR adjustment only
-            scheduler_patience = getattr(training_config, 'lr_scheduler_patience', 3)
-            scheduler_threshold = getattr(training_config, 'lr_scheduler_threshold', 1e-4)
+        
             self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 self.optimizer,
                 mode='min',
-                factor=training_config.lr_scheduler_factor,
-                patience=training_config.lr_scheduler_patience,
-                threshold=training_config.lr_scheduler_threshold,
-                min_lr=training_config.lr_scheduler_min_lr
+                factor=self.lr_scheduler_factor,
+                patience=self.scheduler_patience,
+                threshold=self.scheduler_threshold,
+                min_lr=self.lr_scheduler_min_lr
             )
-            logger.info(f"Model setup complete and moved to device: {self.device}")
-            logger.info(f"Loss function: TripletMarginLoss (margin={self.margin})")
-            logger.info(f"Optimizer: Adam (lr={self.learning_rate}, weight_decay={getattr(training_config, 'weight_decay', 1e-4)})")
-            logger.info(f"LR Scheduler: ReduceLROnPlateau (patience={scheduler_patience}, threshold={scheduler_threshold})")
+
+            logger.info(f"Training model initialized with device: {self.device}")
+            logger.info(f"Training directory: {self.train_dir}")
+            logger.info(f"Batch size: {self.batch_size}")
+            logger.info(f"Number of epochs: {self.num_epochs}")
+            logger.info(f"Triplet margin: {self.margin}")
+            logger.info(f"Optimizer: Adam (initial lr={self.learning_rate}, weight_decay={weight_decay})")
+            logger.info(f"LR Scheduler: ReduceLROnPlateau (patience={self.scheduler_patience}, threshold={self.scheduler_threshold})")
         except Exception as e:
             logger.error(f"Model setup failed: {e}")
             raise RuntimeError(f"Failed to setup model: {e}")
@@ -440,10 +458,16 @@ class Training:
         return {
             'train_dir': self.train_dir,
             'embedding_dim': self.embedding_dim,
+            'dropout_rate': self.dropout_rate,
             'learning_rate': self.learning_rate,
             'batch_size': self.batch_size,
             'num_epochs': self.num_epochs,
             'margin': self.margin,
+            'weight_decay': self.weight_decay,
+            'scheduler_patience': self.scheduler_patience,
+            'scheduler_threshold': self.scheduler_threshold,
+            'lr_scheduler_min_lr': self.lr_scheduler_min_lr,
+            'lr_scheduler_factor': self.lr_scheduler_factor,
             'device': str(self.device),
             'model_loaded': self.model is not None,
             'dataloader_ready': self.dataloader is not None,

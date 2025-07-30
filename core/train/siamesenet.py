@@ -1,5 +1,5 @@
 import logging
-from typing import Tuple
+from typing import Tuple, Optional
 
 import torch
 import torch.nn as nn
@@ -137,42 +137,42 @@ class SiameseNet(nn.Module):
     feature representation through channel and spatial attention mechanisms.
     """
     
-    def __init__(self, embedding_dim: int = model_config.embedding_dim, 
-                 use_cbam: bool = True, attention_layers: list = None) -> None:
+    def __init__(self, **kwargs) -> None:
         """
         Initialize the SiameseNet with a CBAM-enhanced ResNet backbone.
+        Accepts all optional parameters via kwargs for flexibility.
         
         Args:
             embedding_dim: Dimension of the output embedding vectors
             use_cbam: Whether to use CBAM attention modules
             attention_layers: List of layer names to apply CBAM to. 
                            Defaults to ['layer2', 'layer3', 'layer4']
+            dropout_rate: Dropout rate for embedding layer
+            Any other parameters can be passed via kwargs.
         """
         super().__init__()
-        self.embedding_dim = embedding_dim
-        self.dropout_rate = getattr(model_config, 'dropout_rate', 0.5)
-        self.use_cbam = use_cbam
-        
-        if attention_layers is None:
-            attention_layers = ['layer2', 'layer3', 'layer4']
-        
+        self.embedding_dim = kwargs.get('embedding_dim', model_config.embedding_dim)
+        self.dropout_rate = kwargs.get('dropout_rate', model_config.dropout_rate)
+        self.use_cbam = kwargs.get('use_cbam', True)
+        attention_layers = kwargs.get('attention_layers', ['layer2', 'layer3', 'layer4'])
+
         # Create the original ResNet18
         original_resnet = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
-        
+
         # Modify the first conv layer to be more suitable for small images
         original_resnet.conv1 = nn.Conv2d(
             3, 64, kernel_size=3, stride=1, padding=1, bias=False
         )
-        
+
         # Get the number of features from the backbone's output
         num_ftrs = original_resnet.fc.in_features
-        
+
         # Replace the final layer with our embedding layer including dropout
         original_resnet.fc = nn.Sequential(
             nn.Dropout(self.dropout_rate),
-            nn.Linear(num_ftrs, embedding_dim)
+            nn.Linear(num_ftrs, self.embedding_dim)
         )
-        
+
         # Create backbone with or without CBAM
         if self.use_cbam:
             self.backbone = ResNetWithCBAM(original_resnet, attention_layers)
@@ -181,12 +181,10 @@ class SiameseNet(nn.Module):
             self.backbone = original_resnet
             logger.info(f"SiameseNet initialized without CBAM attention")
 
-        logger.info(f"SiameseNet initialized with embedding dimension {embedding_dim}")
+        logger.info(f"SiameseNet initialized with embedding dimension {self.embedding_dim}")
         logger.info(f"Using ResNet18 as backbone")
         logger.info(f"Dropout rate: {self.dropout_rate}")
         logger.info(f"First conv layer - kernel size: 3, stride: 1")
-
-        min_images_per_player = training_config.min_images_per_player
 
     @property
     def device(self) -> torch.device:
