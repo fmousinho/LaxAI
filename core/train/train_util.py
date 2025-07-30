@@ -95,7 +95,7 @@ def train(tenant_id: str, frames_per_video: int, verbose: bool, save_intermediat
             logger.info("**********************************************************************")
             logger.info(f"  Training round {processed_folders + 1}/{total_folders}")
             logger.info(f"Running train pipeline for dataset: {train_path}")
-             logger.info("**********************************************************************")
+            logger.info("**********************************************************************")
             train_results = train_pipeline.run(dataset_path=train_path)
 
             if train_results.get("status") == "completed":

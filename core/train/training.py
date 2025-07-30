@@ -18,49 +18,63 @@ class Training:
     Focused on training lacrosse player re-identification models.
     """
     
-    def __init__(self, 
-                 train_dir: str,
-                 storage_client: Any,
-                 embedding_dim: Optional[int],
-                 dropout_rate: Optional[float],
-                 margin: float = training_config.margin,
-                 learning_rate=training_config.learning_rate,
-                 batch_size=training_config.batch_size,
-                 num_epochs=training_config.num_epochs,
-                 weight_decay=training_config.weight_decay,
-                 scheduler_patience = training_config.lr_scheduler_patience,
-                 scheduler_threshold = training_config.lr_scheduler_threshold,
-                 lr_scheduler_min_lr = training_config.lr_scheduler_min_lr,
-                 lr_scheduler_factor = training_config.lr_scheduler_factor,
-                 device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
-                 ):
+def __init__(self, 
+             train_dir: str,
+             storage_client: Any,
+             device: Any = None,
+             **kwargs):
         """
         Initialize the training class with hyperparameters.
         
         Args:
             train_dir: Directory containing training data (local or GCS blob prefix)
             storage_client: Google Storage client for GCS operations (required for GCS paths)
-            embedding_dim: Dimension of the embedding vector
-            learning_rate: Learning rate for optimizer
-            batch_size: Batch size for training
-            num_epochs: Number of training epochs
-            margin: Margin for triplet loss
             device: Device to run the model on (CPU, GPU, or MPS)
+            All other hyperparameters must be provided as kwargs or present in training_config.
+
+        Kwargs (defaults to training_config if not provided):
+            embedding_dim (int): Dimension of the embedding vector
+            dropout_rate (float, optional): Dropout rate for the model
+            margin (float): Margin for triplet loss
+            learning_rate (float): Learning rate for optimizer
+            batch_size (int): Batch size for training
+            num_epochs (int): Number of training epochs
+            weight_decay (float): Weight decay for optimizer
+            lr_scheduler_patience (int): Patience for LR scheduler
+            lr_scheduler_threshold (float): Threshold for LR scheduler
+            lr_scheduler_min_lr (float): Minimum LR for scheduler
+            lr_scheduler_factor (float): Factor for LR scheduler
+        If any required hyperparameter is missing in both kwargs and training_config, a ValueError will be raised.
         """
         self.train_dir = train_dir
         self.storage_client = storage_client
-        self.embedding_dim = embedding_dim
-        self.dropout_rate = dropout_rate
-        self.learning_rate = learning_rate
-        self.batch_size = batch_size
-        self.num_epochs = num_epochs
-        self.margin = margin
-        self.weight_decay = weight_decay
-        self.device = device
-        self.scheduler_patience = scheduler_patience
-        self.scheduler_threshold = scheduler_threshold
-        self.lr_scheduler_min_lr = lr_scheduler_min_lr
-        self.lr_scheduler_factor = lr_scheduler_factor
+        def get_kwarg_or_config(key, config_obj=training_config, allow_none=False):
+            if key in kwargs:
+                return kwargs[key]
+            if hasattr(config_obj, key):
+                val = getattr(config_obj, key)
+                if val is not None or allow_none:
+                    return val
+            raise ValueError(f"Missing required hyperparameter '{key}' in kwargs and config.")
+
+        self.embedding_dim = get_kwarg_or_config('embedding_dim')
+        self.dropout_rate = get_kwarg_or_config('dropout_rate', allow_none=True)
+        self.margin = get_kwarg_or_config('margin')
+        self.learning_rate = get_kwarg_or_config('learning_rate')
+        self.batch_size = get_kwarg_or_config('batch_size')
+        self.num_epochs = get_kwarg_or_config('num_epochs')
+        self.weight_decay = get_kwarg_or_config('weight_decay')
+        self.scheduler_patience = get_kwarg_or_config('lr_scheduler_patience')
+        self.scheduler_threshold = get_kwarg_or_config('lr_scheduler_threshold')
+        self.lr_scheduler_min_lr = get_kwarg_or_config('lr_scheduler_min_lr')
+        self.lr_scheduler_factor = get_kwarg_or_config('lr_scheduler_factor')
+        # Device: direct argument, else config, else autodetect
+        if device is not None:
+            self.device = device
+        elif hasattr(training_config, 'device') and training_config.device is not None:
+            self.device = training_config.device
+        else:
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
 
         self.model = None
         self.optimizer: Optional[torch.optim.Optimizer] = None
