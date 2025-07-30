@@ -287,7 +287,7 @@ class WandbLogger:
             return None
         
     def save_model_to_registry(self, model: torch.nn.Module, collection_name: str, 
-                            alias: str = "latest", file_name: str = "model.pth", metadata: Optional[Dict[str, Any]] = None) -> None:
+                            alias: str = "latest", file_name: str = "model.pth", metadata: Optional[Dict[str, Any]] = None, tags: Optional[List[str]] = None) -> None:
         """
         Save model to wandb model registry with automatic version management.
         Keeps only the last versions plus any versions tagged.
@@ -298,6 +298,7 @@ class WandbLogger:
             alias: Model version alias (e.g., "latest", "best", "v1")
             file_name: Name of the model file to save
             metadata: Additional metadata to include
+            tags: Optional list of tags to add to the artifact
         """
         if not self.enabled or not self.initialized:
             return
@@ -307,7 +308,8 @@ class WandbLogger:
             artifact = wandb.Artifact(
                 name=collection_name,
                 type="model",
-                metadata=metadata or {}
+                metadata=metadata or {},
+                tags=tags if tags is not None else None
             )
 
             # Save model state dict
