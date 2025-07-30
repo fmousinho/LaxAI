@@ -224,7 +224,7 @@ class WandbLogger:
             logger.warning(f"Failed to watch model with wandb: {e}")
 
     def load_model_from_registry(self, model_class, collection_name: str, 
-                                alias: str = "latest", device: str = "cpu") -> Optional[torch.nn.Module]:
+                                alias: str = "latest", device: str = "cpu", **kwargs) -> Optional[torch.nn.Module]:
         """
         Load model from wandb model registry.
         
@@ -271,7 +271,7 @@ class WandbLogger:
             
             if os.path.exists(model_path):
                 # Initialize model and load weights
-                model = model_class()
+                model = model_class(**kwargs)
                 model.load_state_dict(torch.load(model_path, map_location=device))
                 model.to(device)
 
