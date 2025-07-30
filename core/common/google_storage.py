@@ -64,7 +64,6 @@ class GoogleStorageClient:
             # Set credentials path if provided in config (from environment variable)
             if self.config.credentials_path:
                 os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = self.config.credentials_path
-                logger.info(f"Using service account credentials from: {self.config.credentials_path}")
             
             # Create client with explicit project ID if provided
             if self.config.project_id:
@@ -86,7 +85,7 @@ class GoogleStorageClient:
             return True
             
         except DefaultCredentialsError as e:
-            logger.error(f"Authentication failed - No valid credentials found: {e}")
+            logger.error(f"Authentication failed - No valid credentials found:")
             logger.error("Make sure to set GOOGLE_APPLICATION_CREDENTIALS in your .env file or run 'gcloud auth application-default login'")
             return False
         except NotFound as e:
