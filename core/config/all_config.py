@@ -21,6 +21,10 @@ class ModelConfig:
     input_width: int = 80
     embedding_dim: int = 512  
     dropout_rate: float = 0.2
+    resnet_conv_kernel_size: int = 3
+    resnet_conv_stride: int = 1
+    resnet_conv_padding: int = 1
+    resnet_conv_bias: bool = False  # Whether to use bias in the first conv
     enable_grass_mask: bool = False  # Not fully implemented yet
     model_class_module: str = "core.train.siamesenet"  # Module where the model class is defined
     model_class_str: str = "SiameseNet"  # Name of the model class

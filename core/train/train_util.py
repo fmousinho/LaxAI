@@ -84,7 +84,7 @@ def train(tenant_id: str, frames_per_video: int, verbose: bool, save_intermediat
                     train_paths.add(full_path)
         logger.info(f"Found {len(train_paths)} directories containing training data.")
 
-        total_folders = 0
+        total_folders = len(train_paths)
         processed_folders = 0
         for train_path in train_paths:
             # Validate that this path has the expected structure: .../datasets/frameN/train/
@@ -92,7 +92,10 @@ def train(tenant_id: str, frames_per_video: int, verbose: bool, save_intermediat
                 logger.warning(f"Skipping invalid train path structure: {train_path}")
                 continue
 
+            logger.info("**********************************************************************")
+            logger.info(f"  Training round {processed_folders + 1}/{total_folders}")
             logger.info(f"Running train pipeline for dataset: {train_path}")
+             logger.info("**********************************************************************")
             train_results = train_pipeline.run(dataset_path=train_path)
 
             if train_results.get("status") == "completed":
@@ -102,7 +105,6 @@ def train(tenant_id: str, frames_per_video: int, verbose: bool, save_intermediat
                 logger.error(f"Details: {json.dumps(train_results.get('errors'), indent=2)}")
 
             processed_folders += 1
-            total_folders += 1
 
         logger.info("--- End-to-End Workflow Finished ---")
 

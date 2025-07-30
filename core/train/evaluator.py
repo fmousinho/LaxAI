@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from typing import Dict, List, Tuple, Any, Optional
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support, roc_auc_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, precision_recall_fscore_support, roc_auc_score
 from sklearn.model_selection import KFold
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -337,12 +337,12 @@ class ModelEvaluator:
                         # Already normalized, don't normalize again
                         final_embedding = embedding
                         if i < 3:
-                            logger.info(f"Embedding {i} is already normalized, skipping L2 normalization")
+                            logger.debug(f"Embedding {i} is already normalized, skipping L2 normalization")
                     else:
                         # Not normalized, apply L2 normalization
                         final_embedding = F.normalize(embedding, p=2, dim=1)
                         if i < 3:
-                            logger.info(f"Applied L2 normalization to embedding {i}")
+                            logger.debug(f"Applied L2 normalization to embedding {i}")
                     
                     # Debug: Check final embedding
                     if i < 3:  # Log first few normalized embeddings
@@ -546,13 +546,12 @@ class ModelEvaluator:
         
         # Compute metrics
         accuracy = accuracy_score(y_true, y_pred)
+        precision, recall, f1, _ = precision_recall_fscore_support(y_true, y_pred, average='binary', zero_division=np.nan)
         
         # Add detailed debugging information
         logger.info(f"Classification evaluation: {len(y_true)} pairs generated")
         logger.info(f"True labels distribution: Same={sum(y_true)}, Different={len(y_true)-sum(y_true)}")
         logger.info(f"Predictions distribution: Same={sum(y_pred)}, Different={len(y_pred)-sum(y_pred)}")
-        logger.info(f"Similarity scores range: [{min(y_scores):.6f}, {max(y_scores):.6f}]")
-        logger.info(f"Similarity scores mean: {np.mean(y_scores):.6f}, std: {np.std(y_scores):.6f}")
         
         # Show similarity distribution for same vs different players
         same_similarities = [score for score, true_label in zip(y_scores, y_true) if true_label == 1]
@@ -579,18 +578,13 @@ class ModelEvaluator:
         fn = sum(1 for true, pred in zip(y_true, y_pred) if true == 1 and pred == 0)
         
         logger.info(f"Confusion matrix: TP={tp}, FP={fp}, TN={tn}, FN={fn}")
-        manual_precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        manual_recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        manual_f1 = 2 * manual_precision * manual_recall / (manual_precision + manual_recall) if (manual_precision + manual_recall) > 0 else 0.0
-        logger.info(f"Manual calculation: Precision={manual_precision:.6f}, Recall={manual_recall:.6f}, F1={manual_f1:.6f}")
+        logger.info(f"Metrics: Accuracy={accuracy:.4f}, Precision={precision:.4f}, Recall={recall:.4f}, F1={f1:.4f}")
         
         # Debug: Show a few sample predictions vs truth
         logger.info("Sample predictions vs truth (first 10 pairs):")
         for i in range(min(10, len(y_true))):
             logger.info(f"  Pair {i}: similarity={y_scores[i]:.6f}, true={y_true[i]}, pred={y_pred[i]}, threshold={self.threshold}")
-        
-        # Use manual calculation as the final values
-        precision, recall, f1 = manual_precision, manual_recall, manual_f1 
+
 
         # Always try to find a better threshold, especially if results are poor
         if len(set(y_true)) == 2:  # Only if we have both classes in ground truth
@@ -617,12 +611,12 @@ class ModelEvaluator:
                 
                 logger.info(f"Using optimal threshold {best_threshold:.6f}")
                 logger.info(f"Results with optimal threshold: TP={tp_opt}, FP={fp_opt}, TN={tn_opt}, FN={fn_opt}")
-                logger.info(f"Improved metrics: Accuracy={accuracy:.6f}, Precision={precision:.6f}, Recall={recall:.6f}, F1={f1:.6f}")
+                logger.info(f"Improved metrics: Accuracy={accuracy:.4f}, Precision={precision:.4f}, Recall={recall:.4f}, F1={f1:.4f}")
                 
                 # Update the threshold for future use
                 self.threshold = best_threshold
             else:
-                logger.info(f"Keeping original threshold {self.threshold:.6f} (F1={f1:.6f} vs optimal F1={best_f1:.6f})")
+                logger.info(f"Keeping original threshold {self.threshold:.6f} (F1={f1:.4f} vs optimal F1={best_f1:.4f})")
         else:
             logger.warning("Cannot optimize threshold - only one class present in ground truth")
         
