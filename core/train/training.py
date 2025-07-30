@@ -20,10 +20,10 @@ class Training:
     
     def __init__(self, 
                  train_dir: str,
+                 storage_client: Any,
                  embedding_dim: Optional[int],
                  dropout_rate: Optional[float],
                  margin: float = training_config.margin,
-                 storage_client=None,
                  learning_rate=training_config.learning_rate,
                  batch_size=training_config.batch_size,
                  num_epochs=training_config.num_epochs,
@@ -68,7 +68,7 @@ class Training:
         self.dataloader = None
         load_dotenv()
 
-    def load_model_from_wandb(self, model_class, model_name: str, alias: str = "latest"):
+    def load_model_from_wandb(self, model_class, model_name: str, alias: Optional[str]):
         """
         Load model from wandb model registry.
         
@@ -83,12 +83,14 @@ class Training:
         try:
             # Use the centralized wandb model loading
 
-            loaded_model = wandb_logger.load_model_from_registry(
-                model_class=lambda: model_class(),
-                collection_name=model_name,
-                alias=alias,
-                device=str(self.device)
-            )
+            registry_kwargs = {
+                'model_class': lambda: model_class(),
+                'collection_name': model_name,
+                'device': str(self.device)
+            }
+            if alias is not None:
+                registry_kwargs['alias'] = alias
+            loaded_model = wandb_logger.load_model_from_registry(**registry_kwargs)
             
             if loaded_model is not None:
                 self.model = loaded_model
@@ -116,20 +118,53 @@ class Training:
             raise RuntimeError("No model to save. Train the model first.")
         
         try:
+            # Collect additional metadata for reproducibility and traceability
+            import datetime
+            import subprocess
             metadata = {
                 "embedding_dim": self.embedding_dim,
+                "dropout_rate": self.dropout_rate,
                 "device": str(self.device),
                 "num_epochs": self.num_epochs,
                 "margin": self.margin,
                 "learning_rate": self.learning_rate,
                 "batch_size": self.batch_size,
-                "train_dir": self.train_dir
+                "weight_decay": self.weight_decay,
+                "scheduler_type": "ReduceLROnPlateau",
+                "scheduler_patience": self.scheduler_patience,
+                "scheduler_threshold": self.scheduler_threshold,
+                "lr_scheduler_min_lr": self.lr_scheduler_min_lr,
+                "lr_scheduler_factor": self.lr_scheduler_factor,
+                "optimizer_type": "Adam",
+                "train_dir": self.train_dir,
+                "model_architecture": type(self.model).__name__ if self.model is not None else None,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "wandb_run_id": wandb.run.id if hasattr(wandb, 'run') and wandb.run is not None else None,
+                "notes": getattr(self, 'notes', None),
             }
+            # Try to get git commit hash if available
+            try:
+                git_commit_hash = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode("utf-8").strip()
+                metadata["git_commit_hash"] = git_commit_hash
+            except Exception:
+                metadata["git_commit_hash"] = None
+
+            # Optionally add dataset info if available
+            if hasattr(self, 'dataloader') and self.dataloader is not None:
+                try:
+                    metadata["train_dataset_size"] = len(self.dataloader.dataset)
+                except Exception:
+                    metadata["train_dataset_size"] = None
+            if hasattr(self, 'dataloader') and self.dataloader is not None:
+                try:
+                    metadata["train_num_batches"] = len(self.dataloader)
+                except Exception:
+                    metadata["train_num_batches"] = None
+
             wandb_logger.save_model_to_registry(
                 model=self.model,
                 collection_name=model_name,
-                metadata=metadata,
-                alias="latest"
+                metadata=metadata
             )
             logger.info(f"✓ Model saved to wandb registry: {model_name}:latest")
         except Exception as e:
@@ -253,11 +288,10 @@ class Training:
             self.model.to(self.device)
             # Setup training components
             self.loss_fn = nn.TripletMarginLoss(margin=self.margin, p=2)
-            weight_decay = self.weight_decay
             self.optimizer = torch.optim.Adam(
                 self.model.parameters(), 
                 lr=self.learning_rate, 
-                weight_decay=weight_decay
+                weight_decay=self.weight_decay
             )
             # Scheduler uses its own patience/threshold for LR adjustment only
         
@@ -275,13 +309,13 @@ class Training:
             logger.info(f"Batch size: {self.batch_size}")
             logger.info(f"Number of epochs: {self.num_epochs}")
             logger.info(f"Triplet margin: {self.margin}")
-            logger.info(f"Optimizer: Adam (initial lr={self.learning_rate}, weight_decay={weight_decay})")
+            logger.info(f"Optimizer: Adam (initial lr={self.learning_rate}, weight_decay={self.weight_decay})")
             logger.info(f"LR Scheduler: ReduceLROnPlateau (patience={self.scheduler_patience}, threshold={self.scheduler_threshold})")
         except Exception as e:
             logger.error(f"Model setup failed: {e}")
             raise RuntimeError(f"Failed to setup model: {e}")
 
-    def train(self):
+    def train(self, margin_decay_rate: float = training_config.margin_decay_rate, margin_change_threshold: float = training_config.margin_change_threshold):
         """
         Execute the main training loop with early stopping.
         
@@ -326,47 +360,50 @@ class Training:
         best_loss = float('inf')
         patience_counter = 0
         
+        current_margin = self.margin
+        self.loss_fn = nn.TripletMarginLoss(margin=current_margin, p=2)
         for epoch in range(self.num_epochs):
+            # Calculate new margin for this epoch
+            new_margin = self.margin * (margin_decay_rate ** epoch)
+            if abs(new_margin - current_margin) > margin_change_threshold:
+                self.margin = new_margin
+                self.loss_fn = nn.TripletMarginLoss(margin=self.margin, p=2)
+                logger.info(f"Margin updated for epoch {epoch+1}: {new_margin:.4f}")
+            else:
+                logger.debug(f"Margin unchanged for epoch {epoch+1}: {current_margin:.4f}")
+
             self.model.train()
             running_loss = 0.0
             batch_count = 0
-            
+
             for i, (anchor, positive, negative, _) in enumerate(self.dataloader):
                 anchor = anchor.to(self.device)
-                positive = positive.to(self.device) 
+                positive = positive.to(self.device)
                 negative = negative.to(self.device)
-                
+
                 # Zero gradients
                 self.optimizer.zero_grad()
-                
+
                 # Forward pass
                 emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(
                     anchor, positive, negative)
-                
+
                 # Calculate loss
                 loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
-                
+
                 # Backward pass and optimize
                 loss.backward()
                 self.optimizer.step()
-                
+
                 running_loss += loss.item()
                 batch_count += 1
-                
-                # Log batch metrics to wandb
-                if wandb_config.enabled and i % wandb_config.log_frequency == 0:
-                    step = epoch * len(self.dataloader) + i
-                    wandb_logger.log_metrics({
-                        "batch_loss": loss.item(),
-                        "learning_rate": self.learning_rate,
-                        "epoch": epoch + 1
-                    }, step=step)
 
             # Calculate and log epoch summary
             epoch_loss = running_loss / batch_count if batch_count > 0 else 0.0
             logger.info(f"=== Epoch {epoch+1}/{self.num_epochs} Summary ===")
             logger.info(f"Average Loss: {epoch_loss:.4f}")
-            
+            logger.info(f"Margin used: {current_margin:.4f}")
+
             # Log epoch metrics to wandb
             if wandb_config.enabled:
                 # Use a step that is guaranteed to be after all batch steps for this epoch
@@ -374,14 +411,14 @@ class Training:
                 wandb_logger.log_metrics({
                     "epoch_loss": epoch_loss,
                     "epoch": epoch + 1,
-                    "best_loss": best_loss if epoch_loss >= best_loss else epoch_loss
+                    "margin": current_margin
                 }, step=epoch_end_step)
-            
+
             # Early stopping based on loss threshold
             if epoch_loss < early_stopping_threshold:
                 logger.info(f"Early stopping triggered (loss {epoch_loss:.4f} < threshold {early_stopping_threshold:.4f})")
                 break
-            
+
             # Early stopping based on patience
             if early_stopping_patience is not None:
                 if epoch_loss < best_loss:
@@ -391,7 +428,7 @@ class Training:
                 else:
                     patience_counter += 1
                     logger.debug(f"Patience counter: {patience_counter}/{early_stopping_patience}")
-                    
+
                 if patience_counter >= early_stopping_patience:
                     logger.info(f"Early stopping triggered due to patience ({patience_counter} epochs without improvement)")
                     break

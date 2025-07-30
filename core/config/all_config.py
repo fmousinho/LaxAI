@@ -63,6 +63,15 @@ class TrainingConfig:
     num_workers: int = 4 if sys.platform != "darwin" else 0  # Number of DataLoader workers
     early_stopping_loss_ratio: float = 0.1  # Early stopping threshold as a ratio of margin
     early_stopping_patience: Optional[int] = 10  # Number of epochs to wait before early stopping (None = disabled)
+    margin_decay_rate: float = 0.97  # Decay rate for margin
+    margin_change_threshold: float = 0.01  # Minimum change in margin to trigger update
+
+@dataclass
+class EvaluatorConfig:
+    """Configuration for model evaluation parameters."""
+    threshold: float = 0.5  # Default similarity threshold for evaluation
+    k_folds: int = 5  # Number of folds for cross-validation
+
 
 
 @dataclass
@@ -194,3 +203,4 @@ transform_config = TransformConfig()
 background_mask_config = BackgroundMaskConfig()
 debug_config = DebugConfig()
 wandb_config = WandbConfig()
+evaluator_config = EvaluatorConfig()

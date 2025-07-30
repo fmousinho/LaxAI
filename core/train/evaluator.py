@@ -12,7 +12,7 @@ from collections import defaultdict
 import json
 
 from core.train.dataset import LacrossePlayerDataset
-from core.config.all_config import wandb_config
+from core.config.all_config import wandb_config, evaluator_config
 from core.train.wandb_logger import wandb_logger
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ class ModelEvaluator:
     """
     
     def __init__(self, model: torch.nn.Module, device: torch.device, 
-                 threshold: float = 0.5, k_folds: int = 5):
+                 threshold: float = evaluator_config.threshold, k_folds: int = evaluator_config.k_folds):
         """
         Initialize the evaluator.
         

@@ -33,7 +33,7 @@ class TrainPipeline(Pipeline):
 
         model_class_module = model_config.model_class_module
         model_class_str = model_config.model_class_str
-        self.model_class = getattr(importlib.import_module(model_class_module), model_class_str)
+        self.model_class = importlib.import_module(model_class_module)
 
         step_definitions = {
             "create_dataset": {
@@ -55,8 +55,8 @@ class TrainPipeline(Pipeline):
             pipeline_name="training_pipeline",
             storage_client=self.storage_client,
             step_definitions=step_definitions,
-            verbose=True,
-            save_intermediate=False
+            verbose=verbose,
+            save_intermediate=save_intermediate
         )
 
     def run(self, dataset_path: str, resume_from_checkpoint: bool = True) -> Dict[str, Any]:
@@ -71,9 +71,19 @@ class TrainPipeline(Pipeline):
             Dictionary with pipeline results and statistics.
         """
         if wandb_config.enabled:
+            parts = dataset_path.split('/')
+            # Get video_source_id and frame_id
+            video_source_id = next((p for p in parts if p.startswith('video_')), None)
+            user_run_id = next((p for p in parts if p.startswith('run_')), None)
+            frame_id = parts[-1]  # 'frame0'
+            tenant_id = parts[1] if len(parts) > 1 else None
+
             config = {
-                "dataset_path": dataset_path,
-                "pipeline": "training_pipeline"
+                "pipeline": "training_pipeline",
+                "video_source_id": video_source_id,
+                "frame_id": frame_id,
+                "user_run_id": user_run_id,
+                "tenant_id": tenant_id
             }
             wandb_logger.init_run(config=config, run_name=f"training_pipeline_{os.path.basename(dataset_path)}")
         try:
@@ -87,6 +97,9 @@ class TrainPipeline(Pipeline):
             return results
         finally:
             if wandb_config.enabled:
+                context = results.get('context', {})
+                training_info = context.get('training_info', {})
+                wandb_logger.update_run_config(training_info)
                 wandb_logger.finish()
 
 
@@ -309,16 +322,15 @@ class TrainPipeline(Pipeline):
 
             # Execute complete training pipeline
             logger.info("Executing training pipeline...")
+
+            training_config = training.get_training_config()
+
             trained_model = training.train_and_save(
                 model_class=self.model_class,
                 dataset_class=LacrossePlayerDataset,
                 model_name=self.collection_name,
-                transform=transform,
-                force_pretrained=False  # Use existing weights if available
+                transform=transform
             )
-            
-            # Get training info for context
-            training_info = training.get_training_info()
             
             # Validate that the trained model is actually a PyTorch model
             import torch.nn
@@ -386,7 +398,6 @@ class TrainPipeline(Pipeline):
                         reloaded_model = wandb_logger.load_model_from_registry(
                             model_class=lambda: self.model_class(embedding_dim=model_config.embedding_dim),
                             collection_name=self.collection_name,
-                            alias="latest",
                             device=device
                         )
                         
@@ -430,9 +441,7 @@ class TrainPipeline(Pipeline):
             try:
                 evaluator = ModelEvaluator(
                     model=trained_model,
-                    device=device,
-                    threshold=0.5,  # Default similarity threshold
-                    k_folds=5      # 5-fold cross-validation
+                    device=device
                 )
                 logger.info("Model evaluator initialized successfully")
             except Exception as e:
@@ -445,7 +454,6 @@ class TrainPipeline(Pipeline):
             evaluation_results = evaluator.evaluate_comprehensive(
                 dataset_path=dataset_path,
                 storage_client=self.storage_client,  # Pass storage client for GCS support
-                use_validation_split=True  # Use existing train/val split
             )
             
             # Generate human-readable report
