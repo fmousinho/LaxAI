@@ -66,20 +66,28 @@ class GoogleStorageClient:
             bool: True if authentication successful, False otherwise
         """
         try:
-            # Set credentials path if provided in config (from environment variable)
+            # If credentials object is provided, use it directly
             if self.credentials:
-                os.environ[self.config.credentials_name] = self.credentials
-            elif self.config.credentials_name not in os.environ:
-                raise ValueError(f"{self.config.credentials_name} not set in environment variables")
-
-            # Create client with explicit project ID if provided
-            if self.config.project_id:
-                self._client = storage.Client(credentials=self.credentials,project=self.config.project_id)
-                logger.info(f"Using explicitly configured project: {self.config.project_id}")
+                self._client = storage.Client(credentials=self.credentials, project=self.config.project_id)
+                logger.info(f"Using provided service account credentials for project: {self.config.project_id}")
             else:
-                # Use default project from ADC
-                self._client = storage.Client(credentials=self.credentials)
-                logger.info(f"Using project from ADC: {self._client.project}")
+                # Check if credentials file path is set in environment
+                if self.config.credentials_name not in os.environ:
+                    raise ValueError(f"{self.config.credentials_name} not set in environment variables")
+                
+                credentials_path = os.environ[self.config.credentials_name]
+                
+                # Create client with explicit project ID if provided
+                if self.config.project_id:
+                    self._client = storage.Client.from_service_account_json(
+                        credentials_path, 
+                        project=self.config.project_id
+                    )
+                    logger.info(f"Using service account file from {credentials_path} for project: {self.config.project_id}")
+                else:
+                    # Use default project from service account file
+                    self._client = storage.Client.from_service_account_json(credentials_path)
+                    logger.info(f"Using service account file from {credentials_path} with default project: {self._client.project}")
 
             # Test authentication by trying to get bucket
             self._bucket = self._client.bucket(self.config.bucket_name)

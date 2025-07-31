@@ -24,7 +24,10 @@ logger = logging.getLogger(__name__)
 
 class TrainPipeline(Pipeline):
 
-    def __init__(self, tenant_id: str = "tenant1", verbose: bool = True, save_intermediate: bool = True, training_kwargs: Optional[Dict[str, Any]] = None, custom_name: Optional[str] = "run"):
+    def __init__(self, tenant_id: str = "tenant1", verbose: bool = True, save_intermediate: bool = True, custom_name: str = "run", **training_kwargs):
+        """
+        Initialize the training pipeline.
+        """
         self.verbose = verbose
         self.save_intermediate = save_intermediate
         self.storage_client = get_storage(tenant_id)
@@ -36,7 +39,7 @@ class TrainPipeline(Pipeline):
         model_class_str = model_config.model_class_str
         module = importlib.import_module(model_class_module)
         self.model_class = getattr(module, model_class_str)
-        self.training_kwargs = training_kwargs or {}
+        self.training_kwargs = training_kwargs
 
         step_definitions = {
             "create_dataset": {

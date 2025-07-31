@@ -1,5 +1,6 @@
 import os
 from dotenv import load_dotenv
+from IPython import get_ipython
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 # Assuming the .env file is in the project root directory, one up from the current directory
