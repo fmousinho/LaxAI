@@ -74,11 +74,11 @@ class GoogleStorageClient:
 
             # Create client with explicit project ID if provided
             if self.config.project_id:
-                self._client = storage.Client(project=self.config.project_id)
+                self._client = storage.Client(credentials=self.credentials,project=self.config.project_id)
                 logger.info(f"Using explicitly configured project: {self.config.project_id}")
             else:
                 # Use default project from ADC
-                self._client = storage.Client()
+                self._client = storage.Client(credentials=self.credentials)
                 logger.info(f"Using project from ADC: {self._client.project}")
 
             # Test authentication by trying to get bucket
@@ -93,7 +93,7 @@ class GoogleStorageClient:
             
         except DefaultCredentialsError as e:
             logger.error(f"Authentication failed - No valid credentials found:")
-            logger.error("Make sure to set GOOGLE_APPLICATION_CREDENTIALS in your .env file or run 'gcloud auth application-default login'")
+            logger.error("Make sure to set GOOGLE_APPLICATION_CREDENTIALS in your .env file or environment variables.") 
             return False
         except NotFound as e:
             logger.error(f"Authentication failed - Bucket '{self.config.bucket_name}' not found: {e}")
