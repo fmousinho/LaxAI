@@ -34,7 +34,8 @@ class TrainPipeline(Pipeline):
 
         model_class_module = model_config.model_class_module
         model_class_str = model_config.model_class_str
-        self.model_class = importlib.import_module(model_class_module)
+        module = importlib.import_module(model_class_module)
+        self.model_class = getattr(module, model_class_str)
         self.training_kwargs = training_kwargs or {}
 
         step_definitions = {
@@ -327,7 +328,7 @@ class TrainPipeline(Pipeline):
             # Execute complete training pipeline
             logger.info("Executing training pipeline...")
 
-            training_config = training.get_training_config()
+            training_info = training.get_training_info()
 
             trained_model = training.train_and_save(
                 model_class=self.model_class,
