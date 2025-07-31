@@ -33,8 +33,6 @@ class Training:
             All other hyperparameters must be provided as kwargs or present in training_config.
 
         Kwargs (defaults to training_config if not provided):
-            embedding_dim (int): Dimension of the embedding vector
-            dropout_rate (float, optional): Dropout rate for the model
             margin (float): Margin for triplet loss
             learning_rate (float): Learning rate for optimizer
             batch_size (int): Batch size for training
@@ -57,8 +55,6 @@ class Training:
                     return val
             raise ValueError(f"Missing required hyperparameter '{key}' in kwargs and config.")
 
-        self.embedding_dim = get_kwarg_or_config('embedding_dim')
-        self.dropout_rate = get_kwarg_or_config('dropout_rate', allow_none=True)
         self.margin = get_kwarg_or_config('margin')
         self.learning_rate = get_kwarg_or_config('learning_rate')
         self.batch_size = get_kwarg_or_config('batch_size')
@@ -81,7 +77,7 @@ class Training:
         self.loss_fn: Optional[nn.Module] = None
         self.dataloader = None
 
-    def load_model_from_wandb(self, model_class, model_name: str, alias: Optional[str]):
+    def load_model_from_wandb(self, model_class, model_name: str, alias: Optional[str], **kwargs):
         """
         Load model from wandb model registry.
         
@@ -95,7 +91,7 @@ class Training:
         """
         try:
             # Use the centralized wandb model loading
-
+        
             registry_kwargs = {
                 'model_class': lambda: model_class(),
                 'collection_name': model_name,
@@ -103,6 +99,7 @@ class Training:
             }
             if alias is not None:
                 registry_kwargs['alias'] = alias
+            registry_kwargs.update(kwargs)  # Merge/override with any extra kwargs
             loaded_model = wandb_logger.load_model_from_registry(**registry_kwargs)
             
             if loaded_model is not None:
@@ -265,7 +262,8 @@ class Training:
         logger.info(f"  Number of workers: {n_workers}")
         logger.info(f"  Number of batches: {len(self.dataloader)}")
 
-    def setup_model(self, model_class, model_name: str, force_pretrained: bool = False):
+
+    def setup_model(self, model_class, model_name: str, force_pretrained: bool = False, **kwargs):
     
         """
         Setup the model, loss function, and optimizer for training.
@@ -282,21 +280,16 @@ class Training:
         try:
             model_loaded = False
             # Prepare kwargs for model initialization
-            model_kwargs = {}
-            if self.embedding_dim is not None:
-                model_kwargs['embedding_dim'] = self.embedding_dim
-            if self.dropout_rate is not None:
-                model_kwargs['dropout_rate'] = self.dropout_rate
 
             # Try to load from wandb registry first (unless forcing pretrained)
             if force_pretrained:
                 logger.info("Forcing fresh start with pre-trained ResNet18 weights")
-                self.model = model_class(**model_kwargs)
+                self.model = model_class(**kwargs)
             else:
-                model_loaded = self.load_model_from_wandb(model_class, model_name=model_name, alias="latest", **model_kwargs)
+                model_loaded = self.load_model_from_wandb(model_class, model_name=model_name, alias="latest", **kwargs)
             if not model_loaded:
                 logger.info("No wandb model found, will use local weights or pre-trained backbone")
-                self.model = model_class(**model_kwargs)
+                self.model = model_class(**kwargs)
 
             self.model.to(self.device)
             # Setup training components
@@ -349,16 +342,18 @@ class Training:
         # Log dataset info to wandb
         if hasattr(self, 'dataset') and wandb_config.enabled:
             dataset_size = len(self.dataset)
-            num_players = len(self.dataset.players)
-            player_stats = {player: len(self.dataset.player_to_images[player]) 
-                           for player in self.dataset.players}
-            
-            wandb_logger.log_dataset_info(
-                dataset_path=self.train_dir,
-                dataset_size=dataset_size,
-                num_players=num_players,
-                player_stats=player_stats
-            )
+            # If model_kwargs is provided, use it for model_class instantiation
+            mk = kwargs.pop('model_kwargs', {})
+            registry_kwargs = {
+                'model_class': lambda: model_class(**mk),
+                'collection_name': model_name,
+                'device': str(self.device)
+            }
+            if alias is not None:
+                registry_kwargs['alias'] = alias
+            registry_kwargs.update(kwargs)  # Merge/override with any extra kwargs
+            loaded_model = wandb_logger.load_model_from_registry(registry_kwargs)
+        
             
 
         # Early stopping configuration
@@ -454,7 +449,7 @@ class Training:
         logger.info("Training completed successfully")
         return self.model
 
-    def train_and_save(self, model_class, dataset_class, model_name: str, transform: Optional[Any] = None, force_pretrained: bool = False):
+    def train_and_save(self, model_class, dataset_class, model_name: str, transform: Optional[Any] = None, force_pretrained: bool = False, model_kwargs: Dict[str, Any] = {}) -> Any:
         """
         Complete training pipeline: setup data, setup model, train, and save.
         
@@ -480,7 +475,7 @@ class Training:
             
             # Setup model
             logger.info("Setting up model...")
-            self.setup_model(model_class, model_name=model_name, force_pretrained=force_pretrained)
+            self.setup_model(model_class, model_name=model_name, force_pretrained=force_pretrained, **model_kwargs)
 
             # Train
             logger.info("Starting training...")
@@ -507,8 +502,6 @@ class Training:
         """
         return {
             'train_dir': self.train_dir,
-            'embedding_dim': self.embedding_dim,
-            'dropout_rate': self.dropout_rate,
             'learning_rate': self.learning_rate,
             'batch_size': self.batch_size,
             'num_epochs': self.num_epochs,
