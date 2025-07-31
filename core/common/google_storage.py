@@ -53,18 +53,22 @@ class GoogleStorageClient:
         self._client = None
         self._bucket = None
         self._authenticated = False
+        self.credentials = credentials
         
     def _authenticate(self) -> bool:
         """
         Authenticate with Google Cloud Storage.
+        
+        Raises:
+            RuntimeError: If authentication fails
         
         Returns:
             bool: True if authentication successful, False otherwise
         """
         try:
             # Set credentials path if provided in config (from environment variable)
-            if credentials:
-                os.environ[self.config.credentials_name] = credentials
+            if self.credentials:
+                os.environ[self.config.credentials_name] = self.credentials
             elif self.config.credentials_name not in os.environ:
                 raise ValueError(f"{self.config.credentials_name} not set in environment variables")
 
