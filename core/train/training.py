@@ -132,8 +132,6 @@ class Training:
             import datetime
             import subprocess
             metadata = {
-                "embedding_dim": self.embedding_dim,
-                "dropout_rate": self.dropout_rate,
                 "device": str(self.device),
                 "num_epochs": self.num_epochs,
                 "margin": self.margin,
@@ -340,21 +338,15 @@ class Training:
         logger.info(f"Starting training for {self.num_epochs} epochs")
 
         # Log dataset info to wandb
-        if hasattr(self, 'dataset') and wandb_config.enabled:
-            dataset_size = len(self.dataset)
-            # If model_kwargs is provided, use it for model_class instantiation
-            mk = kwargs.pop('model_kwargs', {})
-            registry_kwargs = {
-                'model_class': lambda: model_class(**mk),
-                'collection_name': model_name,
-                'device': str(self.device)
-            }
-            if alias is not None:
-                registry_kwargs['alias'] = alias
-            registry_kwargs.update(kwargs)  # Merge/override with any extra kwargs
-            loaded_model = wandb_logger.load_model_from_registry(registry_kwargs)
-        
+        if hasattr(self, 'dataloader') and wandb_config.enabled:
+            dataset_size = len(self.dataloader.dataset)
+            num_players = len(self.dataloader.dataset.players) if hasattr(self.dataloader.dataset, 'players') else None
             
+            wandb_logger.log_dataset_info(
+                dataset_path=self.train_dir,
+                dataset_size=dataset_size,
+                num_players=num_players,
+            )
 
         # Early stopping configuration
         early_stopping_threshold = training_config.early_stopping_loss_ratio * self.margin
@@ -418,8 +410,8 @@ class Training:
                 epoch_end_step = (epoch + 1) * len(self.dataloader)
                 wandb_logger.log_metrics({
                     "epoch_loss": epoch_loss,
-                    "epoch": epoch + 1,
-                    "margin": current_margin
+                    "margin": self.margin,
+                    "current_lr": self.optimizer.param_groups[0]['lr']
                 }, step=epoch_end_step)
 
             # Early stopping based on loss threshold
@@ -512,8 +504,4 @@ class Training:
             'lr_scheduler_min_lr': self.lr_scheduler_min_lr,
             'lr_scheduler_factor': self.lr_scheduler_factor,
             'device': str(self.device),
-            'model_loaded': self.model is not None,
-            'dataloader_ready': self.dataloader is not None,
-            'optimizer_ready': self.optimizer is not None,
-            'loss_fn_ready': self.loss_fn is not None
         }

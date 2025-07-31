@@ -24,15 +24,15 @@ class WandbLogger:
     Utility class for Weights & Biases logging integration.
     Handles experiment tracking, metrics logging, and model artifacts.
     """
-    
-    def __init__(self, enabled: Optional[bool] = None):
+
+    def __init__(self, enabled: bool = wandb_config.enabled):
         """
         Initialize the wandb logger.
         
         Args:
             enabled: Override config setting for wandb logging
         """
-        self.enabled = enabled if enabled is not None else wandb_config.enabled
+        self.enabled = enabled
         self.run = None
         self.initialized = False
         
@@ -40,7 +40,7 @@ class WandbLogger:
             self.enabled = False
             logger.warning("wandb package not available, disabling wandb logging")
     
-    def init_run(self, config: Dict[str, Any], run_name: Optional[str] = None, 
+    def init_run(self, config: Dict[str, Any], run_name: str = wandb_config.run_name, 
                  tags: Optional[List[str]] = None) -> bool:
         """
         Initialize a new wandb run.
@@ -62,17 +62,20 @@ class WandbLogger:
             if tags:
                 all_tags.extend(tags)
             
+            run_params = {
+                "project": wandb_config.project,
+                "entity": wandb_config.entity,
+                "name": run_name or wandb_config.run_name,
+                "tags": all_tags,
+                "config": config,
+                "reinit": True  # Allow multiple runs in same process
+            }
             # Initialize wandb run
-            self.run = wandb.init(
-                project=wandb_config.project,
-                entity=wandb_config.team,
-                name=run_name,
-                tags=all_tags,
-                config=config,
-                reinit=True  # Allow multiple runs in same process
-            )
+            with wandb.init(**run_params) as run:
+                self.run = run
             
             self.initialized = True
+
             logger.info(f"✅ Wandb run initialized: {self.run.name}")
             logger.info(f"   Project: {wandb_config.project}")
             logger.info(f"   Entity: {wandb_config.entity}")
@@ -97,12 +100,12 @@ class WandbLogger:
             return
             
         try:
-            wandb.log(metrics, step=step)
+            self.run.log(metrics, step=step)
         except Exception as e:
             logger.warning(f"Failed to log metrics to wandb: {e}")
     
     def log_dataset_info(self, dataset_path: str, dataset_size: int, 
-                        num_players: int, player_stats: Dict[str, int]) -> None:
+                        num_players: int) -> None:
         """
         Log dataset information to wandb.
         
@@ -110,7 +113,6 @@ class WandbLogger:
             dataset_path: Path to the dataset
             dataset_size: Total number of images
             num_players: Number of unique players
-            player_stats: Dictionary mapping player names to image counts
         """
         if not self.enabled or not self.initialized:
             return
@@ -121,18 +123,11 @@ class WandbLogger:
                 "dataset/path": dataset_path,
                 "dataset/total_images": dataset_size,
                 "dataset/num_players": num_players,
-                "dataset/avg_images_per_player": dataset_size / num_players if num_players > 0 else 0,
-                "dataset/min_images_per_player": min(player_stats.values()) if player_stats else 0,
-                "dataset/max_images_per_player": max(player_stats.values()) if player_stats else 0
+                "dataset/avg_images_per_player": dataset_size / num_players if num_players > 0 else 0
             }
-            
-            # Add individual player stats
-            for player, count in player_stats.items():
-                dataset_info[f"dataset/player_{player}_images"] = count
-            
-            wandb.log(dataset_info)
-            logger.info(f"Logged dataset info to wandb: {dataset_size} images, {num_players} players")
-            
+
+            self.run.log(dataset_info)
+
         except Exception as e:
             logger.warning(f"Failed to log dataset info to wandb: {e}")
     
@@ -198,7 +193,7 @@ class WandbLogger:
             return
             
         try:
-            wandb.finish()
+            self.run.finish()
             logger.info("Wandb run finished")
             self.initialized = False
             
@@ -218,7 +213,7 @@ class WandbLogger:
             
         try:
             freq = log_freq or wandb_config.log_frequency
-            wandb.watch(model, log_freq=freq)
+            self.run.watch(model, log_freq=freq)
             logger.info(f"Started watching model with log frequency: {freq}")
             
         except Exception as e:
@@ -300,7 +295,7 @@ class WandbLogger:
             metadata: Additional metadata to include
             tags: Optional list of tags to add to the artifact
         """
-        if not self.enabled or not self.initialized:
+        if not self.enabled or not self.initialized or self.run is None:
             return
             
         try:
@@ -308,8 +303,7 @@ class WandbLogger:
             artifact = wandb.Artifact(
                 name=collection_name,
                 type="model",
-                metadata=metadata or {},
-                tags=tags if tags is not None else None
+                metadata=metadata or {}
             )
 
             # Save model state dict
@@ -318,7 +312,7 @@ class WandbLogger:
             artifact.add_file(model_path)
             
             # Log artifact
-            logged_artifact = self.run.log_artifact(artifact)
+            logged_artifact = self.run.log_artifact(artifact, type="model", tags=tags)
             target_path = f"wandb-registry-model/{collection_name}"
             self.run.link_artifact(logged_artifact, target_path=target_path)
 
@@ -406,7 +400,7 @@ class WandbLogger:
         except Exception as e:
             logger.warning(f"Failed to cleanup old model versions: {e}")
 
-    def update_run_config(self, config_dict: Dict[str, Any], tags: Optional[List[str]] = None) -> None:
+    def update_run_config(self, config_dict: Dict[str, Any]) -> None:
         """
         Update the wandb run config and tags with the contents of a dictionary and a list of tags.
         Args:
@@ -418,10 +412,6 @@ class WandbLogger:
         try:
             self.run.config.update(config_dict, allow_val_change=True)
             logger.debug(f"Updated wandb run config with: {list(config_dict.keys())}")
-            if tags is not None:
-                # Update tags in the wandb run
-                self.run.tags = list(set(self.run.tags).union(set(tags)))
-                logger.debug(f"Updated wandb run tags: {self.run.tags}")
         except Exception as e:
             logger.warning(f"Failed to update wandb run config or tags: {e}")
 

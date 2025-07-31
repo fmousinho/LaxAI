@@ -1,18 +1,18 @@
 {
   "distance_metrics": {
     "avg_distance_same_player": NaN,
-    "avg_distance_different_player": 0.622604250907898,
+    "avg_distance_different_player": 0.5704101324081421,
     "avg_similarity_same_player": NaN,
-    "avg_similarity_different_player": 0.7794255614280701,
+    "avg_similarity_different_player": 0.8001362085342407,
     "distance_separation": NaN,
     "similarity_separation": NaN,
     "same_player_pairs_count": 0,
     "different_player_pairs_count": 136
   },
   "classification_metrics": {
-    "accuracy": 0.03676470588235294,
+    "accuracy": 0.04411764705882353,
     "precision": 0.0,
-    "recall": 0.0,
+    "recall": NaN,
     "f1_score": 0.0,
     "roc_auc": NaN,
     "threshold_used": 0.5
@@ -23,12 +23,12 @@
     "mean_average_precision": 0.0
   },
   "cross_validation": {
-    "accuracy_mean": 0.8148484848484848,
-    "accuracy_std": 0.10768944057172912,
-    "f1_score_mean": 0.6649131911251923,
-    "f1_score_std": 0.17124419936924598,
-    "rank_1_accuracy_mean": 0.6916666666666667,
-    "rank_1_accuracy_std": 0.18929694486000911
+    "accuracy_mean": 0.614090909090909,
+    "accuracy_std": 0.13949403520791082,
+    "f1_score_mean": 0.5205786205199632,
+    "f1_score_std": 0.07463432422803262,
+    "rank_1_accuracy_mean": 0.5958333333333333,
+    "rank_1_accuracy_std": 0.19878100736460938
   },
   "dataset_info": {
     "validation_samples": 17,
