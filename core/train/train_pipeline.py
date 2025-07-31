@@ -78,8 +78,8 @@ class TrainPipeline(Pipeline):
             # Get video_source_id and frame_id
             video_source_id = next((p for p in parts if p.startswith('video_')), None)
             user_run_id = next((p for p in parts if p.startswith('run_')), None)
-            frame_id = parts[-1]  # 'frame0'
-            tenant_id = parts[1] if len(parts) > 1 else None
+            frame_id = next((p for p in parts if p.startswith('frame')), None)
+            tenant_id = parts[0] if len(parts) > 1 else None
 
             config = {
                 "pipeline": "training_pipeline",
@@ -89,7 +89,7 @@ class TrainPipeline(Pipeline):
                 "user_run_id": user_run_id,
                 "tenant_id": tenant_id
             }
-            wandb_logger.init_run(config=config, run_name=f"training_pipeline_{os.path.basename(dataset_path)}", tags=wandb_run_tags)
+            wandb_logger.init_run(config=config, run_name=f"{self.custom_name}_{video_source_id}_{frame_id}", tags=wandb_run_tags)
         try:
             if not dataset_path:
                 return {"status": PipelineStatus.ERROR.value, "error": "No dataset path provided"}
@@ -387,42 +387,6 @@ class TrainPipeline(Pipeline):
                 error_msg = "Trained model must be available in context (run train_model step first)"
                 logger.error(error_msg)
                 return {"status": StepStatus.ERROR.value, "error": error_msg}
-            
-            # Validate that trained_model is actually a PyTorch model, not a string or other type
-            import torch.nn
-            if not isinstance(trained_model, torch.nn.Module):
-                # If we have a placeholder string, try to reload the model from wandb
-                if isinstance(trained_model, str) and "excluded_for_serialization" in trained_model:
-                    logger.info("Model object not found in context (checkpoint resume), attempting to reload from wandb...")
-                    try:
-                        from .wandb_logger import wandb_logger
-                        training_info = context.get('training_info', {})
-                        device = training_info.get('device', 'cpu')
-                        
-                        # Try to load the model from wandb using centralized function
-                        reloaded_model = wandb_logger.load_model_from_registry(
-                            model_class=lambda: self.model_class(embedding_dim=model_config.embedding_dim),
-                            collection_name=self.collection_name,
-                            device=device
-                        )
-                        
-                        if reloaded_model is not None:
-                            logger.info("Successfully reloaded model from wandb for evaluation")
-                            # Update context with the reloaded model
-                            context['trained_model'] = reloaded_model
-                            trained_model = reloaded_model
-                        else:
-                            error_msg = "Failed to reload model from wandb - no saved model found"
-                            logger.error(error_msg)
-                            return {"status": StepStatus.ERROR.value, "error": error_msg}
-                    except Exception as e:
-                        error_msg = f"Failed to reload model from wandb: {str(e)}"
-                        logger.error(error_msg)
-                        return {"status": StepStatus.ERROR.value, "error": error_msg}
-                else:
-                    error_msg = f"Expected trained_model to be a PyTorch model (torch.nn.Module), but got {type(trained_model)}: {trained_model}"
-                    logger.error(error_msg)
-                    return {"status": StepStatus.ERROR.value, "error": error_msg}
             
             dataset = context.get('dataset')
             if dataset is None:

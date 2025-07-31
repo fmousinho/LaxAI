@@ -193,6 +193,7 @@ class WandbConfig:
     embeddings_model_collection: str = "PlayerEmbeddings"
     default_model_versions_to_keep: int = 3
     model_tags_to_skip_deletion: List[str] = field(default_factory=lambda: ["do_not_delete"])
+    run_name: str = "run"
 
 
 # Global config instances - these can be imported and used directly
