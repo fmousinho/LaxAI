@@ -384,11 +384,8 @@ def get_storage(user_path: str, credentials: Optional[service_account.Credential
     Returns:
         GoogleStorageClient: Configured Google Storage client instance
     """
-    
-    Returns:
-        GoogleStorageClient: Configured Google Storage client instance
-    """
-    return GoogleStorageClient(user_path)
+
+    return GoogleStorageClient(user_path, credentials)
 
 
 
