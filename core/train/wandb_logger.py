@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional, List
 import torch
 import numpy as np
 from PIL import Image
+from utils import load_env_or_colab
 
 from core.config.all_config import wandb_config
 
@@ -62,17 +63,25 @@ class WandbLogger:
             if tags:
                 all_tags.extend(tags)
             
+            # Validate API key and login
+            api_key = os.environ.get("WANDB_API_KEY")
+            if not api_key:
+                logger.error("WANDB_API_KEY environment variable not found")
+                self.enabled = False
+                return False
+
+            wandb.login(key=api_key)
+
             run_params = {
                 "project": wandb_config.project,
-                "entity": wandb_config.entity,
+                "entity": wandb_config.team,
                 "name": run_name or wandb_config.run_name,
                 "tags": all_tags,
                 "config": config,
                 "reinit": True  # Allow multiple runs in same process
             }
             # Initialize wandb run
-            with wandb.init(**run_params) as run:
-                self.run = run
+            self.run = wandb.init(**run_params)
             
             self.initialized = True
 
