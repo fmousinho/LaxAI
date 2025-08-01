@@ -11,9 +11,9 @@ import seaborn as sns
 from collections import defaultdict
 import json
 
-from src.train.dataset import LacrossePlayerDataset
-from src.config.all_config import wandb_config, evaluator_config
-from src.train.wandb_logger import wandb_logger
+from train.dataset import LacrossePlayerDataset
+from config.all_config import wandb_config, evaluator_config
+from train.wandb_logger import wandb_logger
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,7 @@ class ModelEvaluator:
                 logger.info(f"  Val dir: {val_dir}")
                 
                 # Create dataset from validation directory
-                from src.config.transforms import get_transforms
+                from config.transforms import get_transforms
                 val_transforms = get_transforms('validation')  # Use validation transforms
                 if storage_client:
                     val_dataset = LacrossePlayerDataset(

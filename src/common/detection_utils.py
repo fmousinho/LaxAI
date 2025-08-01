@@ -12,10 +12,10 @@ from typing import Optional, List
 from collections import defaultdict
 import json
 
-from src.common.detection import DetectionModel
+from common.detection import DetectionModel
 from modules.tracker import AffineAwareByteTrack
 from modules.utils import log_progress
-from src.config.all_config import detection_config
+from config.all_config import detection_config
 
 logger = logging.getLogger(__name__)
 

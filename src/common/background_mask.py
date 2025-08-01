@@ -78,7 +78,7 @@ class BackgroundMaskDetector:
         if config is not None:
             self.config = config
         else:
-            from src.config.all_config import background_mask_config
+            from config.all_config import background_mask_config
             self.config = background_mask_config
         
         # Override config values with provided parameters
@@ -505,7 +505,7 @@ if __name__ == "__main__":
     
     # Test 2: Using custom configuration
     print("\n=== Test 2: Custom Configuration ===")
-    from src.config.all_config import BackgroundMaskConfig
+    from config.all_config import BackgroundMaskConfig
     
     custom_config = BackgroundMaskConfig(
         sample_frames=3,

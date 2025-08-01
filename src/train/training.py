@@ -3,10 +3,10 @@ import torch
 import logging
 from typing import Optional, Any, Dict
 from torch.utils.data import DataLoader
-from utils import load_env_or_colab
+from utils.env_or_colab import load_env_or_colab
 import torch.nn as nn
 import wandb
-from src.config.all_config import model_config, training_config, wandb_config
+from config.all_config import model_config, training_config, wandb_config
 from .wandb_logger import wandb_logger
 
 logger = logging.getLogger(__name__)

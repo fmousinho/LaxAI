@@ -13,8 +13,8 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, Callable
 from enum import Enum
 
-from src.common.pipeline_step import PipelineStep, StepStatus
-from src.common.google_storage import GoogleStorageClient
+from common.pipeline_step import PipelineStep, StepStatus
+from common.google_storage import GoogleStorageClient
 
 logger = logging.getLogger(__name__)
 

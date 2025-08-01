@@ -8,6 +8,15 @@ from typing import Tuple, List, Optional
 import sys
 
 @dataclass
+class GoogleStorageConfig:
+    """Configuration for Google Cloud Storage."""
+    project_id: str = "LaxAI"
+    gcs_paths_file: str = "config/gcs_structure.yaml"  # Path to YAML file with GCS paths
+    bucket_name: str = "laxai_dev"
+    user_path: str = ""  # Will be set by caller
+    credentials_name: str = "GOOGLE_APPLICATION_CREDENTIALS"
+
+@dataclass
 class DebugConfig:
     """Configuration for debugging and logging."""
     bypass_player_creation: bool = True
@@ -197,6 +206,7 @@ class WandbConfig:
 
 
 # Global config instances - these can be imported and used directly
+google_storage_config = GoogleStorageConfig()
 model_config = ModelConfig()
 tracker_config = TrackerConfig()
 training_config = TrainingConfig()

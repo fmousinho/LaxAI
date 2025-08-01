@@ -1,0 +1,6 @@
+[project]
+name = "LaxAI"
+version = "0.1.0"
+
+[tool.setuptools.packages.find]
+where = ["src"] # This tells the build system to find packages inside the 'src' directory.

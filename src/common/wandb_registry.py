@@ -1,7 +1,7 @@
 import logging
 import wandb
-from utils import load_env_or_colab
-from src.config import wandb_config
+from utils.env_or_colab import load_env_or_colab
+from config import wandb_config
 
 logger = logging.getLogger(__name__)
 

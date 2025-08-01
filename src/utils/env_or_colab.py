@@ -2,10 +2,8 @@ import os
 from dotenv import load_dotenv
 from IPython import get_ipython
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
-# Assuming the .env file is in the project root directory, one up from the current directory
-project_root = os.path.dirname(current_dir)
-env_path = os.path.join(project_root, '.env')
+# With TOML configuration, we can directly use relative path from project root
+env_path = '.env'
 
 
 def load_env_or_colab():

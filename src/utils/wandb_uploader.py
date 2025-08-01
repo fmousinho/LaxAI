@@ -15,7 +15,7 @@ import sys
 import logging
 import tempfile
 import wandb
-from utils import load_env_or_colab
+from utils.env_or_colab import load_env_or_colab
 
 # --- Path Setup ---
 # Add the project root to the Python path to allow for absolute imports

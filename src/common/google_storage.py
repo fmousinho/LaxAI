@@ -20,34 +20,27 @@ including error handling, credential management, and common operations.
 
 import logging
 import os
+import sys
 import yaml
 from dataclasses import dataclass
 from typing import Optional, List
-from utils import load_env_or_colab
+from utils.env_or_colab import load_env_or_colab
 from google.cloud import storage
 from google.cloud.exceptions import NotFound, Forbidden
 from google.auth.exceptions import DefaultCredentialsError
 from google.oauth2 import service_account
+from config.all_config import google_storage_config
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class GoogleStorageConfig:
-    project_id: str = "LaxAI"
-    gcs_paths_file: str = "../config/gcs_structure.yaml"  # Path to YAML file with GCS paths
-    bucket_name: str = "laxai_dev"
-    user_path: str = ""  # Will be set by caller
-    credentials_name: str = "GOOGLE_APPLICATION_CREDENTIALS"
 
 class GCSPaths:
     """
     A class to manage Google Cloud Storage paths defined in a YAML file.
     """
     def __init__(self):
-        self.project_id = GoogleStorageConfig.project_id
-        self.bucket_name = GoogleStorageConfig.bucket_name
-        self.gcs_paths_file = GoogleStorageConfig.gcs_paths_file
+        self.project_id = google_storage_config.project_id
+        self.bucket_name = google_storage_config.bucket_name
+        self.gcs_paths_file = google_storage_config.gcs_paths_file
         self.paths = self._load_paths()
 
 
@@ -55,7 +48,9 @@ class GCSPaths:
         """Loads paths from the YAML configuration file."""
         try:
             with open(self.gcs_paths_file, 'r') as f:
-                return yaml.safe_load(f)
+                config = yaml.safe_load(f)
+                # Extract the data_prefixes from the nested structure
+                return config.get('gcs', {}).get('data_prefixes', {})
         except FileNotFoundError:
             logger.error(f"GCS paths configuration file not found: {self.gcs_paths_file}")
             raise
@@ -63,13 +58,13 @@ class GCSPaths:
             logger.error(f"Error parsing GCS paths YAML file: {e}")
             raise
 
-    def get_path(self, key: str, *args) -> str:
+    def get_path(self, key: str, **kwargs) -> str:
         """
-        Retrieves a formatted path string using the given key and arguments.
+        Retrieves a formatted path string using the given key and keyword arguments.
 
         Args:
             key: The key corresponding to the desired path in the YAML file.
-            *args: Arguments to format the path string (e.g., tenant_id, video_id).
+            **kwargs: Keyword arguments to format the path string (e.g., tenant_id="tenant1", video_id="vid123").
 
         Returns:
             The formatted path string.
@@ -79,11 +74,11 @@ class GCSPaths:
         """
         path_template = self.paths.get(key)
         if path_template is None:
-            raise KeyError(f"Path key '{key}' not found in {self.config_file}")
+            raise KeyError(f"Path key '{key}' not found in {self.gcs_paths_file}")
         try:
-            return path_template.format(*args)
-        except IndexError as e:
-            logger.error(f"Not enough arguments provided for path '{key}': {e}")
+            return path_template.format(**kwargs)
+        except KeyError as e:
+            logger.error(f"Missing required argument for path '{key}': {e}")
             raise
         except Exception as e:
             logger.error(f"Error formatting path '{key}': {e}")
@@ -95,15 +90,16 @@ class GCSPaths:
 class GoogleStorageClient:
     """Google Cloud Storage client with error handling and common operations."""
 
-    def __init__(self, user_path: str, credentials: Optional[service_account.Credentials]):
+    def __init__(self, user_type: str, user_id: str, credentials: Optional[service_account.Credentials]):
         """
         Initialize the Google Storage client with predefined configuration.
         
         Args:
-            user_path: The user-specific path within the bucket (e.g., "tenant1/user123")
+            user_type: The type of user (e.g., "tenant", "admin")
+            user_id: The unique identifier for the user (e.g., "tenant1/user123")
         """
-        self.config = GoogleStorageConfig()
-        self.config.user_path = user_path
+        self.config = google_storage_config
+        self.config.user_path = user_id
         self._client = None
         self._bucket = None
         self._authenticated = False
@@ -468,7 +464,7 @@ def get_storage(user_path: str, credentials: Optional[service_account.Credential
 # USAGE EXAMPLE
 
 if __name__ == "__main__":
-    # from src.common.google_storage import get_storage
+    # from common.google_storage import get_storage
 
     print("Google Cloud Storage Client Example")
     print("=" * 40)
