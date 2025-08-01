@@ -1,0 +1,12 @@
+gcs:
+  bucket_name: "laxai_dev"
+  data_prefixes:
+    raw_data: "{tenant_id}/raw/"
+    imported_video: "{tenant_id}/process/{video_id}/imported/"
+    extracted_frames: "{tenant_id}/process/{video_id}/{frame_id}/"
+    orig_crops: "{tenant_id}/process/{video_id}/{frame_id}/orig_crops/"
+    augmented_crops: "{tenant_id}/process/{video_id}/{frame_id}/augmented_crops/"
+    datasets_root: "{tenant_id}/datasets"
+    train_dataset: "{tenant_id}/datasets/{dataset_id}/train"
+    val_dataset: "{tenant_id}/datasets/{dataset_id}/val"
+    run_data: "{tenant_id}/runs/{run_id}/

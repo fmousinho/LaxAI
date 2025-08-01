@@ -16,10 +16,10 @@ def test_model_evaluation():
     """Test the model evaluation pipeline with debugging."""
     
     # Import after logging setup
-    from core.train.evaluator import ModelEvaluator
-    from core.train.siamesenet import SiameseNet
-    from core.config.all_config import model_config
-    from core.train.wandb_logger import wandb_logger
+    from src.train.evaluator import ModelEvaluator
+    from src.train.siamesenet import SiameseNet
+    from src.config.all_config import model_config
+    from src.train.wandb_logger import wandb_logger
     
     # Initialize device
     if torch.cuda.is_available():

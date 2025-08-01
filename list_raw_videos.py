@@ -10,7 +10,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 
-from core.common.google_storage import get_storage
+from src.common.google_storage import get_storage
 
 def list_raw_videos(tenant_id: str = "tenant1"):
     """

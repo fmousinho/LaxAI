@@ -22,7 +22,7 @@ import numpy as np
 from modules.tracker import TrackData
 from modules.player import Player
 from modules.utils import l2_normalize_embedding
-from core.config.all_config import player_config, track_stitching_config, model_config
+from src.config.all_config import player_config, track_stitching_config, model_config
 
 logger = logging.getLogger(__name__)
 

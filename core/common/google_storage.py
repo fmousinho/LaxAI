@@ -83,11 +83,11 @@ class GoogleStorageClient:
                         credentials_path, 
                         project=self.config.project_id
                     )
-                    logger.info(f"Using service account file from {credentials_path} for project: {self.config.project_id}")
+                    logger.info(f"Using service account file for project: {self.config.project_id}")
                 else:
                     # Use default project from service account file
                     self._client = storage.Client.from_service_account_json(credentials_path)
-                    logger.info(f"Using service account file from {credentials_path} with default project: {self._client.project}")
+                    logger.info(f"Using service account file with default project: {self._client.project}")
 
             # Test authentication by trying to get bucket
             self._bucket = self._client.bucket(self.config.bucket_name)
@@ -136,8 +136,16 @@ class GoogleStorageClient:
             raise RuntimeError("Failed to authenticate with Google Cloud Storage")
         
         try:
-
-            blobs = self._client.list_blobs(self.config.bucket_name, prefix=prefix)
+            # Add user_path prefix to search prefix, consistent with upload methods
+            if prefix:
+                if self.config.user_path:
+                    full_prefix = f"{self.config.user_path}/{prefix}"
+                else:
+                    full_prefix = prefix
+            else:
+                full_prefix = self.config.user_path if self.config.user_path else None
+                
+            blobs = self._client.list_blobs(self.config.bucket_name, prefix=full_prefix)
             return [blob.name for blob in blobs]
         except Exception as e:
             logger.error(f"Failed to list blobs: {e}")

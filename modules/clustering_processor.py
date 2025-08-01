@@ -10,8 +10,8 @@ from collections import Counter
 import time
 import logging
 from typing import Optional
-from core.config.transforms import get_transforms
-from core.config.all_config import model_config, clustering_config
+from src.config.transforms import get_transforms
+from src.config.all_config import model_config, clustering_config
 
 logger = logging.getLogger(__name__)
 
