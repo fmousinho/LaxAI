@@ -24,7 +24,7 @@ from .detection_utils import (
 from .google_storage import (
     get_storage,
     GoogleStorageClient,
-    GoogleStorageConfig
+    GCSPaths
 )
 from .pipeline import (
     Pipeline,

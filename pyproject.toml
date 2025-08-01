@@ -1,6 +1,17 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "LaxAI"
 version = "0.1.0"
 
+[tool.setuptools]
+package-dir = {"" = "src"}
+
 [tool.setuptools.packages.find]
-where = ["src"] # This tells the build system to find packages inside the 'src' directory.
+where = ["src"]
+
+# This ensures the package is editable and src is in Python path
+[tool.setuptools.package-data]
+"*" = ["*.yaml", "*.yml", "*.json"]
