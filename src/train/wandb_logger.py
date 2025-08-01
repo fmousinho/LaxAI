@@ -4,9 +4,9 @@ from typing import Dict, Any, Optional, List
 import torch
 import numpy as np
 from PIL import Image
-from utils import load_env_or_colab
+from utils.env_or_colab import load_env_or_colab
 
-from src.config.all_config import wandb_config
+from config.all_config import wandb_config
 
 logger = logging.getLogger(__name__)
 

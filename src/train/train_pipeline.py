@@ -5,17 +5,17 @@ import traceback
 from typing import Any, Dict, List, Optional
 
 
-from src.train.wandb_logger import wandb_logger
+from train.wandb_logger import wandb_logger
 
-from src.common.pipeline_step import  StepStatus
-from src.common.google_storage import  get_storage
-from src.common.pipeline import Pipeline, PipelineStatus
-from src.train.dataset import LacrossePlayerDataset
-from src.train.training import Training
-from src.train.siamesenet import SiameseNet
-from src.train.evaluator import ModelEvaluator
-from src.config.transforms import get_transforms
-from src.config.all_config import training_config, model_config, wandb_config
+from common.pipeline_step import  StepStatus
+from common.google_storage import  get_storage
+from common.pipeline import Pipeline, PipelineStatus
+from train.dataset import LacrossePlayerDataset
+from train.training import Training
+from train.siamesenet import SiameseNet
+from train.evaluator import ModelEvaluator
+from config.transforms import get_transforms
+from config.all_config import training_config, model_config, wandb_config
 
 
 

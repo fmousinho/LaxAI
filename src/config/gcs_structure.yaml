@@ -9,4 +9,4 @@ gcs:
     datasets_root: "{tenant_id}/datasets"
     train_dataset: "{tenant_id}/datasets/{dataset_id}/train"
     val_dataset: "{tenant_id}/datasets/{dataset_id}/val"
-    run_data: "{tenant_id}/runs/{run_id}/
+    run_data: "{tenant_id}/runs/{run_id}/"

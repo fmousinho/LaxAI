@@ -14,22 +14,15 @@ import logging
 import json
 import argparse
 
-# --- Path Setup ---
-# Add the project root to the Python path to allow for absolute imports
-current_script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(os.path.dirname(current_script_dir))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 
-from utils import env_or_colab
-from src.common.google_storage import get_storage
-from src.train.dataprep_pipeline import DataPrepPipeline
-from src.train.train_pipeline import TrainPipeline
-from src.config.all_config import detection_config, training_config
-from src.config import logging_config
+from utils.env_or_colab import load_env_or_colab as env_or_colab
+from common.google_storage import get_storage
+from train.dataprep_pipeline import DataPrepPipeline
+from train.train_pipeline import TrainPipeline
+from config.all_config import detection_config, training_config
+from config import logging_config
 
 # --- Configure Logging ---
 # Note: This script assumes logging is configured elsewhere (e.g., in config)

@@ -6,12 +6,12 @@ from typing import List, Optional, Union
 import numpy as np
 import supervision as sv
 import torch
-from utils import load_env_or_colab
+from utils.env_or_colab import load_env_or_colab
 from PIL import Image
 from rfdetr import RFDETRBase  # type: ignore
 import wandb
 
-from src.config.all_config import detection_config, wandb_config
+from config.all_config import detection_config, wandb_config
 
 logger = logging.getLogger(__name__)
 

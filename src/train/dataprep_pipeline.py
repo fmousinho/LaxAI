@@ -21,21 +21,15 @@ import numpy as np
 import supervision as sv
 from supervision import Detections
 
-# Add the project root to the Python path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(os.path.dirname(current_dir))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-from src.common.google_storage import get_storage
-from src.common.detection import DetectionModel
-from src.common.pipeline_step import PipelineStep, StepStatus
-from src.common.pipeline import Pipeline, PipelineStatus
-from src.config.all_config import DetectionConfig
-from src.config import logging_config
-from src.common.background_mask import BackgroundMaskDetector, create_frame_generator_from_images
-from src.common.crop_utils import extract_crops_from_video, create_train_val_split
-from src.train.augmentation import augment_images
+from common.google_storage import get_storage
+from common.detection import DetectionModel
+from common.pipeline_step import PipelineStep, StepStatus
+from common.pipeline import Pipeline, PipelineStatus
+from config.all_config import DetectionConfig
+from config import logging_config
+from common.background_mask import BackgroundMaskDetector, create_frame_generator_from_images
+from common.crop_utils import extract_crops_from_video, create_train_val_split
+from train.augmentation import augment_images
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +62,7 @@ class DataPrepPipeline(Pipeline):
         self.frames_per_video = config.frames_per_video
         
         # Import transform_config to get the background removal setting
-        from src.config.all_config import transform_config
+        from config.all_config import transform_config
         
         # Determine if grass mask should be enabled
         if enable_grass_mask is None:
