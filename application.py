@@ -1,13 +1,15 @@
 import logging
-from config import (
+from src.config.all_config import (
     debug_config,
     detection_config,
-    get_transforms,
-    initialize_background_removal,
     model_config,
-    refresh_transform_instances,
     track_stitching_config,
     transform_config,
+)
+from src.config.transforms import (
+    get_transforms,
+    initialize_background_removal,
+    refresh_transform_instances,
 )
 from modules.utils import log_progress
 from typing import Optional, List, Dict, Tuple
@@ -23,7 +25,7 @@ import tempfile
 import shutil
 
 from tools import reporting
-from core.common import (
+from src.common import (
     DetectionModel,
     create_train_val_split,
     extract_crops_from_video,
@@ -35,7 +37,7 @@ from core.common import (
 from modules.player import Player
 from modules.tracker import AffineAwareByteTrack, TrackData
 from modules.clustering_processor import ClusteringProcessor
-from core.train import LacrossePlayerDataset, SiameseNet
+from src.train import LacrossePlayerDataset, SiameseNet
 from modules.emb_processor import EmbeddingsProcessor
 from modules.writer_processor import VideoWriterProcessor
 from modules.player_association import associate_tracks_to_players_with_stitching, stitch_tracks

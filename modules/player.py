@@ -5,7 +5,7 @@ import numpy as np
 import supervision as sv
 from scipy.optimize import linear_sum_assignment
 
-from core.config.all_config import player_config
+from src.config.all_config import player_config
 
 logger = logging.getLogger(__name__)
 

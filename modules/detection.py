@@ -10,7 +10,7 @@ import torch
 from PIL import Image
 from rfdetr import RFDETRBase  # type: ignore
 
-from core.config.all_config import detection_config
+from src.config.all_config import detection_config
 from tools.store_driver import Store
 
 logger = logging.getLogger(__name__)

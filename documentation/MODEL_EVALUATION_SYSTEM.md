@@ -55,8 +55,8 @@ K-fold cross-validation ensuring player-level splits:
 ### Basic Evaluation
 
 ```python
-from core.train.evaluator import ModelEvaluator
-from core.train.siamesenet import SiameseNet
+from src.train.evaluator import ModelEvaluator
+from src.train.siamesenet import SiameseNet
 
 # Initialize evaluator
 model = SiameseNet(embedding_dim=128)
@@ -74,7 +74,7 @@ print(report)
 ### Integration with Training Pipeline
 
 ```python
-from core.train.train_pipeline import TrainPipeline
+from src.train.train_pipeline import TrainPipeline
 
 # Initialize pipeline
 pipeline = TrainPipeline(tenant_id="tenant1", verbose=True)
