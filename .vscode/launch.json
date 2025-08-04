@@ -4,6 +4,30 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
+        
+
+
+        {
+            "name": "Load Transform",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "LaxAI.src.features.load_transform",
+            "cwd": "${workspaceFolder}/..",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+        },
+        
+        {
+            "name": "Train Pipeline",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "LaxAI.src.train.train_pipeline",
+            "cwd": "${workspaceFolder}/..",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+
+
         {
             "name": "LaxAI in Debug",
             "type": "debugpy",
@@ -21,25 +45,6 @@
                 "--log_level", "INFO"
                 //"--detections_import_path", "/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI/detections.json" // Optional: path to existing detections JSON file
             ]
-        },
-
-        {
-            "name": "LaxAI Analyse",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "LaxAI.main",
-            "cwd": "${workspaceFolder}/..",
-            "console": "integratedTerminal",
-            "justMyCode": true,
-            "args": [
-                // Replace with the actual path to your test video
-                "/Users/fernandomousinho/Library/CloudStorage/GoogleDrive-fmousinho76@gmail.com/My Drive/Colab_Notebooks/GRIT Dallas-Houston 2027 vs Urban Elite 2027 - 12-30pm.mp4", 
-                "--device", "cpu", // or "mps", "cuda"
-                "--analyse", "20:40",
-                "--log_level", "DEBUG"
-            ]
         }
-
-
     ]
 }

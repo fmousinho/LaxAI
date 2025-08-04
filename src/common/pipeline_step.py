@@ -49,8 +49,8 @@ class PipelineStep:
         """Mark step as started and record start time."""
         self.status = StepStatus.IN_PROGRESS
         self.start_time = datetime.now()
-    
-    def complete(self, output_path: Optional[str] = None, metadata: Dict[str, Any] = None):
+
+    def complete(self, output_path: Optional[str] = None, metadata: Dict[str, Any] = {}):
         """
         Mark step as completed successfully.
         

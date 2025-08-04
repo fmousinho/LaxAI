@@ -9,30 +9,28 @@ including downloading from Google Storage, extracting frames, augmenting images,
 import os
 import sys
 import json
-import uuid
 import logging
-import time
-import shutil
-from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 from enum import Enum
 import cv2
 import numpy as np
 import supervision as sv
+from PIL import Image
 from supervision import Detections
-
+from supervision.utils.image import crop_image
 from common.google_storage import get_storage, GCSPaths
 from common.detection import DetectionModel
-from common.pipeline_step import PipelineStep, StepStatus
+from common.pipeline_step import StepStatus
 from common.pipeline import Pipeline, PipelineStatus
-from config.all_config import DetectionConfig
+from config.all_config import DetectionConfig, detection_config, model_config, training_config
 from config import logging_config
 from common.background_mask import BackgroundMaskDetector, create_frame_generator_from_images
-from common.crop_utils import extract_crops_from_video, create_train_val_split
 from train.augmentation import augment_images
-from utils.id_generator import create_tenant_id, create_video_id, create_frame_id, create_dataset_id, create_run_id
+from utils.id_generator import create_video_id, create_frame_id, create_dataset_id, create_run_id, create_crop_id, create_aug_crop_id
 
 logger = logging.getLogger(__name__)
+
+MIN_VIDEO_RESOLUTION = (1920, 1080)  # Minimum resolution for video processing
 
 
 class DataPrepPipeline(Pipeline):
@@ -46,8 +44,8 @@ class DataPrepPipeline(Pipeline):
     4. Extracts frames with sufficient detections
     5. Saves metadata and detection results
     """
-    
-    def __init__(self, config: DetectionConfig, tenant_id: str = "tenant1", verbose: bool = True, save_intermediate: bool = True, enable_grass_mask: bool = None, **kwargs):
+
+    def __init__(self, config: DetectionConfig, tenant_id: str = "tenant1", verbose: bool = True, save_intermediate: bool = True, enable_grass_mask: bool = model_config.enable_grass_mask, **kwargs):
         """
         Initialize the training pipeline.
         
@@ -61,6 +59,8 @@ class DataPrepPipeline(Pipeline):
         self.config = config
         self.tenant_id = tenant_id
         self.frames_per_video = config.frames_per_video
+        self.video_capture = None
+        self.train_ratio = training_config.train_ratio
         
         # Import transform_config to get the background removal setting
         from config.all_config import transform_config
@@ -79,9 +79,8 @@ class DataPrepPipeline(Pipeline):
             self.background_mask_detector = None
             logger.info("Grass mask functionality disabled - skipping BackgroundMaskDetector initialization")
         
-        # Get storage clients
-        self.storage_admin = get_storage("common")  # For accessing common resources
-        self.tenant_storage = get_storage(f"{tenant_id}/user")  # For tenant-specific operations
+        # Get storage client
+        self.tenant_storage = get_storage(tenant_id)  # For tenant-specific operations (without /user suffix)
         
         # Initialize GCS path manager for structured path handling
         self.path_manager = GCSPaths()
@@ -102,10 +101,6 @@ class DataPrepPipeline(Pipeline):
             ("import_videos", {
                 "description": "Move MP4 videos from tenant's raw directory for processing",
                 "function": self._import_video
-            }),
-            ("load_videos", {
-                "description": "Download videos to memory",
-                "function": self._load_video
             }),
             ("extract_frames", {
                 "description": "Extract frames with sufficient detections for processing",
@@ -169,10 +164,10 @@ class DataPrepPipeline(Pipeline):
         )
         
         # Override run_folder to use structured GCS path
-        run_id = create_run_id()
-        self.run_folder = self.path_manager.get_path("run_data", tenant_id=self.tenant_id, run_id=run_id)
-        self.run_guid = run_id  # Use structured run_id instead of random UUID
-    
+        self.run_guid = create_run_id()
+        self.run_folder = self.path_manager.get_path("run_data", run_id=self.run_guid)
+
+
     def run(self, video_path: str, resume_from_checkpoint: bool = True) -> Dict[str, Any]:
         """
         Execute the complete training pipeline for a single video.
@@ -190,7 +185,7 @@ class DataPrepPipeline(Pipeline):
         logger.info(f"Processing video: {video_path}")
 
         # Create initial context with the video path
-        initial_context = {"video_path": video_path}
+        initial_context = {"raw_video_path": video_path}
         
         # Call the base class run method with the initial context
         # The base class now handles checkpoint functionality automatically
@@ -223,149 +218,41 @@ class DataPrepPipeline(Pipeline):
         Returns:
             Dictionary with imported video information
         """
-        video_path = context.get("video_path")
-        if not video_path:
+        raw_video_path = context.get("raw_video_path")
+        if not raw_video_path:
             return {"status": StepStatus.ERROR.value, "error": "No video path provided"}
 
         try:
-            logger.info(f"Importing video: {video_path}")
+            logger.info(f"Importing video: {raw_video_path}")
 
             # Generate structured video ID using ID generator
-            video_id = create_video_id()
+            video_guid = create_video_id()
             
-            # Create structured video path using path manager
             video_folder = self.path_manager.get_path("imported_video", 
-                                                    tenant_id=self.tenant_id, 
-                                                    video_id=video_id)
+                                                    video_id=video_guid).rstrip('/')
+            
+            imported_video_blob_name = f"{video_folder}/{video_guid}.mp4"
 
-            # Check if it's a GCS URL, local file, or blob path
-            if video_path.startswith("gs://"):
-                imported_video = self._import_single_video(video_path, video_id, video_folder)
-            elif "/" in video_path:
-                # It's a blob path (contains slashes), treat as Google Storage blob
-                logger.info(f"Processing video blob: {video_path}")
-                imported_video = self._import_single_video(video_path, video_id, video_folder)
-            else:
-                # It's just a filename, assume it's in the tenant's raw directory
-                raw_video_path = self.path_manager.get_path("raw_data", tenant_id=self.tenant_id) + video_path
-                logger.info(f"Video filename provided, looking in tenant raw directory: {raw_video_path}")
-                imported_video = self._import_single_video(raw_video_path, video_id, video_folder)
 
-            # Check if the import succeeded
-            if not imported_video:
-                raise ValueError(f"Error importing video")
+            if not self.tenant_storage.move_blob(raw_video_path, imported_video_blob_name):
+                raise RuntimeError(f"Failed to move video from {raw_video_path} to {imported_video_blob_name}")
+       
+            logger.info(f"Successfully imported to {imported_video_blob_name}")
 
-            logger.info(f"Successfully imported {imported_video}")
+            context.update({
+                "status": StepStatus.COMPLETED.value,
+                "video_guid": video_guid,
+                "video_folder": video_folder,
+                "video_blob_name": imported_video_blob_name
+            })
 
-            return {"imported_video": imported_video, "video_guid": video_id, "video_folder": video_folder}
+            return context
 
         except Exception as e:
             logger.error(f"Failed to import video {video_path}: {str(e)}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
     
-    def _import_single_video(self, video_blob_name: str, video_id: str, video_folder: str) -> str:
-        """
-        Import a single video from raw directory into organized video folder.
-        
-        Args:
-            video_blob_name: The blob name of the video in Google Storage
-            video_id: The structured video ID for this video
-            video_folder: The folder where the video should be stored
-            
-        Returns:
-            Path to the imported video file
-            
-        Raises:
-            RuntimeError: If import operation fails
-        """
-        logger.info(f"Importing video: {video_blob_name}")
-        
-        # Create a robust temporary file path
-        temp_video_path = f"/tmp/video_{video_id}.mp4"
-        
-        try:
-            # Move video to its new organized folder with structured ID name
-            new_video_name = f"{video_id}.mp4"
-            new_video_blob = f"{video_folder}/{new_video_name}"
-            
-            if not self.tenant_storage.move_blob(video_blob_name, new_video_blob):
-                raise RuntimeError(f"Failed to move video to new location: {video_blob_name} -> {new_video_blob}")
-            
-            # Download the moved video file for metadata extraction
-            if not self.tenant_storage.download_blob(new_video_blob, temp_video_path):
-                raise RuntimeError(f"Failed to download moved video: {new_video_blob}")
-            
-            # Extract video metadata from the temporary file
-            metadata = self._extract_video_metadata(temp_video_path, video_blob_name, video_id)
-            
-            # Save metadata file
-            metadata_blob = f"{video_folder}/metadata.json"
-            metadata_content = json.dumps(metadata, indent=2)
-            if not self.tenant_storage.upload_from_string(metadata_blob, metadata_content):
-                raise RuntimeError(f"Failed to save metadata for video: {video_blob_name}")
-            
-            logger.info(f"Successfully imported video: {video_blob_name} -> {new_video_blob}")
-            return new_video_blob
-            
-        except Exception as e:
-            raise RuntimeError(f"Failed to import video {video_blob_name}: {str(e)}")
-        finally:
-            # Always clean up temporary file, even if there's an error
-            if os.path.exists(temp_video_path):
-                try:
-                    os.remove(temp_video_path)
-                    logger.debug(f"Cleaned up temporary file: {temp_video_path}")
-                except Exception as cleanup_error:
-                    logger.warning(f"Failed to cleanup temporary file {temp_video_path}: {cleanup_error}")
     
-    def _load_video(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Load the imported video into memory for processing.
-        
-        Args:
-            context: Pipeline context containing imported_video
-            
-        Returns:
-            Dictionary with loaded video information
-        """
-        imported_video = context.get("imported_video")
-        video_guid = context.get("video_guid")
-        
-        if not imported_video:
-            logger.error("No imported video to load")
-            return {"status": StepStatus.ERROR.value, "error": "No imported video provided"}
-        
-        # Create a robust temporary file path
-        temp_video_path = f"/tmp/processing_{video_guid}.mp4"
-        
-        try:
-            # Always download from Google Storage as we're now blob-based
-            logger.info(f"Downloading video from storage: {imported_video}")
-            if not self.tenant_storage.download_blob(imported_video, temp_video_path):
-                raise RuntimeError(f"Failed to download video for processing: {imported_video}")
-            
-            # Validate video resolution
-            logger.info(f"Validating video resolution: {temp_video_path}")
-            if not self._validate_video_resolution(temp_video_path):
-                raise RuntimeError(f"Video resolution validation failed for: {imported_video}. Video must be at least 1920x1080 pixels.")
-            
-            logger.info(f"Successfully loaded video for processing: {imported_video}")
-            
-            return {
-                "loaded_video": {
-                    "video_path": imported_video,
-                    "video_guid": video_guid,
-                    "temp_path": temp_video_path
-                }
-            }
-            
-        except Exception as e:
-            logger.error(f"Critical error loading video {imported_video}: {e}")
-            return {"status": StepStatus.ERROR.value, "error": str(e)}
-        finally:
-            # Note: We don't cleanup the temp file here because it's needed for subsequent steps
-            # The cleanup will happen in the pipeline's cleanup method or after processing
-            pass
     
     def _detect_players(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -378,110 +265,73 @@ class DataPrepPipeline(Pipeline):
             Dictionary with detection results
         """
         frames_data = context.get("frames_data")
-        video_guid = context.get("video_guid")
+        frame_ids = context.get("frame_ids")
+        video_guid = context.get("video_guid")  
+        video_folder = context.get("video_folder")
         
         if not frames_data:
-            # If frames_data is missing (e.g., when resuming from checkpoint), try to regenerate it
-            logger.warning("No frames data for player detection - attempting to regenerate from video")
-            
-            # Try to get loaded_video info to re-extract frames
-            loaded_video = context.get("loaded_video")
-            if loaded_video and loaded_video.get("temp_path"):
-                logger.info("Attempting to re-extract frames for detection")
-                # Re-extract frames for this step
-                frames_result = self._extract_frames_for_detections(context)
-                if frames_result.get("status") == StepStatus.ERROR.value:
-                    return frames_result
-                frames_data = frames_result.get("frames_data")
-                # Update context with re-extracted frames
-                context["frames_data"] = frames_data
-            
-            if not frames_data:
-                logger.error("No frames data for player detection - previous step failed or frames unavailable")
-                return {"status": StepStatus.ERROR.value, "error": "No frames data provided - frame extraction failed"}
+            logger.error("No frames data for player detection - previous step failed or frames unavailable")
+            return {"status": StepStatus.ERROR.value, "error": "No frames data provided - frame extraction failed"}
         
         if not video_guid:
             logger.error("No video GUID for player detection")
             return {"status": StepStatus.ERROR.value, "error": "No video GUID provided"}
         
+        if not video_folder:
+            logger.error("No video folder for player detection")
+            return {"status": StepStatus.ERROR.value, "error": "No video folder provided for saving detections"}
+        
+        if type(frame_ids) is not list or len(frame_ids) != len(frames_data):
+            logger.error("Frame IDs do not match frames data length")
+            return {"status": StepStatus.ERROR.value, "error": "Frame IDs and frames data length mismatch"}
+
         try:
             logger.info(f"Starting player detection for video: {video_guid} with {len(frames_data)} frames")
             
             # Process each frame individually since the detection model expects individual frames
+            detections_count = 0
             all_detections = []
-            for i, frame in enumerate(frames_data):
-                try:
-                    # Ensure frame is a numpy array with correct format
-                    if not isinstance(frame, np.ndarray):
-                        logger.warning(f"Frame {i} is not a numpy array, skipping")
-                        continue
-                    
-                    # Convert from BGR to RGB if needed (OpenCV uses BGR, models usually expect RGB)
-                    if len(frame.shape) == 3 and frame.shape[2] == 3:
-                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    else:
-                        frame_rgb = frame
-                    
-                    # Generate detections for this single frame
-                    frame_detections = self.detection_model.generate_detections(frame_rgb)
-                    
-                    if frame_detections is not None and len(frame_detections) > 0:
-                        # Append the entire Detections object to the list
-                        all_detections.append(frame_detections)
-                        logger.debug(f"Frame {i}: Found {len(frame_detections)} detections")
-                    else:
-                        logger.debug(f"Frame {i}: No detections found")
-                        
-                except Exception as frame_error:
-                    logger.warning(f"Failed to process frame {i}: {frame_error}")
-                    continue
+            for frame_id, frame in zip(frame_ids, frames_data):
+           
+                try:     
+                # Generate detections for this single frame
+                    frame_detections = self.detection_model.generate_detections(frame)
+                    if frame_detections is None or len(frame_detections) == 0:
+                        logger.warning(f"Frame {frame_id}: No detections found")
+                    all_detections.append(frame_detections)
+                    detections_count += len(frame_detections)
 
-            if len(all_detections) == 0:
-                logger.error(f"Could not extract detections from {len(frames_data)} frames for video {video_guid}")
-                return {"status": StepStatus.ERROR.value, "error": f"No detections found in {len(frames_data)} frames"}
+                except Exception as e:
+                    logger.error(f"Error processing frame {frame_id} for video {video_guid}: {e}")
+                    raise RuntimeError(f"Failed to process frame {frame_id} for video {video_guid}: {e}")
+                        
 
             # Save detections - convert to JSON-serializable format
-            video_folder = context.get("video_folder", f"{self.run_folder}/video_{video_guid}")
-            detections_blob = f"{video_folder}/detections.json"
+            detections_blob_name = f"{video_folder.rstrip('/')}/detections.json"
+            single_detection_object = sv.Detections.merge(all_detections)
 
-            # Convert detections to JSON-serializable format
-            serializable_detections = []
-            for frame_idx, detection_obj in enumerate(all_detections):
-                # Each detection_obj is a supervision.Detections object
-                if hasattr(detection_obj, 'xyxy') and hasattr(detection_obj, 'confidence') and hasattr(detection_obj, 'class_id'):
-                    # Convert supervision.Detections to dictionary with frame information
-                    frame_detections = {
-                        "frame_index": frame_idx,
-                        "boxes": detection_obj.xyxy.tolist() if hasattr(detection_obj.xyxy, 'tolist') else detection_obj.xyxy,
-                        "confidence": detection_obj.confidence.tolist() if hasattr(detection_obj.confidence, 'tolist') else detection_obj.confidence,
-                        "class_id": detection_obj.class_id.tolist() if hasattr(detection_obj.class_id, 'tolist') else detection_obj.class_id,
-                        "tracker_id": detection_obj.tracker_id.tolist() if detection_obj.tracker_id is not None and hasattr(detection_obj.tracker_id, 'tolist') else detection_obj.tracker_id,
-                        "num_detections": len(detection_obj)
-                    }
-                    serializable_detections.append(frame_detections)
-                else:
-                    # If it's already a dict or other serializable format, keep it as is
-                    serializable_detections.append(detection_obj)
+            self.tenant_storage.upload_from_bytes(detections_blob_name, single_detection_object)
 
-            detections_content = json.dumps(serializable_detections, indent=2)
-            if not self.tenant_storage.upload_from_string(detections_blob, detections_content):
-                logger.error(f"Failed to save detections for video: {video_guid}")
-                return {"status": StepStatus.ERROR.value, "error": f"Failed to save detections to storage: {detections_blob}"}
+            logger.info(f"Player detection completed for frame id {frame_id} - {detections_count} detections found")
+
+            if detections_count == 0:
+                logger.warning(f"No detections found for video {video_guid} - skipping crop extraction")
+                return {"status": StepStatus.ERROR.value, "error": "No detections found in video frames"}
+
+            context.update({
+                "status": StepStatus.COMPLETED.value,
+                "all_detections": all_detections
+            })
             
-            logger.info(f"Completed detection for video: {video_guid} - found {len(all_detections)} detections")
-            
-            return {
-                "detection_result": {
-                    "video_guid": video_guid,
-                    "frames_data": frames_data,
-                    "detections_blob": detections_blob
-                }
-            }
+            return context
             
         except Exception as e:
             logger.error(f"Critical error in player detection for video {video_guid}: {e}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
     
+
+
+
     def _extract_crops(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Extract and save player crops from detections.
@@ -492,193 +342,70 @@ class DataPrepPipeline(Pipeline):
         Returns:
             Dictionary with crop extraction results
         """
-        detection_result = context.get("detection_result")
+        all_detections = context.get("all_detections")
         frames_data = context.get("frames_data")
-        video_id = context.get("video_guid")  # Note: keeping "video_guid" key for backward compatibility
-        extracted_frame_paths = context.get("extracted_frame_paths", {})
-        
-        if not detection_result or not frames_data:
+        video_guid = context.get("video_guid") 
+        frame_ids = context.get("frame_ids")
+        frames_guids = context.get("frames_guids")
+
+        if not all_detections or not frames_data:
             logger.warning("No detection result or frames data found for crop extraction")
             return {"status": StepStatus.ERROR.value, "error": "No detection result or frames data provided"}
         
         try:
-            logger.info(f"Extracting crops for video: {video_id}")
+            logger.info(f"Extracting crops for video: {video_guid}")
+
+            crops_uploaded = 0
+            error_count = 0
+            crops_by_frame = []
             
-            # Create a temporary directory for crop extraction
-            temp_dir = f"/tmp/crops_{video_id}"
-            os.makedirs(temp_dir, exist_ok=True)
+            for frame_detections, frame, frame_id, frame_guid in zip(all_detections, frames_data, frame_ids, frames_guids):
+
+                crops = []
+                if not isinstance(frame_detections, sv.Detections):
+                    logger.error("Invalid detections format - expected sv.Detections object")
+                    raise RuntimeError("Invalid detections format - expected sv.Detections object")
+                
+                for detection in frame_detections:
+                    crop_np = crop_image(frame, detection[0].astype(int))
+                    crop_pil = Image.fromarray(crop_np, mode='RGB')
+
+                    file_name = create_crop_id(frame_id=frame_guid)
+                    blob_path = self.path_manager.get_path("orig_crops", 
+                                                           video_id=video_guid, 
+                                                           frame_id=frame_guid)
+                    
+                    blob_name = f"{blob_path.rstrip('/')}/{file_name}.jpg"
+
+                    success = self.tenant_storage.upload_from_bytes(blob_name, crop_np)
+                    if not success:
+                        logger.error(f"Failed to upload crop {file_name} for video {video_id} at frame {frame_id}")
+                        error_count += 1
+                        continue
+                    crops_uploaded += 1
+                    crops.append(crop_np)
+                crops_by_frame.append(crops)
+
+            if error_count > 0:
+                logger.warning(f"Failed to upload {error_count} crops for video {video_id} at frame {frame_id}")
+            logger.info(f"Successfully extracted and uploaded {crops_uploaded} crops across {len(frames_data)} frames")
             
-            try:
-                # Load the saved detection results instead of re-running detection
-                detections_blob = detection_result.get("detections_blob")
-                if not detections_blob:
-                    raise RuntimeError("No detections blob found in detection result")
-                
-                # Download the detection results
-                temp_detections_path = f"/tmp/detections_{video_id}.json"
-                if not self.tenant_storage.download_blob(detections_blob, temp_detections_path):
-                    raise RuntimeError(f"Failed to download detection results: {detections_blob}")
-                
-                # Load the detection results
-                with open(temp_detections_path, 'r') as f:
-                    saved_detections = json.load(f)
-                
-                logger.info(f"Loaded {len(saved_detections)} detection frames from storage")
-                
-                # Convert saved detections back to supervision.Detections format
-                all_detections = []
-                for frame_idx, frame_detection in enumerate(saved_detections):
-                    if isinstance(frame_detection, dict) and "boxes" in frame_detection:
-                        # Convert back to supervision.Detections format
-                        boxes = np.array(frame_detection["boxes"])
-                        confidence = np.array(frame_detection["confidence"])
-                        class_id = np.array(frame_detection["class_id"])
-                        
-                        # Debug: Check the actual detection data
-                        logger.info(f"Frame {frame_idx}: {len(boxes)} boxes, confidence range: {confidence.min():.3f}-{confidence.max():.3f}")
-                        logger.info(f"  Sample box: {boxes[0] if len(boxes) > 0 else 'No boxes'}")
-                        
-                        # Create supervision.Detections object
-                        detections = sv.Detections(
-                            xyxy=boxes,
-                            confidence=confidence,
-                            class_id=class_id
-                        )
-                        
-                        # Add frame_id to the detection data
-                        if detections.data is None:
-                            detections.data = {}
-                        detections.data["frame_id"] = np.full(len(detections), frame_idx)
-                        
-                        all_detections.append(detections)
-                        logger.debug(f"Converted frame {frame_idx}: {len(detections)} detections")
-                    else:
-                        logger.warning(f"Skipping frame {frame_idx}: Invalid detection format")
-                
-                if len(all_detections) == 0:
-                    raise RuntimeError("No valid detections found in saved results")
-                
-                logger.info(f"Successfully converted {len(all_detections)} detection frames")
-                
-                # Debug: Log detection statistics
-                total_detections = sum(len(det) for det in all_detections)
-                logger.info(f"Total detections across all frames: {total_detections}")
-                
-                # Process each frame individually with structured IDs
-                frame_ids = context.get("frames_extracted", [])
-                crops_in_memory = {}
-                crops_uploaded = 0
-                crops_by_frame = {}  # Track crops per frame for later dataset creation
-                
-                logger.info(f"Processing {len(frame_ids)} frames for crop extraction")
-                
-                for i, frame_id in enumerate(frame_ids):
-                    if i >= len(all_detections):
-                        logger.warning(f"No detections for frame {frame_id}, skipping")
-                        continue
-                        
-                    frame_detections = all_detections[i]
-                    frame_image = frames_data[i]
-                    
-                    if len(frame_detections) == 0:
-                        logger.info(f"No detections in frame {frame_id}, skipping crop extraction")
-                        continue
-                    
-                    logger.info(f"Processing frame {frame_id} with {len(frame_detections)} detections")
-                    
-                    # Create structured path for this frame's original crops
-                    orig_crops_path = self.path_manager.get_path("orig_crops", 
-                                                               tenant_id=self.tenant_id, 
-                                                               video_id=video_id, 
-                                                               frame_id=frame_id)
-                    
-                    # Extract crops for this frame
-                    crops_extracted = extract_crops_from_video(
-                        video_frames=[frame_image],
-                        all_detections=[frame_detections],
-                        output_folder=temp_dir,
-                        show_progress=self.verbose,
-                        save_intermediate=self.save_intermediate,
-                        confidence_threshold=0.7
-                    )
-                    
-                    if not crops_extracted:
-                        logger.warning(f"No crops extracted from frame {frame_id}")
-                        continue
-                    
-                    # Organize and upload crops for this frame
-                    frame_crops_uploaded = 0
-                    frame_crops_in_memory = {}
-                    
-                    if os.path.exists(os.path.join(temp_dir, "all_crops")):
-                        all_crops_dir = os.path.join(temp_dir, "all_crops")
-                        
-                        # Walk through all crop files and process them
-                        for root, dirs, files in os.walk(all_crops_dir):
-                            for file in files:
-                                if file.endswith('.jpg'):
-                                    local_crop_path = os.path.join(root, file)
-                                    
-                                    # Calculate relative path from all_crops_dir
-                                    rel_path = os.path.relpath(local_crop_path, all_crops_dir)
-                                    
-                                    # Load crop into memory
-                                    crop_img = cv2.imread(local_crop_path)
-                                    crop_img = cv2.cvtColor(crop_img, cv2.COLOR_BGR2RGB)  # Convert to RGB
-                                    if crop_img is not None:
-                                        frame_crops_in_memory[rel_path] = crop_img
-                                        
-                                        # Upload to Google Storage with structured path
-                                        storage_crop_path = f"{orig_crops_path}/{rel_path}"
-                                        
-                                        if self.tenant_storage.upload_from_file(storage_crop_path, local_crop_path):
-                                            frame_crops_uploaded += 1
-                                            logger.debug(f"Uploaded crop: {storage_crop_path}")
-                                        else:
-                                            logger.warning(f"Failed to upload crop: {storage_crop_path}")
-                    
-                    crops_uploaded += frame_crops_uploaded
-                    crops_by_frame[frame_id] = frame_crops_in_memory
-                    crops_in_memory.update({f"{frame_id}/{k}": v for k, v in frame_crops_in_memory.items()})
-                    
-                    logger.info(f"Frame {frame_id}: extracted and uploaded {frame_crops_uploaded} crops")
-                
-                logger.info(f"Successfully extracted and uploaded {crops_uploaded} crops across {len(crops_by_frame)} frames")
-                
-                return {
-                    "crops_extracted": True,
-                    "video_guid": video_id,
-                    "crops_by_frame": crops_by_frame,
-                    "crops_uploaded": crops_uploaded,
-                    "crops_in_memory": crops_in_memory,
-                    "frames_processed": len(crops_by_frame)
-                }
-                
-            finally:
-                # Clean up temporary files
-                if os.path.exists(temp_dir):
-                    try:
-                        shutil.rmtree(temp_dir)
-                        logger.debug(f"Cleaned up temporary crops directory: {temp_dir}")
-                    except Exception as cleanup_error:
-                        logger.warning(f"Failed to cleanup temporary crops directory {temp_dir}: {cleanup_error}")
-                
-                # Clean up temporary detections file
-                temp_detections_path = f"/tmp/detections_{video_id}.json"
-                if os.path.exists(temp_detections_path):
-                    try:
-                        os.remove(temp_detections_path)
-                        logger.debug(f"Cleaned up temporary detections file: {temp_detections_path}")
-                    except Exception as cleanup_error:
-                        logger.warning(f"Failed to cleanup temporary detections file {temp_detections_path}: {cleanup_error}")
+            context.update({
+                "status": StepStatus.COMPLETED.value,
+                "crops_by_frame": crops_by_frame
+            })
+
+            return context
                         
         except Exception as e:
             logger.error(f"Failed to extract crops for video {video_id}: {e}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
     
+
     def _remove_crop_background(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Remove background from player crops using the initialized grass mask detector.
+        Replaces the original crop with modified crop in memory. Does not upload to storage.
         
         Args:
             context: Pipeline context containing crop extraction results
@@ -686,304 +413,37 @@ class DataPrepPipeline(Pipeline):
         Returns:
             Dictionary with background removal results
         """
-        # Check if grass mask is enabled
+       
         if not self.enable_grass_mask:
             logger.info("Grass mask disabled - skipping background removal step")
             return {"status": StepStatus.ERROR.value, "error": "Background removal step called but grass mask is disabled"}
         
-        crops_extracted = context.get("crops_extracted", False)
+        crops_by_frame = context.get("crops_by_frame")
         video_guid = context.get("video_guid")
-        original_crops_folder = context.get("original_crops_folder")
-        grass_mask_initialized = context.get("grass_mask_initialized", False)
-        
-        if not crops_extracted or not original_crops_folder:
-            logger.warning("No crops extracted or original crops folder not found")
-            return {"status": StepStatus.ERROR.value, "error": "No crops extracted or original crops folder not found"}
-        
-        if not grass_mask_initialized:
-            logger.warning("Grass mask detector not initialized")
+
+        if not context.get("grass_mask_initialized"):
+            logger.error("Grass mask detector not initialized")
             return {"status": StepStatus.ERROR.value, "error": "Grass mask detector not initialized"}
         
+        crops_processed = 0
+
         try:
             logger.info(f"Removing background from crops for video: {video_guid}")
-            
-            # Get the video folder and create modified crops folder
-            video_folder = context.get("video_folder", f"{self.run_folder}/video_{video_guid}")
-            crops_folder = f"{video_folder}/crops"
-            modified_crops_folder = f"{crops_folder}/modified"
-            
-            # OPTIMIZATION: Use in-memory crops if available
-            crops_in_memory = context.get("crops_in_memory", {})
-            
-            logger.info(f"Background removal - crops_in_memory available: {len(crops_in_memory)} crops")
-            
-            if crops_in_memory:
-                logger.info(f"Using {len(crops_in_memory)} crops from memory (optimized)")
-                
-                # Log sample crop information for debugging
-                if len(crops_in_memory) > 0:
-                    sample_path, sample_crop = next(iter(crops_in_memory.items()))
-                    logger.debug(f"Sample crop: {sample_path}, shape: {sample_crop.shape}, dtype: {sample_crop.dtype}")
-                    logger.debug(f"Sample crop pixel [0,0]: {sample_crop[0,0]}")
-                
-                # Process crops directly from memory
-                modified_crops_in_memory = {}
-                crops_processed = 0
-                
-                # Create temporary directory for saving processed crops
-                temp_dir = f"/tmp/background_removal_{video_guid}"
-                os.makedirs(temp_dir, exist_ok=True)
-                
-                try:
-                    for rel_path, crop_img in crops_in_memory.items():
-                        try:
-                            # Remove background using the grass mask detector
-                            # Note: crops_in_memory contains RGB images, so we specify RGB input format
-                            processed_result = self.background_mask_detector.remove_background(
+            for frame in crops_by_frame:
+                for crop in frame:
+                      processed_crop = self.background_mask_detector.remove_background(
                                 crop_img, 
                                 input_format='RGB'
                             )
-                            
-                            # Ensure we have a single image (not a list)
-                            if isinstance(processed_result, list):
-                                processed_crop = processed_result[0]
-                            else:
-                                processed_crop = processed_result
-                            
-                            # Log background removal results for debugging
-                            if crops_processed < 3:  # Only log first few crops to avoid spam
-                                logger.debug(f"Crop {rel_path}: Original pixel [0,0]: {crop_img[0,0]}")
-                                logger.debug(f"Crop {rel_path}: Processed pixel [0,0]: {processed_crop[0,0]}")
-                            
-                            # Store in memory for next step
-                            modified_crops_in_memory[rel_path] = processed_crop
-                            
-                            # Parse crop information from rel_path (format: frame_{frame_id}/{frame_id}_{tracker_id}_{confidence}.jpg)
-                            path_parts = rel_path.split('/')
-                            if len(path_parts) >= 2:
-                                frame_folder = path_parts[0]  # e.g., "frame_123"
-                                crop_filename = path_parts[1]  # e.g., "123_456_0.850.jpg"
-                                
-                                # Extract frame_id and tracker_id from filename
-                                name_parts = crop_filename.split('_')
-                                if len(name_parts) >= 2:
-                                    frame_id = name_parts[0]
-                                    tracker_id = name_parts[1]
-                                    
-                                    # Create new path structure: video_folder/crops/modified/frame{frame_id}/crop_{tracker_id}/crop.jpg
-                                    new_storage_path = f"{modified_crops_folder}/frame{frame_id}/crop_{tracker_id}/crop.jpg"
-                                    
-                                    # Save the processed crop to temporary location
-                                    temp_modified_path = os.path.join(temp_dir, f"frame{frame_id}", f"crop_{tracker_id}", "crop.jpg")
-                                    os.makedirs(os.path.dirname(temp_modified_path), exist_ok=True)
-                                    
-                                    # Convert RGB to BGR for OpenCV saving (which will result in RGB on disk)
-                                    crop_bgr = cv2.cvtColor(processed_crop, cv2.COLOR_RGB2BGR)
-                                    if cv2.imwrite(temp_modified_path, crop_bgr):
-                                        # Upload the modified crop to Google Storage
-                                        if self.tenant_storage.upload_from_file(new_storage_path, temp_modified_path):
-                                            crops_processed += 1
-                                            logger.debug(f"Processed and uploaded crop: {new_storage_path}")
-                                        else:
-                                            logger.warning(f"Failed to upload modified crop: {new_storage_path}")
-                                    else:
-                                        logger.warning(f"Failed to save modified crop: {temp_modified_path}")
-                                else:
-                                    logger.warning(f"Invalid crop filename format: {crop_filename}")
-                            else:
-                                logger.warning(f"Invalid crop path format: {rel_path}")
-                                
-                        except Exception as crop_error:
-                            logger.warning(f"Failed to process crop {rel_path}: {crop_error}")
-                            continue
-                    
-                    logger.info(f"Successfully processed {crops_processed} crops from memory for video: {video_guid}")
-                    
-                    return {
-                        "background_removed": True,
-                        "video_guid": video_guid,
-                        "original_crops_folder": original_crops_folder,
-                        "modified_crops_folder": modified_crops_folder,
-                        "crops_processed": crops_processed,
-                        "total_crops_processed": len(crops_in_memory),
-                        "modified_crops_in_memory": modified_crops_in_memory,  # OPTIMIZATION: Pass to next step
-                        "optimization_used": "in_memory_processing"
-                    }
-                    
-                finally:
-                    # Clean up temporary directory
-                    if os.path.exists(temp_dir):
-                        try:
-                            shutil.rmtree(temp_dir)
-                            logger.debug(f"Cleaned up temporary background removal directory: {temp_dir}")
-                        except Exception as cleanup_error:
-                            logger.warning(f"Failed to cleanup temporary directory {temp_dir}: {cleanup_error}")
-            
-            else:
-                # FALLBACK: Original implementation using Google Storage
-                logger.info("Using fallback implementation with Google Storage downloads")
-                
-                # Create temporary directory for processing
-                temp_dir = f"/tmp/background_removal_{video_guid}"
-                os.makedirs(temp_dir, exist_ok=True)
-                
-                try:
-                    # Download all original crops from Google Storage
-                    temp_original_dir = os.path.join(temp_dir, "original")
-                    os.makedirs(temp_original_dir, exist_ok=True)
-                    
-                    # List all blobs in the original crops folder
-                    blobs = self.tenant_storage.list_blobs(prefix=f"{original_crops_folder}/")
-                    
-                    if not blobs:
-                        logger.error(f"No blobs found in original crops folder: {original_crops_folder}")
-                        return {"status": StepStatus.ERROR.value, "error": f"No crops found in {original_crops_folder}"}
-                    
-                    downloaded_crops = []
-                    crops_processed = 0
-                    failed_downloads = 0
-                    
-                    logger.info(f"Found {len(blobs)} blobs in original crops folder: {original_crops_folder}")
-                    logger.debug(f"User path prefix: {self.tenant_storage.config.user_path}/")
-                    logger.debug(f"Full crops folder path: {self.tenant_storage.config.user_path}/{original_crops_folder}")
-                    
-                    for blob_name in blobs:
-                        if blob_name.endswith('.jpg'):
-                            # Calculate local path maintaining directory structure
-                            # blob_name includes user_path prefix, so we need to calculate rel_path correctly
-                            user_path_prefix = f"{self.tenant_storage.config.user_path}/"
-                            full_original_crops_folder = f"{user_path_prefix}{original_crops_folder}"
-                            
-                            if blob_name.startswith(f"{full_original_crops_folder}/"):
-                                rel_path = blob_name[len(f"{full_original_crops_folder}/"):]
-                            else:
-                                # Fallback: try with just the original_crops_folder
-                                rel_path = blob_name[len(f"{original_crops_folder}/"):]
-                            
-                            local_path = os.path.join(temp_original_dir, rel_path)
-                            
-                            # Create directory structure if needed
-                            os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                            
-                            # Debug: Log the blob path being downloaded
-                            logger.debug(f"Attempting to download blob: {blob_name}")
-                            
-                            # IMPORTANT: The blob_name from list_blobs includes the user_path prefix,
-                            # but download_blob expects a path without the user_path prefix
-                            # So we need to strip the user_path prefix from the blob_name
-                            user_path_prefix = f"{self.tenant_storage.config.user_path}/"
-                            if blob_name.startswith(user_path_prefix):
-                                blob_path_for_download = blob_name[len(user_path_prefix):]
-                            else:
-                                blob_path_for_download = blob_name
-                            
-                            logger.debug(f"Downloading blob path: {blob_path_for_download}")
-                            
-                            # Download the crop
-                            if self.tenant_storage.download_blob(blob_path_for_download, local_path):
-                                downloaded_crops.append((blob_name, local_path, rel_path))
-                                logger.debug(f"Downloaded crop: {blob_name}")
-                            else:
-                                failed_downloads += 1
-                                logger.warning(f"Failed to download crop: {blob_name}")
-                                logger.warning(f"  Original blob name: {blob_name}")
-                                logger.warning(f"  Download path used: {blob_path_for_download}")
-                    
-                    # Check if too many downloads failed - this indicates a systemic issue
-                    if failed_downloads > 0 and len(downloaded_crops) == 0:
-                        logger.error(f"Failed to download any crops from {original_crops_folder}. This indicates a path or storage issue.")
-                        return {"status": StepStatus.ERROR.value, "error": f"Failed to download any crops from storage. Check paths and storage configuration."}
-                    
-                    if failed_downloads > len(downloaded_crops):
-                        logger.error(f"More downloads failed ({failed_downloads}) than succeeded ({len(downloaded_crops)}). This indicates a systemic issue.")
-                        return {"status": StepStatus.ERROR.value, "error": f"Majority of crop downloads failed. Check paths and storage configuration."}
-                    
-                    logger.info(f"Downloaded {len(downloaded_crops)} crops for background removal (failed: {failed_downloads})")
-                    
-                    # Process each crop to remove background
-                    for blob_name, local_path, rel_path in downloaded_crops:
-                        try:
-                            # Read the crop image
-                            crop_img = cv2.imread(local_path)
-                            
-                            if crop_img is None:
-                                logger.warning(f"Failed to read crop image: {local_path}")
-                                continue
-                            
-                            # Convert BGR to RGB since cv2.imread returns BGR but our crops are stored as RGB
-                            crop_rgb = cv2.cvtColor(crop_img, cv2.COLOR_BGR2RGB)
-                            
-                            # Remove background using the grass mask detector
-                            processed_result = self.background_mask_detector.remove_background(
-                                crop_rgb, 
-                                input_format='RGB'
-                            )
-                            
-                            # Ensure we have a single image (not a list)
-                            if isinstance(processed_result, list):
-                                processed_crop = processed_result[0]
-                            else:
-                                processed_crop = processed_result
-                            
-                            # Parse crop information from rel_path (format: frame_{frame_id}/{frame_id}_{tracker_id}_{confidence}.jpg)
-                            path_parts = rel_path.split('/')
-                            if len(path_parts) >= 2:
-                                frame_folder = path_parts[0]  # e.g., "frame_123"
-                                crop_filename = path_parts[1]  # e.g., "123_456_0.850.jpg"
-                                
-                                # Extract frame_id and tracker_id from filename
-                                name_parts = crop_filename.split('_')
-                                if len(name_parts) >= 2:
-                                    frame_id = name_parts[0]
-                                    tracker_id = name_parts[1]
-                                    
-                                    # Create new path structure: video_folder/crops/modified/frame{frame_id}/crop_{tracker_id}/crop.jpg
-                                    new_storage_path = f"{modified_crops_folder}/frame{frame_id}/crop_{tracker_id}/crop.jpg"
-                                    
-                                    # Save the processed crop to temporary location
-                                    temp_modified_path = os.path.join(temp_dir, "modified", f"frame{frame_id}", f"crop_{tracker_id}", "crop.jpg")
-                                    os.makedirs(os.path.dirname(temp_modified_path), exist_ok=True)
-                                    
-                                    # Convert RGB to BGR for OpenCV saving (which will result in RGB on disk)
-                                    crop_bgr = cv2.cvtColor(processed_crop, cv2.COLOR_RGB2BGR)
-                                    if cv2.imwrite(temp_modified_path, crop_bgr):
-                                        # Upload the modified crop to Google Storage
-                                        if self.tenant_storage.upload_from_file(new_storage_path, temp_modified_path):
-                                            crops_processed += 1
-                                            logger.debug(f"Processed and uploaded crop: {new_storage_path}")
-                                        else:
-                                            logger.warning(f"Failed to upload modified crop: {new_storage_path}")
-                                    else:
-                                        logger.warning(f"Failed to save modified crop: {temp_modified_path}")
-                                else:
-                                    logger.warning(f"Invalid crop filename format: {crop_filename}")
-                            else:
-                                logger.warning(f"Invalid crop path format: {rel_path}")
-                                
-                        except Exception as crop_error:
-                            logger.warning(f"Failed to process crop {local_path}: {crop_error}")
-                            continue
-                    
-                    logger.info(f"Successfully removed background from {crops_processed} crops for video: {video_guid}")
-                    
-                    return {
-                        "background_removed": True,
-                        "video_guid": video_guid,
-                        "original_crops_folder": original_crops_folder,
-                        "modified_crops_folder": modified_crops_folder,
-                        "crops_processed": crops_processed,
-                        "total_crops_downloaded": len(downloaded_crops),
-                        "optimization_used": "fallback_storage"
-                    }
-                    
-                finally:
-                    # Clean up temporary directory
-                    if os.path.exists(temp_dir):
-                        try:
-                            shutil.rmtree(temp_dir)
-                            logger.debug(f"Cleaned up temporary background removal directory: {temp_dir}")
-                        except Exception as cleanup_error:
-                            logger.warning(f"Failed to cleanup temporary directory {temp_dir}: {cleanup_error}")
+                      crop = processed_crop.copy()
+                      crops_processed += 1
+            context.update({
+                "status": StepStatus.COMPLETED.value,
+                "crops_wo_background": crops_processed
+            })
+            logger.info(f"Successfully removed background from {crops_processed} crops for video {video_guid}")
+            return context
+
                         
         except Exception as e:
             logger.error(f"Failed to remove background from crops for video {video_guid}: {e}")
@@ -991,7 +451,7 @@ class DataPrepPipeline(Pipeline):
     
     def _augment_crops(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Augment player crops for training and store them in the same directories as source crops.
+        Augment player crops for training and store them in structured GCS paths per frame.
         
         Args:
             context: Pipeline context containing crop processing results
@@ -1000,111 +460,43 @@ class DataPrepPipeline(Pipeline):
             Dictionary with augmentation results
         """
         video_guid = context.get("video_guid")
+        frames_guid = context.get("frames_guids")
+        crops_by_frame = context.get("crops_by_frame")
+
         
-        # Determine source crops based on whether grass mask is enabled
-        if self.enable_grass_mask:
-            # Use background-removed crops
-            background_removed = context.get("background_removed", False)
-            source_crops_folder = context.get("modified_crops_folder")
-            source_crops_in_memory = context.get("modified_crops_in_memory", {})
-            crops_processed = context.get("crops_processed", 0)
-            
-            if not background_removed or not source_crops_folder or crops_processed == 0:
-                logger.warning("No background-removed crops to augment")
-                return {"crops_augmented": False, "error": "No background-removed crops available"}
-            
-            logger.info(f"Augmenting {crops_processed} background-removed crops for video: {video_guid}")
-        else:
-            # Use original crops (no background removal)
-            crops_extracted = context.get("crops_extracted", False)
-            source_crops_folder = context.get("original_crops_folder")
-            source_crops_in_memory = context.get("crops_in_memory", {})
-            crops_processed = context.get("crops_uploaded", 0)
-            
-            if not crops_extracted or not source_crops_folder or crops_processed == 0:
-                logger.warning("No original crops to augment")
-                return {"crops_augmented": False, "error": "No original crops available"}
-            
-            logger.info(f"Augmenting {crops_processed} original crops for video: {video_guid} (grass mask disabled)")
+        logger.info(f"Augmenting crops for {video_guid}")
+
+        n_aug_crops = 0
         
         try:
-            logger.info(f"Using source crops from: {source_crops_folder}")
-            
-            # Create temporary directory for saving augmented crops
-            temp_dir = f"/tmp/augmentation_{video_guid}"
-            os.makedirs(temp_dir, exist_ok=True)
-            
-            augmented_crops_in_memory = {}
-            total_augmented = 0
-            source_crops = 0
-            
-            try:
-                # Use in-memory crops if available, otherwise download from storage
-                if source_crops_in_memory:
-                    logger.info(f"Using {len(source_crops_in_memory)} crops from memory (optimized)")
-                    crops_to_process = source_crops_in_memory.items()
-                    source_crops = len(source_crops_in_memory)
-                else:
-                    logger.info("Downloading crops from storage for augmentation")
-                    crops_to_process = self._download_crops_for_augmentation(source_crops_folder, temp_dir)
-                    source_crops = len(list(crops_to_process)) if hasattr(crops_to_process, '__len__') else 0
-                
-                # Process each crop for augmentation
-                for rel_path, crop_img in crops_to_process:
-                    try:
-                        # Parse crop path to extract frame_id and tracker_id
-                        frame_id, tracker_id = self._parse_crop_path(rel_path)
-                        if not frame_id or not tracker_id:
-                            logger.warning(f"Could not parse crop path: {rel_path}")
-                            continue
-                        
-                        # Generate augmented images (crop_img is expected to be RGB format)
-                        augmented_images = augment_images([crop_img])
-                        
-                        # Store original crop
-                        augmented_crops_in_memory[rel_path] = crop_img
-                        
-                        # Process and store each augmented image
-                        for i, aug_img in enumerate(augmented_images[1:], 1):  # Skip original at index 0
-                            aug_storage_path = f"{modified_crops_folder}/frame{frame_id}/crop_{tracker_id}/crop_aug{i}.jpg"
-                            aug_rel_path = f"frame{frame_id}/crop_{tracker_id}/crop_aug{i}.jpg"
-                            
-                            # Store in memory for next pipeline step
-                            augmented_crops_in_memory[aug_rel_path] = aug_img
-                            
-                            # Save and upload augmented crop
-                            if self._save_and_upload_crop(aug_img, aug_storage_path, temp_dir, frame_id, tracker_id, f"crop_aug{i}.jpg"):
-                                total_augmented += 1
-                            
-                    except Exception as crop_error:
-                        logger.warning(f"Failed to augment crop {rel_path}: {crop_error}")
-                        continue
-                
-                logger.info(f"Successfully augmented {total_augmented} crops from {source_crops} source crops for video: {video_guid}")
-                
-                return {
-                    "crops_augmented": True,
-                    "video_guid": video_guid,
-                    "source_crops_folder": source_crops_folder,
-                    "total_augmented": total_augmented,
-                    "source_crops": source_crops,
-                    "augmented_crops_in_memory": augmented_crops_in_memory,
-                    "optimization_used": "in_memory_processing" if source_crops_in_memory else "fallback_storage",
-                    "grass_mask_enabled": self.enable_grass_mask
-                }
-                
-            finally:
-                # Clean up temporary directory
-                if os.path.exists(temp_dir):
-                    try:
-                        shutil.rmtree(temp_dir)
-                        logger.debug(f"Cleaned up temporary augmentation directory: {temp_dir}")
-                    except Exception as cleanup_error:
-                        logger.warning(f"Failed to cleanup temporary directory {temp_dir}: {cleanup_error}")
-            
+            for frame, frame_guid in zip(crops_by_frame, frames_guid):
+                for crop in frame:
+                    temp_crop_guid = create_crop_id(frame_id=frame_guid)
+                    aug_crops = augment_images([crop])
+                    for i, aug_crop in enumerate(aug_crops):
+                        file_name = create_aug_crop_id(temp_crop_guid, i)
+                        blob_path = self.path_manager.get_path("augmented_crops",
+                                                               video_id=video_guid, 
+                                                               frame_id=frame_guid,
+                                                               orig_crop_id=temp_crop_guid)
+                        blob_name = f"{blob_path.rstrip('/')}/{file_name}.jpg"
+                        success = self.tenant_storage.upload_from_bytes(blob_name, aug_crop)
+                        if not success:
+                            logger.error(f"Failed to upload augmented crop {file_name} for video {video_id} at frame {frame_id}")
+                            return {"status": StepStatus.ERROR.value, "error": f"Failed to upload augmented crop {file_name}"}
+                        n_aug_crops += 1
+            logger.info(f"Successfully augmented crops for video {video_guid}")
+            context.update({
+                "status": StepStatus.COMPLETED.value,
+                "crops_augmented": True,
+                "n_augmented_crops": n_aug_crops
+            })
+            return context
+        
         except Exception as e:
-            logger.error(f"Failed to augment crops for video {video_guid}: {e}")
+            logger.error(f"Failed to augment crops for video {video_id}: {e}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
+                    
     
     def _download_crops_for_augmentation(self, source_crops_folder: str, temp_dir: str):
         """
@@ -1228,434 +620,92 @@ class DataPrepPipeline(Pipeline):
             Dictionary with dataset creation results
         """
         crops_augmented = context.get("crops_augmented", False)
-        video_id = context.get("video_guid")  # Keep for backward compatibility
+        frames_guids = context.get("frames_guids")
+        video_guid = context.get("video_guid")
+
+       
         
         if not crops_augmented:
             logger.warning("No augmented crops to create datasets from")
-            return {"datasets_created": False, "error": "No augmented crops available"}
+            return {"status": StepStatus.ERROR.value, "error": "No augmented crops available"}
         
         try:
-            logger.info(f"Creating training and validation sets for video: {video_id}")
-            
-            # OPTIMIZATION: Use in-memory crops if available (now includes augmented crops)
-            augmented_crops_in_memory = context.get("augmented_crops_in_memory", {})
-            
-            if augmented_crops_in_memory:
-                logger.info(f"Using {len(augmented_crops_in_memory)} augmented crops from memory (optimized)")
-                
-                # Create temporary directory for processing
-                temp_dir = f"/tmp/datasets_{video_id}"
-                os.makedirs(temp_dir, exist_ok=True)
-                
-                try:
-                    # Organize crops by frame for frame-specific train/val splits
-                    crops_by_frame = {}
-                    
-                    # Group crops by frame using the new structure
-                    for rel_path, crop_img in augmented_crops_in_memory.items():
-                        # Extract frame information from path 
-                        # Format: frame_abc123/crop_456/crop.jpg or frame_abc123/crop_456/crop_aug1.jpg
-                        path_parts = rel_path.split('/')
-                        if len(path_parts) >= 2:
-                            frame_id = path_parts[0]  # e.g., "frame_abc123"
-                            
-                            if frame_id not in crops_by_frame:
-                                crops_by_frame[frame_id] = {}
-                            
-                            crops_by_frame[frame_id][rel_path] = crop_img
+            logger.info(f"Creating training and validation sets for video {video_guid}")
+
+            for frame_guid in frames_guids:
+           
+                orig_crop_path = self.path_manager.get_path("orig_crops", video_id=video_guid, frame_id=frame_guid).rstrip('/')
+                orig_crops_names = self.tenant_storage.list_blobs(prefix=f"{orig_crop_path}/")
+
+                dataset_guid = create_dataset_id()
+                train_dataset_path = self.path_manager.get_path("train_dataset", dataset_id=dataset_guid).rstrip('/')
+                val_dataset_path = self.path_manager.get_path("val_dataset", dataset_id=dataset_guid).rstrip('/')
+
+                ttl_train=0
+                ttl_val=0
+
+                for orig_crop_name in orig_crops_names:
+
+                    orig_crop_guid = os.path.basename(orig_crop_name).replace('.jpg', '')
+                    aug_img_path = self.path_manager.get_path("augmented_crops", video_id=video_guid, frame_id=frame_guid, orig_crop_id=orig_crop_guid).rstrip('/')
+                    aug_crops_names = self.tenant_storage.list_blobs(prefix=f"{aug_img_path}/")
+                    random.shuffle(aug_crops_names)
+                    n_crops = len(aug_crops_names)
+                    n_train = int(n_crops * self.train_ratio)  
+
+    
+
+                    for i in range(n_crops):
+                        file_name = os.path.basename(aug_crops_names[i])
+                        if i < n_train:
+                            self.tenant_storage.copy_blob(aug_crops_names[i], f"{train_dataset_path}/{file_name}")
+                            ttl_train += 1
                         else:
-                            frame_id = 'unknown_frame'
-                            track_folder = 'unknown'
-                        
-                    
-                    logger.info(f"Prepared {len(augmented_crops_in_memory)} crops across {len(crops_by_frame)} frames")
-                    
-                    # Process each frame separately - one dataset per frame
-                    total_train_samples = 0
-                    total_val_samples = 0
-                    datasets_created = []
-                    
-                    for frame_id, frame_crops in crops_by_frame.items():
-                        # Skip frames with no crops
-                        if not frame_crops:
-                            logger.warning(f"Skipping frame {frame_id} - no crops available")
-                            continue
-                            
-                        logger.info(f"Processing frame {frame_id} with {len(frame_crops)} crops")
-                        
-                        # Generate dataset_id for this frame (one dataset per frame)
-                        dataset_id = create_dataset_id()
-                        
-                        # Create structured paths for train and val datasets
-                        train_dataset_path = self.path_manager.get_path("train_dataset", 
-                                                                      tenant_id=self.tenant_id, 
-                                                                      dataset_id=dataset_id)
-                        val_dataset_path = self.path_manager.get_path("val_dataset", 
-                                                                    tenant_id=self.tenant_id, 
-                                                                    dataset_id=dataset_id)
-                        
-                        # Create temporary frame directory
-                        temp_frame_dir = os.path.join(temp_dir, frame_id)
-                        temp_crops_dir = os.path.join(temp_frame_dir, "crops")
-                        os.makedirs(temp_crops_dir, exist_ok=True)
-                        
-                        # Save crops for this frame to temporary directory
-                        saved_crops_count = 0
-                        for rel_path, crop_img in frame_crops.items():
-                            # Use just the crop part of the path (remove frame prefix)
-                            crop_local_path = '/'.join(rel_path.split('/')[1:])  # Remove "frame_abc123/" part
-                            local_path = os.path.join(temp_crops_dir, crop_local_path)
-                            
-                            # Create directory structure if needed
-                            os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                            
-                            # Save crop to temporary location
-                            # Convert RGB to BGR for OpenCV saving (which will result in RGB on disk)
-                            crop_bgr = cv2.cvtColor(crop_img, cv2.COLOR_RGB2BGR)
-                            if cv2.imwrite(local_path, crop_bgr):
-                                saved_crops_count += 1
-                                logger.debug(f"Saved crop: {local_path}")
-                            else:
-                                logger.warning(f"Failed to save crop: {local_path}")
-                        
-                        logger.info(f"Saved {saved_crops_count} crops to {temp_crops_dir}")
-                        
-                        # Create train/val split for this frame
-                        temp_frame_datasets_dir = os.path.join(temp_frame_dir, "datasets")
-                        
-                        # Only attempt train/val split if we have crops
-                        if saved_crops_count > 0:
-                            try:
-                                create_train_val_split(
-                                    source_folder=temp_crops_dir,
-                                    destin_folder=temp_frame_datasets_dir,
-                                    train_ratio=0.8
-                                )
-                                logger.info(f"Successfully created train/val split for frame {frame_id} -> dataset {dataset_id}")
-                            except Exception as split_error:
-                                logger.warning(f"Failed to create train/val split for frame {frame_id}: {split_error}")
-                                continue
-                        else:
-                            logger.warning(f"No crops saved for frame {frame_id}, skipping train/val split")
-                            continue
-                        
-                        # Upload frame-specific train and val datasets to structured GCS paths
-                        frame_train_samples = 0
-                        frame_val_samples = 0
-                        
-                        # Upload train dataset for this frame to structured path
-                        train_local_dir = os.path.join(temp_frame_datasets_dir, "train")
-                        if os.path.exists(train_local_dir):
-                            for root, dirs, files in os.walk(train_local_dir):
-                                for file in files:
-                                    if file.endswith('.jpg'):
-                                        local_path = os.path.join(root, file)
-                                        rel_path = os.path.relpath(local_path, train_local_dir)
-                                        storage_path = f"{train_dataset_path}/{rel_path}"
-                                        
-                                        if self.tenant_storage.upload_from_file(storage_path, local_path):
-                                            frame_train_samples += 1
-                                            logger.debug(f"Uploaded train sample: {storage_path}")
-                                        else:
-                                            logger.warning(f"Failed to upload train sample: {storage_path}")
-                        
-                        # Upload val dataset for this frame to structured path
-                        val_local_dir = os.path.join(temp_frame_datasets_dir, "val")
-                        if os.path.exists(val_local_dir):
-                            for root, dirs, files in os.walk(val_local_dir):
-                                for file in files:
-                                    if file.endswith('.jpg'):
-                                        local_path = os.path.join(root, file)
-                                        rel_path = os.path.relpath(local_path, val_local_dir)
-                                        storage_path = f"{val_dataset_path}/{rel_path}"
-                                        
-                                        if self.tenant_storage.upload_from_file(storage_path, local_path):
-                                            frame_val_samples += 1
-                                            logger.debug(f"Uploaded val sample: {storage_path}")
-                                        else:
-                                            logger.warning(f"Failed to upload val sample: {storage_path}")
-                        
-                        total_train_samples += frame_train_samples
-                        total_val_samples += frame_val_samples
-                        
-                        # Record this dataset creation
-                        datasets_created.append({
-                            "frame_id": frame_id,
-                            "dataset_id": dataset_id,
-                            "train_dataset_path": train_dataset_path,
-                            "val_dataset_path": val_dataset_path,
-                            "train_samples": frame_train_samples,
-                            "val_samples": frame_val_samples
-                        })
-                        
-                        logger.info(f"Frame {frame_id} -> Dataset {dataset_id}: {frame_train_samples} train samples, {frame_val_samples} val samples")
-                    
-                    logger.info(f"Successfully created {len(datasets_created)} datasets for video: {video_id}")
-                    logger.info(f"Total training samples: {total_train_samples}, Total validation samples: {total_val_samples}")
-                    
-                    return {
-                        "datasets_created": True,
-                        "video_guid": video_id,
-                        "datasets_created_list": datasets_created,
-                        "training_samples": total_train_samples,
-                        "validation_samples": total_val_samples,
-                        "frames_processed": len(crops_by_frame),
-                        "total_crops_processed": len(augmented_crops_in_memory),
-                        "optimization_used": "in_memory_processing_structured_paths"
-                    }
-                    
-                finally:
-                    # Clean up temporary directory
-                    if os.path.exists(temp_dir):
-                        try:
-                            shutil.rmtree(temp_dir)
-                            logger.debug(f"Cleaned up temporary datasets directory: {temp_dir}")
-                        except Exception as cleanup_error:
-                            logger.warning(f"Failed to cleanup temporary directory {temp_dir}: {cleanup_error}")
-            
-            else:
-                # FALLBACK: Original implementation using Google Storage
-                logger.info("Using fallback implementation with Google Storage downloads")
-                
-                # Create temporary directory for processing
-                temp_dir = f"/tmp/datasets_{video_id}"
-                os.makedirs(temp_dir, exist_ok=True)
-                
-                try:
-                    # Download all modified crops from Google Storage
-                    temp_crops_dir = os.path.join(temp_dir, "crops")
-                    os.makedirs(temp_crops_dir, exist_ok=True)
-                    
-                    # List all blobs in the modified crops folder (now includes augmented crops)
-                    blobs = self.tenant_storage.list_blobs(prefix=f"{modified_crops_folder}/")
-                    
-                    # Organize crops by frame
-                    crops_by_frame = {}
-                    track_folders = set()
-                    
-                    for blob_name in blobs:
-                        if blob_name.endswith('.jpg'):
-                            # Calculate relative path
-                            user_path_prefix = f"{self.tenant_storage.config.user_path}/"
-                            if blob_name.startswith(user_path_prefix):
-                                blob_path_for_download = blob_name[len(user_path_prefix):]
-                            else:
-                                blob_path_for_download = blob_name
-                            
-                            # Extract the relative path structure
-                            if blob_name.startswith(f"{user_path_prefix}{modified_crops_folder}/"):
-                                rel_path = blob_name[len(f"{user_path_prefix}{modified_crops_folder}/"):]
-                            else:
-                                rel_path = blob_name[len(f"{modified_crops_folder}/"):]
-                            
-                            # Extract frame information from path
-                            path_parts = rel_path.split('/')
-                            if len(path_parts) >= 2:
-                                frame_id = path_parts[0]  # e.g., "frame123"
-                                crop_folder = path_parts[1]  # e.g., "crop_456"
-                                track_folder = f"{frame_id}_{crop_folder}"
-                            else:
-                                frame_id = 'unknown_frame'
-                                track_folder = 'unknown'
-                            
-                            track_folders.add(track_folder)
-                            
-                            if frame_id not in crops_by_frame:
-                                crops_by_frame[frame_id] = []
-                            
-                            crops_by_frame[frame_id].append((blob_name, blob_path_for_download, rel_path))
-                    
-                    logger.info(f"Found {sum(len(crops) for crops in crops_by_frame.values())} augmented crops across {len(crops_by_frame)} frames from {len(track_folders)} tracks")
-                    
-                    # Process each frame separately
-                    total_train_samples = 0
-                    total_val_samples = 0
-                    
-                    for frame_id, frame_crop_blobs in crops_by_frame.items():
-                        # Skip frames with no crops
-                        if not frame_crop_blobs:
-                            logger.warning(f"Skipping frame {frame_id} - no crops available")
-                            continue
-                            
-                        logger.info(f"Processing frame {frame_id} with {len(frame_crop_blobs)} crops")
-                        
-                        # Create temporary frame directory
-                        temp_frame_dir = os.path.join(temp_dir, frame_id)
-                        temp_frame_crops_dir = os.path.join(temp_frame_dir, "crops")
-                        os.makedirs(temp_frame_crops_dir, exist_ok=True)
-                        
-                        # Download crops for this frame
-                        downloaded_crops = []
-                        for blob_name, blob_path_for_download, rel_path in frame_crop_blobs:
-                            # Use just the crop part of the path (remove frame prefix)
-                            crop_local_path = '/'.join(rel_path.split('/')[1:])  # Remove "frame123/" part
-                            local_path = os.path.join(temp_frame_crops_dir, crop_local_path)
-                            os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                            
-                            # Download the crop
-                            if self.tenant_storage.download_blob(blob_path_for_download, local_path):
-                                downloaded_crops.append((blob_name, local_path, crop_local_path))
-                                logger.debug(f"Downloaded crop: {blob_name}")
-                            else:
-                                logger.warning(f"Failed to download crop: {blob_name}")
-                                logger.warning(f"  Original blob name: {blob_name}")
-                                logger.warning(f"  Download path used: {blob_path_for_download}")
-                        
-                        logger.info(f"Downloaded {len(downloaded_crops)} crops for frame {frame_id}")
-                        
-                        # Create train/val split for this frame
-                        temp_frame_datasets_dir = os.path.join(temp_frame_dir, "datasets")
-                        
-                        # Only attempt train/val split if we have crops
-                        if len(downloaded_crops) > 0:
-                            try:
-                                create_train_val_split(
-                                    source_folder=temp_frame_crops_dir,
-                                    destin_folder=temp_frame_datasets_dir,
-                                    train_ratio=0.8
-                                )
-                                logger.info(f"Successfully created train/val split for frame {frame_id}")
-                            except Exception as split_error:
-                                logger.warning(f"Failed to create train/val split for frame {frame_id}: {split_error}")
-                                continue
-                        else:
-                            logger.warning(f"No crops downloaded for frame {frame_id}, skipping train/val split")
-                        
-                        # Upload frame-specific train and val datasets to Google Storage
-                        frame_train_samples = 0
-                        frame_val_samples = 0
-                        
-                        # Upload train dataset for this frame
-                        train_local_dir = os.path.join(temp_frame_datasets_dir, "train")
-                        if os.path.exists(train_local_dir):
-                            for root, dirs, files in os.walk(train_local_dir):
-                                for file in files:
-                                    if file.endswith('.jpg'):
-                                        local_path = os.path.join(root, file)
-                                        rel_path = os.path.relpath(local_path, train_local_dir)
-                                        storage_path = f"{datasets_folder}/{frame_id}/train/{rel_path}"
-                                        
-                                        if self.tenant_storage.upload_from_file(storage_path, local_path):
-                                            frame_train_samples += 1
-                                            logger.debug(f"Uploaded train sample: {storage_path}")
-                                        else:
-                                            logger.warning(f"Failed to upload train sample: {storage_path}")
-                        
-                        # Upload val dataset for this frame
-                        val_local_dir = os.path.join(temp_frame_datasets_dir, "val")
-                        if os.path.exists(val_local_dir):
-                            for root, dirs, files in os.walk(val_local_dir):
-                                for file in files:
-                                    if file.endswith('.jpg'):
-                                        local_path = os.path.join(root, file)
-                                        rel_path = os.path.relpath(local_path, val_local_dir)
-                                        storage_path = f"{datasets_folder}/{frame_id}/val/{rel_path}"
-                                        
-                                        if self.tenant_storage.upload_from_file(storage_path, local_path):
-                                            frame_val_samples += 1
-                                            logger.debug(f"Uploaded val sample: {storage_path}")
-                                        else:
-                                            logger.warning(f"Failed to upload val sample: {storage_path}")
-                        
-                        total_train_samples += frame_train_samples
-                        total_val_samples += frame_val_samples
-                        
-                        logger.info(f"Frame {frame_id}: {frame_train_samples} train samples, {frame_val_samples} val samples")
-                    
-                    logger.info(f"Successfully created training and validation sets for video: {video_guid}")
-                    logger.info(f"Total training samples: {total_train_samples}, Total validation samples: {total_val_samples}")
-                    
-                    return {
-                        "datasets_created": True,
-                        "video_guid": video_guid,
-                        "datasets_folder": datasets_folder,
-                        "training_samples": total_train_samples,
-                        "validation_samples": total_val_samples,
-                        "frames_processed": len(crops_by_frame),
-                        "total_crops_processed": sum(len(crops) for crops in crops_by_frame.values()),
-                        "tracks_processed": len(track_folders),
-                        "optimization_used": "fallback_storage"
-                    }
-                    
-                finally:
-                    # Clean up temporary directory
-                    if os.path.exists(temp_dir):
-                        try:
-                            shutil.rmtree(temp_dir)
-                            logger.debug(f"Cleaned up temporary datasets directory: {temp_dir}")
-                        except Exception as cleanup_error:
-                            logger.warning(f"Failed to cleanup temporary directory {temp_dir}: {cleanup_error}")
-                        
+                            self.tenant_storage.copy_blob(aug_crops_names[i], f"{val_dataset_path}/{file_name}")
+                            ttl_val += 1
+
+                logger.info(f"Created {dataset_guid} with {ttl_train} training and {ttl_val} val crops for {frame_guid}")
+
+            context.update({
+                "status": StepStatus.COMPLETED.value,
+                "datasets_created": True,
+                "total_train_samples": ttl_train,
+                "total_val_samples": ttl_val
+            })
+            return context
+        
         except Exception as e:
             logger.error(f"Failed to create training and validation sets for video {video_guid}: {e}")
-            # Still need to return datasets_folder for consistency
-            video_folder = context.get("video_folder", f"{self.run_folder}/video_{video_guid}")
-            datasets_folder = f"{video_folder}/datasets"
-            return {"datasets_created": False, "error": str(e), "datasets_folder": datasets_folder}
+            return {"status": StepStatus.ERROR.value, "error": str(e)}
+                
+                
     
     
-    def _validate_video_resolution(self, video_path: str) -> bool:
+    def _validate_video_resolution(self, width: int, height: int) -> bool:
         """
-        Validate that video resolution is at least 1920 by 1080 pixels.
+        Validate that video resolution complies with minimum requirements.
         
         Args:
-            video_path: Path to the video file
+            width: Width of the video, in pixels
+            height: Height of the video, in pixels
             
         Returns:
             True if resolution is adequate, False otherwise
         """
-        try:
-            # Check if file exists
-            if not os.path.exists(video_path):
-                logger.error(f"Video file does not exist: {video_path}")
-                return False
-            
-            # Check if file is not empty
-            if os.path.getsize(video_path) == 0:
-                logger.error(f"Video file is empty: {video_path}")
-                return False
-            
-            cap = cv2.VideoCapture(video_path)
-            
-            if not cap.isOpened():
-                logger.error(f"OpenCV could not open video file: {video_path}")
-                logger.error("This could be due to:")
-                logger.error("1. Unsupported video format")
-                logger.error("2. Corrupted video file")
-                logger.error("3. Missing codecs")
-                logger.error("4. File permissions issue")
-                return False
-            
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            
-            cap.release()
-            
-            is_valid = width >= 1920 and height >= 1080
-            logger.info(f"Video resolution: {width}x{height}, Valid: {is_valid}")
-            
-            if not is_valid:
-                logger.error(f"Video resolution {width}x{height} is below minimum requirement of 1920x1080")
-            
-            return is_valid
-            
-        except Exception as e:
-            logger.error(f"Error validating video resolution for {video_path}: {e}")
-            return False
+        
+        return (width >= MIN_VIDEO_RESOLUTION[0] and height >= MIN_VIDEO_RESOLUTION[1])
+           
     
-    def _extract_video_metadata(self, video_path: str, original_blob_name: str, video_id: str) -> Dict[str, Any]:
+    def _extract_video_metadata(self, cap) -> Dict[str, Any]:
         """
         Extract metadata from video file.
         
         Args:
-            video_path: Path to the video file
-            original_blob_name: Original blob name in Google Storage
-            video_id: Generated structured ID for the video
+            cap: OpenCV VideoCapture object
             
         Returns:
             Dictionary with video metadata
         """
-        cap = cv2.VideoCapture(video_path)
         
         if not cap.isOpened():
             raise RuntimeError(f"Could not open video for metadata extraction: {video_path}")
@@ -1667,23 +717,12 @@ class DataPrepPipeline(Pipeline):
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         duration = frame_count / fps if fps > 0 else 0
         
-        cap.release()
-        
-        # Get file size
-        file_size = os.path.getsize(video_path)
-        
         metadata = {
-            "video_guid": video_id,
-            "original_name": os.path.basename(original_blob_name),
-            "original_blob_name": original_blob_name,
-            "processed_name": f"{video_id}.mp4",
             "width": width,
             "height": height,
             "fps": fps,
             "frame_count": frame_count,
-            "duration_seconds": duration,
-            "file_size_bytes": file_size,
-            "processed_at": datetime.now().isoformat()
+            "duration_seconds": duration
         }
         
         return metadata
@@ -1698,125 +737,86 @@ class DataPrepPipeline(Pipeline):
         Returns:
             Dictionary with extracted frames data
         """
-        logger.warning("FRAME_DEBUG: Frame extraction method called with modified code")
+        video_blob_name = context.get("video_blob_name", None)
+        video_guid = context.get("video_guid", None)
         
-        loaded_video = context.get("loaded_video")
         
-        if not loaded_video:
+        if not video_blob_name:
             logger.error("No loaded video for frame extraction - previous step failed")
-            return {"status": StepStatus.ERROR.value, "error": "No loaded video provided - video loading failed"}
+            return {"status": StepStatus.ERROR.value, "error": "No  video found - video loading failed"}
+       
         
-        temp_path = loaded_video["temp_path"]
-        video_id = loaded_video["video_guid"]  # Note: keeping "video_guid" key for backward compatibility
-        
-        try:
-            cap = cv2.VideoCapture(temp_path)
-            
+        with self.tenant_storage.get_video_capture(video_blob_name) as cap:
+
             if not cap.isOpened():
-                raise RuntimeError(f"Could not open video for frame extraction: {temp_path}")
-            
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                logger.error(f"Could not open video for frame extraction: {video_blob_name}")
+                return {"status": StepStatus.ERROR.value, "error": f"Could not open video: {video_blob_name}"}
+
+            video_metadata = self._extract_video_metadata(cap)
+
+            if not self._validate_video_resolution(video_metadata["width"], video_metadata["height"]):
+                logger.error(f"Video resolution {video_metadata['width']}x{video_metadata['height']} is below minimum requirement")
+                return {"status": StepStatus.ERROR.value, "error": "Video resolution is below minimum requirements"}
+
+            total_frames = video_metadata["frame_count"]
             
             if total_frames <= 0:
-                raise RuntimeError(f"Video has no frames or invalid frame count: {total_frames}")
+                logger.error(f"Video has no frames or invalid frame count: {total_frames}")
+                return {"status": StepStatus.ERROR.value, "error": f"Invalid frame count: {total_frames}"}
             
             # Calculate initial frame positions (frames_per_video frames equally spaced)
             frame_positions = [int(i * total_frames / self.frames_per_video) for i in range(self.frames_per_video)]
             
             frames_data = []
-            frame_ids = []
-            extracted_frame_paths = {}  # Map frame_id to path
+            frames_guids = []
+            extracted_frame_paths = {}
             
-            logger.warning(f"FRAME_DEBUG: Starting frame extraction loop for {len(frame_positions)} positions")
+            logger.debug(f"Starting frame extraction for {len(frame_positions)} positions")
             
             for frame_position in frame_positions:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_position)
-                ret, frame = cap.read()
-                logger.warning(f"FRAME_DEBUG: Processing frame {frame_position}, read success: {ret}")
-                if ret:
+                _, frame = cap.read()
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) 
+                logger.debug(f"Processing frame {frame_position}")
                     # Generate structured frame ID
-                    frame_id = create_frame_id()
+                frame_guid = create_frame_id()
+
+                
+                frames_data.append(frame)
+                frames_guids.append(frame_guid)
+                
+                # Create structured path for extracted frames
+                frame_folder = self.path_manager.get_path("extracted_frames", 
+                                                        video_id=video_guid, 
+                                                        frame_id=frame_guid)
+                
+                # Save frame to Google Storage using structured path
+                frame_filename = f"{frame_guid}.jpg"
+                frame_blob_path = f"{frame_folder.rstrip('/')}/{frame_filename}"
+
+
+                success = self.tenant_storage.upload_from_bytes(frame_blob_path, frame)
+                if not success:
+                    logger.error(f"Failed to upload {frame_guid} to storage path: {frame_blob_path}")
+                    return {"status": StepStatus.ERROR.value, "error": f"Failed to upload frame {frame_guid} to storage path: {frame_blob_path}"}
+           
                     
-                    frames_data.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                    frame_ids.append(frame_id)
-                    
-                    # Create structured path for extracted frames
-                    frame_folder = self.path_manager.get_path("extracted_frames", 
-                                                            tenant_id=self.tenant_id, 
-                                                            video_id=video_id, 
-                                                            frame_id=frame_id)
-                    extracted_frame_paths[frame_id] = frame_folder
-                    
-                    # Save frame to Google Storage using structured path
-                    frame_filename = f"frame_{frame_id}.jpg"
-                    frame_blob_path = f"{frame_folder}/{frame_filename}"
-                    
-                    # Create temporary file for the frame
-                    temp_frame_path = f"/tmp/frame_{video_id}_{frame_id}.jpg"
-                    try:
-                        # Save frame as JPEG
-                        success = cv2.imwrite(temp_frame_path, frame)
-                        if not success:
-                            logger.error(f"Failed to write frame {frame_id} to temporary file {temp_frame_path}")
-                            continue
-                        
-                        # Verify the file exists and has content
-                        if not os.path.exists(temp_frame_path):
-                            logger.error(f"Temporary frame file does not exist: {temp_frame_path}")
-                            continue
-                        
-                        file_size = os.path.getsize(temp_frame_path)
-                        if file_size == 0:
-                            logger.error(f"Temporary frame file is empty: {temp_frame_path}")
-                            continue
-                        
-                        logger.warning(f"FRAME_DEBUG: Created temporary frame file: {temp_frame_path} (size: {file_size} bytes)")
-                        
-                        # Upload to Google Storage using structured path
-                        upload_success = self.tenant_storage.upload_from_file(frame_blob_path, temp_frame_path)
-                        if not upload_success:
-                            logger.warning(f"FRAME_DEBUG: Failed to upload frame {frame_id} to storage path: {frame_blob_path}")
-                        else:
-                            logger.warning(f"FRAME_DEBUG: Successfully uploaded frame {frame_id} to {frame_blob_path}")
-                    except Exception as frame_error:
-                        logger.warning(f"Failed to save frame {frame_id}: {frame_error}")
-                    finally:
-                        # Clean up temporary frame file
-                        if os.path.exists(temp_frame_path):
-                            try:
-                                os.remove(temp_frame_path)
-                            except Exception as cleanup_error:
-                                logger.warning(f"Failed to cleanup temp frame file {temp_frame_path}: {cleanup_error}")
-            
-            cap.release()
 
             if len(frames_data) == 0:
                 raise RuntimeError(f"No frames could be extracted from video")
 
             logger.info(f"Extracted and saved {len(frames_data)} frames with structured IDs")
-            
-            return {
-                "frames_data": frames_data,
-                "video_guid": video_id,  # Keep for backward compatibility
-                "frames_extracted": frame_ids,
-                "extracted_frame_paths": extracted_frame_paths,  # New structured paths
-                "frames_saved_count": len(frames_data)
-            }
-            
-        except Exception as e:
-            logger.error(f"Critical error extracting frames from video {video_id}: {e}")
-            return {"status": StepStatus.ERROR.value, "error": str(e)}
-        finally:
-            # Clean up temporary file after frame extraction
-            loaded_video = context.get("loaded_video", {})
-            temp_path = loaded_video.get("temp_path")
-            if temp_path and os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                    logger.debug(f"Cleaned up temporary file: {temp_path}")
-                except Exception as cleanup_error:
-                    logger.warning(f"Failed to cleanup temporary file {temp_path}: {cleanup_error}")
 
+            context.update({
+                "status": StepStatus.COMPLETED.value,
+                "frames_data": frames_data,
+                "video_guid": video_guid,
+                "frames_guids": frames_guids,
+                "frame_ids": frame_positions
+            })
+            
+            return context
+            
 
     def _initialize_grass_mask(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1837,24 +837,8 @@ class DataPrepPipeline(Pipeline):
         video_guid = context.get("video_guid")
         
         if not frames_data:
-            # If frames_data is missing (e.g., when resuming from checkpoint), try to regenerate it
-            logger.warning("No frames data for grass mask initialization - attempting to regenerate from video")
-            
-            # Try to get loaded_video info to re-extract frames
-            loaded_video = context.get("loaded_video")
-            if loaded_video and loaded_video.get("temp_path"):
-                logger.info("Attempting to re-extract frames for grass mask initialization")
-                # Re-extract frames for this step
-                frames_result = self._extract_frames_for_detections(context)
-                if frames_result.get("status") == StepStatus.ERROR.value:
-                    return frames_result
-                frames_data = frames_result.get("frames_data")
-                # Update context with re-extracted frames
-                context["frames_data"] = frames_data
-            
-            if not frames_data:
-                logger.warning("No frames data for grass mask initialization")
-                return {"status": StepStatus.ERROR.value, "error": "No frames data provided"}
+            logger.warning("No frames data for grass mask initialization")
+            return {"status": StepStatus.ERROR.value, "error": "No frames data provided"}
         
         try:
             logger.info(f"Initializing grass mask detector for video: {video_guid}")
@@ -1883,27 +867,29 @@ class DataPrepPipeline(Pipeline):
                         background_stats[key] = str(value)
                 else:
                     background_stats[key] = value
-            
-            return {
+
+            context.update({
+                "status": StepStatus.COMPLETED.value,
                 "grass_mask_initialized": True,
-                "video_guid": video_guid,
                 "background_stats": background_stats
-            }
+            })
+            
+            return context
             
         except Exception as e:
             logger.error(f"Failed to initialize grass mask detector for video {video_guid}: {e}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
 
 
-def run_dataprep_pipeline(tenant_id: str = "tenant1", video_path: str = "", delete_original_raw_videos: bool = False, frames_per_video: int = 20, verbose: bool = False, save_intermediate: bool = False) -> Dict[str, Any]:
+def run_dataprep_pipeline(tenant_id: str = "tenant1", video_path: str = "", delete_original_raw_videos: bool = False, frames_per_video: int = detection_config.frames_per_video, verbose: bool = False, save_intermediate: bool = False) -> Dict[str, Any]:
     """
     Convenience function to run the data preparation pipeline.
 
     Args:
-        tenant_id: The tenant ID to process videos for (default: "tenant1")
+        tenant_id: The tenant ID to process videos for
         video_path: Path to the video file to process
         delete_original_raw_videos: Whether to delete original raw video files after processing (default: False)
-        frames_per_video: Number of frames to extract per video (default: 20)
+        frames_per_video: Number of frames to extract per video
         verbose: Whether to enable verbose logging (default: False)
         save_intermediate: Whether to save intermediate results (default: False)
         
