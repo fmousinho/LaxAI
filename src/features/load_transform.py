@@ -14,21 +14,29 @@ import logging
 import json
 import argparse
 
+# Add the src directory to the Python path for imports
+src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if src_dir not in sys.path:
+    sys.path.insert(0, src_dir)
+
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 
-from utils.env_or_colab import load_env_or_colab as env_or_colab
+from config import logging_config
+from utils.env_or_colab import load_env_or_colab
 from common.google_storage import get_storage
 from train.dataprep_pipeline import DataPrepPipeline
-from train.train_pipeline import TrainPipeline
 from config.all_config import detection_config, training_config
-from config import logging_config
+
 
 # --- Configure Logging ---
 # Note: This script assumes logging is configured elsewhere (e.g., in config)
 # If not, uncomment the following lines for basic logging.
 # from config import logging_config
 logger = logging.getLogger(__name__)
+
+# Load environment variables
+load_env_or_colab()
 
 
 
@@ -47,7 +55,7 @@ def main(tenant_id: str, frames_per_video: int, verbose: bool, save_intermediate
 
     # 1. Find all videos in the raw directory
     try:
-        tenant_storage = get_storage(f"{tenant_id}/user")
+        tenant_storage = get_storage(tenant_id)
         
         # First try the standard prefix pattern
         raw_blobs = tenant_storage.list_blobs(prefix="raw/")
@@ -126,20 +134,6 @@ def main(tenant_id: str, frames_per_video: int, verbose: bool, save_intermediate
         if dataprep_results.get("status") == "completed":
             logger.info(f"Data prep pipeline completed successfully for {video_file}!")
             
-            # Create a new training pipeline instance for each dataset
-            train_pipeline = TrainPipeline(tenant_id=tenant_id, verbose=verbose, save_intermediate=save_intermediate)
-            
-            logger.info(f"Dataprep Context: {dataprep_results}")
-            
-            # 3. Run Training Pipeline
-            try:
-                train_results = train_pipeline.run(dataprep_results)
-                if train_results.get("status") == "completed":
-                    logger.info(f"Training pipeline completed successfully for {video_file}!")
-                else:
-                    logger.error(f"Training pipeline failed for {video_file}. Details: {train_results.get('errors', [])}")
-            except Exception as train_error:
-                logger.error(f"Training pipeline encountered an error for {video_file}: {train_error}")
         else:
             logger.error(f"Data prep pipeline failed for {video_file}. Skipping training.")
             logger.error(f"Details: {dataprep_results.get('errors', [])}")
@@ -157,7 +151,6 @@ if __name__ == "__main__":
     parser.add_argument("--verbose", action="store_true", help="Enable verbose pipeline logging.")
     parser.add_argument("--save_intermediate", action="store_true", help="Save intermediate pipeline step results to GCS.")
     args = parser.parse_args()
-
 
     main(
         tenant_id=args.tenant_id,

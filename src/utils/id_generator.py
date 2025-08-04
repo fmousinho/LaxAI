@@ -6,6 +6,7 @@ used in the GCS structure, following the pattern: [type]_[GUID]
 """
 
 import uuid
+from typing import Optional
 
 
 def create_tenant_id() -> str:
@@ -48,9 +49,14 @@ def create_model_id() -> str:
     return f"model_{uuid.uuid4().hex[:8]}"
 
 
-def create_crop_id() -> str:
+def create_crop_id(frame_id: str) -> str:
     """Generate a unique crop ID."""
-    return f"crop_{uuid.uuid4().hex[:8]}"
+    return f"crop_{frame_id}_{uuid.uuid4().hex[:8]}.jpg"
+
+def create_aug_crop_id(crop_id: str, aug_idx: int) -> str:
+    """Generate a unique augmented crop ID based on the original crop ID."""
+    crop_id = crop_id.replace('.jpg', '')  # Remove file extension if present
+    return f"{crop_id}_aug_{aug_idx}_{uuid.uuid4().hex[:8]}.jpg"
 
 
 def create_batch_id() -> str:

@@ -11,9 +11,8 @@ import sys
 class GoogleStorageConfig:
     """Configuration for Google Cloud Storage."""
     project_id: str = "LaxAI"
-    gcs_paths_file: str = "config/gcs_structure.yaml"  # Path to YAML file with GCS paths
+    gcs_paths_file: str = "LaxAI/src/config/gcs_structure.yaml"  # Path to YAML file with GCS paths
     bucket_name: str = "laxai_dev"
-    user_path: str = ""  # Will be set by caller
     credentials_name: str = "GOOGLE_APPLICATION_CREDENTIALS"
 
 @dataclass
@@ -34,7 +33,7 @@ class ModelConfig:
     resnet_conv_stride: int = 1
     resnet_conv_padding: int = 1
     resnet_conv_bias: bool = False  # Whether to use bias in the first conv
-    enable_grass_mask: bool = False  # Not fully implemented yet
+    enable_grass_mask: bool = False  
     model_class_module: str = "src.train.siamesenet"  # Module where the model class is defined
     model_class_str: str = "SiameseNet"  # Name of the model class
 
@@ -102,8 +101,8 @@ class DetectionConfig:
     color_space: str = "RGB"  # Expected color space for processing
     convert_bgr_to_rgb: bool = True  # Auto-convert OpenCV BGR to RGB
     # Training pipeline configuration
-    delete_original_raw_videos: bool = False  # Whether to delete original raw video files after processing
-    frames_per_video: int = 20  # Number of frames to extract per video
+    delete_original_raw_videos: bool = True  # Whether to delete original raw video files after processing
+    frames_per_video: int = 3  # Number of frames to extract per video
 
 
 @dataclass

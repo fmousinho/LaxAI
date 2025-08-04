@@ -187,7 +187,7 @@ class Pipeline:
             # Check if the result indicates an error
             if isinstance(result, dict) and result.get("status") == StepStatus.ERROR.value:
                 error_msg = result.get("error", "Unknown error")
-                raise RuntimeError(f"Step returned error status: {error_msg}")
+                raise RuntimeError(f"Step {func.__name__} returned error status: {error_msg}")
             
             step.complete(metadata={"args_count": len(args), "kwargs_count": len(kwargs)})
             self._log_step(step_name, f"Completed successfully in {step.duration:.2f}s")
@@ -255,7 +255,7 @@ class Pipeline:
             "steps": list(self.steps.keys())
         })
         
-        placeholder_blob = f"{self.run_folder}/.pipeline_info.json"
+        placeholder_blob = f"{self.run_folder.rstrip('/')}/.pipeline_info.json"
         
         if not self.storage_client.upload_from_string(placeholder_blob, placeholder_content):
             raise RuntimeError(f"Failed to create run folder: {self.run_folder}")
@@ -302,7 +302,7 @@ class Pipeline:
                 "checkpoint_version": "1.0"
             }
             
-            checkpoint_blob = f"{self.run_folder}/.checkpoint.json"
+            checkpoint_blob = f"{self.run_folder.rstrip('/')}/.checkpoint.json"
             checkpoint_content = json.dumps(checkpoint_data, indent=2)
             
             success = self.storage_client.upload_from_string(checkpoint_blob, checkpoint_content)
@@ -393,8 +393,8 @@ class Pipeline:
             Checkpoint data dictionary if found, None otherwise
         """
         try:
-            checkpoint_blob = f"{self.run_folder}/.checkpoint.json"
-            
+            checkpoint_blob = f"{self.run_folder.rstrip('/')}/.checkpoint.json"
+
             if not self.storage_client.blob_exists(checkpoint_blob):
                 logger.info(f"No checkpoint found at: {checkpoint_blob}")
                 return None
@@ -507,8 +507,8 @@ class Pipeline:
             True if cleanup successful, False otherwise
         """
         try:
-            checkpoint_blob = f"{self.run_folder}/.checkpoint.json"
-            
+            checkpoint_blob = f"{self.run_folder.rstrip('/')}/.checkpoint.json"
+
             if self.storage_client.blob_exists(checkpoint_blob):
                 success = self.storage_client.delete_blob(checkpoint_blob)
                 if success:
