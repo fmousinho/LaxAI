@@ -325,7 +325,6 @@ class DataPrepPipeline(Pipeline):
             return {"status": StepStatus.ERROR.value, "error": str(e)}
     
     
-    
     def _detect_players(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Run player detection on the extracted frames.
@@ -401,8 +400,6 @@ class DataPrepPipeline(Pipeline):
             logger.error(f"Critical error in player detection for video {video_guid}: {e}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
     
-
-
 
     def _extract_crops(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -525,6 +522,7 @@ class DataPrepPipeline(Pipeline):
             logger.error(f"Failed to remove background from crops for video {video_guid}: {e}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
     
+
     def _augment_crops(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Augment player crops for training and store them in structured GCS paths per frame.
@@ -757,24 +755,9 @@ class DataPrepPipeline(Pipeline):
             True if resolution is adequate, False otherwise
         """
 
-        return (width >= MIN_VIDEO_RESOLUTION[0] and height >= MIN_VIDEO_RESOLUTION[1])        
-    
-    
-    def _validate_video_resolution(self, width: int, height: int) -> bool:
-        """
-        Validate that video resolution complies with minimum requirements.
-        
-        Args:
-            width: Width of the video, in pixels
-            height: Height of the video, in pixels
-            
-        Returns:
-            True if resolution is adequate, False otherwise
-        """
-        
         return (width >= MIN_VIDEO_RESOLUTION[0] and height >= MIN_VIDEO_RESOLUTION[1])
-           
-    
+
+
     def _extract_video_metadata(self, cap) -> Dict[str, Any]:
         """
         Extract metadata from video file.
@@ -805,6 +788,7 @@ class DataPrepPipeline(Pipeline):
         }
         
         return metadata
+
 
     def _extract_frames_for_detections(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -960,7 +944,7 @@ class DataPrepPipeline(Pipeline):
             return {"status": StepStatus.ERROR.value, "error": str(e)}
 
 
-def run_dataprep_pipeline(tenant_id: str = "tenant1", video_path: str = "", delete_original_raw_videos: bool = False, frames_per_video: int = detection_config.frames_per_video, verbose: bool = False, save_intermediate: bool = False) -> Dict[str, Any]:
+def run_dataprep_pipeline(*args, **kwargs) -> Dict[str, Any]:
     """
     Convenience function to run the data preparation pipeline.
 
@@ -978,7 +962,7 @@ def run_dataprep_pipeline(tenant_id: str = "tenant1", video_path: str = "", dele
     config = DetectionConfig()
     config.delete_original_raw_videos = delete_original_raw_videos
     config.frames_per_video = frames_per_video
-    pipeline = DataPrepPipeline(config, tenant_id=tenant_id, verbose=verbose, save_intermediate=save_intermediate)
+    pipeline = DataPrepPipeline(config, *args, **kwargs)
 
     # Ensure that the video path is correct
     if not video_path:
