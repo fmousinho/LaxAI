@@ -47,7 +47,7 @@ class DataPrepPipeline(Pipeline):
     5. Saves metadata and detection results
     """
 
-    def __init__(self, config: DetectionConfig, tenant_id: str = "tenant1", verbose: bool = True, save_intermediate: bool = True, enable_grass_mask: bool = model_config.enable_grass_mask, **kwargs):
+    def __init__(self, config: DetectionConfig, tenant_id: str = "tenant1", verbose: bool = True, save_intermediate: bool = True, enable_grass_mask: bool = model_config.enable_grass_mask, delete_process_folder: bool = True, **kwargs):
         """
         Initialize the training pipeline.
         
@@ -63,6 +63,7 @@ class DataPrepPipeline(Pipeline):
         self.frames_per_video = config.frames_per_video
         self.video_capture = None
         self.train_ratio = training_config.train_ratio
+        self.delete_process_folder = delete_process_folder
         self.default_workers = training_config.default_workers
         
         # Import transform_config to get the background removal setting
@@ -171,6 +172,59 @@ class DataPrepPipeline(Pipeline):
         self.run_folder = self.path_manager.get_path("run_data", run_id=self.run_guid)
 
 
+    def _execute_parallel_operations(self, tasks: List[Tuple], operation_func, context_info: str = "") -> Tuple[List, int]:
+        """
+        Execute a list of operations in parallel using ThreadPoolExecutor.
+        
+        Args:
+            tasks: List of tuples containing task parameters
+            operation_func: Function to execute for each task (e.g., self.tenant_storage.upload_from_bytes)
+            context_info: Additional context information for logging
+            
+        Returns:
+            Tuple of (failed_operations, successful_count)
+        """
+        if not tasks:
+            return [], 0
+
+        logger.info(f"Starting parallel {operation_func.__name__} of {len(tasks)} items{' for ' + context_info if context_info else ''}")
+        failed_operations = []
+        
+        with ThreadPoolExecutor(max_workers=self.default_workers) as executor:
+            # Submit tasks using the provided function
+            # For upload: operation_func(task[0], task[1]) - blob_name, data
+            # For move: operation_func(task[0], task[1]) - source, destination
+            future_to_task = {
+                executor.submit(operation_func, task[0], task[1]): task 
+                for task in tasks
+            }
+            
+            # Process completed operations
+            for future in as_completed(future_to_task):
+                task = future_to_task[future]
+                
+                try:
+                    success = future.result()
+                    if not success:
+                        failed_operations.append(task)
+                        # Generic error logging - works for both upload and move
+                        identifier = task[2] if len(task) > 2 else task[0]  # file_name or source
+                        logger.error(f"Failed to {operation_func.__name__} {identifier}{' for ' + context_info if context_info else ''}")
+                except Exception as e:
+                    failed_operations.append(task)
+                    identifier = task[2] if len(task) > 2 else task[0]  # file_name or source
+                    logger.error(f"Exception during {operation_func.__name__} of {identifier}: {e}")
+
+        successful_count = len(tasks) - len(failed_operations)
+        
+        if failed_operations:
+            logger.warning(f"Failed to {operation_func.__name__} {len(failed_operations)} out of {len(tasks)} items{' for ' + context_info if context_info else ''}")
+
+        logger.info(f"Successfully completed {successful_count} {operation_func.__name__} operations{' for ' + context_info if context_info else ''}")
+
+        return failed_operations, successful_count
+
+
     def run(self, video_path: str, resume_from_checkpoint: bool = True) -> Dict[str, Any]:
         """
         Execute the complete training pipeline for a single video.
@@ -208,8 +262,23 @@ class DataPrepPipeline(Pipeline):
             "errors": results["errors"],
             "pipeline_summary": results["pipeline_summary"]
         }
-        
+
+        if self.delete_process_folder:
+            logger.info(f"Deleting process folder: {self.run_folder}")
+            video_guid = context.get("video_guid", "unknown")
+            process_folder_path = self.path_manager.get_path("process_folder", video_id=video_guid)
+            blobs_to_delete = self.tenant_storage.list_blobs(prefix=process_folder_path)
+            failed_deletes, deletes = self._execute_parallel_operations(
+                blobs_to_delete,
+                self.tenant_storage.delete_blob,
+                f"delete process folder {self.run_folder}"
+            )
+            if failed_deletes:
+                logger.warning(f"Failed to delete {len(failed_deletes)} from {process_folder_path}")
+            logger.info(f"Successfully deleted {len(deletes)} from {process_folder_path}")
+
         return formatted_results
+    
     
     def _import_video(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -386,32 +455,11 @@ class DataPrepPipeline(Pipeline):
                 crops_by_frame.append(crops)
 
             # Second phase: Execute uploads in parallel
-            logger.info(f"Starting parallel upload of {len(upload_tasks)} crops")
-            failed_uploads = []
-
-            with ThreadPoolExecutor(max_workers=self.default_workers) as executor:
-                # Submit all upload tasks
-                future_to_task = {
-                    executor.submit(self.tenant_storage.upload_from_bytes, task[0], task[1]): task 
-                    for task in upload_tasks
-                }
-                
-                # Process completed uploads
-                for future in as_completed(future_to_task):
-                    task = future_to_task[future]
-                    blob_name, crop_np, file_name, frame_id = task
-                    
-                    try:
-                        success = future.result()
-                        if not success:
-                            failed_uploads.append(file_name)
-                            logger.error(f"Failed to upload crop {file_name} for video {video_guid} at frame {frame_id}")
-                    except Exception as e:
-                        failed_uploads.append(file_name)
-                        logger.error(f"Exception during upload of crop {file_name}: {e}")
-
-            # Report results
-            crops_uploaded = len(upload_tasks) - len(failed_uploads)
+            failed_uploads, crops_uploaded = self._execute_parallel_operations(
+                upload_tasks, 
+                self.tenant_storage.upload_from_bytes,
+                f"crops for video {video_guid}"
+            )
             
             if failed_uploads:
                 logger.warning(f"Failed to upload {len(failed_uploads)} out of {len(upload_tasks)} crops for {video_guid}")
@@ -517,29 +565,11 @@ class DataPrepPipeline(Pipeline):
                         n_aug_crops += 1
 
             # Execute uploads in parallel
-            logger.info(f"Starting parallel upload of {len(upload_tasks)} augmented crops")
-            failed_uploads = []
-
-            with ThreadPoolExecutor(max_workers=self.default_workers) as executor:
-                # Submit all upload tasks
-                future_to_task = {
-                    executor.submit(self.tenant_storage.upload_from_bytes, task[0], task[1]): task 
-                    for task in upload_tasks
-                }
-                
-                # Process completed uploads
-                for future in as_completed(future_to_task):
-                    task = future_to_task[future]
-                    blob_name, aug_crop, file_name, frames_guid = task
-                    
-                    try:
-                        success = future.result()
-                        if not success:
-                            failed_uploads.append(file_name)
-                            logger.error(f"Failed to upload augmented crop {file_name} for {video_guid} at frame {frames_guid}")
-                    except Exception as e:
-                        failed_uploads.append(file_name)
-                        logger.error(f"Exception during upload of {file_name}: {e}")
+            failed_uploads, successful_uploads = self._execute_parallel_operations(
+                upload_tasks, 
+                self.tenant_storage.upload_from_bytes
+                f"augmented crops for video {video_guid}"
+            )
 
             # Check for upload failures
             if failed_uploads:
@@ -681,34 +711,21 @@ class DataPrepPipeline(Pipeline):
                             move_tasks.append((aug_crop, destination, "val"))
 
                 # Execute moves in parallel
-                logger.info(f"Starting parallel move of {len(move_tasks)} crops to train/val datasets")
-                failed_moves = []
+                failed_moves, successful_moves = self._execute_parallel_operations(
+                    move_tasks, 
+                    self.tenant_storage.move_blob
+                    f"crops to train/val datasets for {frame_guid}"
+                )
 
-                with ThreadPoolExecutor(max_workers=self.default_workers) as executor:
-                    # Submit all move tasks
-                    future_to_task = {
-                        executor.submit(self.tenant_storage.move_blob, task[0], task[1]): task 
-                        for task in move_tasks
-                    }
-                    
-                    # Process completed moves
-                    for future in as_completed(future_to_task):
-                        task = future_to_task[future]
-                        source, destination, dataset_type = task
-                        
-                        try:
-                            success = future.result()
-                            if success:
-                                if dataset_type == "train":
-                                    ttl_train += 1
-                                else:
-                                    ttl_val += 1
-                            else:
-                                failed_moves.append((source, dataset_type))
-                                logger.error(f"Failed to move {source} to {dataset_type} dataset")
-                        except Exception as e:
-                            failed_moves.append((source, dataset_type))
-                            logger.error(f"Exception during move of {source}: {e}")
+                # Count successful moves by type
+                ttl_train = 0
+                ttl_val = 0
+                for task in move_tasks:
+                    if task not in failed_moves:
+                        if task[2] == "train":  # dataset_type is the 3rd element
+                            ttl_train += 1
+                        else:
+                            ttl_val += 1
 
                 if failed_moves:
                     logger.warning(f"Failed to move {len(failed_moves)} out of {len(move_tasks)} crops for {frame_guid}")
