@@ -12,8 +12,10 @@ import json
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 from enum import Enum
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import cv2
 import numpy as np
+import random
 import supervision as sv
 from PIL import Image
 from supervision import Detections
@@ -61,6 +63,7 @@ class DataPrepPipeline(Pipeline):
         self.frames_per_video = config.frames_per_video
         self.video_capture = None
         self.train_ratio = training_config.train_ratio
+        self.default_workers = training_config.default_workers
         
         # Import transform_config to get the background removal setting
         from config.all_config import transform_config
@@ -355,12 +358,11 @@ class DataPrepPipeline(Pipeline):
         try:
             logger.info(f"Extracting crops for video: {video_guid}")
 
-            crops_uploaded = 0
-            error_count = 0
             crops_by_frame = []
+            upload_tasks = []
             
+            # First phase: Extract all crops and collect upload tasks
             for frame_detections, frame, frame_id, frame_guid in zip(all_detections, frames_data, frame_ids, frames_guids):
-
                 crops = []
                 if not isinstance(frame_detections, sv.Detections):
                     logger.error("Invalid detections format - expected sv.Detections object")
@@ -375,19 +377,45 @@ class DataPrepPipeline(Pipeline):
                                                            video_id=video_guid, 
                                                            frame_id=frame_guid)
                     
-                    blob_name = f"{blob_path.rstrip('/')}/{file_name}.jpg"
+                    blob_name = f"{blob_path.rstrip('/')}/{file_name}"
 
-                    success = self.tenant_storage.upload_from_bytes(blob_name, crop_np)
-                    if not success:
-                        logger.error(f"Failed to upload crop {file_name} for video {video_id} at frame {frame_id}")
-                        error_count += 1
-                        continue
-                    crops_uploaded += 1
+                    # Add to upload tasks instead of uploading immediately
+                    upload_tasks.append((blob_name, crop_np, file_name, frame_id))
                     crops.append(crop_np)
+                
                 crops_by_frame.append(crops)
 
-            if error_count > 0:
-                logger.warning(f"Failed to upload {error_count} crops for video {video_id} at frame {frame_id}")
+            # Second phase: Execute uploads in parallel
+            logger.info(f"Starting parallel upload of {len(upload_tasks)} crops")
+            failed_uploads = []
+
+            with ThreadPoolExecutor(max_workers=self.default_workers) as executor:
+                # Submit all upload tasks
+                future_to_task = {
+                    executor.submit(self.tenant_storage.upload_from_bytes, task[0], task[1]): task 
+                    for task in upload_tasks
+                }
+                
+                # Process completed uploads
+                for future in as_completed(future_to_task):
+                    task = future_to_task[future]
+                    blob_name, crop_np, file_name, frame_id = task
+                    
+                    try:
+                        success = future.result()
+                        if not success:
+                            failed_uploads.append(file_name)
+                            logger.error(f"Failed to upload crop {file_name} for video {video_guid} at frame {frame_id}")
+                    except Exception as e:
+                        failed_uploads.append(file_name)
+                        logger.error(f"Exception during upload of crop {file_name}: {e}")
+
+            # Report results
+            crops_uploaded = len(upload_tasks) - len(failed_uploads)
+            
+            if failed_uploads:
+                logger.warning(f"Failed to upload {len(failed_uploads)} out of {len(upload_tasks)} crops for {video_guid}")
+            
             logger.info(f"Successfully extracted and uploaded {crops_uploaded} crops across {len(frames_data)} frames")
             
             context.update({
@@ -398,7 +426,7 @@ class DataPrepPipeline(Pipeline):
             return context
                         
         except Exception as e:
-            logger.error(f"Failed to extract crops for video {video_id}: {e}")
+            logger.error(f"Failed to extract crops for  {video_guid}: {e}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
     
 
@@ -469,23 +497,56 @@ class DataPrepPipeline(Pipeline):
         n_aug_crops = 0
         
         try:
-            for frame, frame_guid in zip(crops_by_frame, frames_guid):
-                for crop in frame:
-                    temp_crop_guid = create_crop_id(frame_id=frame_guid)
+            # Collect all upload tasks first
+            upload_tasks = []
+            
+            for crops, frames_guid in zip(crops_by_frame, frames_guid):
+                for crop in crops:
                     aug_crops = augment_images([crop])
-                    for i, aug_crop in enumerate(aug_crops):
-                        file_name = create_aug_crop_id(temp_crop_guid, i)
-                        blob_path = self.path_manager.get_path("augmented_crops",
+                    temp_crop_guid = create_crop_id(frame_id=frames_guid)
+                    blob_path = self.path_manager.get_path("augmented_crops",
                                                                video_id=video_guid, 
-                                                               frame_id=frame_guid,
+                                                               frame_id=frames_guid,
                                                                orig_crop_id=temp_crop_guid)
-                        blob_name = f"{blob_path.rstrip('/')}/{file_name}.jpg"
-                        success = self.tenant_storage.upload_from_bytes(blob_name, aug_crop)
-                        if not success:
-                            logger.error(f"Failed to upload augmented crop {file_name} for video {video_id} at frame {frame_id}")
-                            return {"status": StepStatus.ERROR.value, "error": f"Failed to upload augmented crop {file_name}"}
+                    for aug_crop in aug_crops:
+                        file_name = create_aug_crop_id(temp_crop_guid, n_aug_crops)
+                        blob_name = f"{blob_path.rstrip('/')}/{file_name}"
+                        
+                        # Add to upload tasks instead of uploading immediately
+                        upload_tasks.append((blob_name, aug_crop, file_name, frames_guid))
                         n_aug_crops += 1
-            logger.info(f"Successfully augmented crops for video {video_guid}")
+
+            # Execute uploads in parallel
+            logger.info(f"Starting parallel upload of {len(upload_tasks)} augmented crops")
+            failed_uploads = []
+
+            with ThreadPoolExecutor(max_workers=self.default_workers) as executor:
+                # Submit all upload tasks
+                future_to_task = {
+                    executor.submit(self.tenant_storage.upload_from_bytes, task[0], task[1]): task 
+                    for task in upload_tasks
+                }
+                
+                # Process completed uploads
+                for future in as_completed(future_to_task):
+                    task = future_to_task[future]
+                    blob_name, aug_crop, file_name, frames_guid = task
+                    
+                    try:
+                        success = future.result()
+                        if not success:
+                            failed_uploads.append(file_name)
+                            logger.error(f"Failed to upload augmented crop {file_name} for {video_guid} at frame {frames_guid}")
+                    except Exception as e:
+                        failed_uploads.append(file_name)
+                        logger.error(f"Exception during upload of {file_name}: {e}")
+
+            # Check for upload failures
+            if failed_uploads:
+                logger.error(f"Failed to upload {len(failed_uploads)} out of {n_aug_crops} augmented crops")
+                return {"status": StepStatus.ERROR.value, "error": f"Failed to upload {len(failed_uploads)} augmented crops"}
+
+            logger.info(f"Successfully created and uploaded {n_aug_crops} augmented crops for {video_guid}")
             context.update({
                 "status": StepStatus.COMPLETED.value,
                 "crops_augmented": True,
@@ -494,7 +555,7 @@ class DataPrepPipeline(Pipeline):
             return context
         
         except Exception as e:
-            logger.error(f"Failed to augment crops for video {video_id}: {e}")
+            logger.error(f"Failed to augment crops for {video_guid}: {e}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
                     
     
@@ -542,71 +603,6 @@ class DataPrepPipeline(Pipeline):
                 else:
                     logger.warning(f"Failed to download crop: {blob_name}")
     
-    def _parse_crop_path(self, rel_path: str) -> Tuple[Optional[str], Optional[str]]:
-        """
-        Parse crop path to extract frame_id and tracker_id.
-        
-        Args:
-            rel_path: Relative path like "frame_123/123_456_0.850.jpg" or "frame123/crop_456/crop.jpg"
-            
-        Returns:
-            Tuple of (frame_id, tracker_id) or (None, None) if parsing fails
-        """
-        path_parts = rel_path.split('/')
-        
-        # Handle old format: frame_123/123_456_0.850.jpg
-        if len(path_parts) >= 2 and path_parts[0].startswith('frame_'):
-            frame_folder = path_parts[0]  # e.g., "frame_123"
-            crop_filename = path_parts[1]  # e.g., "123_456_0.850.jpg"
-            
-            # Extract frame_id and tracker_id from filename
-            name_parts = crop_filename.split('_')
-            if len(name_parts) >= 2:
-                return name_parts[0], name_parts[1]
-        
-        # Handle new format: frame123/crop_456/crop.jpg
-        elif len(path_parts) >= 3:
-            frame_folder = path_parts[0]  # e.g., "frame123"
-            crop_folder = path_parts[1]   # e.g., "crop_456"
-            
-            frame_id = frame_folder.replace('frame', '')
-            tracker_id = crop_folder.replace('crop_', '')
-            return frame_id, tracker_id
-        
-        return None, None
-    
-    def _save_and_upload_crop(self, crop_img: np.ndarray, storage_path: str, temp_dir: str, 
-                             frame_id: str, tracker_id: str, filename: str) -> bool:
-        """
-        Save crop image to temporary location and upload to storage.
-        
-        Args:
-            crop_img: RGB crop image
-            storage_path: Full storage path for upload
-            temp_dir: Temporary directory
-            frame_id: Frame identifier
-            tracker_id: Tracker identifier  
-            filename: Final filename
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        temp_path = os.path.join(temp_dir, f"frame{frame_id}", f"crop_{tracker_id}", filename)
-        os.makedirs(os.path.dirname(temp_path), exist_ok=True)
-        
-        # Convert RGB to BGR for OpenCV saving (results in correct RGB on disk)
-        crop_bgr = cv2.cvtColor(crop_img, cv2.COLOR_RGB2BGR)
-        
-        if cv2.imwrite(temp_path, crop_bgr):
-            if self.tenant_storage.upload_from_file(storage_path, temp_path):
-                logger.debug(f"Saved and uploaded crop: {storage_path}")
-                return True
-            else:
-                logger.warning(f"Failed to upload crop: {storage_path}")
-        else:
-            logger.warning(f"Failed to save crop: {temp_path}")
-        
-        return False
     
     def _create_training_and_validation_sets(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -622,8 +618,6 @@ class DataPrepPipeline(Pipeline):
         crops_augmented = context.get("crops_augmented", False)
         frames_guids = context.get("frames_guids")
         video_guid = context.get("video_guid")
-
-       
         
         if not crops_augmented:
             logger.warning("No augmented crops to create datasets from")
@@ -633,9 +627,12 @@ class DataPrepPipeline(Pipeline):
             logger.info(f"Creating training and validation sets for video {video_guid}")
 
             for frame_guid in frames_guids:
-           
-                orig_crop_path = self.path_manager.get_path("orig_crops", video_id=video_guid, frame_id=frame_guid).rstrip('/')
-                orig_crops_names = self.tenant_storage.list_blobs(prefix=f"{orig_crop_path}/")
+
+                aug_crops_root = self.path_manager.get_path("augmented_crops_root", video_id=video_guid, frame_id=frame_guid).rstrip('/')
+                if not aug_crops_root:
+                    logger.error(f"No augmented crops root found for video {video_guid} at frame {frame_guid}")
+                    raise RuntimeError(f"No augmented crops root found for video {video_guid} at frame {frame_guid}")
+                folders_with_augmentations = self.tenant_storage.list_blobs(prefix=f"{aug_crops_root}/", include_user_id=False)
 
                 dataset_guid = create_dataset_id()
                 train_dataset_path = self.path_manager.get_path("train_dataset", dataset_id=dataset_guid).rstrip('/')
@@ -644,26 +641,78 @@ class DataPrepPipeline(Pipeline):
                 ttl_train=0
                 ttl_val=0
 
-                for orig_crop_name in orig_crops_names:
 
-                    orig_crop_guid = os.path.basename(orig_crop_name).replace('.jpg', '')
-                    aug_img_path = self.path_manager.get_path("augmented_crops", video_id=video_guid, frame_id=frame_guid, orig_crop_id=orig_crop_guid).rstrip('/')
-                    aug_crops_names = self.tenant_storage.list_blobs(prefix=f"{aug_img_path}/")
-                    random.shuffle(aug_crops_names)
-                    n_crops = len(aug_crops_names)
-                    n_train = int(n_crops * self.train_ratio)  
+                # Find individual folders with augmentations
+                folder_set = set()
+                for folder_with_augmentations in folders_with_augmentations:
 
-    
+                    remaining_path = folder_with_augmentations[len(aug_crops_root):].lstrip('/')
+                    slash_index = remaining_path.find('/')
 
-                    for i in range(n_crops):
-                        file_name = os.path.basename(aug_crops_names[i])
+                    if slash_index != -1:
+                        folder = aug_crops_root.rstrip('/') + '/' + remaining_path[:slash_index]
+                        folder_set.add(folder)
+                    else:
+                        logger.error(f"Invalid augmented crop path: {remaining_path}")
+                        raise RuntimeError(f"Invalid augmented crop path: {remaining_path}")
+                
+                # Collect all move operations first
+                move_tasks = []
+                
+                for folder in folder_set:
+
+                    orig_crop_id = os.path.basename(folder).rstrip('.jpg')
+
+                    aug_list = self.tenant_storage.list_blobs(prefix=f"{folder}", include_user_id=False)
+                    random.shuffle(aug_list) 
+                    
+                    n_train = int(len(aug_list) * self.train_ratio)  # Calculate number of training crops
+
+                    player_train_folder = self.path_manager.get_path("train_player_folder", dataset_id=dataset_guid, orig_crop_id=orig_crop_id).rstrip('/')
+                    player_val_folder = self.path_manager.get_path("val_player_folder", dataset_id=dataset_guid, orig_crop_id=orig_crop_id).rstrip('/')
+
+                    for i, aug_crop in enumerate(aug_list):
+                        aug_crop_name = os.path.basename(aug_crop)
                         if i < n_train:
-                            self.tenant_storage.copy_blob(aug_crops_names[i], f"{train_dataset_path}/{file_name}")
-                            ttl_train += 1
+                            destination = f"{player_train_folder}/{aug_crop_name}"
+                            move_tasks.append((aug_crop, destination, "train"))
                         else:
-                            self.tenant_storage.copy_blob(aug_crops_names[i], f"{val_dataset_path}/{file_name}")
-                            ttl_val += 1
+                            destination = f"{player_val_folder}/{aug_crop_name}"
+                            move_tasks.append((aug_crop, destination, "val"))
 
+                # Execute moves in parallel
+                logger.info(f"Starting parallel move of {len(move_tasks)} crops to train/val datasets")
+                failed_moves = []
+
+                with ThreadPoolExecutor(max_workers=self.default_workers) as executor:
+                    # Submit all move tasks
+                    future_to_task = {
+                        executor.submit(self.tenant_storage.move_blob, task[0], task[1]): task 
+                        for task in move_tasks
+                    }
+                    
+                    # Process completed moves
+                    for future in as_completed(future_to_task):
+                        task = future_to_task[future]
+                        source, destination, dataset_type = task
+                        
+                        try:
+                            success = future.result()
+                            if success:
+                                if dataset_type == "train":
+                                    ttl_train += 1
+                                else:
+                                    ttl_val += 1
+                            else:
+                                failed_moves.append((source, dataset_type))
+                                logger.error(f"Failed to move {source} to {dataset_type} dataset")
+                        except Exception as e:
+                            failed_moves.append((source, dataset_type))
+                            logger.error(f"Exception during move of {source}: {e}")
+
+                if failed_moves:
+                    logger.warning(f"Failed to move {len(failed_moves)} out of {len(move_tasks)} crops for {frame_guid}")
+                
                 logger.info(f"Created {dataset_guid} with {ttl_train} training and {ttl_val} val crops for {frame_guid}")
 
             context.update({
@@ -673,12 +722,25 @@ class DataPrepPipeline(Pipeline):
                 "total_val_samples": ttl_val
             })
             return context
-        
+
         except Exception as e:
             logger.error(f"Failed to create training and validation sets for video {video_guid}: {e}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
-                
-                
+
+
+    def _validate_video_resolution(self, width: int, height: int) -> bool:
+        """
+        Validate that video resolution complies with minimum requirements.
+
+        Args:
+            width: Width of the video, in pixels
+            height: Height of the video, in pixels
+
+        Returns:
+            True if resolution is adequate, False otherwise
+        """
+
+        return (width >= MIN_VIDEO_RESOLUTION[0] and height >= MIN_VIDEO_RESOLUTION[1])        
     
     
     def _validate_video_resolution(self, width: int, height: int) -> bool:
