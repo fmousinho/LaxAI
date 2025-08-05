@@ -55,7 +55,7 @@ def create_crop_id(frame_id: str) -> str:
 
 def create_aug_crop_id(crop_id: str, aug_idx: int) -> str:
     """Generate a unique augmented crop ID based on the original crop ID."""
-    crop_id = crop_id.replace('.jpg', '')  # Remove file extension if present
+    crop_id = crop_id.rstrip('.jpg')  # Remove file extension if present
     return f"{crop_id}_aug_{aug_idx}_{uuid.uuid4().hex[:8]}.jpg"
 
 

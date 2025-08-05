@@ -25,9 +25,10 @@ import tempfile
 import cv2
 import json
 import numpy as np
-from io import BytesIO
+import io 
 from typing import Optional, List, Any
 import PIL.Image
+from supervision import Detections, JSONSink
 from utils.env_or_colab import load_env_or_colab
 from google.cloud import storage
 from google.cloud.storage import Blob
@@ -100,7 +101,7 @@ class GCSPaths:
             return path_template.format(**kwargs)
         except KeyError as e:
             logger.error(f"Missing required argument for path '{key}': {e}")
-            raise
+            return None
         except Exception as e:
             logger.error(f"Error formatting path '{key}': {e}")
             raise
@@ -189,16 +190,17 @@ class GoogleStorageClient:
         if not self._authenticated:
             return self._authenticate()
         return True
-    
-    def list_blobs(self, prefix: Optional[str] = None) -> List[str]:
+
+    def list_blobs(self, prefix: Optional[str] = None, include_user_id: bool = True) -> List[str]:
         """
         Lists all the blobs in the bucket.
         
         Args:
             prefix: Optional prefix to filter blobs (will be combined with user_path)
-            
+            include_user_id: Whether to include user_id prefix in the blob names
+
         Returns:
-            List of blob names
+            List of blob names, inclusive of user_id prefix if set
             
         Raises:
             RuntimeError: If authentication fails
@@ -208,16 +210,23 @@ class GoogleStorageClient:
         
         try:
             # Add user_id prefix to search prefix, consistent with upload methods
+            if self.user_id and not self.user_id.endswith('/'):
+                self.user_id += '/'
             if prefix:
                 if self.user_id:
-                    full_prefix = f"{self.user_id}/{prefix}"
+                    full_prefix = f"{self.user_id}{prefix}"
                 else:
                     full_prefix = prefix
             else:
                 full_prefix = self.user_id if self.user_id else None
                 
             blobs = self._client.list_blobs(self.config.bucket_name, prefix=full_prefix)
-            return [blob.name for blob in blobs]
+            user_id_len = len(self.user_id) if self.user_id else 0
+            if include_user_id or user_id_len == 0:
+                return [blob.name for blob in blobs]
+            else:
+                return [blob.name[user_id_len:] for blob in blobs]
+          
         except Exception as e:
             logger.error(f"Failed to list blobs: {e}")
             raise
@@ -282,7 +291,29 @@ class GoogleStorageClient:
                 image_bytes = cv2.imencode(".jpg", bgr_data)[1].tobytes()
                 blob.upload_from_string(image_bytes, content_type=content_type)
                 return True
-            
+
+            elif isinstance(data, Detections):
+                # Use JSONSink for proper serialization with a temporary file
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
+                    temp_json_path = temp_file.name
+                
+                # Use JSONSink to serialize the Detection object
+                json_sink = JSONSink(temp_json_path)
+                with json_sink as sink:
+                    sink.append(data)
+                
+                # Read the serialized JSON data
+                with open(temp_json_path, 'r') as f:
+                    json_string = f.read()
+                
+                # Clean up temporary file
+                os.remove(temp_json_path)
+                
+                # Upload the JSON string
+                blob.upload_from_string(json_string, content_type="application/json")
+                return True
+
+
             elif destination_blob_name.endswith('.json'):
                 json_bytes = json.dumps(data).encode("utf-8")
                 content_type = content_type or "application/json"
@@ -449,7 +480,7 @@ class GoogleStorageClient:
 
             source_blob = self._bucket.blob(full_source)
             new_blob = self._bucket.copy_blob(source_blob, self._bucket, new_name=full_destination)
-            logger.info(f"Blob {full_source} copied to {full_destination}")
+            logger.debug(f"Blob {full_source} copied to {full_destination}")
             return True
         except Exception as e:
             logger.error(f"Failed to copy blob: {e}")
@@ -547,7 +578,7 @@ class GoogleStorageClient:
             # Delete the original blob
             source_blob.delete()
             
-            logger.info(f"Blob moved from {full_source} to {full_destination}")
+            logger.debug(f"Blob moved from {full_source} to {full_destination}")
             return True
             
         except Exception as e:
@@ -661,6 +692,7 @@ class GoogleStorageClient:
             if self.cap:
                 return self.cap.read()
             return False, None
+        
         
         def get(self, prop_id):
             """

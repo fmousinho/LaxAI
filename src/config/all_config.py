@@ -77,6 +77,7 @@ class TrainingConfig:
     early_stopping_patience: Optional[int] = 10  # Number of epochs to wait before early stopping (None = disabled)
     margin_decay_rate: float = 0.97  # Decay rate for margin
     margin_change_threshold: float = 0.01  # Minimum change in margin to trigger update
+    default_workers: int = 8  # Default number of workers for DataLoader
 
 @dataclass
 class EvaluatorConfig:
