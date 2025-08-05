@@ -496,11 +496,16 @@ class GoogleStorageClient:
             return False
         
         try:
-            # Add user_path prefix to blob name
-            full_blob_name = f"{self.user_id}/{blob_name}"
-            blob = self._bucket.blob(full_blob_name)
+            if self.user_id and not self.user_id.endswith('/'):
+                self.user_id += '/'
+            if full_blob_name.startswith(self.user_id):
+                full_name = full_blob_name
+            else:
+                full_name = f"{self.user_id}{full_blob_name}" if self.user_id else full_blob_name
+
+            blob = self._bucket.blob(full_name)
             blob.delete()
-            logger.info(f"Blob {full_blob_name} deleted")
+            logger.info(f"Blob {full_name} deleted")
             return True
         except Exception as e:
             logger.error(f"Failed to delete blob: {e}")

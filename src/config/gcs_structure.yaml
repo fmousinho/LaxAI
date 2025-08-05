@@ -3,6 +3,7 @@ gcs:
   tenant_id: "{tenant_id}"
   data_prefixes:
     raw_data: "raw/"
+    process_folder: "process/{video_id}/"
     imported_video: "process/{video_id}/imported/"
     extracted_frames: "process/{video_id}/{frame_id}/"
     orig_crops: "process/{video_id}/{frame_id}/orig_crops/"
