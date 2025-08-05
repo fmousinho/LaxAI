@@ -26,6 +26,7 @@ import cv2
 import json
 import numpy as np
 import io 
+import weakref
 from typing import Optional, List, Any
 import PIL.Image
 from supervision import Detections, JSONSink
@@ -294,24 +295,18 @@ class GoogleStorageClient:
 
             elif isinstance(data, Detections):
                 # Use JSONSink for proper serialization with a temporary file
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
-                    temp_json_path = temp_file.name
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as temp_file:
                 
-                # Use JSONSink to serialize the Detection object
-                json_sink = JSONSink(temp_json_path)
-                with json_sink as sink:
-                    sink.append(data)
-                
-                # Read the serialized JSON data
-                with open(temp_json_path, 'r') as f:
-                    json_string = f.read()
-                
-                # Clean up temporary file
-                os.remove(temp_json_path)
-                
-                # Upload the JSON string
-                blob.upload_from_string(json_string, content_type="application/json")
-                return True
+                    # Use JSONSink to serialize the Detection object
+                    json_sink = JSONSink(temp_file.name)
+                    with json_sink as sink:
+                        sink.append(data)
+                    
+                    # Read the serialized JSON data
+                    with open(temp_file.name, 'r') as f:
+                        json_string = f.read()
+                        blob.upload_from_string(json_string, content_type="application/json")
+                        return True
 
 
             elif destination_blob_name.endswith('.json'):
@@ -633,6 +628,25 @@ class GoogleStorageClient:
             self.cap = None
             self.video_data = None
             self.temp_file_path = None
+            
+            # Register finalizer for cleanup in case __exit__ is never called
+            # This ensures cleanup even if the program crashes or is interrupted
+            self._finalizer = weakref.finalize(self, self._cleanup_temp_file, None)
+
+        @staticmethod
+        def _cleanup_temp_file(temp_path):
+            """
+            Static cleanup function that removes temporary file without referencing self.
+            
+            Args:
+                temp_path: Path to temporary file to remove
+            """
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                    logger.debug(f"Finalizer cleaned up temporary video file: {temp_path}")
+                except OSError as e:
+                    logger.warning(f"Finalizer failed to remove temporary file {temp_path}: {e}")
 
         def __enter__(self):
             """
@@ -653,6 +667,10 @@ class GoogleStorageClient:
                 temp_file.flush()
                 self.temp_file_path = temp_file.name
                 temp_file.close()
+
+                # Update the finalizer with the actual temp file path
+                self._finalizer.detach()  # Remove the old finalizer
+                self._finalizer = weakref.finalize(self, self._cleanup_temp_file, self.temp_file_path)
 
                 # Open the video file with OpenCV
                 self.cap = cv2.VideoCapture(self.temp_file_path)
@@ -677,6 +695,11 @@ class GoogleStorageClient:
             
             if self.temp_file_path and os.path.exists(self.temp_file_path):
                 os.remove(self.temp_file_path)
+                logger.debug(f"Context manager cleaned up temporary video file: {self.temp_file_path}")
+                
+            # Detach the finalizer since we've already cleaned up manually
+            if hasattr(self, '_finalizer'):
+                self._finalizer.detach()
                 
             # Clear the video data from memory
             self.video_data = None
