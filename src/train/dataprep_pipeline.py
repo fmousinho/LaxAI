@@ -172,7 +172,7 @@ class DataPrepPipeline(Pipeline):
         self.run_folder = self.path_manager.get_path("run_data", run_id=self.run_guid)
 
 
-    def _execute_parallel_operations(self, tasks: List[Tuple], operation_func, context_info: str = "") -> Tuple[List, int]:
+    def _execute_parallel_operations(self, tasks: List[Tuple] | List[str], operation_func, context_info: str = "") -> Tuple[List, int]:
         """
         Execute a list of operations in parallel using ThreadPoolExecutor.
         
@@ -192,10 +192,11 @@ class DataPrepPipeline(Pipeline):
         
         with ThreadPoolExecutor(max_workers=self.default_workers) as executor:
             # Submit tasks using the provided function
-            # For upload: operation_func(task[0], task[1]) - blob_name, data
-            # For move: operation_func(task[0], task[1]) - source, destination
+            # For upload: operation_func(*task) - blob_name, data  
+            # For move: operation_func(*task) - source, destination
+            # For delete: operation_func(task) - blob_name (string)
             future_to_task = {
-                executor.submit(operation_func, task[0], task[1]): task 
+                executor.submit(operation_func, *task) if isinstance(task, tuple) else executor.submit(operation_func, task): task
                 for task in tasks
             }
             
@@ -207,13 +208,10 @@ class DataPrepPipeline(Pipeline):
                     success = future.result()
                     if not success:
                         failed_operations.append(task)
-                        # Generic error logging - works for both upload and move
-                        identifier = task[2] if len(task) > 2 else task[0]  # file_name or source
-                        logger.error(f"Failed to {operation_func.__name__} {identifier}{' for ' + context_info if context_info else ''}")
+                        logger.error(f"Failed to run {operation_func.__name__}({task}) for {context_info}")
                 except Exception as e:
                     failed_operations.append(task)
-                    identifier = task[2] if len(task) > 2 else task[0]  # file_name or source
-                    logger.error(f"Exception during {operation_func.__name__} of {identifier}: {e}")
+                    logger.error(f"Exception during {operation_func.__name__}({task}): {e}")
 
         successful_count = len(tasks) - len(failed_operations)
         
@@ -264,18 +262,19 @@ class DataPrepPipeline(Pipeline):
         }
 
         if self.delete_process_folder:
-            logger.info(f"Deleting process folder: {self.run_folder}")
             video_guid = context.get("video_guid", "unknown")
             process_folder_path = self.path_manager.get_path("process_folder", video_id=video_guid)
-            blobs_to_delete = self.tenant_storage.list_blobs(prefix=process_folder_path)
+            logger.info(f"Deleting process folder: {process_folder_path}")
+            blob_names = self.tenant_storage.list_blobs(prefix=process_folder_path)
+            # Convert blob names to tuple format for delete operation (blob_name, None)
             failed_deletes, deletes = self._execute_parallel_operations(
-                blobs_to_delete,
+                blob_names,
                 self.tenant_storage.delete_blob,
-                f"delete process folder {self.run_folder}"
+                f"delete process folder {process_folder_path}"
             )
             if failed_deletes:
                 logger.warning(f"Failed to delete {len(failed_deletes)} from {process_folder_path}")
-            logger.info(f"Successfully deleted {len(deletes)} from {process_folder_path}")
+            logger.info(f"Successfully deleted {deletes} from {process_folder_path}")
 
         return formatted_results
     
@@ -446,7 +445,7 @@ class DataPrepPipeline(Pipeline):
                     blob_name = f"{blob_path.rstrip('/')}/{file_name}"
 
                     # Add to upload tasks instead of uploading immediately
-                    upload_tasks.append((blob_name, crop_np, file_name, frame_id))
+                    upload_tasks.append((blob_name, crop_np))
                     crops.append(crop_np)
                 
                 crops_by_frame.append(crops)
@@ -548,8 +547,9 @@ class DataPrepPipeline(Pipeline):
             
             for crops, frames_guid in zip(crops_by_frame, frames_guid):
                 for crop in crops:
+                    #creates augmented crops for each original crop
                     aug_crops = augment_images([crop])
-                    temp_crop_guid = create_crop_id(frame_id=frames_guid)
+                    temp_crop_guid = create_crop_id(frame_id=frames_guid).rstrip('.jpg')  # Remove .jpg extension for folder name
                     blob_path = self.path_manager.get_path("augmented_crops",
                                                                video_id=video_guid, 
                                                                frame_id=frames_guid,
@@ -559,13 +559,13 @@ class DataPrepPipeline(Pipeline):
                         blob_name = f"{blob_path.rstrip('/')}/{file_name}"
                         
                         # Add to upload tasks instead of uploading immediately
-                        upload_tasks.append((blob_name, aug_crop, file_name, frames_guid))
+                        upload_tasks.append((blob_name, aug_crop))
                         n_aug_crops += 1
 
             # Execute uploads in parallel
             failed_uploads, successful_uploads = self._execute_parallel_operations(
                 upload_tasks, 
-                self.tenant_storage.upload_from_bytes
+                self.tenant_storage.upload_from_bytes,
                 f"augmented crops for video {video_guid}"
             )
 
@@ -585,51 +585,6 @@ class DataPrepPipeline(Pipeline):
         except Exception as e:
             logger.error(f"Failed to augment crops for {video_guid}: {e}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
-                    
-    
-    def _download_crops_for_augmentation(self, source_crops_folder: str, temp_dir: str):
-        """
-        Download crops from storage for augmentation processing.
-        
-        Args:
-            source_crops_folder: Storage path to source crops (either original or modified)
-            temp_dir: Temporary directory for downloads
-            
-        Yields:
-            Tuples of (rel_path, crop_image_rgb)
-        """
-        temp_crops_dir = os.path.join(temp_dir, "crops")
-        os.makedirs(temp_crops_dir, exist_ok=True)
-        
-        # List all blobs in the source crops folder
-        blobs = self.tenant_storage.list_blobs(prefix=f"{source_crops_folder}/")
-        
-        for blob_name in blobs:
-            if blob_name.endswith('.jpg') and 'crop.jpg' in blob_name:  # Only process original crops
-                # Calculate download path
-                user_path_prefix = f"{self.tenant_storage.config.user_path}/"
-                blob_path_for_download = blob_name[len(user_path_prefix):] if blob_name.startswith(user_path_prefix) else blob_name
-                
-                # Extract relative path
-                if blob_name.startswith(f"{user_path_prefix}{source_crops_folder}/"):
-                    rel_path = blob_name[len(f"{user_path_prefix}{source_crops_folder}/"):]
-                else:
-                    rel_path = blob_name[len(f"{source_crops_folder}/"):]
-                
-                local_path = os.path.join(temp_crops_dir, rel_path)
-                os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                
-                # Download and read the crop
-                if self.tenant_storage.download_blob(blob_path_for_download, local_path):
-                    crop_img = cv2.imread(local_path)
-                    if crop_img is not None:
-                        # Convert BGR to RGB (crops are stored as RGB but cv2.imread returns BGR)
-                        crop_rgb = cv2.cvtColor(crop_img, cv2.COLOR_BGR2RGB)
-                        yield rel_path, crop_rgb
-                    else:
-                        logger.warning(f"Failed to read crop image: {local_path}")
-                else:
-                    logger.warning(f"Failed to download crop: {blob_name}")
     
     
     def _create_training_and_validation_sets(self, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -660,58 +615,51 @@ class DataPrepPipeline(Pipeline):
                 if not aug_crops_root:
                     logger.error(f"No augmented crops root found for video {video_guid} at frame {frame_guid}")
                     raise RuntimeError(f"No augmented crops root found for video {video_guid} at frame {frame_guid}")
-                folders_with_augmentations = self.tenant_storage.list_blobs(prefix=f"{aug_crops_root}/", include_user_id=False)
-
+                players = self.tenant_storage.list_blobs(prefix=aug_crops_root, delimiter='/')
+                players = list(players)  
+                random.shuffle(players)  
+                
                 dataset_guid = create_dataset_id()
-                train_dataset_path = self.path_manager.get_path("train_dataset", dataset_id=dataset_guid).rstrip('/')
-                val_dataset_path = self.path_manager.get_path("val_dataset", dataset_id=dataset_guid).rstrip('/')
+                n_train_players = int(len(players) * self.train_ratio)
+                train_players = players[:n_train_players]
+                val_players = players[n_train_players:]
+                
 
                 ttl_train=0
                 ttl_val=0
 
+                train_folder = self.path_manager.get_path("train_dataset", dataset_id=dataset_guid).rstrip('/')
+                val_folder = self.path_manager.get_path("val_dataset", dataset_id=dataset_guid).rstrip('/')
 
-                # Find individual folders with augmentations
-                folder_set = set()
-                for folder_with_augmentations in folders_with_augmentations:
 
-                    remaining_path = folder_with_augmentations[len(aug_crops_root):].lstrip('/')
-                    slash_index = remaining_path.find('/')
-
-                    if slash_index != -1:
-                        folder = aug_crops_root.rstrip('/') + '/' + remaining_path[:slash_index]
-                        folder_set.add(folder)
-                    else:
-                        logger.error(f"Invalid augmented crop path: {remaining_path}")
-                        raise RuntimeError(f"Invalid augmented crop path: {remaining_path}")
-                
-                # Collect all move operations first
                 move_tasks = []
-                
-                for folder in folder_set:
+                for player in train_players:
+                    player_folder = self.path_manager.get_path("augmented_crops", video_id = video_guid, dataset_id=dataset_guid, orig_crop_id=player.rstrip('/'))
+                    player_images_path_list = self.tenant_storage.list_blobs(prefix=player_folder)
+                    destination_folder = f"{train_folder}/{player}"
+                    destination_folder = destination_folder.rstrip('/')
 
-                    orig_crop_id = os.path.basename(folder).rstrip('.jpg')
+                    for image_path in player_images_path_list:
+                        if not image_path.endswith('.jpg'):
+                            logger.warning(f"Skipping non-JPG file: {image_path}")
+                            continue
+                        move_tasks.append((image_path, f"{destination_folder}/{os.path.basename(image_path)}"))
 
-                    aug_list = self.tenant_storage.list_blobs(prefix=f"{folder}", include_user_id=False)
-                    random.shuffle(aug_list) 
-                    
-                    n_train = int(len(aug_list) * self.train_ratio)  # Calculate number of training crops
+                for player in val_players:
+                    player_folder = self.path_manager.get_path("augmented_crops", video_id = video_guid, dataset_id=dataset_guid, orig_crop_id=player.rstrip('/'))
+                    player_images_path_list = self.tenant_storage.list_blobs(prefix=player_folder)
+                    destination_folder = f"{val_folder}/{player}"
+                    destination_folder = destination_folder.rstrip('/')
 
-                    player_train_folder = self.path_manager.get_path("train_player_folder", dataset_id=dataset_guid, orig_crop_id=orig_crop_id).rstrip('/')
-                    player_val_folder = self.path_manager.get_path("val_player_folder", dataset_id=dataset_guid, orig_crop_id=orig_crop_id).rstrip('/')
+                    for image_path in player_images_path_list:
+                        if not image_path.endswith('.jpg'):
+                            logger.warning(f"Skipping non-JPG file: {image_path}")
+                            continue
+                        move_tasks.append((image_path, f"{destination_folder}/{os.path.basename(image_path)}"))
 
-                    for i, aug_crop in enumerate(aug_list):
-                        aug_crop_name = os.path.basename(aug_crop)
-                        if i < n_train:
-                            destination = f"{player_train_folder}/{aug_crop_name}"
-                            move_tasks.append((aug_crop, destination, "train"))
-                        else:
-                            destination = f"{player_val_folder}/{aug_crop_name}"
-                            move_tasks.append((aug_crop, destination, "val"))
-
-                # Execute moves in parallel
                 failed_moves, successful_moves = self._execute_parallel_operations(
                     move_tasks, 
-                    self.tenant_storage.move_blob
+                    self.tenant_storage.move_blob,
                     f"crops to train/val datasets for {frame_guid}"
                 )
 
@@ -720,7 +668,7 @@ class DataPrepPipeline(Pipeline):
                 ttl_val = 0
                 for task in move_tasks:
                     if task not in failed_moves:
-                        if task[2] == "train":  # dataset_type is the 3rd element
+                        if task[1].split('/')[-3] == "train":  # dataset_type is the 3rd element
                             ttl_train += 1
                         else:
                             ttl_val += 1

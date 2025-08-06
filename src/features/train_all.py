@@ -14,12 +14,16 @@ import logging
 import json
 import argparse
 
+src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if src_dir not in sys.path:
+    sys.path.insert(0, src_dir)
+
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 
 from config.all_config import detection_config, training_config
 from config import logging_config
-from common.google_storage import get_storage
+from common.google_storage import get_storage, GCSPaths
 from train.dataprep_pipeline import DataPrepPipeline
 from train.train_pipeline import TrainPipeline
 
@@ -52,49 +56,36 @@ def train(tenant_id: str, frames_per_video: int, verbose: bool, save_intermediat
             save_intermediate=save_intermediate
             )
 
-
+        logger.info("Checking for available datasets..")
         # Use Google Storage functions to list directories
         storage_client = get_storage(tenant_id)
         # Find dataset paths - look for /datasets/ directories that contain numeric/train/ structure
-        all_blobs = storage_client.list_blobs()
-        logger.info(f"Total blobs found: {len(all_blobs)}")
-        
-        # Debug: Show sample blobs that contain /datasets/ and /train/
-        train_blobs = [blob for blob in all_blobs if '/train/' in blob]
-        for blob in train_blobs[:5]:
-            logger.info(f"Sample blob: {blob}")
+        path_finder = GCSPaths()
+        datasets_folder = path_finder.get_path("datasets_root").rstrip('/')
+        datasets = storage_client.list_blobs(prefix=datasets_folder, delimiter='/')
 
-        # Find all unique parent directories containing /train
-        train_paths = set()
-        for blob in train_blobs:
-            # Extract the full path including frame directory: .../datasets/frameN/train/
-            if '/datasets/' in blob and '/train/' in blob:
-                datasets_index = blob.find('/datasets/')
-                train_index = blob.find('/train/', datasets_index)
-                if datasets_index != -1 and train_index != -1:
-                    # Include everything up to and including /train/
-                    full_path = blob[:train_index + len('/train/')]
-                    train_paths.add(full_path)
-        logger.info(f"Found {len(train_paths)} directories containing training data.")
-
-        total_folders = len(train_paths)
+        logger.info(f"Found {len(datasets)} dataset directories in GCS.")
+    
+        DATASETS_TO_USE = 1
         processed_folders = 0
-        for train_path in train_paths:
-            # Validate that this path has the expected structure: .../datasets/frameN/train/
-            if '/datasets/' not in train_path or '/datasets/frame' not in train_path or not train_path.rstrip('/').endswith('/train'):
-                logger.warning(f"Skipping invalid train path structure: {train_path}")
-                continue
+        processed_datasets = 0
+    
+        for dataset_full_path in datasets:
+            if processed_folders >= DATASETS_TO_USE:
+                break
+            
+            dataset_name = dataset_full_path.split('/')[2]  # Extract dataset name from path
 
             logger.info("**********************************************************************")
-            logger.info(f"  Training round {processed_folders + 1}/{total_folders}")
-            logger.info(f"Running train pipeline for dataset: {train_path}")
+            logger.info(f"  Training for {dataset_name}")
             logger.info("**********************************************************************")
-            train_results = train_pipeline.run(dataset_path=train_path)
+
+            train_results = train_pipeline.run(dataset_name=dataset_name)
 
             if train_results.get("status") == "completed":
-                logger.info(f"Successfully completed training for dataset: {train_path}")
+                logger.info(f"Successfully completed training for dataset: {dataset_name}")
             else:
-                logger.error(f"Training pipeline failed for dataset: {train_path}")
+                logger.error(f"Training pipeline failed for dataset: {dataset_name}")
                 logger.error(f"Details: {json.dumps(train_results.get('errors'), indent=2)}")
 
             processed_folders += 1

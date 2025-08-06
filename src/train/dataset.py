@@ -26,58 +26,26 @@ class LacrossePlayerDataset(Dataset):
         self.transform = transform if transform is not None else get_transforms('training')
         self.min_images_per_player = min_images_per_player
 
-        if self.storage_client is not None:
-            # GCS mode - List all blobs under image_dir
-            all_blobs = self.storage_client.list_blobs(prefix=image_dir)
-            # Filter for image files
-            image_blobs = [b for b in all_blobs if b.lower().endswith(('.jpg', '.png', '.jpeg'))]
+        # Initialize dataset by loading player images
+        if self.storage_client is None:
+            raise ValueError("storage_client is required - local filesystem no longer supported")
 
-            # Group by player (assume player is the immediate subfolder under image_dir)
-            player_to_images = {}
-            for blob in image_blobs:
-                parts = blob[len(image_dir):].lstrip('/').split('/')
-                if len(parts) < 2:
-                    continue  # Not in a player subfolder
-                player = parts[0]
-                player_to_images.setdefault(player, []).append(blob)
+        potential_players = self.storage_client.list_blobs(prefix=image_dir, delimiter='/')
+        self.players = []
+        self.player_to_images = {}
 
-            # Filter players with sufficient images
-            self.players = []
-            self.player_to_images = {}
-            for player, imgs in player_to_images.items():
-                if len(imgs) >= self.min_images_per_player:
-                    self.players.append(player)
-                    self.player_to_images[player] = imgs
-        else:
-            # Local filesystem mode
-            if not os.path.exists(image_dir):
-                raise FileNotFoundError(f"Image directory does not exist: {image_dir}")
-            
-            # Get all player directories
-            player_dirs = [d for d in os.listdir(image_dir) 
-                          if os.path.isdir(os.path.join(image_dir, d))]
-            
-            # Group by player
-            player_to_images = {}
-            for player_dir in player_dirs:
-                player_path = os.path.join(image_dir, player_dir)
-                image_files = []
-                for f in os.listdir(player_path):
-                    if f.lower().endswith(('.jpg', '.png', '.jpeg')):
-                        image_files.append(os.path.join(player_path, f))
-                if image_files:
-                    player_to_images[player_dir] = image_files
-            
-            # Filter players with sufficient images
-            self.players = []
-            self.player_to_images = {}
-            for player, imgs in player_to_images.items():
-                if len(imgs) >= self.min_images_per_player:
-                    self.players.append(player)
-                    self.player_to_images[player] = imgs
+        # Group by identity (orig_crop_id) - the immediate subfolder under image_dir
+        # For path structure: datasets/{dataset_id}/train/{orig_crop_id}/image.jpg
+        player_to_images = {}
+        for potential_player in potential_players:
+            player_images = self.storage_client.list_blobs(prefix=potential_player)
+            if len(player_images) > self.min_images_per_player:
+                self.players.append(potential_player)
+                self.player_to_images[potential_player] = player_images
+
 
         if len(self.players) < 2:
-            raise ValueError(f"Need at least 2 players with {min_images_per_player}+ images each. Found {len(self.players)} valid players.")
+            raise ValueError(f"Need at least 2 players with {self.min_images_per_player}+ images each. Found {len(self.players)} valid players.")
 
         # Create list of all valid images
         self.all_images = []
@@ -96,17 +64,14 @@ class LacrossePlayerDataset(Dataset):
     def __getitem__(self, index):
         # Anchor image
         anchor_blob = self.all_images[index]
-        anchor_player = anchor_blob[len(self.image_dir):].lstrip('/').split('/')[0]
+        
+        anchor_player = os.path.dirname(anchor_blob) + '/' 
         anchor_label = self.player_indices[anchor_player]
 
         try:
-            anchor_img = self._load_image_from_gcs(anchor_blob)
+            anchor_img = self.storage_client.download_as_bytes(anchor_blob)
         except Exception as e:
-            print(f"Error loading anchor image {anchor_blob}: {e}")
-            anchor_blob = self.all_images[0]
-            anchor_player = anchor_blob[len(self.image_dir):].lstrip('/').split('/')[0]
-            anchor_label = self.player_indices[anchor_player]
-            anchor_img = self._load_image_from_gcs(anchor_blob)
+           logger.error(f"Error loading anchor image {anchor_blob}: {e}")
 
         # Select a positive image (different image of the same player)
         positive_list = self.player_to_images[anchor_player]
@@ -114,30 +79,35 @@ class LacrossePlayerDataset(Dataset):
             positive_blob = anchor_blob
         else:
             positive_candidates = [p for p in positive_list if p != anchor_blob]
-            if positive_candidates:
-                positive_blob = random.choice(positive_candidates)
-            else:
-                positive_blob = random.choice(positive_list)
+            positive_blob = random.choice(positive_candidates)
+        
         try:
-            positive_img = self._load_image_from_gcs(positive_blob)
+            positive_img = self.storage_client.download_as_bytes(positive_blob)
         except Exception as e:
-            print(f"Error loading positive image {positive_blob}: {e}")
+            logger.error(f"Error loading positive image {positive_blob}: {e}")
             positive_img = anchor_img
 
         # Select a negative image (image of a different player)
         negative_candidates = [p for p in self.players if p != anchor_player]
-        if not negative_candidates:
-            negative_player = anchor_player
-        else:
-            negative_player = random.choice(negative_candidates)
-        negative_blob = random.choice(self.player_to_images[negative_player])
+        negative_player = random.choice(negative_candidates)
+        negative_img_candidates = list(self.player_to_images[negative_player])
+        negative_blob = random.choice(negative_img_candidates)
         try:
-            negative_img = self._load_image_from_gcs(negative_blob)
+            negative_img = self.storage_client.download_as_bytes(negative_blob)
         except Exception as e:
-            print(f"Error loading negative image {negative_blob}: {e}")
+            logger.error(f"Error loading negative image {negative_blob}: {e}")
             negative_img = anchor_img
 
         # Apply transformations
+
+        if isinstance(anchor_img, np.ndarray) and anchor_img.ndim == 3 and anchor_img.shape[2] == 3:
+            anchor_img = Image.fromarray(anchor_img)
+        if isinstance(positive_img, np.ndarray) and positive_img.ndim == 3 and positive_img.shape[2] == 3:
+            positive_img = Image.fromarray(positive_img)
+        if isinstance(negative_img, np.ndarray) and negative_img.ndim == 3 and negative_img.shape[2] == 3:
+            negative_img = Image.fromarray(negative_img)
+       
+
         if self.transform:
             try:
                 anchor_img = self.transform(anchor_img)
@@ -155,12 +125,6 @@ class LacrossePlayerDataset(Dataset):
 
         return anchor_img, positive_img, negative_img, torch.tensor(anchor_label)
 
-    def _load_image_from_gcs(self, blob_path):
-        # Download blob to a temporary file and open with PIL
-        import tempfile
-        with tempfile.NamedTemporaryFile(suffix=os.path.splitext(blob_path)[-1]) as tmp:
-            if not self.storage_client.download_blob(blob_path, tmp.name):
-                raise IOError(f"Failed to download blob: {blob_path}")
-            return Image.open(tmp.name).convert('RGB')
+
 
 

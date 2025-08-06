@@ -13,6 +13,7 @@ import json
 
 from train.dataset import LacrossePlayerDataset
 from config.all_config import wandb_config, evaluator_config
+from config.transforms import get_transforms
 from train.wandb_logger import wandb_logger
 
 logger = logging.getLogger(__name__)
@@ -52,8 +53,7 @@ class ModelEvaluator:
         self.embeddings_cache = {}
         
     def evaluate_comprehensive(self, dataset_path: str, 
-                             storage_client=None,
-                             use_validation_split: bool = True) -> Dict[str, Any]:
+                             storage_client=None) -> Dict[str, Any]:
         """
         Run comprehensive evaluation including all metrics.
         
@@ -67,85 +67,47 @@ class ModelEvaluator:
         """
         logger.info("Starting comprehensive model evaluation...")
         
-        if use_validation_split:
-            # The `dataset_path` is the path to the training data, e.g., .../datasets/frame19/train
-            # The validation data is in a sibling directory, e.g., .../datasets/frame19/val
+        if not storage_client:
+            raise ValueError("storage_client is required for GCS operations")
+
+    
+        train_folder = dataset_path.rstrip('/') + '/train'
+        val_folder = dataset_path.rstrip('/') + '/val'
+
+        val_blobs = storage_client.list_blobs(prefix=val_folder)
+        val_exists = len(val_blobs) > 0
+
+        if not val_exists:
+            logger.warning(f"Validation directory not found: {val_folder}")
+            return {}
+
             
-            # The train_dir is the dataset_path itself.
-            train_dir = dataset_path.rstrip('/')
-            
-            # To get the validation directory, go to parent and join with 'val'.
-            base_path = os.path.dirname(train_dir)
-            val_dir = os.path.join(base_path, "val")
-            
-            # Check if validation directory exists
-            val_exists = False
-            if storage_client:
-                # For GCS, check if validation directory has any blobs
-                val_blobs = list(storage_client.list_blobs(prefix=val_dir.rstrip('/')))
-                val_exists = len(val_blobs) > 0
-            else:
-                # For local filesystem
-                val_exists = os.path.exists(val_dir)
-            
-            if not val_exists:
-                logger.warning(f"Validation directory not found: {val_dir}")
-                logger.info("Falling back to random split from training data")
-                use_validation_split = False
-            else:
-                logger.info(f"Using existing validation split:")
-                logger.info(f"  Train dir: {train_dir}")
-                logger.info(f"  Val dir: {val_dir}")
+        logger.info(f"Using existing validation split:")
+        logger.info(f"  Train dir: {train_dir}")
+        logger.info(f"  Val dir: {val_dir}")
                 
-                # Create dataset from validation directory
-                from config.transforms import get_transforms
-                val_transforms = get_transforms('validation')  # Use validation transforms
-                if storage_client:
-                    val_dataset = LacrossePlayerDataset(
-                        image_dir=val_dir,
-                        storage_client=storage_client,
-                        transform=val_transforms,
-                        min_images_per_player= N_PLAYERS_FOR_VAL
-                    )
-                    train_transforms = get_transforms('training')
-                    train_dataset = LacrossePlayerDataset(
-                        image_dir=train_dir,
-                        storage_client=storage_client,
-                        transform=train_transforms,
-                        min_images_per_player=N_PLAYERS_FOR_VAL
-                    )
-                else:
-                    val_dataset = LacrossePlayerDataset(
-                        image_dir=val_dir,
-                        transform=val_transforms,
-                        min_images_per_player=N_PLAYERS_FOR_VAL
-                    )
-                    train_transforms = get_transforms('training')
-                    train_dataset = LacrossePlayerDataset(
-                        image_dir=train_dir,
-                        transform=train_transforms,
-                        min_images_per_player=N_PLAYERS_FOR_VAL
-                    )
+               
+        val_transforms = get_transforms('validation')  # Use validation transforms
+             
+        val_dataset = LacrossePlayerDataset(
+            image_dir=val_dir,
+            storage_client=storage_client,
+            transform=val_transforms,
+            min_images_per_player= N_PLAYERS_FOR_VAL
+        )
+        train_transforms = get_transforms('training')
+        train_dataset = LacrossePlayerDataset(
+            image_dir=train_dir,
+            storage_client=storage_client,
+            transform=train_transforms,
+            min_images_per_player=N_PLAYERS_FOR_VAL
+        )
+               
                 # Check if enough valid players exist in validation set
-                if len(val_dataset.players) < 2:
-                    logger.warning(f"Validation set does not have enough valid players (found {len(val_dataset.players)}). Falling back to random split.")
-                    use_validation_split = False
+        if len(val_dataset.players) < 2:
+            logger.warning(f"Validation set does not have enough valid players (found {len(val_dataset.players)}).")
+            return {}
         
-        if not use_validation_split:
-            # Fallback: create random split from dataset (old behavior)
-            logger.info("Creating random split from provided dataset")
-            if storage_client:
-                dataset = LacrossePlayerDataset(
-                    image_dir=dataset_path,
-                    storage_client=storage_client,
-                    min_images_per_player=N_PLAYERS_FOR_VAL  # For evaluation, 1 image is sufficient
-                )
-            else:
-                dataset = LacrossePlayerDataset(
-                    image_dir=dataset_path,
-                    min_images_per_player=N_PLAYERS_FOR_VAL  # For evaluation, 1 image is sufficient
-                )
-            train_dataset, val_dataset = self._split_dataset(dataset, test_split=0.2)
         
         # Generate embeddings for validation set
         logger.info("Generating embeddings for validation set...")
