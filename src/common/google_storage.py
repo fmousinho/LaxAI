@@ -81,7 +81,7 @@ class GCSPaths:
             logger.error(f"Error parsing GCS paths YAML file: {e}")
             raise
 
-    def get_path(self, key: str, **kwargs) -> str:
+    def get_path(self, key: str, **kwargs) -> Optional[str]:
         """
         Retrieves a formatted path string using the given key and keyword arguments.
 
@@ -94,7 +94,17 @@ class GCSPaths:
 
         Raises:
             KeyError: If the key is not found in the configuration.
+            ValueError: If any kwargs values contain invalid characters (/, \, .).
         """
+        # Validate kwargs values for invalid characters
+        invalid_chars = ['/', '\\', '.']
+        for param_name, param_value in kwargs.items():
+            if isinstance(param_value, str):
+                for char in invalid_chars:
+                    if char in param_value:
+                        logger.error(f"Invalid character '{char}' found in parameter '{param_name}' with value '{param_value}'. Path parameters cannot contain '/', '\\', or '.' characters.")
+                        return None
+        
         path_template = self.paths.get(key)
         if path_template is None:
             raise KeyError(f"Path key '{key}' not found in {self.gcs_paths_file}")
@@ -191,18 +201,20 @@ class GoogleStorageClient:
         if not self._authenticated:
             return self._authenticate()
         return True
+ 
 
-    def list_blobs(self, prefix: Optional[str] = None, include_user_id: bool = True, delimiter: Optional[str] = None) -> set[str]:
+    def list_blobs(self, prefix: Optional[str] = None, include_user_id: bool = True, delimiter: Optional[str] = None, exclude_prefix_in_return: bool = False) -> set[str]:
         """
-        Lists all the blobs in the bucket, returning a list of names.
+        Lists all the blobs in the bucket, returning a set of names.
         
         Args:
             prefix: Optional prefix to filter blobs (will be combined with user_path)
             include_user_id: Whether to include user_id prefix in the blob names
             delimiter: Optional delimiter - when used, returns only directory prefixes
+            exclude_prefix_in_return: Whether to exclude the search prefix from returned paths
 
         Returns:
-            List of blob names (or directory prefixes if delimiter is used)
+            Set of blob names (or directory prefixes if delimiter is used)
             
         Raises:
             RuntimeError: If authentication fails
@@ -224,40 +236,44 @@ class GoogleStorageClient:
 
             full_prefix = (full_prefix.rstrip('/') + '/') if  full_prefix else '/'
 
-            iterator = self._client.list_blobs(self._bucket, prefix=full_prefix, delimiter=delimiter)
+            iterator = self._bucket.list_blobs(prefix=full_prefix, delimiter=delimiter)
             user_id_len = len(self.user_id) if self.user_id else 0
             
             result = set()
-
+            
             if delimiter:
-                if include_user_id or user_id_len == 0:
-                    for page in iterator.pages:
-                        for p in page.prefixes:
-                            if type(p) is not str:
-                                logger.warning(f"Unexpected type in prefixes: {type(p)}")
-                                continue
-                            result.add(p)
-                else:
-                    for page in iterator.pages:
-                        for p in page.prefixes:
-                            if type(p) is not str:
-                                logger.warning(f"Unexpected type in prefixes: {type(p)}")
-                                continue
-                            result.add(p[user_id_len:])
+                # When delimiter is used, we need to consume the iterator to populate prefixes
+                # Consume the iterator (which contains individual blobs at this level)
+                list(iterator)  # This populates iterator.prefixes
+                
+                # Now get the directory prefixes
+                for prefix_path in iterator.prefixes:
+                    if exclude_prefix_in_return:
+                        # Properly remove the search prefix from the beginning
+                        if prefix_path.startswith(full_prefix):
+                            clean_path = prefix_path[len(full_prefix):]
+                        else:
+                            clean_path = prefix_path
+                        result.add(clean_path)
+                    elif include_user_id or user_id_len == 0:
+                        result.add(prefix_path)
+                    else:
+                        result.add(prefix_path[user_id_len:])
             else:
-                if include_user_id or user_id_len == 0:
-                    for blob in iterator:
-                        if type(blob.name) is not str:
-                            logger.warning(f"Unexpected type in blobs: {type(blob)}")
-                            continue
+                # When no delimiter, return blob names
+                for blob in iterator:
+                    if exclude_prefix_in_return:
+                        # Properly remove the search prefix from the beginning
+                        if blob.name.startswith(full_prefix):
+                            clean_name = blob.name[len(full_prefix):]
+                        else:
+                            clean_name = blob.name
+                        result.add(clean_name)
+                    elif include_user_id or user_id_len == 0:
                         result.add(blob.name)
-                else:
-                    for blob in iterator:
-                        if type(blob.name) is not str:
-                            logger.warning(f"Unexpected type in blobs: {type(blob.name)}")
-                            continue
+                    else:
                         result.add(blob.name[user_id_len:])
-
+            
             return result
           
         except Exception as e:
@@ -589,7 +605,7 @@ class GoogleStorageClient:
 
             blob = self._bucket.blob(full_name)
             blob.delete()
-            logger.info(f"Blob {full_name} deleted")
+            logger.debug(f"Blob {full_name} deleted")
             return True
         except Exception as e:
             logger.error(f"Failed to delete blob: {e}")
