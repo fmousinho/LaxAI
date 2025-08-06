@@ -95,7 +95,7 @@ class DataPrepPipeline(Pipeline):
         # Detection model is required for training pipeline
         try:
             self.detection_model = DetectionModel()
-            logger.info("Detection model successfully loaded")
+            logger.info("Detection model loaded")
         except RuntimeError as e:
             logger.critical(f"CRITICAL ERROR: Detection model is required for training pipeline but failed to load: {e}")
             raise RuntimeError(f"Training pipeline cannot continue without detection model: {e}")
@@ -218,7 +218,7 @@ class DataPrepPipeline(Pipeline):
         if failed_operations:
             logger.warning(f"Failed to {operation_func.__name__} {len(failed_operations)} out of {len(tasks)} items{' for ' + context_info if context_info else ''}")
 
-        logger.info(f"Successfully completed {successful_count} {operation_func.__name__} operations{' for ' + context_info if context_info else ''}")
+        logger.info(f"Completed {successful_count} {operation_func.__name__} operations{' for ' + context_info if context_info else ''}")
 
         return failed_operations, successful_count
 
@@ -460,7 +460,7 @@ class DataPrepPipeline(Pipeline):
             if failed_uploads:
                 logger.warning(f"Failed to upload {len(failed_uploads)} out of {len(upload_tasks)} crops for {video_guid}")
             
-            logger.info(f"Successfully extracted and uploaded {crops_uploaded} crops across {len(frames_data)} frames")
+            logger.info(f"Successfully uploaded {crops_uploaded} crops across {len(frames_data)} frames")
             
             context.update({
                 "status": StepStatus.COMPLETED.value,
@@ -615,18 +615,14 @@ class DataPrepPipeline(Pipeline):
                 if not aug_crops_root:
                     logger.error(f"No augmented crops root found for video {video_guid} at frame {frame_guid}")
                     raise RuntimeError(f"No augmented crops root found for video {video_guid} at frame {frame_guid}")
-                players = self.tenant_storage.list_blobs(prefix=aug_crops_root, delimiter='/')
+                players = self.tenant_storage.list_blobs(prefix=aug_crops_root, delimiter='/', exclude_prefix_in_return=True)
                 players = list(players)  
                 random.shuffle(players)  
-                
+
                 dataset_guid = create_dataset_id()
                 n_train_players = int(len(players) * self.train_ratio)
                 train_players = players[:n_train_players]
                 val_players = players[n_train_players:]
-                
-
-                ttl_train=0
-                ttl_val=0
 
                 train_folder = self.path_manager.get_path("train_dataset", dataset_id=dataset_guid).rstrip('/')
                 val_folder = self.path_manager.get_path("val_dataset", dataset_id=dataset_guid).rstrip('/')
@@ -634,28 +630,30 @@ class DataPrepPipeline(Pipeline):
 
                 move_tasks = []
                 for player in train_players:
-                    player_folder = self.path_manager.get_path("augmented_crops", video_id = video_guid, dataset_id=dataset_guid, orig_crop_id=player.rstrip('/'))
-                    player_images_path_list = self.tenant_storage.list_blobs(prefix=player_folder)
+                    player = player.rstrip('/')  # Ensure no trailing slash
+                    player_aug_folder = self.path_manager.get_path("augmented_crops", video_id=video_guid, frame_id=frame_guid, orig_crop_id=player)
+                    player_images_path_list = self.tenant_storage.list_blobs(prefix=player_aug_folder)
                     destination_folder = f"{train_folder}/{player}"
-                    destination_folder = destination_folder.rstrip('/')
-
+                  
                     for image_path in player_images_path_list:
                         if not image_path.endswith('.jpg'):
                             logger.warning(f"Skipping non-JPG file: {image_path}")
                             continue
-                        move_tasks.append((image_path, f"{destination_folder}/{os.path.basename(image_path)}"))
+                        file_name = os.path.basename(image_path)
+                        move_tasks.append((image_path, f"{destination_folder}/{file_name}"))
 
                 for player in val_players:
-                    player_folder = self.path_manager.get_path("augmented_crops", video_id = video_guid, dataset_id=dataset_guid, orig_crop_id=player.rstrip('/'))
-                    player_images_path_list = self.tenant_storage.list_blobs(prefix=player_folder)
+                    player = player.rstrip('/')
+                    player_aug_folder = self.path_manager.get_path("augmented_crops", video_id=video_guid, frame_id=frame_guid, orig_crop_id=player)
+                    player_images_path_list = self.tenant_storage.list_blobs(prefix=player_aug_folder)
                     destination_folder = f"{val_folder}/{player}"
-                    destination_folder = destination_folder.rstrip('/')
 
                     for image_path in player_images_path_list:
                         if not image_path.endswith('.jpg'):
                             logger.warning(f"Skipping non-JPG file: {image_path}")
                             continue
-                        move_tasks.append((image_path, f"{destination_folder}/{os.path.basename(image_path)}"))
+                        file_name = os.path.basename(image_path)
+                        move_tasks.append((image_path, f"{destination_folder}/{file_name}"))
 
                 failed_moves, successful_moves = self._execute_parallel_operations(
                     move_tasks, 
@@ -664,14 +662,13 @@ class DataPrepPipeline(Pipeline):
                 )
 
                 # Count successful moves by type
-                ttl_train = 0
-                ttl_val = 0
-                for task in move_tasks:
-                    if task not in failed_moves:
-                        if task[1].split('/')[-3] == "train":  # dataset_type is the 3rd element
-                            ttl_train += 1
-                        else:
-                            ttl_val += 1
+                ttl_train = len(self.tenant_storage.list_blobs(prefix=train_folder))
+                ttl_val = len(self.tenant_storage.list_blobs(prefix=val_folder))
+
+                if ttl_train == 0:
+                    logger.warning(f"No training crops created for {frame_guid} - check if there are any crops in the source folders")
+                if ttl_val == 0:
+                    logger.warning(f"No validation crops created for {frame_guid} - check if there are any crops in the source folders")
 
                 if failed_moves:
                     logger.warning(f"Failed to move {len(failed_moves)} out of {len(move_tasks)} crops for {frame_guid}")
@@ -807,6 +804,7 @@ class DataPrepPipeline(Pipeline):
 
 
                 success = self.tenant_storage.upload_from_bytes(frame_blob_path, frame)
+
                 if not success:
                     logger.error(f"Failed to upload {frame_guid} to storage path: {frame_blob_path}")
                     return {"status": StepStatus.ERROR.value, "error": f"Failed to upload frame {frame_guid} to storage path: {frame_blob_path}"}
@@ -862,8 +860,8 @@ class DataPrepPipeline(Pipeline):
             
             # Get background statistics for logging
             stats = self.background_mask_detector.get_stats()
-            
-            logger.info(f"Grass mask detector initialized successfully for video: {video_guid}")
+
+            logger.info(f"Grass mask detector initialized for video: {video_guid}")
             logger.debug(f"Background color statistics: {stats}")
             
             # Convert numpy arrays to lists for JSON serialization

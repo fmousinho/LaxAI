@@ -28,11 +28,10 @@ class ModelEvaluator:
     - Distance-based metrics (Euclidean, Cosine)
     - Classification metrics (Accuracy, Precision, Recall, F1, ROC-AUC)
     - Ranking metrics (Rank-1, Rank-5, mAP, CMC curve)
-    - Cross-validation and temporal validation
     """
     
     def __init__(self, model: torch.nn.Module, device: torch.device, 
-                 threshold: float = evaluator_config.threshold, k_folds: int = evaluator_config.k_folds):
+                 threshold: float = evaluator_config.threshold):
         """
         Initialize the evaluator.
         
@@ -40,19 +39,17 @@ class ModelEvaluator:
             model: Trained Siamese network model
             device: Device to run evaluation on
             threshold: Similarity threshold for binary classification (default 0.5, will be optimized)
-            k_folds: Number of folds for cross-validation
         """
         self.model = model
         self.device = device
         self.threshold = threshold
-        self.k_folds = k_folds
         self.model.eval()
         
         # Results storage
         self.results = {}
         self.embeddings_cache = {}
-        
-    def evaluate_comprehensive(self, dataset_path: str, 
+
+    def evaluate_comprehensive(self, validation_dataset_path: str, 
                              storage_client=None) -> Dict[str, Any]:
         """
         Run comprehensive evaluation including all metrics.
@@ -70,38 +67,19 @@ class ModelEvaluator:
         if not storage_client:
             raise ValueError("storage_client is required for GCS operations")
 
-    
-        train_folder = dataset_path.rstrip('/') + '/train'
-        val_folder = dataset_path.rstrip('/') + '/val'
-
-        val_blobs = storage_client.list_blobs(prefix=val_folder)
-        val_exists = len(val_blobs) > 0
-
-        if not val_exists:
-            logger.warning(f"Validation directory not found: {val_folder}")
-            return {}
-
             
-        logger.info(f"Using existing validation split:")
-        logger.info(f"  Train dir: {train_dir}")
-        logger.info(f"  Val dir: {val_dir}")
+        logger.info(f"Using validation set from: {validation_dataset_path}")
                 
                
         val_transforms = get_transforms('validation')  # Use validation transforms
              
         val_dataset = LacrossePlayerDataset(
-            image_dir=val_dir,
+            image_dir=validation_dataset_path,
             storage_client=storage_client,
             transform=val_transforms,
             min_images_per_player= N_PLAYERS_FOR_VAL
         )
-        train_transforms = get_transforms('training')
-        train_dataset = LacrossePlayerDataset(
-            image_dir=train_dir,
-            storage_client=storage_client,
-            transform=train_transforms,
-            min_images_per_player=N_PLAYERS_FOR_VAL
-        )
+        
                
                 # Check if enough valid players exist in validation set
         if len(val_dataset.players) < 2:
@@ -125,22 +103,15 @@ class ModelEvaluator:
         logger.info("Computing ranking metrics...")
         ranking_metrics = self._evaluate_ranking(embeddings, labels)
         
-        # Cross-validation (use training set for this)
-        logger.info("Running cross-validation on training set...")
-        cv_metrics = self._cross_validate(train_dataset)
         
         # Aggregate results
         results = {
             'distance_metrics': distance_metrics,
             'classification_metrics': classification_metrics,
             'ranking_metrics': ranking_metrics,
-            'cross_validation': cv_metrics,
             'dataset_info': {
                 'validation_samples': len(val_dataset),
-                'training_samples': len(train_dataset) if use_validation_split else 0,
                 'val_players': len(val_dataset.players),
-                'train_players': len(train_dataset.players) if use_validation_split else 0,
-                'used_existing_split': use_validation_split
             }
         }
         
@@ -726,53 +697,6 @@ class ModelEvaluator:
         
         return float(np.mean(precisions)) if precisions else 0.0
     
-    def _cross_validate(self, dataset: LacrossePlayerDataset) -> Dict[str, float]:
-        """
-        Perform k-fold cross-validation.
-        """
-        players = dataset.players
-        kfold = KFold(n_splits=self.k_folds, shuffle=True, random_state=42)
-        
-        cv_scores = {
-            'accuracy': [],
-            'f1_score': [],
-            'rank_1_accuracy': []
-        }
-        
-        for fold, (train_idx, val_idx) in enumerate(kfold.split(players)):
-            logger.info(f"Cross-validation fold {fold + 1}/{self.k_folds}")
-            
-            train_players = [players[i] for i in train_idx]
-            val_players = [players[i] for i in val_idx]
-            
-            # Create subset datasets
-            val_dataset = self._create_player_subset(dataset, val_players)
-            
-            # Generate embeddings for validation set
-            embeddings, labels, _ = self._generate_embeddings(val_dataset)
-            
-            if len(embeddings) == 0:
-                continue
-            
-            # Compute metrics for this fold
-            classification_metrics = self._evaluate_classification(embeddings, labels)
-            ranking_metrics = self._evaluate_ranking(embeddings, labels)
-            
-            cv_scores['accuracy'].append(classification_metrics['accuracy'])
-            cv_scores['f1_score'].append(classification_metrics['f1_score'])
-            cv_scores['rank_1_accuracy'].append(ranking_metrics['rank_1_accuracy'])
-        
-        # Compute mean and std for each metric
-        cv_results = {}
-        for metric, scores in cv_scores.items():
-            if scores:
-                cv_results[f'{metric}_mean'] = float(np.mean(scores))
-                cv_results[f'{metric}_std'] = float(np.std(scores))
-            else:
-                cv_results[f'{metric}_mean'] = 0.0
-                cv_results[f'{metric}_std'] = 0.0
-        
-        return cv_results
     
     def _log_to_wandb(self, results: Dict[str, Any]) -> None:
         """
@@ -795,14 +719,6 @@ class ModelEvaluator:
         # Ranking metrics
         for key, value in results['ranking_metrics'].items():
             wandb_metrics[f'eval/ranking/{key}'] = value
-        
-        # Cross-validation metrics
-        for key, value in results['cross_validation'].items():
-            wandb_metrics[f'eval/cv/{key}'] = value
-        
-        # Dataset info
-        for key, value in results['dataset_info'].items():
-            wandb_metrics[f'eval/dataset/{key}'] = value
         
         wandb_logger.log_metrics(wandb_metrics)
         logger.info("Evaluation results logged to wandb")
@@ -871,13 +787,6 @@ class ModelEvaluator:
         report.append(f"  Same player avg distance: {dist_metrics['avg_distance_same_player']:.4f}")
         report.append(f"  Different player avg distance: {dist_metrics['avg_distance_different_player']:.4f}")
         report.append(f"  Distance separation: {dist_metrics['distance_separation']:.4f}")
-        
-        # Cross-validation
-        cv_metrics = results['cross_validation']
-        report.append(f"\nCross-Validation Results:")
-        report.append(f"  Accuracy: {cv_metrics['accuracy_mean']:.4f} ± {cv_metrics['accuracy_std']:.4f}")
-        report.append(f"  F1-Score: {cv_metrics['f1_score_mean']:.4f} ± {cv_metrics['f1_score_std']:.4f}")
-        report.append(f"  Rank-1: {cv_metrics['rank_1_accuracy_mean']:.4f} ± {cv_metrics['rank_1_accuracy_std']:.4f}")
         
         report.append("\n" + "=" * 60)
         

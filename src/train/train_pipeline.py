@@ -100,14 +100,13 @@ class TrainPipeline(Pipeline):
                 return {"status": PipelineStatus.ERROR.value, "error": "No dataset name provided"}
             initial_context = {"dataset_name": dataset_name}
             results = super().run(initial_context, resume_from_checkpoint=resume_from_checkpoint)
-            # Log evaluation results to wandb if available
-            if wandb_config.enabled and results.get('evaluation_results'):
-                wandb_logger.log_metrics(results['evaluation_results'])
             return results
         finally:
             if wandb_config.enabled:
+                eval_results = results.get('evaluation_results', {})
+                wandb_logger.summary(eval_results)
                 context = results.get('context', {})
-                training_info = context.get('training_info', {})
+                training_info = context.get('training_info', {})                
                 wandb_logger.update_run_config(training_info)
                 wandb_logger.finish()
 
@@ -260,11 +259,8 @@ class TrainPipeline(Pipeline):
                 logger.error(error_msg)
                 return {"status": StepStatus.ERROR.value, "error": error_msg}
             
-            dataset_folder = context.get('dataset_folder')
-            if not dataset_folder:
-                error_msg = "Dataset folder must be available in context (run create_dataset_folder step first)"
-                logger.error(error_msg)
-                return {"status": StepStatus.ERROR.value, "error": error_msg}
+            dataset_name = context.get('dataset_name').rstrip('/')
+            val_folder = self.path_manager.get_path("val_dataset", dataset_id=dataset_name)
 
             training_info = context.get('training_info', {})
             device = training_info.get('device', 'cpu')
@@ -287,7 +283,7 @@ class TrainPipeline(Pipeline):
             # Run comprehensive evaluation
             logger.info("Running comprehensive evaluation suite...")
             evaluation_results = evaluator.evaluate_comprehensive(
-                dataset_path=dataset_folder,
+                validation_dataset_path=val_folder,
                 storage_client=self.storage_client,  # Pass storage client for GCS support
             )
             
