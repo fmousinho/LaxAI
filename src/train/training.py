@@ -16,19 +16,25 @@ class Training:
     """
     A training class specifically for neural network training using triplet loss.
     Focused on training lacrosse player re-identification models.
+    
+    This class assumes GCS storage and uses path_manager for structured path handling.
+    The train_dir parameter now represents a dataset_id that gets resolved to 
+    structured train/val paths using path_manager.
     """
     
     def __init__(self, 
                 train_dir: str,
                 storage_client: Any,
+                path_manager: Any = None,
                 device: Any = None,
                 **kwargs):
         """
         Initialize the training class with hyperparameters.
         
         Args:
-            train_dir: Directory containing training data (local or GCS blob prefix)
-            storage_client: Google Storage client for GCS operations (required for GCS paths)
+            train_dir: Directory containing training data (GCS blob prefix for dataset_id)
+            storage_client: Google Storage client for GCS operations (required)
+            path_manager: GCSPaths instance for structured path handling (optional, will create if None)
             device: Device to run the model on (CPU, GPU, or MPS)
             All other hyperparameters must be provided as kwargs or present in training_config.
 
@@ -44,8 +50,14 @@ class Training:
             lr_scheduler_factor (float): Factor for LR scheduler
         If any required hyperparameter is missing in both kwargs and training_config, a ValueError will be raised.
         """
-        self.train_dir = train_dir
+        self.train_dir = train_dir  # This is now the dataset_id for path_manager
+        self.dataset_id = os.path.basename(train_dir.rstrip('/'))  # Extract dataset_id from train_dir
         self.storage_client = storage_client
+        if path_manager is None:
+            from common.google_storage import GCSPaths
+            self.path_manager = GCSPaths()
+        else:
+            self.path_manager = path_manager
         def get_kwarg_or_config(key, config_obj=training_config, allow_none=False):
             if key in kwargs:
                 return kwargs[key]
@@ -144,18 +156,12 @@ class Training:
                 "lr_scheduler_min_lr": self.lr_scheduler_min_lr,
                 "lr_scheduler_factor": self.lr_scheduler_factor,
                 "optimizer_type": "Adam",
-                "train_dir": self.train_dir,
+                "train_dir": self.train_dir,  # This is now dataset_id
                 "model_architecture": type(self.model).__name__ if self.model is not None else None,
                 "timestamp": datetime.datetime.now().isoformat(),
                 "wandb_run_id": wandb.run.id if hasattr(wandb, 'run') and wandb.run is not None else None,
                 "notes": getattr(self, 'notes', None),
             }
-            # Try to get git commit hash if available
-            try:
-                git_commit_hash = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode("utf-8").strip()
-                metadata["git_commit_hash"] = git_commit_hash
-            except Exception:
-                metadata["git_commit_hash"] = None
 
             # Optionally add dataset info if available
             if hasattr(self, 'dataloader') and self.dataloader is not None:
@@ -180,7 +186,7 @@ class Training:
 
     def setup_data(self, dataset_class, transform=None):
         """
-        Setup the dataset and dataloader for training.
+        Setup the dataset and dataloader for training using GCS structured paths.
         
         Args:
             dataset_class: The dataset class to use (e.g., LacrossePlayerDataset)
@@ -190,61 +196,43 @@ class Training:
             FileNotFoundError: If training directory doesn't exist
             ValueError: If insufficient player folders for training
         """
-        # Check if we're working with GCS or local filesystem
-        is_gcs_path = self.storage_client is not None
+        # Use path_manager to get structured train dataset path
+        # self.train_dir is now the dataset_id
+        dataset_id = self.dataset_id
+        train_dataset_path = self.path_manager.get_path("train_dataset", dataset_id=dataset_id)
+        val_dataset_path = self.path_manager.get_path("val_dataset", dataset_id=dataset_id)
         
-        if is_gcs_path:
-            # For GCS paths, validate by listing blobs with the prefix
-            try:
-                all_blobs = list(self.storage_client.list_blobs(prefix=self.train_dir))
-                if not all_blobs:
-                    raise FileNotFoundError(f"Training directory does not exist in GCS: {self.train_dir}")
-                
-                # Check for player folders by looking for blobs with player subfolders
-                player_folders = set()
-                for blob in all_blobs:
-                    # Remove the train_dir prefix and look for player folders
-                    relative_path = blob[len(self.train_dir):].lstrip('/')
-                    if '/' in relative_path:
-                        player = relative_path.split('/')[0]
-                        if player and blob.lower().endswith(('.jpg', '.png', '.jpeg')):
-                            player_folders.add(player)
-                
-                if len(player_folders) < 2:
-                    raise ValueError(f"Need at least 2 player folders for triplet loss training! Found: {len(player_folders)}")
-                
-                logger.info(f"Found {len(player_folders)} player folders in GCS path: {self.train_dir}")
-                
-            except Exception as e:
-                if isinstance(e, (FileNotFoundError, ValueError)):
-                    raise
-                raise FileNotFoundError(f"Failed to access GCS training directory: {self.train_dir} - {str(e)}")
-        else:
-            # For local filesystem paths, use original validation
-            if not os.path.exists(self.train_dir):
-                raise FileNotFoundError(f"Training directory does not exist: {self.train_dir}")
-            
-            train_folders = [d for d in os.listdir(self.train_dir) 
-                            if os.path.isdir(os.path.join(self.train_dir, d))]
-            
-            if len(train_folders) < 2:
-                raise ValueError("Need at least 2 player folders for triplet loss training!")
-            
-            logger.info(f"Found {len(train_folders)} player folders in {self.train_dir}")
+        logger.info(f"Setting up dataset for dataset_id: {dataset_id}")
+        logger.info(f"Train dataset path: {train_dataset_path}")
+        logger.info(f"Val dataset path: {val_dataset_path}")
         
-        # Setup dataset and dataloader
-        if is_gcs_path:
-            # For GCS, pass storage_client to dataset
-            if transform is not None:
-                train_dataset = dataset_class(image_dir=self.train_dir, storage_client=self.storage_client, transform=transform)
-            else:
-                train_dataset = dataset_class(image_dir=self.train_dir, storage_client=self.storage_client)
+        # Validate training data exists in GCS
+        try:
+            train_blobs = list(self.storage_client.list_blobs(prefix=train_dataset_path))
+            if not train_blobs:
+                raise FileNotFoundError(f"Training dataset does not exist in GCS: {train_dataset_path}")
+            
+            # Check for player folders by looking for blobs with player subfolders
+            player_folders = set()
+            for blob in train_blobs:
+                player = os.path.basename(blob)
+                player_folders.add(player)
+
+            if len(player_folders) < 2:
+                raise ValueError(f"Need at least 2 player folders for triplet loss training! Found: {len(player_folders)} in {train_dataset_path}")
+            
+            logger.info(f"Found {len(player_folders)} player folders in train dataset.")
+            
+        except Exception as e:
+            if isinstance(e, (FileNotFoundError, ValueError)):
+                raise
+            raise FileNotFoundError(f"Failed to access GCS training directory: {train_dataset_path} - {str(e)}")
+        
+        # Setup dataset and dataloader using the structured train path
+        if transform is not None:
+            train_dataset = dataset_class(image_dir=train_dataset_path, storage_client=self.storage_client, transform=transform)
         else:
-            # For local filesystem, use original approach
-            if transform is not None:
-                train_dataset = dataset_class(image_dir=self.train_dir, transform=transform)
-            else:
-                train_dataset = dataset_class(image_dir=self.train_dir)
+            train_dataset = dataset_class(image_dir=train_dataset_path, storage_client=self.storage_client)
 
         n_workers = getattr(training_config, 'num_workers', 0)
         self.dataloader = DataLoader(
@@ -259,6 +247,8 @@ class Training:
         logger.info(f"  Batch size: {self.batch_size}")
         logger.info(f"  Number of workers: {n_workers}")
         logger.info(f"  Number of batches: {len(self.dataloader)}")
+        logger.info(f"  Train dataset path: {train_dataset_path}")
+        logger.info(f"  Val dataset path: {val_dataset_path} (for future use)")
 
 
     def setup_model(self, model_class, model_name: str, force_pretrained: bool = False, **kwargs):
@@ -493,7 +483,7 @@ class Training:
             Dictionary with training configuration details
         """
         return {
-            'train_dir': self.train_dir,
+            'dataset_id': self.train_dir,  # train_dir is now dataset_id
             'learning_rate': self.learning_rate,
             'batch_size': self.batch_size,
             'num_epochs': self.num_epochs,

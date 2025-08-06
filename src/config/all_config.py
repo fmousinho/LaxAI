@@ -71,7 +71,7 @@ class TrainingConfig:
     weight_decay: float = 1e-4  # L2 regularization weight decay
     model_save_path: str = '/common/model/embeddings_latest.pth'
     train_ratio: float = 0.8
-    min_images_per_player: int = 3
+    min_images_per_player: int = 2
     num_workers: int = 4 if sys.platform != "darwin" else 0  # Number of DataLoader workers
     early_stopping_loss_ratio: float = 0.1  # Early stopping threshold as a ratio of margin
     early_stopping_patience: Optional[int] = 10  # Number of epochs to wait before early stopping (None = disabled)

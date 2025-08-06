@@ -75,29 +75,3 @@ def create_short_guid() -> str:
     return uuid.uuid4().hex[:8]
 
 
-# Example usage and testing
-if __name__ == "__main__":
-    print("Generated IDs:")
-    print(f"Tenant ID: {create_tenant_id()}")
-    print(f"Video ID: {create_video_id()}")
-    print(f"Frame ID: {create_frame_id()}")
-    print(f"Dataset ID: {create_dataset_id()}")
-    print(f"Run ID: {create_run_id()}")
-    print(f"User ID: {create_user_id()}")
-    print(f"Experiment ID: {create_experiment_id()}")
-    print(f"Model ID: {create_model_id()}")
-    print(f"Crop ID: {create_crop_id()}")
-    print(f"Batch ID: {create_batch_id()}")
-    
-    print("\nExample GCS path usage:")
-    tenant = create_tenant_id()
-    video = create_video_id()
-    frame = create_frame_id()
-    dataset = create_dataset_id()
-    run = create_run_id()
-    
-    print(f"Raw data path: {tenant}/raw/")
-    print(f"Imported video path: {tenant}/process/{video}/imported/")
-    print(f"Extracted frames path: {tenant}/process/{video}/{frame}/")
-    print(f"Train dataset path: {tenant}/datasets/{dataset}/train")
-    print(f"Run data path: {tenant}/runs/{run}/")

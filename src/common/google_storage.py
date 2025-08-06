@@ -192,16 +192,17 @@ class GoogleStorageClient:
             return self._authenticate()
         return True
 
-    def list_blobs(self, prefix: Optional[str] = None, include_user_id: bool = True) -> List[str]:
+    def list_blobs(self, prefix: Optional[str] = None, include_user_id: bool = True, delimiter: Optional[str] = None) -> set[str]:
         """
-        Lists all the blobs in the bucket.
+        Lists all the blobs in the bucket, returning a list of names.
         
         Args:
             prefix: Optional prefix to filter blobs (will be combined with user_path)
             include_user_id: Whether to include user_id prefix in the blob names
+            delimiter: Optional delimiter - when used, returns only directory prefixes
 
         Returns:
-            List of blob names, inclusive of user_id prefix if set
+            List of blob names (or directory prefixes if delimiter is used)
             
         Raises:
             RuntimeError: If authentication fails
@@ -214,19 +215,50 @@ class GoogleStorageClient:
             if self.user_id and not self.user_id.endswith('/'):
                 self.user_id += '/'
             if prefix:
-                if self.user_id:
+                if self.user_id and not prefix.startswith(self.user_id):
                     full_prefix = f"{self.user_id}{prefix}"
                 else:
                     full_prefix = prefix
             else:
                 full_prefix = self.user_id if self.user_id else None
-                
-            blobs = self._client.list_blobs(self.config.bucket_name, prefix=full_prefix)
+
+            full_prefix = (full_prefix.rstrip('/') + '/') if  full_prefix else '/'
+
+            iterator = self._client.list_blobs(self._bucket, prefix=full_prefix, delimiter=delimiter)
             user_id_len = len(self.user_id) if self.user_id else 0
-            if include_user_id or user_id_len == 0:
-                return [blob.name for blob in blobs]
+            
+            result = set()
+
+            if delimiter:
+                if include_user_id or user_id_len == 0:
+                    for page in iterator.pages:
+                        for p in page.prefixes:
+                            if type(p) is not str:
+                                logger.warning(f"Unexpected type in prefixes: {type(p)}")
+                                continue
+                            result.add(p)
+                else:
+                    for page in iterator.pages:
+                        for p in page.prefixes:
+                            if type(p) is not str:
+                                logger.warning(f"Unexpected type in prefixes: {type(p)}")
+                                continue
+                            result.add(p[user_id_len:])
             else:
-                return [blob.name[user_id_len:] for blob in blobs]
+                if include_user_id or user_id_len == 0:
+                    for blob in iterator:
+                        if type(blob.name) is not str:
+                            logger.warning(f"Unexpected type in blobs: {type(blob)}")
+                            continue
+                        result.add(blob.name)
+                else:
+                    for blob in iterator:
+                        if type(blob.name) is not str:
+                            logger.warning(f"Unexpected type in blobs: {type(blob.name)}")
+                            continue
+                        result.add(blob.name[user_id_len:])
+
+            return result
           
         except Exception as e:
             logger.error(f"Failed to list blobs: {e}")
@@ -354,6 +386,58 @@ class GoogleStorageClient:
             logger.error(f"Failed to download blob: {e}")
             return False
     
+    def download_as_bytes(self, source_blob_name: str) -> Optional[bytes]:
+        """
+        Download a blob from the bucket as bytes.
+        
+        Args:
+            source_blob_name: Name of the blob in the bucket (will be prefixed with user_path)
+            
+        Returns:
+            bytes: Content of the blob as bytes, or None if download failed
+        """
+        if not self._ensure_authenticated():
+            logger.error("Failed to authenticate with Google Cloud Storage")
+            return None
+        if self.user_id and not self.user_id.endswith('/'):
+            self.user_id += '/'
+
+        try:
+            # Add user_path prefix to source, but avoid double prefixing
+            if self.user_id and source_blob_name.startswith(self.user_id):
+                full_source = source_blob_name
+            else:
+                full_source = f"{self.user_id}{source_blob_name}" if self.user_id else source_blob_name
+            blob = self._bucket.blob(full_source)
+            content = blob.download_as_bytes()
+            logger.debug(f"Blob {full_source} downloaded as bytes")
+            if source_blob_name.endswith('.jpg') or source_blob_name.endswith('.jpeg'):
+                # Convert BGR to RGB if necessary
+                image = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_COLOR)
+                if image is not None:
+                    content = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            elif source_blob_name.endswith('.json'):
+                # Ensure JSON is properly decoded
+                content = content.decode('utf-8')
+            elif source_blob_name.endswith('.txt'):
+                # Ensure text is properly decoded
+                content = content.decode('utf-8')
+            elif source_blob_name.endswith('.mp4') or source_blob_name.endswith('.avi'):
+                # For video files, return raw bytes
+                pass
+            else:
+                logger.error(f"Unsupported file type for download: {source_blob_name}")
+                return None
+            logger.debug(f"Blob {full_source} downloaded successfully")
+
+            return content
+        except Exception as e:
+            logger.error(f"Failed to download blob as bytes: {e}")
+            return None
+
+
+
+
     def download_as_string(self, source_blob_name: str) -> Optional[str]:
         """
         Download a blob from the bucket as a string.
@@ -498,10 +582,10 @@ class GoogleStorageClient:
         try:
             if self.user_id and not self.user_id.endswith('/'):
                 self.user_id += '/'
-            if full_blob_name.startswith(self.user_id):
-                full_name = full_blob_name
+            if blob_name.startswith(self.user_id):
+                full_name = blob_name
             else:
-                full_name = f"{self.user_id}{full_blob_name}" if self.user_id else full_blob_name
+                full_name = f"{self.user_id}{blob_name}" if self.user_id else blob_name
 
             blob = self._bucket.blob(full_name)
             blob.delete()
