@@ -97,6 +97,28 @@ class WandbLogger:
             self.enabled = False
             return False
     
+
+    def log_summary(self, summary: Dict[str, Any]) -> None:
+        """
+        Log summary metrics to wandb.
+        
+        Args:
+            summary: Dictionary of summary metrics to log
+        """
+        if not self.enabled or not self.initialized:
+            return
+            
+        try:
+            if self.run is None:
+                raise RuntimeError("Wandb run is not initialized. Call init_run() first.")
+                
+            self.run.summary.update(summary)
+            logger.info(f"Logged summary metrics: {list(summary.keys())}")
+
+        except Exception as e:
+            logger.warning(f"Failed to log summary metrics to wandb: {e}")
+
+
     def log_metrics(self, metrics: Dict[str, Any], step: Optional[int] = None) -> None:
         """
         Log metrics to wandb.
@@ -113,88 +135,7 @@ class WandbLogger:
         except Exception as e:
             logger.warning(f"Failed to log metrics to wandb: {e}")
     
-    def log_dataset_info(self, dataset_path: str, dataset_size: int, 
-                        num_players: int) -> None:
-        """
-        Log dataset information to wandb.
-        
-        Args:
-            dataset_path: Path to the dataset
-            dataset_size: Total number of images
-            num_players: Number of unique players
-        """
-        if not self.enabled or not self.initialized:
-            return
-            
-        try:
-            # Log dataset summary
-            dataset_info = {
-                "dataset/path": dataset_path,
-                "dataset/total_images": dataset_size,
-                "dataset/num_players": num_players,
-                "dataset/avg_images_per_player": dataset_size / num_players if num_players > 0 else 0
-            }
-
-            self.run.log(dataset_info)
-
-        except Exception as e:
-            logger.warning(f"Failed to log dataset info to wandb: {e}")
-    
-    def log_sample_images(self, dataset, max_images_per_player: Optional[int] = None) -> None:
-        """
-        Log sample training images to wandb.
-        
-        Args:
-            dataset: Training dataset object
-            max_images_per_player: Maximum images to log per player (None = log all if config allows)
-        """
-        if not self.enabled or not self.initialized:
-            return
-            
-        if not wandb_config.log_sample_images:
-            return
-            
-        try:
-            images_to_log = []
-            
-            # Determine how many images to log per player
-            if wandb_config.log_all_images:
-                images_per_player = None  # Log all images
-            else:
-                images_per_player = max_images_per_player or wandb_config.sample_images_count
-            
-            # Collect sample images from each player
-            for player in dataset.players:
-                player_images = dataset.player_to_images[player]
-                
-                # Select images to log
-                if images_per_player is None:
-                    selected_images = player_images  # All images
-                else:
-                    selected_images = player_images[:images_per_player]
-                
-                for img_path in selected_images:
-                    try:
-                        # Load and convert image
-                        img = Image.open(img_path).convert('RGB')
-                        
-                        # Create wandb image with caption
-                        wandb_image = wandb.Image(
-                            img, 
-                            caption=f"Player: {player} | Path: {os.path.basename(img_path)}"
-                        )
-                        images_to_log.append(wandb_image)
-                        
-                    except Exception as e:
-                        logger.warning(f"Failed to load image {img_path}: {e}")
-            
-            # Log all images at once
-            if images_to_log:
-                wandb.log({"training_samples": images_to_log})
-                logger.info(f"Logged {len(images_to_log)} sample images to wandb")
-            
-        except Exception as e:
-            logger.warning(f"Failed to log sample images to wandb: {e}")
+   
 
     def finish(self) -> None:
         """Finish the current wandb run."""

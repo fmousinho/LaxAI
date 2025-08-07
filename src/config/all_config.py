@@ -11,7 +11,7 @@ import sys
 class GoogleStorageConfig:
     """Configuration for Google Cloud Storage."""
     project_id: str = "LaxAI"
-    gcs_paths_file: str = "LaxAI/src/config/gcs_structure.yaml"  # Path to YAML file with GCS paths
+    gcs_paths_file: str = "src/config/gcs_structure.yaml"  # Path to YAML file with GCS paths
     bucket_name: str = "laxai_dev"
     credentials_name: str = "GOOGLE_APPLICATION_CREDENTIALS"
 
@@ -66,7 +66,7 @@ class TrainingConfig:
     lr_scheduler_threshold: float = 1e-4
     lr_scheduler_factor: float = 0.5  # Factor by which to reduce learning rate
     lr_scheduler_min_lr: float = 1e-7  # Minimum learning rate after reduction
-    num_epochs: int = 30
+    num_epochs: int = 50
     margin: float = 0.3
     weight_decay: float = 1e-4  # L2 regularization weight decay
     model_save_path: str = '/common/model/embeddings_latest.pth'
@@ -83,8 +83,6 @@ class TrainingConfig:
 class EvaluatorConfig:
     """Configuration for model evaluation parameters."""
     threshold: float = 0.5  # Default similarity threshold for evaluation
-    k_folds: int = 5  # Number of folds for cross-validation
-
 
 
 @dataclass

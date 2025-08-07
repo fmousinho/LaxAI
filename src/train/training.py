@@ -332,11 +332,6 @@ class Training:
             dataset_size = len(self.dataloader.dataset)
             num_players = len(self.dataloader.dataset.players) if hasattr(self.dataloader.dataset, 'players') else None
             
-            wandb_logger.log_dataset_info(
-                dataset_path=self.train_dir,
-                dataset_size=dataset_size,
-                num_players=num_players,
-            )
 
         # Early stopping configuration
         early_stopping_threshold = training_config.early_stopping_loss_ratio * self.margin
