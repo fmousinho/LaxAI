@@ -225,11 +225,9 @@ class ModelEvaluator:
                 euclidean_dist = np.linalg.norm(embeddings[i] - embeddings[j])
                 euclidean_distances.append(euclidean_dist)
                 
-                # Cosine similarity
-                cosine_sim = np.dot(embeddings[i], embeddings[j]) / (
-                    np.linalg.norm(embeddings[i]) * np.linalg.norm(embeddings[j])
-                )
-                cosine_similarities.append(cosine_sim)
+                # Use F.cosine_similarity from torch
+                sim = F.cosine_similarity(torch.tensor(embeddings[i]).unsqueeze(0), torch.tensor(embeddings[j]).unsqueeze(0))
+                cosine_similarities.append(sim.item())
                 
                 # Same player or not
                 is_same_player = labels[i] == labels[j]
@@ -688,9 +686,10 @@ class ModelEvaluator:
         # Distance metrics
         dist_metrics = results['distance_metrics']
         report.append(f"\nDistance Analysis:")
-        report.append(f"  Same player avg distance: {dist_metrics['avg_distance_same_player']:.4f}")
-        report.append(f"  Different player avg distance: {dist_metrics['avg_distance_different_player']:.4f}")
-        report.append(f"  Distance separation: {dist_metrics['distance_separation']:.4f}")
+        report.append(f"  Avg Dist (Same Player): {dist_metrics['avg_distance_same_player']:.4f}")
+        report.append(f"  Avg Dist (Different Player): {dist_metrics['avg_distance_different_player']:.4f}")
+        report.append(f"  Avg Sim (Same Player): {dist_metrics['avg_similarity_same_player']:.4f}")
+        report.append(f"  Avg Sim (Different Player): {dist_metrics['avg_similarity_different_player']:.4f}")
         
         report.append("\n" + "=" * 60)
         

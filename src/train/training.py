@@ -6,6 +6,7 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader, Dataset
 from utils.env_or_colab import load_env_or_colab
 import torch.nn as nn
+import numpy as np
 import wandb
 from config.all_config import model_config, training_config, wandb_config
 from .wandb_logger import wandb_logger
@@ -459,7 +460,7 @@ class Training:
                 else:
                     raise ValueError(f"Unexpected batch format with {len(batch_data)} elements")
                     
-                embeddings = self.model.forward_single(images)
+                embeddings = self.model.forward(images)
                 all_embeddings.append(embeddings.cpu())
                 all_pids.extend(pids.tolist())
         
