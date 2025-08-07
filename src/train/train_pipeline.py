@@ -103,9 +103,9 @@ class TrainPipeline(Pipeline):
             return results
         finally:
             if wandb_config.enabled:
-                eval_results = results.get('evaluation_results', {})
-                wandb_logger.summary(eval_results)
                 context = results.get('context', {})
+                eval_results = context.get('evaluation_results', {})
+                wandb_logger.log_summary(eval_results)
                 training_info = context.get('training_info', {})                
                 wandb_logger.update_run_config(training_info)
                 wandb_logger.finish()

@@ -115,9 +115,6 @@ class ModelEvaluator:
             }
         }
         
-        # Log to wandb if enabled
-        if wandb_config.enabled:
-            self._log_to_wandb(results)
         
         # Save detailed results
         self._save_results(results)
