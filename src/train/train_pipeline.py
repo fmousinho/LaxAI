@@ -67,7 +67,7 @@ class TrainPipeline(Pipeline):
             save_intermediate=save_intermediate
         )
 
-    def run(self, dataset_name: str, resume_from_checkpoint: bool = True, wandb_run_tags: Optional[List[str]] = None) -> Dict[str, Any]:
+    def run(self, dataset_name: str | List[str], resume_from_checkpoint: bool = True, wandb_run_tags: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Execute the complete training pipeline for a given dataset.
 

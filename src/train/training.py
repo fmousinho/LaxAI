@@ -50,7 +50,7 @@ class Training:
             lr_scheduler_factor (float): Factor for LR scheduler
         If any required hyperparameter is missing in both kwargs and training_config, a ValueError will be raised.
         """
-        self.train_dir = train_dir  # This is now the dataset_id for path_manager
+        self.train_dir = train_dir  
         self.dataset_id = os.path.basename(train_dir.rstrip('/'))  # Extract dataset_id from train_dir
         self.storage_client = storage_client
         if path_manager is None:
