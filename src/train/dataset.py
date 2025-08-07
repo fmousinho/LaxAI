@@ -5,6 +5,7 @@ This module defines the LacrossePlayerDataset class and related utilities for lo
 lacrosse player image crops for training deep learning models, especially for triplet loss setups.
 """
 import torch
+import logging
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
 from PIL import Image
@@ -14,6 +15,8 @@ import numpy as np
 from config.transforms import get_transforms
 
 from config.all_config import training_config
+
+logger = logging.getLogger(__name__)
 
 class LacrossePlayerDataset(Dataset):
     """
