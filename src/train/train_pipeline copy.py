@@ -98,8 +98,8 @@ class TrainPipeline(Pipeline):
         try:
             if not dataset_name:
                 return {"status": PipelineStatus.ERROR.value, "error": "No dataset name provided"}
-            context = {"dataset_name": dataset_name}
-            results = super().run(context, resume_from_checkpoint=resume_from_checkpoint)
+            initial_context = {"dataset_name": dataset_name}
+            results = super().run(initial_context, resume_from_checkpoint=resume_from_checkpoint)
             return results
         finally:
             if wandb_config.enabled:
@@ -138,43 +138,27 @@ class TrainPipeline(Pipeline):
                 return {"status": StepStatus.ERROR.value, "error": "Dataset name is required"}
 
             dataset_folder = self.path_manager.get_path("dataset_folder", dataset_id=dataset_name)
-            train_folder = self.path_manager.get_path("train_dataset", dataset_id=dataset_name)
-            val_folder = self.path_manager.get_path("val_dataset", dataset_id=dataset_name)
             
             # Validate transforms
             try:
-                training_transforms = get_transforms('training')
-                validation_transforms = get_transforms('validation')
+                transforms = get_transforms('training')
             except Exception as e:
                 logger.error(f"Failed to load transforms: {e}")
                 return {"status": StepStatus.ERROR.value, "error": f"Failed to load transforms: {str(e)}"}
             
-            min_images_per_player = training_config.min_images_per_player
-
-            training_dataset = LacrossePlayerDataset(
-                image_dir=train_folder,
-                storage_client=self.storage_client,
-                transform=training_transforms,
-                min_images_per_player=min_images_per_player
-            )
-            validation_dataset = LacrossePlayerDataset(
-                image_dir=val_folder,
-                storage_client=self.storage_client,
-                transform=validation_transforms,
-                min_images_per_player=min_images_per_player
-            )
-
-            context.update({
-                'training_dataset': training_dataset,
-                'validation_dataset': validation_dataset,
-                'status': StepStatus.COMPLETED.value
-            })
+            # Set minimum images per player with validation
+            min_images_per_player = context.get("min_images_per_player")
         
+            # Store dataset in context
+            context['train_folder'] = dataset_folder
+            context['dataset_folder'] = dataset_folder
+            context['transforms'] = transforms
+            context['min_images_per_player'] = min_images_per_player
+            context['status'] = StepStatus.COMPLETED.value
             
             # Log success
             logger.info(f"✅ Dataset created successfully:")
-            logger.info(f"   📁 Train folder: {train_folder}")
-            logger.info(f"   📁 Validation folder: {val_folder}")
+            logger.info(f"   📁 Path: {dataset_folder}")
             logger.info(f"   📏 Min images per player: {min_images_per_player}")
             
             return context
@@ -200,8 +184,8 @@ class TrainPipeline(Pipeline):
         try:
             
             # Check for required inputs
-            training_dataset = context.get('training_dataset')
-            val_dataset = context.get('validation_dataset')
+            dataset_folder = context.get('dataset_folder')
+            transforms = context.get('transforms')
             dataset_guid = context.get('dataset_name')
 
             logger.info(f"Starting model training with dataset from: {dataset_guid}")
@@ -209,6 +193,8 @@ class TrainPipeline(Pipeline):
             # Initialize Training class
             try:
                 training = Training(
+                    train_dir=dataset_folder,
+                    storage_client=self.storage_client,
                     **self.training_kwargs
                 )
             except Exception as e:
@@ -218,14 +204,14 @@ class TrainPipeline(Pipeline):
             # Execute complete training pipeline
             logger.info("Executing training pipeline...")
 
+            training_info = training.get_training_info()
+
             trained_model = training.train_and_save(
                 model_class=self.model_class,
-                dataset=training_dataset,
+                dataset_class=LacrossePlayerDataset,
                 model_name=self.collection_name,
-                val_dataset=val_dataset
+                transform=transforms
             )
-
-            training_info = training.get_training_info()
             
             # Validate that the trained model is actually a PyTorch model
             import torch.nn
@@ -242,7 +228,7 @@ class TrainPipeline(Pipeline):
             context.update({
                 'trained_model': trained_model,
                 'training_info': training_info,
-                'device': training_info['device'],
+                'training_device': training_info['device'],
                 'status': StepStatus.COMPLETED.value
             })
             
@@ -254,7 +240,6 @@ class TrainPipeline(Pipeline):
             logger.error(f"Traceback: {traceback.format_exc()}")
             return {"status": StepStatus.ERROR.value, "error": error_msg}
 
-
     def _evaluate_model(self, context: dict) -> Dict[str, Any]:
         """
         Comprehensive model evaluation using multiple methodologies.
@@ -265,25 +250,20 @@ class TrainPipeline(Pipeline):
         Returns:
             Updated context with evaluation results
         """
-
         try:
-            validation_dataset = context.get('validation_dataset')
-            dataset_guid = context.get('dataset_name')
-            trained_model = context.get('trained_model')
-            device = context.get('device')
-
             
             # Check for required inputs
-            if validation_dataset is None:
-                error_msg = "Validation dataset must be available in context (run prepare_validation_dataset step first)"
-                logger.error(error_msg)
-                return {"status": StepStatus.ERROR.value, "error": error_msg}
-
+            trained_model = context.get('trained_model')
             if trained_model is None:
                 error_msg = "Trained model must be available in context (run train_model step first)"
                 logger.error(error_msg)
                 return {"status": StepStatus.ERROR.value, "error": error_msg}
             
+            dataset_name = context.get('dataset_name').rstrip('/')
+            val_folder = self.path_manager.get_path("val_dataset", dataset_id=dataset_name)
+
+            training_info = context.get('training_info', {})
+            device = training_info.get('device', 'cpu')
             
             logger.info("Starting comprehensive model evaluation...")
             logger.info(f"Evaluation device: {device}")
@@ -302,7 +282,10 @@ class TrainPipeline(Pipeline):
             
             # Run comprehensive evaluation
             logger.info("Running comprehensive evaluation suite...")
-            evaluation_results = evaluator.evaluate_comprehensive(validation_dataset)
+            evaluation_results = evaluator.evaluate_comprehensive(
+                validation_dataset_path=val_folder,
+                storage_client=self.storage_client,  # Pass storage client for GCS support
+            )
             
             # Generate human-readable report
             evaluation_report = evaluator.generate_evaluation_report(evaluation_results)

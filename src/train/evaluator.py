@@ -5,7 +5,6 @@ import torch
 import torch.nn.functional as F
 from typing import Dict, List, Tuple, Any, Optional
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, precision_recall_fscore_support, roc_auc_score
-from sklearn.model_selection import KFold
 import matplotlib.pyplot as plt
 import seaborn as sns
 from collections import defaultdict
@@ -44,52 +43,28 @@ class ModelEvaluator:
         self.device = device
         self.threshold = threshold
         self.model.eval()
-        
-        # Results storage
-        self.results = {}
-        self.embeddings_cache = {}
+       
 
-    def evaluate_comprehensive(self, validation_dataset_path: str, 
-                             storage_client=None) -> Dict[str, Any]:
+    def evaluate_comprehensive(self, dataset) -> Dict[str, Any]:
         """
         Run comprehensive evaluation including all metrics.
         
         Args:
-            dataset_path: Path to the dataset directory (should contain train/ and val/ folders)
-            storage_client: Google Storage client for GCS operations (required for GCS paths)
+            dataset: LacrossePlayerDataset instance for validation
             use_validation_split: If True, use existing val/ folder; if False, create random split
             
         Returns:
             Dictionary containing all evaluation results
         """
         logger.info("Starting comprehensive model evaluation...")
-        
-        if not storage_client:
-            raise ValueError("storage_client is required for GCS operations")
 
-            
-        logger.info(f"Using validation set from: {validation_dataset_path}")
-                
-               
-        val_transforms = get_transforms('validation')  # Use validation transforms
-             
-        val_dataset = LacrossePlayerDataset(
-            image_dir=validation_dataset_path,
-            storage_client=storage_client,
-            transform=val_transforms,
-            min_images_per_player= N_PLAYERS_FOR_VAL
-        )
-        
-               
-                # Check if enough valid players exist in validation set
-        if len(val_dataset.players) < 2:
-            logger.warning(f"Validation set does not have enough valid players (found {len(val_dataset.players)}).")
-            return {}
+        if not dataset:
+            raise ValueError("dataset is required for evaluation")
         
         
         # Generate embeddings for validation set
         logger.info("Generating embeddings for validation set...")
-        embeddings, labels, image_paths = self._generate_embeddings(val_dataset)
+        embeddings, labels, image_paths = self._generate_embeddings(dataset)
         
         # Distance-based evaluation
         logger.info("Computing distance-based metrics...")
@@ -109,10 +84,6 @@ class ModelEvaluator:
             'distance_metrics': distance_metrics,
             'classification_metrics': classification_metrics,
             'ranking_metrics': ranking_metrics,
-            'dataset_info': {
-                'validation_samples': len(val_dataset),
-                'val_players': len(val_dataset.players),
-            }
         }
         
         
@@ -122,66 +93,6 @@ class ModelEvaluator:
         logger.info("✅ Comprehensive evaluation completed")
         return results
     
-    def _split_dataset(self, dataset: LacrossePlayerDataset, 
-                      test_split: float) -> Tuple[LacrossePlayerDataset, LacrossePlayerDataset]:
-        """
-        Split dataset ensuring no player overlap between train and test.
-        """
-        players = dataset.players
-        np.random.seed(42)  # For reproducibility
-        np.random.shuffle(players)
-        
-        split_idx = int(len(players) * (1 - test_split))
-        train_players = players[:split_idx]
-        test_players = players[split_idx:]
-        
-        logger.info(f"Dataset split: {len(train_players)} train players, {len(test_players)} test players")
-        
-        # Create subset datasets (simplified - you may need to implement this in your dataset class)
-        train_dataset = self._create_player_subset(dataset, train_players)
-        test_dataset = self._create_player_subset(dataset, test_players)
-        
-        return train_dataset, test_dataset
-    
-    def _create_player_subset(self, dataset: LacrossePlayerDataset, 
-                             players: List[str]) -> LacrossePlayerDataset:
-        """
-        Create a subset dataset containing only specified players.
-        This creates a filtered view of the original dataset.
-        """
-        # Create a new dataset instance with filtered players
-        subset_dataset = LacrossePlayerDataset.__new__(LacrossePlayerDataset)
-        
-        # Copy basic attributes
-        subset_dataset.image_dir = dataset.image_dir
-        subset_dataset.transform = dataset.transform
-        subset_dataset.min_images_per_player = dataset.min_images_per_player
-        
-        # Copy storage_client if it exists
-        if hasattr(dataset, 'storage_client'):
-            subset_dataset.storage_client = dataset.storage_client
-        
-        # Filter to only include specified players
-        subset_dataset.players = [p for p in players if p in dataset.players]
-        subset_dataset.player_to_images = {
-            player: dataset.player_to_images[player] 
-            for player in subset_dataset.players
-        }
-        
-        # Rebuild all_images list for the subset
-        subset_dataset.all_images = []
-        for player in subset_dataset.players:
-            subset_dataset.all_images.extend(subset_dataset.player_to_images[player])
-        
-        # Rebuild player indices
-        subset_dataset.player_indices = {
-            player: i for i, player in enumerate(subset_dataset.players)
-        }
-        
-        logger.info(f"Created subset with {len(subset_dataset.players)} players, "
-                   f"{len(subset_dataset.all_images)} images")
-        
-        return subset_dataset
     
     def _generate_embeddings(self, dataset: LacrossePlayerDataset) -> Tuple[np.ndarray, List[str], List[str]]:
         """
@@ -290,6 +201,7 @@ class ModelEvaluator:
         
         return np.array(embeddings), labels, image_paths
     
+
     def _evaluate_distances(self, embeddings: np.ndarray, labels: List[str]) -> Dict[str, float]:
         """
         Evaluate distance-based metrics.
@@ -546,6 +458,7 @@ class ModelEvaluator:
             'threshold_used': self.threshold
         }
     
+
     def _find_optimal_threshold(self, y_true: List[int], y_scores: List[float]) -> Tuple[float, float]:
         """
         Find the optimal threshold that maximizes F1 score.
@@ -572,6 +485,7 @@ class ModelEvaluator:
         
         return best_threshold, best_f1
     
+
     def _evaluate_ranking(self, embeddings: np.ndarray, labels: List[str]) -> Dict[str, float]:
         """
         Evaluate ranking metrics (Rank-1, Rank-5, mAP).
@@ -754,13 +668,6 @@ class ModelEvaluator:
         report.append("MODEL EVALUATION REPORT")
         report.append("=" * 60)
         
-        # Dataset info
-        dataset_info = results['dataset_info']
-        report.append("\nDataset Information:")
-        report.append(f"  Training samples: {dataset_info.get('training_samples', 'N/A')}")
-        report.append(f"  Validation samples: {dataset_info.get('validation_samples', 'N/A')}")
-        report.append(f"  Training players: {dataset_info.get('train_players', 'N/A')}")
-        report.append(f"  Validation players: {dataset_info.get('val_players', 'N/A')}")
         
         # Classification metrics
         cls_metrics = results['classification_metrics']

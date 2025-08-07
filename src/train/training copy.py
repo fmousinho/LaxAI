@@ -2,8 +2,7 @@ import os
 import torch
 import logging
 from typing import Optional, Any, Dict
-from tqdm import tqdm
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 from utils.env_or_colab import load_env_or_colab
 import torch.nn as nn
 import wandb
@@ -75,7 +74,6 @@ class Training:
         self.optimizer: Optional[torch.optim.Optimizer] = None
         self.loss_fn: Optional[nn.Module] = None
         self.dataloader = None
-        self.val_dataloader = None
 
 
     def load_model_from_wandb(self, model_class, model_name: str, alias: Optional[str], **kwargs):
@@ -172,35 +170,22 @@ class Training:
         except Exception as e:
             logger.error(f"Failed to save model to wandb registry: {e}")
 
-
-    def setup_dataloader(self, dataset, type: str = 'train'):
+    def setup_dataloader(self, dataset):
         """
         Setup the dataloader for the given dataset.
 
         Args:
             dataset: The dataset object to load
-            type: Type of dataloader to create ('train' or 'val'). If 'train', uses shuffle=True.
-                  If 'val', uses shuffle=False.
             
         """
-        if type == 'train':
-            self.dataloader = DataLoader(
-                dataset,
-                batch_size=self.batch_size,
-                shuffle=True,
+ 
+        self.dataloader = DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
             num_workers=self.num_workers
-            )
-
-        elif type == 'val':
-            self.val_dataloader = DataLoader(
-                dataset,
-                batch_size=self.batch_size,
-                shuffle=False,
-                num_workers=self.num_workers
-            )
-        else:
-            raise ValueError(f"Invalid dataloader type: {type}. Use 'train' or 'val'.")
-
+        )
+        
         logger.info(f"Dataset setup complete:")
         logger.info(f"  Batch size: {self.batch_size}")
         logger.info(f"  Number of workers: {self.num_workers}")
@@ -265,148 +250,101 @@ class Training:
             logger.error(f"Model setup failed: {e}")
             raise RuntimeError(f"Failed to setup model: {e}")
 
-    def train(self, 
-          margin_decay_rate: float = training_config.margin_decay_rate, 
-          margin_change_threshold: float = training_config.margin_change_threshold):
+    def train(self, margin_decay_rate: float = training_config.margin_decay_rate, margin_change_threshold: float = training_config.margin_change_threshold):
         """
-        Execute the main training loop with early stopping, using a validation set
-        to monitor for overfitting.
+        Execute the main training loop with early stopping.
         
-        Args:
-            margin_decay_rate: Rate at which to decay the triplet loss margin.
-            margin_change_threshold: Minimum change in margin to trigger an update.
-            
         Returns:
             The trained model
             
         Raises:
             RuntimeError: If required components are not setup
         """
-        # ========================================================================
-        # Sanity checks
-        # ========================================================================
         if self.model is None or self.dataloader is None:
             raise RuntimeError("Model and dataloader must be setup before training")
         
         if self.optimizer is None or self.loss_fn is None:
             raise RuntimeError("Optimizer and loss function must be setup before training")
         
-        # ========================================================================
-        # Training setup and logging
-        # ========================================================================
         logger.info(f"Starting training for {self.num_epochs} epochs")
-        
-        # Early stopping configuration
-        early_stopping_patience = getattr(training_config, 'early_stopping_patience', None)
-        best_monitoring_loss = float('inf')
-        patience_counter = 0
 
-        # Margin decay setup
+        # Early stopping configuration
+        early_stopping_threshold = training_config.early_stopping_loss_ratio * self.margin
+        early_stopping_patience = getattr(training_config, 'early_stopping_patience', None)
+        
+        logger.info(f"Early stopping threshold set to {early_stopping_threshold:.4f}")
+        if early_stopping_patience is not None:
+            logger.info(f"Early stopping patience set to {early_stopping_patience} epochs")
+        
+        # Early stopping variables
+        best_loss = float('inf')
+        patience_counter = 0
+        
         current_margin = self.margin
         self.loss_fn = nn.TripletMarginLoss(margin=current_margin, p=2)
-        val_dataloader = self.val_dataloader
-
         for epoch in range(self.num_epochs):
-            
-            # ========================================================================
-            # Training Phase
-            # ========================================================================
+            # Calculate new margin for this epoch
+            new_margin = self.margin * (margin_decay_rate ** epoch)
+            if abs(new_margin - current_margin) > margin_change_threshold:
+                self.margin = new_margin
+                self.loss_fn = nn.TripletMarginLoss(margin=self.margin, p=2)
+                logger.info(f"Margin updated for epoch {epoch+1}: {new_margin:.4f}")
+            else:
+                logger.debug(f"Margin unchanged for epoch {epoch+1}: {current_margin:.4f}")
+
             self.model.train()
             running_loss = 0.0
             batch_count = 0
 
-            # Update margin if decay rate is active
-            new_margin = self.margin * (margin_decay_rate ** epoch)
-            if abs(new_margin - current_margin) > margin_change_threshold:
-                current_margin = new_margin
-                self.loss_fn = nn.TripletMarginLoss(margin=current_margin, p=2)
-                logger.info(f"Margin updated for epoch {epoch+1}: {current_margin:.4f}")
-            else:
-                logger.debug(f"Margin unchanged for epoch {epoch+1}: {current_margin:.4f}")
-                
             for i, (anchor, positive, negative, _) in enumerate(self.dataloader):
                 anchor = anchor.to(self.device)
                 positive = positive.to(self.device)
                 negative = negative.to(self.device)
 
+                # Zero gradients
                 self.optimizer.zero_grad()
-                emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative)
+
+                # Forward pass
+                emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(
+                    anchor, positive, negative)
+
+                # Calculate loss
                 loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
 
+                # Backward pass and optimize
                 loss.backward()
                 self.optimizer.step()
 
                 running_loss += loss.item()
                 batch_count += 1
 
-            # Calculate and log training loss
-            epoch_train_loss = running_loss / batch_count if batch_count > 0 else 0.0
-
-            # ========================================================================
-            # Validation Phase (if dataloader is provided)
-            # ========================================================================
-            epoch_val_loss = None
-            reid_metrics = {}
-            if val_dataloader:
-                self.model.eval()  # Set model to evaluation mode
-                
-                # 1. Calculate Validation Loss
-                running_val_loss = 0.0
-                val_batch_count = 0
-                with torch.no_grad(): # No need to compute gradients
-                    for j, (anchor, positive, negative, _) in enumerate(val_dataloader):
-                        anchor = anchor.to(self.device)
-                        positive = positive.to(self.device)
-                        negative = negative.to(self.device)
-                        
-                        emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative)
-                        loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
-                        
-                        running_val_loss += loss.item()
-                        val_batch_count += 1
-                
-                epoch_val_loss = running_val_loss / val_batch_count if val_batch_count > 0 else 0.0
-                
-                # 2. Calculate Retrieval Metrics
-                reid_metrics = self._evaluate_reid_metrics(val_dataloader)
-
-            # ========================================================================
-            # Log and check for early stopping
-            # ========================================================================
+            # Calculate and log epoch summary
+            epoch_loss = running_loss / batch_count if batch_count > 0 else 0.0
             logger.info(f"=== Epoch {epoch+1}/{self.num_epochs} Summary ===")
-            logger.info(f"Training Loss: {epoch_train_loss:.4f}")
-            
-            # Use validation loss for monitoring if available, otherwise fall back to training loss
-            monitoring_loss = epoch_train_loss
-            if epoch_val_loss is not None:
-                logger.info(f"Validation Loss: {epoch_val_loss:.4f}")
-                monitoring_loss = epoch_val_loss
-                for key, val in reid_metrics.items():
-                    logger.info(f"  - {key}: {val:.4f}")
-
+            logger.info(f"Average Loss: {epoch_loss:.4f}")
             logger.info(f"Margin used: {current_margin:.4f}")
-            
+
             # Log epoch metrics to wandb
             if wandb_config.enabled:
-                metrics = {
-                    "train_loss": epoch_train_loss,
-                    "margin": current_margin,
-                    "current_lr": self.optimizer.param_groups[0]['lr']
-                }
-                if epoch_val_loss is not None:
-                    metrics["val_loss"] = epoch_val_loss
-                    metrics.update(reid_metrics) # Add re-id metrics to the log
-                
                 # Use a step that is guaranteed to be after all batch steps for this epoch
                 epoch_end_step = (epoch + 1) * len(self.dataloader)
-                wandb_logger.log_metrics(metrics, step=epoch_end_step)
+                wandb_logger.log_metrics({
+                    "epoch_loss": epoch_loss,
+                    "margin": self.margin,
+                    "current_lr": self.optimizer.param_groups[0]['lr']
+                }, step=epoch_end_step)
 
-            # Early stopping based on patience (now using the monitoring_loss)
+            # Early stopping based on loss threshold
+            if epoch_loss < early_stopping_threshold:
+                logger.info(f"Early stopping triggered (loss {epoch_loss:.4f} < threshold {early_stopping_threshold:.4f})")
+                break
+
+            # Early stopping based on patience
             if early_stopping_patience is not None:
-                if monitoring_loss < best_monitoring_loss:
-                    best_monitoring_loss = monitoring_loss
+                if epoch_loss < best_loss:
+                    best_loss = epoch_loss
                     patience_counter = 0
-                    logger.debug(f"New best loss: {best_monitoring_loss:.4f}")
+                    logger.debug(f"New best loss: {best_loss:.4f}")
                 else:
                     patience_counter += 1
                     logger.debug(f"Patience counter: {patience_counter}/{early_stopping_patience}")
@@ -415,125 +353,16 @@ class Training:
                     logger.info(f"Early stopping triggered due to patience ({patience_counter} epochs without improvement)")
                     break
 
-            # Step the learning rate scheduler (now using the monitoring_loss)
+            # Step the learning rate scheduler
             if hasattr(self, 'lr_scheduler') and self.lr_scheduler is not None:
-                self.lr_scheduler.step(monitoring_loss)
+                self.lr_scheduler.step(epoch_loss)
                 current_lr = self.optimizer.param_groups[0]['lr']
                 logger.info(f"Learning rate after scheduler step: {current_lr:.6f}")
-
         logger.info("Training completed successfully")
         return self.model
 
 
-
-    def _evaluate_reid_metrics(self, dataloader: DataLoader) -> Dict[str, float]:
-        """
-        Computes re-identification metrics (Recall@k and mAP) on the provided dataloader.
-        
-        This function uses the current model to generate embeddings for all images
-        in the dataloader. For triplet datasets, uses only the anchor images for evaluation.
-        
-        Args:
-            dataloader: The dataloader for the validation or test set (can be triplet format).
-            
-        Returns:
-            A dictionary containing the calculated metrics.
-        """
-        self.model.eval()
-        all_embeddings = []
-        all_pids = []  # Player IDs
-        
-        # Generate embeddings for all images in the dataset
-        with torch.no_grad():
-            for batch_data in tqdm(dataloader, desc="Generating Embeddings"):
-                # Handle both triplet format (anchor, positive, negative, label) 
-                # and simple format (images, labels)
-                if len(batch_data) == 4:
-                    # Triplet format: use only anchor images
-                    anchor, positive, negative, pids = batch_data
-                    images = anchor.to(self.device)
-                elif len(batch_data) == 2:
-                    # Simple format: use images directly
-                    images, pids = batch_data
-                    images = images.to(self.device)
-                else:
-                    raise ValueError(f"Unexpected batch format with {len(batch_data)} elements")
-                    
-                embeddings = self.model.forward_single(images)
-                all_embeddings.append(embeddings.cpu())
-                all_pids.extend(pids.tolist())
-        
-        all_embeddings = torch.cat(all_embeddings, dim=0)
-        all_pids = np.array(all_pids)
-        
-        num_queries = len(all_embeddings)
-        
-        # Calculate cosine similarity matrix
-        embeddings_norm = torch.nn.functional.normalize(all_embeddings, p=2, dim=1)
-        similarity_matrix = torch.mm(embeddings_norm, embeddings_norm.T)
-        
-        # Initialize metrics
-        rank1_correct = 0
-        rank5_correct = 0
-        rank10_correct = 0
-        average_precisions = []
-
-        for i in range(num_queries):
-            query_pid = all_pids[i]
-            
-            # Get similarities for the current query
-            query_similarities = similarity_matrix[i, :]
-            
-            # Exclude the query itself from the gallery
-            # A simple way is to zero out its similarity
-            query_similarities[i] = -1.0
-            
-            # Sort by similarity in descending order
-            sorted_indices = torch.argsort(query_similarities, descending=True)
-            
-            # Get the pids of the ranked images
-            ranked_pids = all_pids[sorted_indices.numpy()]
-            
-            # Calculate precision and recall for this query
-            num_correct = 0
-            precision_at_k = 0.0
-            
-            # Count true matches at different ranks
-            if ranked_pids[0] == query_pid:
-                rank1_correct += 1
-            if query_pid in ranked_pids[:5]:
-                rank5_correct += 1
-            if query_pid in ranked_pids[:10]:
-                rank10_correct += 1
-                
-            # Calculate Average Precision for this query
-            # This is a bit simplified, but captures the core idea
-            for k, pid_k in enumerate(ranked_pids):
-                if pid_k == query_pid:
-                    num_correct += 1
-                    precision_at_k += num_correct / (k + 1.0)
-            
-            # Avoid division by zero if there are no correct matches
-            if num_correct > 0:
-                average_precisions.append(precision_at_k / num_correct)
-            else:
-                average_precisions.append(0.0)
-
-        # Compute final metrics
-        recall_1 = rank1_correct / num_queries
-        recall_5 = rank5_correct / num_queries
-        recall_10 = rank10_correct / num_queries
-        mean_average_precision = np.mean(average_precisions)
-        
-        return {
-            "recall@1": recall_1,
-            "recall@5": recall_5,
-            "recall@10": recall_10,
-            "mAP": mean_average_precision
-        }
-
-
-    def train_and_save(self, model_class, dataset: Dataset, model_name: str, force_pretrained: bool = False, val_dataset: Optional[Dataset] = None,model_kwargs: Dict[str, Any] = {}) -> Any:
+    def train_and_save(self, model_class, dataset, model_name: str, force_pretrained: bool = False, model_kwargs: Dict[str, Any] = {}) -> Any:
         """
         Complete training pipeline: setup data, setup model, train, and save.
         
@@ -542,7 +371,6 @@ class Training:
             dataset: The dataset instance to use (e.g., LacrossePlayerDataset)
             model_name: Name of the model to save in wandb registry
             force_pretrained: If True, ignore saved weights and start fresh
-            val_dataset: Optional validation dataset for early stopping and metrics
             
         Returns:
             The trained model
@@ -556,11 +384,6 @@ class Training:
             # Setup data
             logger.info("Setting up training data...")
             self.setup_dataloader(dataset)
-
-            if val_dataset is not None:
-                logger.info("Setting up validation data...")
-                self.setup_dataloader(val_dataset, type='val')
-
             
             # Setup model
             logger.info("Setting up model...")

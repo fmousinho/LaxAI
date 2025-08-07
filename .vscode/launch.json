@@ -18,8 +18,23 @@
             "justMyCode": true,
         },
         
-        {
+       {
             "name": "Train Pipeline",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/features/train_all.py",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                // Add any command line arguments here if needed
+                // "--tenant_id", "tenant1",
+                // "--verbose"
+            ]
+        },
+
+        {
+            "name": "Train Pipeline (Module)",
             "type": "debugpy",
             "request": "launch",
             "module": "LaxAI.src.features.train_all",
