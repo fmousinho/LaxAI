@@ -113,10 +113,14 @@ class TrainPipeline(Pipeline):
 
     def _create_dataset(self, context: dict) -> Dict[str, Any]:
         """
-        Create the LacrossePlayerDataset from the given path with comprehensive validation.
+        Create the LacrossePlayerDataset from the given path(s) with comprehensive validation.
+        
+        Supports both single dataset and multi-dataset modes:
+        - Single dataset: dataset_name is a string, creates datasets from train/val folders
+        - Multi-dataset: dataset_name is a list, creates datasets from multiple train/val folders
         
         Args:
-            context: Pipeline context containing dataset_path
+            context: Pipeline context containing dataset_name (str or List[str])
             
         Returns:
             Updated context with dataset
@@ -127,19 +131,27 @@ class TrainPipeline(Pipeline):
             RuntimeError: If dataset creation fails
         """
         try:
-            # Validate context parameter
-            if not isinstance(context, dict):
-                raise ValueError(f"Context must be a dictionary, got {type(context)}")
-
             # Extract and validate dataset name
             dataset_name = context.get("dataset_name")
             if not dataset_name:
                 logger.error("Dataset name is missing from context")
                 return {"status": StepStatus.ERROR.value, "error": "Dataset name is required"}
 
-            dataset_folder = self.path_manager.get_path("dataset_folder", dataset_id=dataset_name)
-            train_folder = self.path_manager.get_path("train_dataset", dataset_id=dataset_name)
-            val_folder = self.path_manager.get_path("val_dataset", dataset_id=dataset_name)
+            # Handle both single dataset and multi-dataset modes
+            if isinstance(dataset_name, str):
+                # Single dataset mode
+                train_folders = [self.path_manager.get_path("train_dataset", dataset_id=dataset_name)]
+                val_folders = [self.path_manager.get_path("val_dataset", dataset_id=dataset_name)]
+                dataset_mode = "single"
+                logger.info(f"🔄 Creating single dataset from: {dataset_name}")
+            elif isinstance(dataset_name, list):
+                # Multi-dataset mode
+                train_folders = [self.path_manager.get_path("train_dataset", dataset_id=name) for name in dataset_name]
+                val_folders = [self.path_manager.get_path("val_dataset", dataset_id=name) for name in dataset_name]
+                dataset_mode = "multi"
+                logger.info(f"🔄 Creating multi-dataset from {len(dataset_name)} datasets: {dataset_name}")
+            else:
+                raise ValueError(f"dataset_name must be str or List[str], got {type(dataset_name)}")
             
             # Validate transforms
             try:
@@ -151,14 +163,16 @@ class TrainPipeline(Pipeline):
             
             min_images_per_player = training_config.min_images_per_player
 
+            # Create datasets using the enhanced LacrossePlayerDataset
+            # Pass single string for single mode, list for multi mode
             training_dataset = LacrossePlayerDataset(
-                image_dir=train_folder,
+                image_dir=train_folders[0] if dataset_mode == "single" else train_folders,
                 storage_client=self.storage_client,
                 transform=training_transforms,
                 min_images_per_player=min_images_per_player
             )
             validation_dataset = LacrossePlayerDataset(
-                image_dir=val_folder,
+                image_dir=val_folders[0] if dataset_mode == "single" else val_folders,
                 storage_client=self.storage_client,
                 transform=validation_transforms,
                 min_images_per_player=min_images_per_player
@@ -167,15 +181,24 @@ class TrainPipeline(Pipeline):
             context.update({
                 'training_dataset': training_dataset,
                 'validation_dataset': validation_dataset,
+                'dataset_mode': dataset_mode,
                 'status': StepStatus.COMPLETED.value
             })
         
+            # Log success with mode-specific information
+            if dataset_mode == "single":
+                logger.info(f"✅ Single dataset created successfully:")
+                logger.info(f"   📁 Train folder: {train_folders[0]}")
+                logger.info(f"   📁 Validation folder: {val_folders[0]}")
+            else:
+                logger.info(f"✅ Multi-dataset created successfully:")
+                logger.info(f"   📁 Train folders: {len(train_folders)} datasets")
+                logger.info(f"   📁 Validation folders: {len(val_folders)} datasets")
+                for i, (train_f, val_f) in enumerate(zip(train_folders, val_folders)):
+                    logger.info(f"      Dataset {i+1}: {train_f} | {val_f}")
             
-            # Log success
-            logger.info(f"✅ Dataset created successfully:")
-            logger.info(f"   📁 Train folder: {train_folder}")
-            logger.info(f"   📁 Validation folder: {val_folder}")
             logger.info(f"   📏 Min images per player: {min_images_per_player}")
+            logger.info(f"   🎯 Mode: {dataset_mode}-dataset with {'same-dataset negative mining' if dataset_mode == 'multi' else 'standard negative mining'}")
             
             return context
             
