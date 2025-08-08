@@ -94,7 +94,9 @@ class TrainPipeline(Pipeline):
             context = {"dataset_name": dataset_name, "custom_name": custom_name}
             results = super().run(context, resume_from_checkpoint=resume_from_checkpoint)
             return results
-            return results
+        except Exception as e:
+            logger.error(f"Error occurred during training pipeline run: {e}")
+            return {"status": PipelineStatus.ERROR.value, "error": str(e)}
         finally:
             if wandb_config.enabled:
                 context = results.get('context', {})
@@ -134,19 +136,41 @@ class TrainPipeline(Pipeline):
             # Handle both single dataset and multi-dataset modes
             if isinstance(dataset_name, str):
                 # Single dataset mode
-                train_folders = [self.path_manager.get_path("train_dataset", dataset_id=dataset_name)]
-                val_folders = [self.path_manager.get_path("val_dataset", dataset_id=dataset_name)]
-                dataset_mode = "single"
-                logger.info(f"🔄 Creating single dataset from: {dataset_name}")
+                try:
+                    train_folder = self.path_manager.get_path("train_dataset", dataset_id=dataset_name)
+                    val_folder = self.path_manager.get_path("val_dataset", dataset_id=dataset_name)
+                    dataset_mode = "single"
+                    logger.info(f"🔄 Creating single dataset from: {dataset_name}")
+                except KeyError as e:
+                    logger.error(f"Could not find train and val folders for {dataset_name}: {e}")
+                    return {"status": StepStatus.ERROR.value, "error": str(e)}
+                
             elif isinstance(dataset_name, list):
                 # Multi-dataset mode
-                train_folders = [self.path_manager.get_path("train_dataset", dataset_id=name) for name in dataset_name]
-                val_folders = [self.path_manager.get_path("val_dataset", dataset_id=name) for name in dataset_name]
+                for name in dataset_name:
+                    try:
+                        train_folder = self.path_manager.get_path("train_dataset", dataset_id=name)
+                        val_folder = self.path_manager.get_path("val_dataset", dataset_id=name)
+                        train_folders.append(train_folder)
+                        val_folders.append(val_folder)
+                    except KeyError as e:
+                        logger.warning(f"Skipping dataset {name} due to missing folders")
+                        continue
+                if len(train_folders) == 0:
+                    logger.error(f"No valid train folders found for {dataset_name}")
+                    return {"status": StepStatus.ERROR.value, "error": f"No valid train folders found for {dataset_name}"}
+                if len(val_folders) == 0:
+                    logger.warning(f"No valid validation folders found for {dataset_name}")
                 dataset_mode = "multi"
                 logger.info(f"🔄 Creating multi-dataset from {len(dataset_name)} datasets: {dataset_name}")
+            
             else:
                 raise ValueError(f"dataset_name must be str or List[str], got {type(dataset_name)}")
             
+            if not train_folders or not val_folders:
+                logger.error(f"No valid train or validation folders found for {dataset_name}")
+                return {"status": StepStatus.ERROR.value, "error": f"No valid train or validation folders found for {dataset_name}"}
+
             # Validate transforms
             try:
                 training_transforms = get_transforms('training')
@@ -160,7 +184,7 @@ class TrainPipeline(Pipeline):
             # Create datasets using the enhanced LacrossePlayerDataset
             # Pass single string for single mode, list for multi mode
             training_dataset = LacrossePlayerDataset(
-                image_dir=train_folders[0] if dataset_mode == "single" else train_folders,
+                image_dir=train_folders if dataset_mode == "single" else train_folders,
                 storage_client=self.storage_client,
                 transform=training_transforms,
                 min_images_per_player=min_images_per_player

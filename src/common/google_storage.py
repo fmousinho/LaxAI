@@ -4,7 +4,7 @@ Google Cloud Storage utilities for the LaxAI project.
 This module provides a client and helpers for interacting with Google Cloud Storage,
 including error handling, credential management, and common operations.
 """
-#===========================================================
+#==========================================================================
 # Google Cloud Storage Client with Error Handling and Common Operations
 #
 # This module is hardcoded to a specific project and bucket for simplicity.
@@ -13,9 +13,7 @@ including error handling, credential management, and common operations.
 # TODO:
 # - Make sure credentials in Google console are restricted enough
 # - Add support for multi-tenancy
-#===========================================================
-
-
+#==========================================================================
 
 
 import logging
@@ -37,6 +35,7 @@ from google.cloud.exceptions import NotFound, Forbidden
 from google.auth.exceptions import DefaultCredentialsError
 from google.oauth2 import service_account
 from config.all_config import google_storage_config
+from functools import wraps
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +93,7 @@ class GCSPaths:
 
         Raises:
             KeyError: If the key is not found in the configuration.
-            ValueError: If any kwargs values contain invalid characters (/, \, .).
+            ValueError: If any kwargs values contain invalid characters (/, \\, .).
         """
         # Validate kwargs values for invalid characters
         invalid_chars = ['/', '\\', '.']
@@ -117,6 +116,93 @@ class GCSPaths:
             logger.error(f"Error formatting path '{key}': {e}")
             raise
 
+
+
+def ensure_ready(func):
+        """Decorator to ensure authentication and bucket availability before method execution."""
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            if not self._ensure_authenticated():
+                logger.error("Failed to authenticate with Google Cloud Storage")
+                # Return appropriate type based on method name
+                if func.__name__.startswith(('download', 'get')) or func.__name__ == 'download_as_appropriate_type' or func.__name__ == 'download_as_string':
+                    return None
+                elif func.__name__ in ['list_blobs']:
+                    return set()
+                else:
+                    return False
+            
+            if not self._bucket:
+                logger.error(f"No bucket available for {func.__name__}")
+                # Return appropriate type based on method name
+                if func.__name__.startswith(('download', 'get')) or func.__name__ == 'download_as_appropriate_type' or func.__name__ == 'download_as_string':
+                    return None
+                elif func.__name__ in ['list_blobs']:
+                    return set()
+                else:
+                    return False
+            
+            return func(self, *args, **kwargs)
+        return wrapper
+
+
+def normalize_user_path(func):
+    """Decorator to normalize user_id path with trailing slash."""
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        # Ensure user_id has trailing slash if it exists
+        if self.user_id and not self.user_id.endswith('/'):
+            self.user_id += '/'
+        return func(self, *args, **kwargs)
+    return wrapper
+
+
+def build_full_path(path_param_name: str):
+    """
+    Decorator to automatically build full GCS paths by combining user_id with a path parameter.
+    
+    Args:
+        path_param_name: Name of the parameter containing the path to prefix with user_id
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            # Get function signature to map positional args to parameter names
+            import inspect
+            sig = inspect.signature(func)
+            bound_args = sig.bind(self, *args, **kwargs)
+            bound_args.apply_defaults()
+            
+            # Get the path parameter value
+            path_value = bound_args.arguments.get(path_param_name)
+            
+            if path_value and self.user_id:
+                # Build full path if it doesn't already start with user_id
+                if not path_value.startswith(self.user_id):
+                    full_path = f"{self.user_id}{path_value}"
+                    # Update the bound arguments
+                    bound_args.arguments[path_param_name] = full_path
+                    
+                    # Convert back to positional and keyword arguments
+                    new_args = []
+                    new_kwargs = {}
+                    
+                    for param_name, param_value in bound_args.arguments.items():
+                        if param_name == 'self':
+                            continue
+                        param = sig.parameters[param_name]
+                        if param.kind == param.VAR_POSITIONAL:
+                            new_args.extend(param_value)
+                        elif param.kind == param.VAR_KEYWORD:
+                            new_kwargs.update(param_value)
+                        else:
+                            new_kwargs[param_name] = param_value
+                    
+                    return func(self, **new_kwargs)
+            
+            return func(self, *args, **kwargs)
+        return wrapper
+    return decorator
 
 
 
@@ -201,8 +287,11 @@ class GoogleStorageClient:
         if not self._authenticated:
             return self._authenticate()
         return True
- 
 
+
+    @ensure_ready
+    @normalize_user_path
+    @build_full_path('prefix')
     def list_blobs(self, prefix: Optional[str] = None, include_user_id: bool = True, delimiter: Optional[str] = None, exclude_prefix_in_return: bool = False) -> set[str]:
         """
         Lists all the blobs in the bucket, returning a set of names.
@@ -219,24 +308,9 @@ class GoogleStorageClient:
         Raises:
             RuntimeError: If authentication fails
         """
-        if not self._ensure_authenticated():
-            raise RuntimeError("Failed to authenticate with Google Cloud Storage")
-        
         try:
-            # Add user_id prefix to search prefix, consistent with upload methods
-            if self.user_id and not self.user_id.endswith('/'):
-                self.user_id += '/'
-            if prefix:
-                if self.user_id and not prefix.startswith(self.user_id):
-                    full_prefix = f"{self.user_id}{prefix}"
-                else:
-                    full_prefix = prefix
-            else:
-                full_prefix = self.user_id if self.user_id else None
 
-            full_prefix = (full_prefix.rstrip('/') + '/') if  full_prefix else '/'
-
-            iterator = self._bucket.list_blobs(prefix=full_prefix, delimiter=delimiter)
+            iterator = self._bucket.list_blobs(prefix=prefix, delimiter=delimiter)   # type: ignore
             user_id_len = len(self.user_id) if self.user_id else 0
             
             result = set()
@@ -250,8 +324,8 @@ class GoogleStorageClient:
                 for prefix_path in iterator.prefixes:
                     if exclude_prefix_in_return:
                         # Properly remove the search prefix from the beginning
-                        if prefix_path.startswith(full_prefix):
-                            clean_path = prefix_path[len(full_prefix):]
+                        if prefix_path.startswith(prefix) and prefix is not None:
+                            clean_path = prefix_path[len(prefix):]
                         else:
                             clean_path = prefix_path
                         result.add(clean_path)
@@ -264,8 +338,8 @@ class GoogleStorageClient:
                 for blob in iterator:
                     if exclude_prefix_in_return:
                         # Properly remove the search prefix from the beginning
-                        if blob.name.startswith(full_prefix):
-                            clean_name = blob.name[len(full_prefix):]
+                        if blob.name.startswith(prefix) and prefix is not None:
+                            clean_name = blob.name[len(prefix):]
                         else:
                             clean_name = blob.name
                         result.add(clean_name)
@@ -280,6 +354,9 @@ class GoogleStorageClient:
             logger.error(f"Failed to list blobs: {e}")
             raise
 
+    @ensure_ready
+    @normalize_user_path
+    @build_full_path('destination_blob_name')
     def upload_blob(self, data: Any, destination_blob_name: str, data_type: str = 'file') -> bool:
         """
         Upload a file to the bucket.
@@ -292,7 +369,6 @@ class GoogleStorageClient:
             bool: True if upload successful, False otherwise
         """
         try:
-
             if data_type == 'file':
                 if type(data) is str:
                     return self.upload_from_file(destination_blob_name, data)
@@ -307,7 +383,11 @@ class GoogleStorageClient:
         except Exception as e:
             logger.error(f"Failed to upload blob: {e}")
             return False
-        
+    
+
+    @ensure_ready
+    @normalize_user_path
+    @build_full_path('destination_blob_name')
     def upload_from_bytes(self, destination_blob_name: str, data: bytes, content_type: Optional[str] = None) -> bool:
         """
         Upload bytes to a blob.
@@ -320,22 +400,12 @@ class GoogleStorageClient:
         Returns:
             bool: True if upload successful, False otherwise
         """
-        if not self._ensure_authenticated():
-            logger.error("Failed to authenticate with Google Cloud Storage")
-            return False
-        
         try:
-            # Add user_path prefix to destination
-            if len(self.user_id) > 0 and not self.user_id.endswith('/'):
-                self.user_id += '/'
-            if destination_blob_name.startswith(self.user_id):
-                full_destination = destination_blob_name
-            else:
-                full_destination = f"{self.user_id}{destination_blob_name}"
-            blob = self._bucket.blob(full_destination)
+            # Full destination path built by decorator
+            blob = self._bucket.blob(destination_blob_name)  #type:ignore
 
             if destination_blob_name.endswith('.jpg') or destination_blob_name.endswith('.jpeg'):
-                bgr_data = cv2.cvtColor(data, cv2.COLOR_RGB2BGR)
+                bgr_data = cv2.cvtColor(data, cv2.COLOR_RGB2BGR)  # type: ignore
                 content_type = content_type or "image/jpeg"
                 image_bytes = cv2.imencode(".jpg", bgr_data)[1].tobytes()
                 blob.upload_from_string(image_bytes, content_type=content_type)
@@ -356,7 +426,6 @@ class GoogleStorageClient:
                         blob.upload_from_string(json_string, content_type="application/json")
                         return True
 
-
             elif destination_blob_name.endswith('.json'):
                 json_bytes = json.dumps(data).encode("utf-8")
                 content_type = content_type or "application/json"
@@ -371,7 +440,9 @@ class GoogleStorageClient:
             logger.error(f"Failed to upload blob from bytes: {e}")
             return False
 
-
+    @ensure_ready
+    @normalize_user_path
+    @build_full_path('source_blob_name')
     def download_blob(self, source_blob_name: str, destination_file_path: str) -> bool:
         """
         Download a blob from the bucket.
@@ -383,50 +454,34 @@ class GoogleStorageClient:
         Returns:
             bool: True if download successful, False otherwise
         """
-        if not self._ensure_authenticated():
-            logger.error("Failed to authenticate with Google Cloud Storage")
-            return False
-        
         try:
-            # Get the blob object and download it
-            # If the source_blob_name already starts with user_path, don't prefix it again
-            if self.user_id and source_blob_name.startswith(self.user_id + "/"):
-                full_source = source_blob_name
-            else:
-                full_source = f"{self.user_id}/{source_blob_name}" if self.user_id else source_blob_name
-            blob = self._bucket.blob(full_source)
+            blob = self._bucket.blob(source_blob_name)  # type: ignore
             blob.download_to_filename(destination_file_path)
-            logger.debug(f"Blob {full_source} downloaded to {destination_file_path}")
+            logger.debug(f"Blob {source_blob_name} downloaded to {destination_file_path}")
             return True
         except Exception as e:
             logger.error(f"Failed to download blob: {e}")
             return False
     
-    def download_as_bytes(self, source_blob_name: str) -> Optional[bytes]:
+    @ensure_ready
+    @normalize_user_path
+    @build_full_path('source_blob_name')
+    def download_as_appropriate_type(self, source_blob_name: str) -> Optional[Any]:
         """
-        Download a blob from the bucket as bytes.
-        
+        Download a blob from the bucket to memory.
+
         Args:
             source_blob_name: Name of the blob in the bucket (will be prefixed with user_path)
             
         Returns:
-            bytes: Content of the blob as bytes, or None if download failed
+            Optional[Any]: Content of the blob to be assigned to a variable.
         """
-        if not self._ensure_authenticated():
-            logger.error("Failed to authenticate with Google Cloud Storage")
-            return None
-        if self.user_id and not self.user_id.endswith('/'):
-            self.user_id += '/'
 
         try:
-            # Add user_path prefix to source, but avoid double prefixing
-            if self.user_id and source_blob_name.startswith(self.user_id):
-                full_source = source_blob_name
-            else:
-                full_source = f"{self.user_id}{source_blob_name}" if self.user_id else source_blob_name
-            blob = self._bucket.blob(full_source)
+
+            blob = self._bucket.blob(source_blob_name)  # type: ignore
             content = blob.download_as_bytes()
-            logger.debug(f"Blob {full_source} downloaded as bytes")
+            logger.debug(f"Blob {source_blob_name} downloaded as bytes")
             if source_blob_name.endswith('.jpg') or source_blob_name.endswith('.jpeg'):
                 # Convert BGR to RGB if necessary
                 image = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_COLOR)
@@ -444,16 +499,17 @@ class GoogleStorageClient:
             else:
                 logger.error(f"Unsupported file type for download: {source_blob_name}")
                 return None
-            logger.debug(f"Blob {full_source} downloaded successfully")
+            logger.debug(f"Blob {source_blob_name} downloaded successfully")
 
             return content
+        
         except Exception as e:
             logger.error(f"Failed to download blob as bytes: {e}")
             return None
 
-
-
-
+    @ensure_ready
+    @normalize_user_path
+    @build_full_path('source_blob_name')
     def download_as_string(self, source_blob_name: str) -> Optional[str]:
         """
         Download a blob from the bucket as a string.
@@ -464,24 +520,18 @@ class GoogleStorageClient:
         Returns:
             str: Content of the blob as string, or None if download failed
         """
-        if not self._ensure_authenticated():
-            logger.error("Failed to authenticate with Google Cloud Storage")
-            return None
-        
         try:
-            # Add user_path prefix to source, but avoid double prefixing
-            if self.user_id and source_blob_name.startswith(self.user_id + "/"):
-                full_source = source_blob_name
-            else:
-                full_source = f"{self.user_id}/{source_blob_name}" if self.user_id else source_blob_name
-            blob = self._bucket.blob(full_source)
+            blob = self._bucket.blob(source_blob_name)  # type: ignore
             content = blob.download_as_text()
-            logger.info(f"Blob {full_source} downloaded as string")
+            logger.info(f"Blob {source_blob_name} downloaded as string")
             return content
         except Exception as e:
             logger.error(f"Failed to download blob as string: {e}")
             return None
     
+    @ensure_ready
+    @normalize_user_path
+    @build_full_path('destination_blob_name')
     def upload_from_string(self, destination_blob_name: str, data: str) -> bool:
         """
         Upload string data to a blob.
@@ -493,26 +543,19 @@ class GoogleStorageClient:
         Returns:
             bool: True if upload successful, False otherwise
         """
-        if not self._ensure_authenticated():
-            logger.error("Failed to authenticate with Google Cloud Storage")
-            return False
-        
         try:
-            # Add user_path prefix to destination
-            if len(self.user_id) > 0 and not self.user_id.endswith('/'):
-                self.user_id += '/'
-            if destination_blob_name.startswith(self.user_id):
-                full_destination = destination_blob_name
-            else:     
-                full_destination = f"{self.user_id}{destination_blob_name}"
-            blob = self._bucket.blob(full_destination)
+            # Full destination path built by decorator
+            blob = self._bucket.blob(destination_blob_name)  # type: ignore
             blob.upload_from_string(data)
-            logger.info(f"String data uploaded to {full_destination}")
+            logger.info(f"String data uploaded to {destination_blob_name}")
             return True
         except Exception as e:
             logger.error(f"Failed to upload string data: {e}")
             return False
     
+    @ensure_ready
+    @normalize_user_path
+    @build_full_path('destination_blob_name')
     def upload_from_file(self, destination_blob_name: str, file_path: str) -> bool:
         """
         Upload a file to the bucket (alias for upload_blob for consistency).
@@ -524,26 +567,19 @@ class GoogleStorageClient:
         Returns:
             bool: True if upload successful, False otherwise
         """
-        if not self._ensure_authenticated():
-            logger.error("Failed to authenticate with Google Cloud Storage")
-            return False
-        
         try:
-            # Add user_path prefix to destination
-            if len(self.user_id) > 0 and not self.user_id.endswith('/'):
-                self.user_id += '/'
-            if destination_blob_name.startswith(self.user_id):
-                full_destination = destination_blob_name
-            else:
-                full_destination = f"{self.user_id}{destination_blob_name}"
-            blob = self._bucket.blob(full_destination)
+            blob = self._bucket.blob(destination_blob_name)  # type: ignore
             blob.upload_from_filename(file_path)
-            logger.debug(f"File {file_path} uploaded to {full_destination}")
+            logger.debug(f"File {file_path} uploaded to {destination_blob_name}")
             return True
         except Exception as e:
             logger.error(f"Failed to upload file: {e}")
             return False
     
+    @ensure_ready
+    @normalize_user_path
+    @build_full_path('source_blob_name')
+    @build_full_path('destination_blob_name')
     def copy_blob(self, source_blob_name: str, destination_blob_name: str) -> bool:
         """
         Copy a blob within the bucket.
@@ -555,32 +591,18 @@ class GoogleStorageClient:
         Returns:
             bool: True if copy successful, False otherwise
         """
-        if not self._ensure_authenticated():
-            logger.error("Failed to authenticate with Google Cloud Storage")
-            return False
-        
         try:
-            if self.user_id and not self.user_id.endswith('/'):
-                self.user_id += '/'
-            if source_blob_name.startswith(self.user_id):
-                full_source = source_blob_name
-            else:
-                full_source = f"{self.user_id}{source_blob_name}" if self.user_id else source_blob_name
-            
-            
-            if destination_blob_name.startswith(self.user_id):
-                full_destination = destination_blob_name
-            else:
-                full_destination = f"{self.user_id}{destination_blob_name}"
-
-            source_blob = self._bucket.blob(full_source)
-            new_blob = self._bucket.copy_blob(source_blob, self._bucket, new_name=full_destination)
-            logger.debug(f"Blob {full_source} copied to {full_destination}")
+            source_blob = self._bucket.blob(source_blob_name)  # type: ignore
+            _ = self._bucket.copy_blob(source_blob, self._bucket, new_name=destination_blob_name)  # type: ignore
+            logger.debug(f"Blob {source_blob_name} copied to {destination_blob_name}")
             return True
         except Exception as e:
             logger.error(f"Failed to copy blob: {e}")
             return False
     
+    @ensure_ready
+    @normalize_user_path
+    @build_full_path('blob_name')
     def delete_blob(self, blob_name: str) -> bool:
         """
         Delete a blob from the bucket.
@@ -591,26 +613,18 @@ class GoogleStorageClient:
         Returns:
             bool: True if deletion successful, False otherwise
         """
-        if not self._ensure_authenticated():
-            logger.error("Failed to authenticate with Google Cloud Storage")
-            return False
-        
         try:
-            if self.user_id and not self.user_id.endswith('/'):
-                self.user_id += '/'
-            if blob_name.startswith(self.user_id):
-                full_name = blob_name
-            else:
-                full_name = f"{self.user_id}{blob_name}" if self.user_id else blob_name
-
-            blob = self._bucket.blob(full_name)
+            blob = self._bucket.blob(blob_name)  # type: ignore
             blob.delete()
-            logger.debug(f"Blob {full_name} deleted")
+            logger.debug(f"Blob {blob_name} deleted")
             return True
         except Exception as e:
             logger.error(f"Failed to delete blob: {e}")
             return False
     
+    @ensure_ready
+    @normalize_user_path
+    @build_full_path('blob_name')
     def blob_exists(self, blob_name: str) -> bool:
         """
         Check if a blob exists in the bucket.
@@ -621,20 +635,17 @@ class GoogleStorageClient:
         Returns:
             bool: True if blob exists, False otherwise
         """
-        if not self._ensure_authenticated():
-            logger.error("Failed to authenticate with Google Cloud Storage")
-            return False
-        
         try:
-            # Add user_path prefix to blob name
-            full_blob_name = f"{self.user_id}/{blob_name}"
-            blob = self._bucket.blob(full_blob_name)
+            blob = self._bucket.blob(blob_name)  # type: ignore
             return blob.exists()
         except Exception as e:
             logger.error(f"Failed to check if blob exists: {e}")
             return False
-        
 
+    @ensure_ready
+    @normalize_user_path
+    @build_full_path('source_blob_name')
+    @build_full_path('destination_blob_name')
     def move_blob(self, source_blob_name: str, destination_blob_name: str) -> bool:
         """
         Move a blob from one location to another within the bucket.
@@ -646,45 +657,30 @@ class GoogleStorageClient:
         Returns:
             bool: True if move successful, False otherwise
         """
-        if not self._ensure_authenticated():
-            logger.error("Failed to authenticate with Google Cloud Storage")
-            return False
-        
         try:
-            # Add user_path prefix to both source and destination
-            if self.user_id and not self.user_id.endswith('/'):
-                self.user_id += '/'
-            if source_blob_name.startswith(self.user_id):
-                full_source = source_blob_name
-            else:
-                full_source = f"{self.user_id}{source_blob_name}"
-
-            if destination_blob_name.startswith(self.user_id):
-                full_destination = destination_blob_name
-            else: 
-                full_destination = f"{self.user_id}{destination_blob_name}"
-            
-            # Get source blob
-            source_blob = self._bucket.blob(full_source)
+            source_blob = self._bucket.blob(source_blob_name) # type: ignore
 
             # Check if source blob exists
             if not source_blob.exists():
-                logger.error(f"Source blob {full_source} does not exist")
+                logger.error(f"Source blob {source_blob_name} does not exist")
                 return False
             
             # Copy the blob to the new destination
-            new_blob = self._bucket.copy_blob(source_blob, self._bucket, new_name=full_destination)
+            new_blob = self._bucket.copy_blob(source_blob, self._bucket, new_name=destination_blob_name)  # type: ignore
             
             # Delete the original blob
             source_blob.delete()
-            
-            logger.debug(f"Blob moved from {full_source} to {full_destination}")
+
+            logger.debug(f"Blob moved from {source_blob_name} to {destination_blob_name}")
             return True
             
         except Exception as e:
             logger.error(f"Failed to move blob: {e}")
             return False
-        
+
+    @ensure_ready
+    @normalize_user_path
+    @build_full_path('blob_name')
     def get_video_capture(self, blob_name: str) -> 'GoogleStorageClient.GCSVideoCapture':
         """
         Get a GCSVideoCapture context manager for a video blob.
@@ -698,24 +694,13 @@ class GoogleStorageClient:
         Raises:
             RuntimeError: If authentication fails or blob doesn't exist
         """
-        if not self._ensure_authenticated():
-            raise RuntimeError("Failed to authenticate with Google Cloud Storage")
-        
         try:
-            # Add user_path prefix to blob name
-            if self.user_id and not self.user_id.endswith('/'):
-                self.user_id += '/'
-            if blob_name.startswith(self.user_id):
-                full_blob_name = blob_name
-            else:
-                # Ensure user_id is prefixed correctly
-                full_blob_name = f"{self.user_id}{blob_name}" 
-            blob = self._bucket.blob(full_blob_name)
-            
+            blob = self._bucket.blob(blob_name)  # type: ignore
+
             # Check if blob exists
             if not blob.exists():
-                raise FileNotFoundError(f"Video blob {full_blob_name} does not exist")
-                
+                raise FileNotFoundError(f"Video blob {blob_name} does not exist")
+
             return self.GCSVideoCapture(blob)
             
         except Exception as e:

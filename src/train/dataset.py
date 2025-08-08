@@ -50,7 +50,7 @@ class LacrossePlayerDataset(Dataset):
         tenant1/datasets/dataset_123/train/player_crop_id_2/image1.jpg
         tenant1/datasets/dataset_456/train/player_crop_id_3/image1.jpg
     """
-    def __init__(self, image_dir: Union[str, List[str]], storage_client=None, transform=None, min_images_per_player=training_config.min_images_per_player):
+    def __init__(self, image_dir: Union[str, List[str]], storage_client, transform=None, min_images_per_player=training_config.min_images_per_player):
         # Handle both single dataset and multi-dataset modes
         if isinstance(image_dir, str):
             self.dataset_list = [image_dir]
@@ -119,9 +119,9 @@ class LacrossePlayerDataset(Dataset):
         anchor_label = self.player_indices[anchor_player]
 
         try:
-            anchor_img = self.storage_client.download_as_bytes(anchor_blob)
+            anchor_img = self.storage_client.download_as_appropriate_type(anchor_blob)
         except Exception as e:
-           logger.error(f"Error loading anchor image {anchor_blob}: {e}")
+            logger.error(f"Error loading anchor image {anchor_blob}: {e}")
 
         # Select a positive image (different image of the same player)
         positive_list = self.player_to_images[anchor_player]
@@ -132,7 +132,7 @@ class LacrossePlayerDataset(Dataset):
             positive_blob = random.choice(positive_candidates)
         
         try:
-            positive_img = self.storage_client.download_as_bytes(positive_blob)
+            positive_img = self.storage_client.download_as_appropriate_type(positive_blob)
         except Exception as e:
             logger.error(f"Error loading positive image {positive_blob}: {e}")
             positive_img = anchor_img
@@ -155,7 +155,7 @@ class LacrossePlayerDataset(Dataset):
         negative_img_candidates = list(self.player_to_images[negative_player])
         negative_blob = random.choice(negative_img_candidates)
         try:
-            negative_img = self.storage_client.download_as_bytes(negative_blob)
+            negative_img = self.storage_client.download_as_appropriate_type(negative_blob)
         except Exception as e:
             logger.error(f"Error loading negative image {negative_blob}: {e}")
             negative_img = anchor_img

@@ -64,9 +64,13 @@ def train(tenant_id: str, frames_per_video: int, verbose: bool, save_intermediat
         logger.info("Checking for available datasets..")
         # Use Google Storage functions to list directories
         storage_client = get_storage(tenant_id)
-        # Find dataset paths - look for /datasets/ directories that contain numeric/train/ structure
+       
         path_finder = GCSPaths()
-        datasets_folder = path_finder.get_path("datasets_root").rstrip('/')
+        datasets_folder = path_finder.get_path("datasets_root")
+        if datasets_folder is None:
+            raise ValueError("datasets_root path not found in GCSPaths configuration.")
+        else:
+            datasets_folder = datasets_folder.rstrip('/')
         datasets = storage_client.list_blobs(prefix=datasets_folder, delimiter='/', exclude_prefix_in_return=True)
         datasets = list(datasets)  # Convert to list for easier processing
 
