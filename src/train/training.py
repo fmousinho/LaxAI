@@ -2,7 +2,6 @@ import os
 import torch
 import logging
 from typing import Optional, Any, Dict
-from tqdm import tqdm
 from torch.utils.data import DataLoader, Dataset
 from utils.env_or_colab import load_env_or_colab
 import torch.nn as nn
@@ -65,7 +64,9 @@ class Training:
         self.scheduler_threshold = get_kwarg_or_config('lr_scheduler_threshold')
         self.lr_scheduler_min_lr = get_kwarg_or_config('lr_scheduler_min_lr')
         self.lr_scheduler_factor = get_kwarg_or_config('lr_scheduler_factor')
+        self.prefetch_factor = get_kwarg_or_config('prefetch_factor')  # Default prefetch factor if not provided
         self.force_pretraining = get_kwarg_or_config('force_pretraining')
+        self.default_workers = get_kwarg_or_config('default_workers')  #used by dataloader
 
         # Device: direct argument, else config, else autodetect
         if device is not None:
@@ -80,6 +81,9 @@ class Training:
         self.loss_fn: Optional[nn.Module] = None
         self.dataloader = None
         self.val_dataloader = None
+
+        EPOCHS_PER_VAL = 10
+        BATCHES_PER_LOG_MSG = 10
 
 
     def _load_model_from_wandb(self, model_class, model_name: str, alias: Optional[str], **kwargs):
@@ -195,7 +199,9 @@ class Training:
                 dataset,
                 batch_size=self.batch_size,
                 shuffle=True,
-                num_workers=self.num_workers
+                num_workers=self.default_workers,
+                prefetch_factor=self.prefetch_factor,
+                pin_memory=True
             )
 
         elif type == 'val':
@@ -203,7 +209,9 @@ class Training:
                 dataset,
                 batch_size=self.batch_size,
                 shuffle=False,
-                num_workers=self.num_workers
+                num_workers=self.default_workers,
+                prefetch_factor=self.prefetch_factor,
+                pin_memory=True
             )
         else:
             raise ValueError(f"Invalid dataloader type: {type}. Use 'train' or 'val'.")
@@ -313,6 +321,8 @@ class Training:
         self.loss_fn = nn.TripletMarginLoss(margin=current_margin, p=2)
         val_dataloader = self.val_dataloader
 
+        
+
         for epoch in range(self.num_epochs):
             
             # ========================================================================
@@ -344,6 +354,10 @@ class Training:
                 self.optimizer.step()
 
                 running_loss += loss.item()
+
+                if (i + 1) % BATCHES_PER_LOG_MSG == 0:
+                    logger.info(f"Training Batch {i+1}/{batch_count}")
+
                 batch_count += 1
 
             # Calculate and log training loss
@@ -354,7 +368,8 @@ class Training:
             # ========================================================================
             epoch_val_loss = None
             reid_metrics = {}
-            if val_dataloader:
+
+            if val_dataloader and (epoch + 1) % EPOCHS_PER_VAL == 0:
                 self.model.eval()  # Set model to evaluation mode
                 
                 # 1. Calculate Validation Loss
@@ -370,6 +385,10 @@ class Training:
                         loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
                         
                         running_val_loss += loss.item()
+
+                        if (j + 1) % BATCHES_PER_LOG_MSG == 0:
+                            logger.info(f"Validation Batch {j+1}/{val_batch_count}")
+
                         val_batch_count += 1
                 
                 epoch_val_loss = running_val_loss / val_batch_count if val_batch_count > 0 else 0.0
@@ -452,7 +471,7 @@ class Training:
         
         # Generate embeddings for all images in the dataset
         with torch.no_grad():
-            for batch_data in tqdm(dataloader, desc="Generating Embeddings"):
+            for batch_data in dataloader:
                 # Handle both triplet format (anchor, positive, negative, label) 
                 # and simple format (images, labels)
                 if len(batch_data) == 4:
