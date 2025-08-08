@@ -67,17 +67,17 @@ class TrainingConfig:
     lr_scheduler_factor: float = 0.5  # Factor by which to reduce learning rate
     lr_scheduler_min_lr: float = 1e-7  # Minimum learning rate after reduction
     num_epochs: int = 50
-    margin: float = 0.3
+    margin: float = 0.5
     weight_decay: float = 1e-4  # L2 regularization weight decay
     model_save_path: str = '/common/model/embeddings_latest.pth'
     train_ratio: float = 0.8
     min_images_per_player: int = 2
-    num_workers: int = 8 if sys.platform != "darwin" else 0  # Number of DataLoader workers
-    early_stopping_loss_ratio: float = 0.1  # Early stopping threshold as a ratio of margin
+    force_pretraining: bool = False  # Force using ResNet defaults for pretraining
     early_stopping_patience: Optional[int] = 10  # Number of epochs to wait before early stopping (None = disabled)
-    margin_decay_rate: float = 0.97  # Decay rate for margin
+    margin_decay_rate: float = 0.99  # Decay rate for margin
     margin_change_threshold: float = 0.01  # Minimum change in margin to trigger update
-    default_workers: int = 8  # Default number of workers for DataLoader
+    num_workers: int = 8 if sys.platform != "darwin" else 0  # Used by PyTorch
+    default_workers: int = 8  # Used for file uploads
 
 @dataclass
 class EvaluatorConfig:

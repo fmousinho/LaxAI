@@ -41,6 +41,7 @@ class Training:
             lr_scheduler_threshold (float): Threshold for LR scheduler
             lr_scheduler_min_lr (float): Minimum LR for scheduler
             lr_scheduler_factor (float): Factor for LR scheduler
+            force_pretraining (bool): True if pretrained should use ResNet defaults
         If any required hyperparameter is missing in both kwargs and training_config, a ValueError will be raised.
         """
 
@@ -64,6 +65,8 @@ class Training:
         self.scheduler_threshold = get_kwarg_or_config('lr_scheduler_threshold')
         self.lr_scheduler_min_lr = get_kwarg_or_config('lr_scheduler_min_lr')
         self.lr_scheduler_factor = get_kwarg_or_config('lr_scheduler_factor')
+        self.force_pretraining = get_kwarg_or_config('force_pretraining')
+
         # Device: direct argument, else config, else autodetect
         if device is not None:
             self.device = device
@@ -79,10 +82,10 @@ class Training:
         self.val_dataloader = None
 
 
-    def load_model_from_wandb(self, model_class, model_name: str, alias: Optional[str], **kwargs):
+    def _load_model_from_wandb(self, model_class, model_name: str, alias: Optional[str], **kwargs):
         """
-        Load model from wandb model registry.
-        
+        Load model from wandb model registry, and puts in self.model.
+
         Args:
             model_class: The model class to instantiate
             model_name: Name of the model in wandb registry
@@ -189,7 +192,7 @@ class Training:
                 dataset,
                 batch_size=self.batch_size,
                 shuffle=True,
-            num_workers=self.num_workers
+                num_workers=self.num_workers
             )
 
         elif type == 'val':
@@ -209,8 +212,8 @@ class Training:
 
 
 
-    def setup_model(self, model_class, model_name: str, force_pretrained: bool = False, **kwargs):
-    
+    def setup_model(self, model_class, model_name: str, **kwargs):
+
         """
         Setup the model, loss function, and optimizer for training.
         First attempts to load from wandb registry, then falls back to local weights.
@@ -228,11 +231,11 @@ class Training:
             # Prepare kwargs for model initialization
 
             # Try to load from wandb registry first (unless forcing pretrained)
-            if force_pretrained:
+            if self.force_pretraining:
                 logger.info("Forcing fresh start with pre-trained ResNet18 weights")
                 self.model = model_class(**kwargs)
             else:
-                model_loaded = self.load_model_from_wandb(model_class, model_name=model_name, alias="latest", **kwargs)
+                model_loaded = self._load_model_from_wandb(model_class, model_name=model_name, alias="latest", **kwargs)
             if not model_loaded:
                 logger.info("No wandb model found, will use local weights or pre-trained backbone")
                 self.model = model_class(**kwargs)
@@ -534,7 +537,7 @@ class Training:
         }
 
 
-    def train_and_save(self, model_class, dataset: Dataset, model_name: str, force_pretrained: bool = False, val_dataset: Optional[Dataset] = None,model_kwargs: Dict[str, Any] = {}) -> Any:
+    def train_and_save(self, model_class, dataset: Dataset, model_name: str, val_dataset: Optional[Dataset] = None, model_kwargs: Dict[str, Any] = {}) -> Any:
         """
         Complete training pipeline: setup data, setup model, train, and save.
         
@@ -565,7 +568,7 @@ class Training:
             
             # Setup model
             logger.info("Setting up model...")
-            self.setup_model(model_class, model_name=model_name, force_pretrained=force_pretrained, **model_kwargs)
+            self.setup_model(model_class, model_name=model_name, **model_kwargs)
 
             # Train
             logger.info("Starting training...")
