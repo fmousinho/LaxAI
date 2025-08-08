@@ -1,25 +1,48 @@
 """
 Data preparation pipeline for LaxAI project.
 
-This module defines the DataPrepPipeline class and related utilities for processing raw video data,
-including downloading from Google Storage, extracting frames, augmenting images, and preparing datasets for training.
+This module provides a comprehensive pipeline for processing raw lacrosse video data into 
+training-ready datasets. The pipeline handles video import, frame extraction, player detection,
+crop generation, data augmentation, and dataset organization for machine learning workflows.
+
+Key Features:
+    - Automated video processing with resolution validation
+    - Player detection using YOLO-based models
+    - Optional background removal with grass mask detection
+    - Image augmentation for robust training data
+    - Parallel processing for improved performance
+    - Structured GCS storage organization
+    - Train/validation dataset splitting
+
+Example:
+    ```python
+    from train.dataprep_pipeline import DataPrepPipeline
+    from config.all_config import detection_config
+    
+    # Initialize pipeline
+    pipeline = DataPrepPipeline(
+        config=detection_config,
+        tenant_id="tenant1",
+        verbose=True,
+        enable_grass_mask=True
+    )
+    
+    # Process a video (relative GCS path, no gs:// prefix)
+    results = pipeline.run("raw_videos/game_footage.mp4")
+    ```
 """
 
-
 import os
-import sys
-import json
 import logging
-from typing import List, Dict, Any, Optional, Tuple
-from enum import Enum
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import cv2
-import numpy as np
 import random
+from typing import List, Dict, Any, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import supervision as sv
 from PIL import Image
 from supervision import Detections
 from supervision.utils.image import crop_image
+
 from common.google_storage import get_storage, GCSPaths
 from common.detection import DetectionModel
 from common.pipeline_step import StepStatus
@@ -32,31 +55,126 @@ from utils.id_generator import create_video_id, create_frame_id, create_dataset_
 
 logger = logging.getLogger(__name__)
 
-MIN_VIDEO_RESOLUTION = (1920, 1080)  # Minimum resolution for video processing
+#: Minimum video resolution required for processing (width, height)
+MIN_VIDEO_RESOLUTION = (1920, 1080)
 
 
 class DataPrepPipeline(Pipeline):
     """
-    Data preparation pipeline that processes MP4 videos from Google Storage.
+    Comprehensive data preparation pipeline for lacrosse video processing.
 
-    This pipeline:
-    1. Creates a processing run folder with GUID
-    2. Processes videos from the raw directory
-    3. Validates video resolution (minimum 1920 by 1080)
-    4. Extracts frames with sufficient detections
-    5. Saves metadata and detection results
+    This pipeline processes MP4 videos from Google Cloud Storage through a series of stages
+    to create training-ready datasets for player re-identification models. The pipeline is
+    designed for scalability and robustness with parallel processing capabilities.
+
+    **Pipeline Stages:**
+        1. **Video Import**: Move videos from raw directory to organized structure
+        2. **Frame Extraction**: Extract frames with sufficient quality for detection
+        3. **Grass Mask Calculation** (optional): Initialize background removal system
+        4. **Player Detection**: Detect players using YOLO-based models
+        5. **Crop Extraction**: Extract player bounding boxes as individual images
+        6. **Background Removal** (optional): Remove grass/field background from crops
+        7. **Data Augmentation**: Apply transformations to increase dataset diversity
+        8. **Dataset Creation**: Split into training and validation sets with proper organization
+
+    **Key Features:**
+        - Validates video resolution (minimum 1920x1080)
+        - Parallel processing for improved performance
+        - Optional grass mask background removal
+        - Structured GCS path organization
+        - Comprehensive error handling and logging
+        - Configurable train/validation splits
+        - Automatic cleanup of temporary files
+
+    **Storage Organization:**
+        ```
+        tenant_id/
+        ├── imported_videos/{video_id}/
+        ├── extracted_frames/{video_id}/{frame_id}/
+        ├── crops/{video_id}/{frame_id}/
+        ├── augmented_crops/{video_id}/{frame_id}/{crop_id}/
+        └── datasets/{dataset_id}/train|val/{player_id}/
+        ```
+
+    Args:
+        config (DetectionConfig): Detection model configuration settings
+        tenant_id (str): Unique identifier for the tenant/organization
+        verbose (bool, optional): Enable detailed logging. Defaults to True.
+        save_intermediate (bool, optional): Save intermediate pipeline results. Defaults to True.
+        enable_grass_mask (bool, optional): Enable background removal functionality. 
+            If None, uses transform_config.enable_background_removal. Defaults to model_config.enable_grass_mask.
+        delete_process_folder (bool, optional): Clean up temporary processing files. Defaults to True.
+        **kwargs: Additional keyword arguments passed to parent Pipeline class.
+
+    Attributes:
+        config (DetectionConfig): Detection configuration object
+        tenant_id (str): Tenant identifier for storage organization
+        frames_per_video (int): Number of frames to extract per video
+        train_ratio (float): Ratio of data used for training (vs validation)
+        enable_grass_mask (bool): Whether background removal is enabled
+        detection_model (DetectionModel): Loaded YOLO detection model
+        background_mask_detector (BackgroundMaskDetector, optional): Background removal system
+        tenant_storage (GoogleStorageClient): GCS client for data operations
+        path_manager (GCSPaths): Structured path management system
+
+    Raises:
+        RuntimeError: If detection model fails to load (required for pipeline operation)
+        ValueError: If invalid configuration parameters are provided
+
+    Example:
+        ```python
+        from train.dataprep_pipeline import DataPrepPipeline
+        from config.all_config import detection_config
+        
+        # Initialize with background removal enabled
+        pipeline = DataPrepPipeline(
+            config=detection_config,
+            tenant_id="lacrosse_team_1",
+            verbose=True,
+            enable_grass_mask=True,
+            delete_process_folder=True
+        )
+        
+        # Process a game video (relative GCS path)
+        results = pipeline.run("raw_videos/championship_game.mp4")
+        
+        if results["status"] == "completed":
+            print(f"Successfully processed {results['video_guid']}")
+            print(f"Created datasets with {results['pipeline_summary']['total_train_samples']} training samples")
+        ```
+
+    Note:
+        The pipeline requires a properly configured detection model and valid GCS credentials.
+        Videos must meet minimum resolution requirements (1920x1080) for processing.
     """
 
-    def __init__(self, config: DetectionConfig, tenant_id: str = "tenant1", verbose: bool = True, save_intermediate: bool = True, enable_grass_mask: bool = model_config.enable_grass_mask, delete_process_folder: bool = True, **kwargs):
+    def __init__(self, 
+                 config: DetectionConfig, 
+                 tenant_id: str, 
+                 verbose: bool = True, 
+                 save_intermediate: bool = True, 
+                 enable_grass_mask: bool = model_config.enable_grass_mask, 
+                 delete_process_folder: bool = True, 
+                 **kwargs):
         """
-        Initialize the training pipeline.
+        Initialize the data preparation pipeline.
+        
+        Sets up storage clients, detection models, and pipeline configuration.
+        Configures the processing steps based on grass mask settings.
         
         Args:
-            config: Detection configuration object
-            tenant_id: The tenant ID to process videos for (default: "tenant1")
-            verbose: Enable verbose logging (default: False)
-            save_intermediate: Save intermediate results for each step (default: False)
-            enable_grass_mask: Enable or disable grass mask functionality. If None, uses transform_config.enable_background_removal (default: None)
+            config: Detection configuration object containing model settings
+            tenant_id: The tenant ID for data organization and access control
+            verbose: Enable detailed logging throughout the pipeline
+            save_intermediate: Save intermediate results for debugging and recovery
+            enable_grass_mask: Enable background removal functionality. If None, 
+                uses transform_config.enable_background_removal
+            delete_process_folder: Clean up temporary processing files after completion
+            **kwargs: Additional arguments passed to the parent Pipeline class
+        
+        Raises:
+            RuntimeError: If the detection model fails to load, which is required 
+                for the pipeline to function
         """
         self.config = config
         self.tenant_id = tenant_id
@@ -95,7 +213,7 @@ class DataPrepPipeline(Pipeline):
         # Detection model is required for training pipeline
         try:
             self.detection_model = DetectionModel()
-            logger.info("Detection model loaded")
+            logger.info("Detection model loaded successfully")
         except RuntimeError as e:
             logger.critical(f"CRITICAL ERROR: Detection model is required for training pipeline but failed to load: {e}")
             raise RuntimeError(f"Training pipeline cannot continue without detection model: {e}")
@@ -160,7 +278,7 @@ class DataPrepPipeline(Pipeline):
 
         # Initialize base pipeline
         super().__init__(
-            pipeline_name="train_pipeline",
+            pipeline_name="dataprep_pipeline",
             storage_client=self.tenant_storage,
             step_definitions=step_definitions,
             verbose=verbose,
@@ -171,18 +289,52 @@ class DataPrepPipeline(Pipeline):
         self.run_guid = create_run_id()
         self.run_folder = self.path_manager.get_path("run_data", run_id=self.run_guid)
 
-
-    def _execute_parallel_operations(self, tasks: List[Tuple] | List[str], operation_func, context_info: str = "") -> Tuple[List, int]:
+    def _execute_parallel_operations(self, 
+                                   tasks: List[Tuple] | List[str], 
+                                   operation_func, 
+                                   context_info: str = "") -> Tuple[List, int]:
         """
         Execute a list of operations in parallel using ThreadPoolExecutor.
         
+        This method provides a generic interface for parallelizing storage operations
+        such as uploads, downloads, moves, and deletions. It handles error collection
+        and provides comprehensive logging of operation results.
+        
         Args:
-            tasks: List of tuples containing task parameters
-            operation_func: Function to execute for each task (e.g., self.tenant_storage.upload_from_bytes)
-            context_info: Additional context information for logging
+            tasks: List of task parameters. Can be:
+                - List of tuples for multi-parameter operations (e.g., (source, dest) for moves)
+                - List of strings for single-parameter operations (e.g., blob names for deletes)
+            operation_func: Function to execute for each task. Should return bool indicating success.
+                Examples: self.tenant_storage.upload_from_bytes, self.tenant_storage.move_blob
+            context_info: Additional context information for logging (e.g., "video_123 crops")
             
         Returns:
-            Tuple of (failed_operations, successful_count)
+            Tuple containing:
+                - List of failed operations (same format as input tasks)
+                - Integer count of successful operations
+                
+        Example:
+            ```python
+            # Upload multiple files
+            upload_tasks = [("blob1.jpg", image_data1), ("blob2.jpg", image_data2)]
+            failed, success_count = self._execute_parallel_operations(
+                upload_tasks, 
+                self.tenant_storage.upload_from_bytes,
+                "player crops for video_123"
+            )
+            
+            # Delete multiple files  
+            delete_tasks = ["blob1.jpg", "blob2.jpg"]
+            failed, success_count = self._execute_parallel_operations(
+                delete_tasks,
+                self.tenant_storage.delete_blob, 
+                "temporary files cleanup"
+            )
+            ```
+        
+        Note:
+            The method uses self.default_workers to limit concurrency and prevent
+            overwhelming the storage service.
         """
         if not tasks:
             return [], 0
@@ -222,22 +374,70 @@ class DataPrepPipeline(Pipeline):
 
         return failed_operations, successful_count
 
-
     def run(self, video_path: str, resume_from_checkpoint: bool = True) -> Dict[str, Any]:
         """
-        Execute the complete training pipeline for a single video.
+        Execute the complete data preparation pipeline for a single video.
+        
+        This is the main entry point for processing lacrosse videos stored in Google Cloud Storage.
+        The method orchestrates all pipeline stages and provides comprehensive error handling
+        and progress tracking.
         
         Args:
-            video_path: Path to the video file to process (can be local path or gs:// URL)
-            resume_from_checkpoint: Whether to check for and resume from existing checkpoint (default: True)
+            video_path: Relative GCS blob path to the video file to process within the tenant's 
+                storage bucket. Should NOT include the 'gs://' prefix or bucket name.
+                Examples:
+                - "raw_videos/game_footage.mp4"
+                - "uploads/2024/championship_game.mp4" 
+                - "tenant1/imported_videos/video_123.mp4"
+            resume_from_checkpoint: Whether to check for and resume from existing 
+                checkpoint data. If True, the pipeline will skip completed steps.
+                Defaults to True.
             
         Returns:
-            Dictionary with pipeline results and statistics
+            Dictionary containing pipeline execution results:
+                - status (str): Pipeline completion status ("completed", "error", "partial")
+                - run_guid (str): Unique identifier for this pipeline run
+                - run_folder (str): GCS path where run data is stored
+                - video_path (str): Original input video path
+                - video_guid (str): Generated unique video identifier
+                - video_folder (str): GCS path where video data is organized
+                - errors (List[str]): List of any errors encountered during processing
+                - pipeline_summary (Dict): Summary statistics for each pipeline stage
+                
+        Raises:
+            RuntimeError: If critical pipeline dependencies are missing
+            ValueError: If video_path is invalid or empty
+            
+        Example:
+            ```python
+            pipeline = DataPrepPipeline(detection_config, "tenant1")
+            
+            # Process video from raw uploads folder
+            results = pipeline.run("raw_videos/game_footage.mp4")
+            
+            # Process video from specific tenant folder
+            results = pipeline.run("tenant1/uploads/championship_game.mp4")
+            
+            # Check results
+            if results["status"] == "completed":
+                print(f"Successfully processed video {results['video_guid']}")
+                print(f"Training samples: {results['pipeline_summary']['total_train_samples']}")
+            else:
+                print(f"Pipeline failed: {results['errors']}")
+            ```
+            
+        Note:
+            - All video files must already be uploaded to Google Cloud Storage
+            - Video paths are relative to the configured GCS bucket
+            - The pipeline automatically handles temporary file cleanup if 
+              delete_process_folder is enabled
+            - All intermediate data is stored in structured GCS paths for easy 
+              organization and retrieval
         """
         if not video_path:
             return {"status": PipelineStatus.ERROR.value, "error": "No video path provided"}
 
-        logger.info(f"Processing video: {video_path}")
+        logger.info(f"Starting data preparation pipeline for video: {video_path}")
 
         # Create initial context with the video path
         initial_context = {"raw_video_path": video_path}
@@ -261,24 +461,29 @@ class DataPrepPipeline(Pipeline):
             "pipeline_summary": results["pipeline_summary"]
         }
 
+        # Cleanup temporary processing files if enabled
         if self.delete_process_folder:
             video_guid = context.get("video_guid", "unknown")
             process_folder_path = self.path_manager.get_path("process_folder", video_id=video_guid)
-            logger.info(f"Deleting process folder: {process_folder_path}")
+            logger.info(f"Cleaning up temporary process folder: {process_folder_path}")
+            
             blob_names = self.tenant_storage.list_blobs(prefix=process_folder_path)
-            # Convert blob names to tuple format for delete operation (blob_name, None)
-            failed_deletes, deletes = self._execute_parallel_operations(
-                blob_names,
-                self.tenant_storage.delete_blob,
-                f"delete process folder {process_folder_path}"
-            )
-            if failed_deletes:
-                logger.warning(f"Failed to delete {len(failed_deletes)} from {process_folder_path}")
-            logger.info(f"Successfully deleted {deletes} from {process_folder_path}")
+            if blob_names:
+                failed_deletes, successful_deletes = self._execute_parallel_operations(
+                    list(blob_names),
+                    self.tenant_storage.delete_blob,
+                    f"cleanup process folder {process_folder_path}"
+                )
+                
+                if failed_deletes:
+                    logger.warning(f"Failed to delete {len(failed_deletes)} temporary files from {process_folder_path}")
+                
+                logger.info(f"Successfully cleaned up {successful_deletes} temporary files from {process_folder_path}")
+            else:
+                logger.info("No temporary files found to clean up")
 
         return formatted_results
-    
-    
+
     def _import_video(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Import a single video from the provided path into organized video folder.
@@ -890,72 +1095,3 @@ class DataPrepPipeline(Pipeline):
             return {"status": StepStatus.ERROR.value, "error": str(e)}
 
 
-def run_dataprep_pipeline(*args, **kwargs) -> Dict[str, Any]:
-    """
-    Convenience function to run the data preparation pipeline.
-
-    Args:
-        tenant_id: The tenant ID to process videos for
-        video_path: Path to the video file to process
-        delete_original_raw_videos: Whether to delete original raw video files after processing (default: False)
-        frames_per_video: Number of frames to extract per video
-        verbose: Whether to enable verbose logging (default: False)
-        save_intermediate: Whether to save intermediate results (default: False)
-        
-    Returns:
-        Dictionary with pipeline results
-    """
-    config = DetectionConfig()
-    config.delete_original_raw_videos = delete_original_raw_videos
-    config.frames_per_video = frames_per_video
-    pipeline = DataPrepPipeline(config, *args, **kwargs)
-
-    # Ensure that the video path is correct
-    if not video_path:
-        raise ValueError("Video path must be provided")
-
-    return pipeline.run(video_path)
-
-
-
-if __name__ == "__main__":
-
-    # Example usage
-    tenant_id = "tenant1"
-    delete_original_raw_videos = False  # Set to True to delete original raw videos after processing
-    frames_per_video = 20  # Number of frames to extract per video
-    verbose = True  # Enable verbose logging
-    save_intermediate = True  # Save intermediate results
-    
-    # Get the first video from the raw directory
-    try:
-        # Get storage client for the tenant
-        tenant_storage = get_storage(f"{tenant_id}/user")
-        
-        # List all blobs in the raw directory
-        raw_blobs = tenant_storage.list_blobs(prefix="raw/")
-        
-        # Find the first MP4 video file
-        video_path = None
-        for blob_name in raw_blobs:
-            if blob_name.endswith('.mp4') and blob_name != "raw/":
-                # Extract just the filename from the full path
-                video_path = blob_name.split("/")[-1]
-                break
-        
-        if not video_path:
-            print("No MP4 videos found in the raw directory")
-            exit(1)
-        
-        print(f"Processing first video found: {video_path}")
-        
-    except Exception as e:
-        print(f"Error accessing raw directory: {e}")
-        # Fallback to a default video name
-        video_path = "GRIT Dallas-Houston 2027 vs Team 91 2027 National - 7-30am_summary.mp4"
-        print(f"Using fallback video: {video_path}")
-
-    results = run_dataprep_pipeline(tenant_id=tenant_id, video_path=video_path, delete_original_raw_videos=delete_original_raw_videos, frames_per_video=frames_per_video, verbose=verbose, save_intermediate=save_intermediate)
-    
-    print("Pipeline Results:")
-    print(json.dumps(results, indent=2))
