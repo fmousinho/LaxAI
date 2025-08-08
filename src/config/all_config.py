@@ -77,7 +77,8 @@ class TrainingConfig:
     margin_decay_rate: float = 0.99  # Decay rate for margin
     margin_change_threshold: float = 0.01  # Minimum change in margin to trigger update
     num_workers: int = 8 if sys.platform != "darwin" else 0  # Used by PyTorch
-    default_workers: int = 8  # Used for file uploads
+    default_workers: int = 8  # Used for file uploads and dataloader
+    prefetch_factor: int = 2  # Number of batches to prefetch for DataLoader
 
 @dataclass
 class EvaluatorConfig:
