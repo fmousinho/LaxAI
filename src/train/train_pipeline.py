@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 class TrainPipeline(Pipeline):
 
-    def __init__(self, tenant_id: str = "tenant1", verbose: bool = True, save_intermediate: bool = True, custom_name: str = "run", **training_kwargs):
+    def __init__(self, tenant_id: str = "tenant1", verbose: bool = True, save_intermediate: bool = True, **training_kwargs):
         """
         Initialize the training pipeline.
         """
@@ -33,7 +33,6 @@ class TrainPipeline(Pipeline):
         self.storage_client = get_storage(tenant_id)
         self.model_path = training_config.model_save_path
         self.collection_name = wandb_config.embeddings_model_collection
-        self.custom_name = custom_name
 
         model_class_module = model_config.model_class_module
         model_class_str = model_config.model_class_str
@@ -41,6 +40,7 @@ class TrainPipeline(Pipeline):
         self.model_class = getattr(module, model_class_str)
         self.training_kwargs = training_kwargs
         self.path_manager = GCSPaths()
+        self.training_kwargs = training_kwargs
 
 
         step_definitions = {
@@ -67,39 +67,33 @@ class TrainPipeline(Pipeline):
             save_intermediate=save_intermediate
         )
 
-    def run(self, dataset_name: str | List[str], resume_from_checkpoint: bool = True, wandb_run_tags: Optional[List[str]] = None) -> Dict[str, Any]:
+    def run(self, dataset_name: str | List[str], resume_from_checkpoint: bool = True, wandb_run_tags: Optional[List[str]] = None, custom_name: str = "run") -> Dict[str, Any]:
         """
         Execute the complete training pipeline for a given dataset.
 
         Args:
-            dataset_path: Path to the training dataset directory.
+            dataset_name: Dataset name(s) - either a single string or list of strings for multi-dataset training.
             resume_from_checkpoint: Whether to check for and resume from an existing checkpoint.
+            wandb_run_tags: Optional tags for the wandb run.
+            custom_name: Custom name for the training run (used in wandb and logging).
 
         Returns:
             Dictionary with pipeline results and statistics.
         """
         if wandb_config.enabled:
-            parts = dataset_name
-            # Get video_source_id and frame_id
-            video_source_id = next((p for p in parts if p.startswith('video_')), None)
-            user_run_id = next((p for p in parts if p.startswith('run_')), None)
-            frame_id = next((p for p in parts if p.startswith('frame')), None)
-            tenant_id = parts[0] if len(parts) > 1 else None
 
             config = {
                 "pipeline": "training_pipeline",
-                "custom_name": self.custom_name,
-                "video_source_id": video_source_id,
-                "frame_id": frame_id,
-                "user_run_id": user_run_id,
-                "tenant_id": tenant_id
+                "custom_name": custom_name,
             }
-            wandb_logger.init_run(config=config, run_name=f"{self.custom_name}_{video_source_id}_{frame_id}", tags=wandb_run_tags)
+
+            wandb_logger.init_run(config=config, run_name=f"{custom_name}", tags=wandb_run_tags)
         try:
             if not dataset_name:
                 return {"status": PipelineStatus.ERROR.value, "error": "No dataset name provided"}
-            context = {"dataset_name": dataset_name}
+            context = {"dataset_name": dataset_name, "custom_name": custom_name}
             results = super().run(context, resume_from_checkpoint=resume_from_checkpoint)
+            return results
             return results
         finally:
             if wandb_config.enabled:
@@ -240,6 +234,7 @@ class TrainPipeline(Pipeline):
 
             # Execute complete training pipeline
             logger.info("Executing training pipeline...")
+
 
             trained_model = training.train_and_save(
                 model_class=self.model_class,

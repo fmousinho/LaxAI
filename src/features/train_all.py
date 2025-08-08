@@ -13,6 +13,7 @@ import sys
 import logging 
 import json
 import argparse
+from typing import Any
 
 src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if src_dir not in sys.path:
@@ -21,7 +22,7 @@ if src_dir not in sys.path:
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 
-from config.all_config import detection_config, training_config
+from config.all_config import detection_config, training_config, model_config
 from config import logging_config
 from common.google_storage import get_storage, GCSPaths
 from train.dataprep_pipeline import DataPrepPipeline
@@ -49,11 +50,15 @@ def train(tenant_id: str, frames_per_video: int, verbose: bool, save_intermediat
 
     # 1. Find all videos in the raw directory
     try:
+        # Prepare training kwargs before creating the pipeline
+        training_kwargs: dict[str, Any] = {}
+        training_kwargs["force_pretraining"] = True
 
         train_pipeline = TrainPipeline(
             tenant_id=tenant_id, 
             verbose=verbose, 
-            save_intermediate=save_intermediate
+            save_intermediate=save_intermediate,
+            **training_kwargs
             )
 
         logger.info("Checking for available datasets..")
@@ -62,33 +67,34 @@ def train(tenant_id: str, frames_per_video: int, verbose: bool, save_intermediat
         # Find dataset paths - look for /datasets/ directories that contain numeric/train/ structure
         path_finder = GCSPaths()
         datasets_folder = path_finder.get_path("datasets_root").rstrip('/')
-        datasets = storage_client.list_blobs(prefix=datasets_folder, delimiter='/')
+        datasets = storage_client.list_blobs(prefix=datasets_folder, delimiter='/', exclude_prefix_in_return=True)
+        datasets = list(datasets)  # Convert to list for easier processing
 
         logger.info(f"Found {len(datasets)} dataset directories in GCS.")
     
-        DATASETS_TO_USE = 1
-        processed_folders = 0
-        processed_datasets = 0
-    
-        for dataset_full_path in datasets:
-            if processed_folders >= DATASETS_TO_USE:
-                break
+        N_DATASETS_TO_USE = len(datasets)
+
+        datasets_to_use = [dataset.rstrip('/') for dataset in datasets[0:N_DATASETS_TO_USE]]
+
+
+        run_name = "Default params, from Resnet18"
+        wandb_tags = ["do not delete"]
+        for keys, values in model_config.__dict__.items():
+            config = f"{keys}={values}"
+            wandb_tags.append(f"{config}")
             
-            dataset_name = dataset_full_path.split('/')[2]  # Extract dataset name from path
+        for keys, values in training_config.__dict__.items():
+            config = f"{keys}={values}"
+            wandb_tags.append(f"{config}")
 
-            logger.info("**********************************************************************")
-            logger.info(f"  Training for {dataset_name}")
-            logger.info("**********************************************************************")
+        train_results = train_pipeline.run(dataset_name=datasets_to_use, custom_name=run_name, wandb_run_tags=wandb_tags)
 
-            train_results = train_pipeline.run(dataset_name=dataset_name)
+        if train_results.get("status") == "completed":
+            logger.info(f"Successfully completed training for dataset: {datasets_to_use}")
+        else:
+            logger.error(f"Training pipeline failed for dataset: {datasets_to_use}")
+            logger.error(f"Details: {json.dumps(train_results.get('errors'), indent=2)}")
 
-            if train_results.get("status") == "completed":
-                logger.info(f"Successfully completed training for dataset: {dataset_name}")
-            else:
-                logger.error(f"Training pipeline failed for dataset: {dataset_name}")
-                logger.error(f"Details: {json.dumps(train_results.get('errors'), indent=2)}")
-
-            processed_folders += 1
 
         logger.info("--- End-to-End Workflow Finished ---")
 

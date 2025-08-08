@@ -77,7 +77,6 @@ class LacrossePlayerDataset(Dataset):
         for dataset_dir in self.dataset_list:
             potential_players = self.storage_client.list_blobs(prefix=dataset_dir, delimiter='/')
             self.dataset_to_players[dataset_dir] = []
-            
             for potential_player in potential_players:
                 player_images = self.storage_client.list_blobs(prefix=potential_player)
                 if len(player_images) > self.min_images_per_player:
