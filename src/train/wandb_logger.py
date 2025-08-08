@@ -127,7 +127,8 @@ class WandbLogger:
             metrics: Dictionary of metrics to log
             step: Optional step number
         """
-        if not self.enabled or not self.initialized:
+        if not self.enabled or not self.initialized or self.run is None:
+            logger.warning("Wandb logging is not enabled or initialized.")
             return
             
         try:
@@ -139,7 +140,8 @@ class WandbLogger:
 
     def finish(self) -> None:
         """Finish the current wandb run."""
-        if not self.enabled or not self.initialized:
+        if not self.enabled or not self.initialized or self.run is None:
+            logger.warning("Wandb logging is not enabled or initialized.")
             return
             
         try:
@@ -158,7 +160,8 @@ class WandbLogger:
             model: PyTorch model to watch
             log_freq: Frequency to log gradients
         """
-        if not self.enabled or not self.initialized:
+        if not self.enabled or not self.initialized or self.run is None:
+            logger.warning("Wandb logging is not enabled or initialized.")
             return
             
         try:

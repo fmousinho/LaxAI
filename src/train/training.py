@@ -70,12 +70,12 @@ class Training:
         # Device: direct argument, else config, else autodetect
         if device is not None:
             self.device = device
-        elif hasattr(training_config, 'device') and training_config.device is not None:
-            self.device = training_config.device
+        elif getattr(training_config, 'device', None) is not None:
+            self.device = getattr(training_config, 'device')
         else:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
 
-        self.model = None
+        self.model: nn.Module
         self.optimizer: Optional[torch.optim.Optimizer] = None
         self.loss_fn: Optional[nn.Module] = None
         self.dataloader = None
@@ -158,7 +158,10 @@ class Training:
             # Optionally add dataset info if available
             if hasattr(self, 'dataloader') and self.dataloader is not None:
                 try:
-                    metadata["train_dataset_size"] = len(self.dataloader.dataset)
+                    if hasattr(self.dataloader.dataset, "__len__") and callable(getattr(self.dataloader.dataset, "__len__", None)):
+                        metadata["train_dataset_size"] = len(self.dataloader.dataset) # pyright: ignore[reportArgumentType]
+                    else:
+                        metadata["train_dataset_size"] = None
                 except Exception:
                     metadata["train_dataset_size"] = None
             if hasattr(self, 'dataloader') and self.dataloader is not None:
@@ -208,7 +211,7 @@ class Training:
         logger.info(f"Dataset setup complete:")
         logger.info(f"  Batch size: {self.batch_size}")
         logger.info(f"  Number of workers: {self.num_workers}")
-        logger.info(f"  Number of batches: {len(self.dataloader)}")
+        logger.info(f"  Number of batches: {len(self.dataloader) if self.dataloader is not None else 'N/A'}")
 
 
 
@@ -334,7 +337,7 @@ class Training:
                 negative = negative.to(self.device)
 
                 self.optimizer.zero_grad()
-                emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative)
+                emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative)  # pyright: ignore[reportCallIssue]
                 loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
 
                 loss.backward()
@@ -363,7 +366,7 @@ class Training:
                         positive = positive.to(self.device)
                         negative = negative.to(self.device)
                         
-                        emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative)
+                        emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative) # pyright: ignore[reportCallIssue]
                         loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
                         
                         running_val_loss += loss.item()
@@ -527,7 +530,7 @@ class Training:
         recall_1 = rank1_correct / num_queries
         recall_5 = rank5_correct / num_queries
         recall_10 = rank10_correct / num_queries
-        mean_average_precision = np.mean(average_precisions)
+        mean_average_precision = float(np.mean(average_precisions))
         
         return {
             "recall@1": recall_1,
