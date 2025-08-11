@@ -23,7 +23,6 @@ if src_dir not in sys.path:
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 
-from config.all_config import detection_config, training_config, model_config
 from config import logging_config
 from common.google_storage import get_storage, GCSPaths
 from train.train_pipeline import TrainPipeline
@@ -147,61 +146,63 @@ if __name__ == "__main__":
     parser.add_argument("--resume_from_checkpoint", action="store_true", default=True, help="Resume training from checkpoint if available.")
     parser.add_argument("--wandb_tags", nargs="*", default=[], help="List of tags for wandb tracking (space-separated).")
     
-    # Training kwargs (passed to Training class)
-    parser.add_argument("--num_epochs", type=int, default=training_config.num_epochs, help="Number of training epochs.")
-    parser.add_argument("--batch_size", type=int, default=training_config.batch_size, help="Training batch size.")
-    parser.add_argument("--learning_rate", type=float, default=training_config.learning_rate, help="Learning rate for training.")
+    # Training kwargs (passed to Training class) - no defaults here, let inner functions handle defaults
+    parser.add_argument("--num_epochs", type=int, help="Number of training epochs.")
+    parser.add_argument("--batch_size", type=int, help="Training batch size.")
+    parser.add_argument("--learning_rate", type=float, help="Learning rate for training.")
     parser.add_argument("--force_pretraining", action="store_true", help="Force use of pretrained weights even if custom weights exist.")
-    parser.add_argument("--early_stopping_patience", type=int, default=training_config.early_stopping_patience, help="Early stopping patience (epochs without improvement).")
-    parser.add_argument("--min_images_per_player", type=int, default=training_config.min_images_per_player, help="Minimum number of images required per player.")
-    parser.add_argument("--margin", type=float, default=training_config.margin, help="Triplet loss margin.")
-    parser.add_argument("--weight_decay", type=float, default=training_config.weight_decay, help="L2 regularization weight decay.")
-    parser.add_argument("--margin_decay_rate", type=float, default=training_config.margin_decay_rate, help="Decay rate for triplet loss margin.")
-    parser.add_argument("--margin_change_threshold", type=float, default=training_config.margin_change_threshold, help="Threshold for margin changes in triplet loss.")
-    parser.add_argument("--lr_scheduler_patience", type=int, default=training_config.lr_scheduler_patience, help="Learning rate scheduler patience.")
-    parser.add_argument("--lr_scheduler_factor", type=float, default=training_config.lr_scheduler_factor, help="Learning rate reduction factor.")
-    parser.add_argument("--lr_scheduler_min_lr", type=float, default=training_config.lr_scheduler_min_lr, help="Minimum learning rate.")
-    parser.add_argument("--num_workers", type=int, default=training_config.num_workers, help="Number of DataLoader workers.")
-    parser.add_argument("--prefetch_factor", type=int, default=training_config.prefetch_factor, help="DataLoader prefetch factor.")
+    parser.add_argument("--early_stopping_patience", type=int, help="Early stopping patience (epochs without improvement).")
+    parser.add_argument("--min_images_per_player", type=int, help="Minimum number of images required per player.")
+    parser.add_argument("--margin", type=float, help="Triplet loss margin.")
+    parser.add_argument("--weight_decay", type=float, help="L2 regularization weight decay.")
+    parser.add_argument("--margin_decay_rate", type=float, help="Decay rate for triplet loss margin.")
+    parser.add_argument("--margin_change_threshold", type=float, help="Threshold for margin changes in triplet loss.")
+    parser.add_argument("--lr_scheduler_patience", type=int, help="Learning rate scheduler patience.")
+    parser.add_argument("--lr_scheduler_factor", type=float, help="Learning rate reduction factor.")
+    parser.add_argument("--lr_scheduler_min_lr", type=float, help="Minimum learning rate.")
+    parser.add_argument("--num_workers", type=int, help="Number of DataLoader workers.")
+    parser.add_argument("--prefetch_factor", type=int, help="DataLoader prefetch factor.")
     
-    # Model kwargs (passed to model constructor)
-    parser.add_argument("--embedding_dim", type=int, default=model_config.embedding_dim, help="Dimension of output embeddings.")
-    parser.add_argument("--dropout_rate", type=float, default=model_config.dropout_rate, help="Dropout rate in embedding layer.")
-    parser.add_argument("--use_cbam", action="store_true", default=True, help="Use CBAM attention modules in ResNet.")
+    # Model kwargs (passed to model constructor) - no defaults here, let inner functions handle defaults
+    parser.add_argument("--embedding_dim", type=int, help="Dimension of output embeddings.")
+    parser.add_argument("--dropout_rate", type=float, help="Dropout rate in embedding layer.")
+    parser.add_argument("--use_cbam", action="store_true", help="Use CBAM attention modules in ResNet.")
     parser.add_argument("--no_cbam", action="store_true", help="Disable CBAM attention modules.")
-    parser.add_argument("--attention_layers", nargs="*", default=['layer2', 'layer3', 'layer4'], help="ResNet layers to apply CBAM attention to.")
+    parser.add_argument("--attention_layers", nargs="*", help="ResNet layers to apply CBAM attention to.")
     
     args = parser.parse_args()
 
-    # Handle CBAM flag logic (use_cbam is True by default, no_cbam overrides it)
-    use_cbam = args.use_cbam and not args.no_cbam
+    # Build training_kwargs from only explicitly provided arguments
+    training_kwargs = {}
+    training_arg_names = [
+        'num_epochs', 'batch_size', 'learning_rate', 'early_stopping_patience',
+        'min_images_per_player', 'margin', 'weight_decay', 'margin_decay_rate',
+        'margin_change_threshold', 'lr_scheduler_patience', 'lr_scheduler_factor',
+        'lr_scheduler_min_lr', 'num_workers', 'prefetch_factor'
+    ]
+    
+    for arg_name in training_arg_names:
+        if hasattr(args, arg_name) and getattr(args, arg_name) is not None:
+            training_kwargs[arg_name] = getattr(args, arg_name)
+    
+    # Handle force_pretraining flag (only add if True)
+    if args.force_pretraining:
+        training_kwargs['force_pretraining'] = True
 
-    # Build training_kwargs from parsed arguments
-    training_kwargs = {
-        "num_epochs": args.num_epochs,
-        "batch_size": args.batch_size,
-        "learning_rate": args.learning_rate,
-        "force_pretraining": args.force_pretraining,
-        "early_stopping_patience": args.early_stopping_patience,
-        "min_images_per_player": args.min_images_per_player,
-        "margin": args.margin,
-        "weight_decay": args.weight_decay,
-        "margin_decay_rate": args.margin_decay_rate,
-        "margin_change_threshold": args.margin_change_threshold,
-        "lr_scheduler_patience": args.lr_scheduler_patience,
-        "lr_scheduler_factor": args.lr_scheduler_factor,
-        "lr_scheduler_min_lr": args.lr_scheduler_min_lr,
-        "num_workers": args.num_workers,
-        "prefetch_factor": args.prefetch_factor,
-    }
-
-    # Build model_kwargs from parsed arguments  
-    model_kwargs = {
-        "embedding_dim": args.embedding_dim,
-        "dropout_rate": args.dropout_rate,
-        "use_cbam": use_cbam,
-        "attention_layers": args.attention_layers,
-    }
+    # Build model_kwargs from only explicitly provided arguments
+    model_kwargs = {}
+    model_arg_names = ['embedding_dim', 'dropout_rate', 'attention_layers']
+    
+    for arg_name in model_arg_names:
+        if hasattr(args, arg_name) and getattr(args, arg_name) is not None:
+            model_kwargs[arg_name] = getattr(args, arg_name)
+    
+    # Handle CBAM flags (only add if explicitly provided)
+    if args.use_cbam and not args.no_cbam:
+        model_kwargs['use_cbam'] = True
+    elif args.no_cbam:
+        model_kwargs['use_cbam'] = False
+    # If neither flag is provided, let the model use its default
 
     # A basic logging config is needed if not configured globally
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
