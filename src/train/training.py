@@ -125,7 +125,7 @@ class Training:
 
     def save_model(self, model_name: str):
         """
-        Save the trained model weights both locally and to wandb registry.
+        Save the trained model weights to wandb registry.
         
         Args:
             model_name: Name of the model to save in wandb registry

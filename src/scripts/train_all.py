@@ -13,19 +13,22 @@ import sys
 import logging 
 import json
 import argparse
+from pathlib import Path
 from typing import Any
-from typing import Any
 
-src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if src_dir not in sys.path:
-    sys.path.insert(0, src_dir)
+# Ensure src is in the Python path for imports when running as script
+if __name__ == "__main__":
+    src_dir = Path(__file__).parent.parent
+    if str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
 
-# Enable MPS fallback for unsupported operations, as recommended by PyTorch.
-os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
-
+# Imports using relative imports since we're now in the src package
 from config import logging_config
 from common.google_storage import get_storage, GCSPaths
 from train.train_pipeline import TrainPipeline
+
+# Enable MPS fallback for unsupported operations, as recommended by PyTorch.
+os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 
 # --- Configure Logging ---
 # Note: This script assumes logging is configured elsewhere (e.g., in config)
@@ -132,7 +135,8 @@ def train(tenant_id: str,
         logger.error(f"Details: {json.dumps(e.args, indent=2)}")
 
 
-if __name__ == "__main__":
+
+def main():
     parser = argparse.ArgumentParser(description="Run the full LaxAI Data Prep and Training Workflow.")
     
     # Basic pipeline arguments
@@ -218,3 +222,6 @@ if __name__ == "__main__":
         training_kwargs=training_kwargs,
         model_kwargs=model_kwargs
     )
+
+if __name__ == "__main__":
+    main()
