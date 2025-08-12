@@ -1,16 +1,20 @@
 [build-system]
-requires = ["setuptools>=45", "wheel"]
+requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "LaxAI"
 version = "0.1.0"
+authors = [
+  { name="Fernando Mousinho", email="fernando@example.com" },
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[project.scripts]
+laxai-train = "scripts.train_all:main"
+laxai-load-transform = "scripts.load_transform:main"
 
 # This ensures the package is editable and src is in Python path
 [tool.setuptools.package-data]

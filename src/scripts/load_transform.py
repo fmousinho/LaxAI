@@ -13,21 +13,18 @@ import sys
 import logging
 import json
 import argparse
+from pathlib import Path
 
-# Add the src directory to the Python path for imports
-src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if src_dir not in sys.path:
-    sys.path.insert(0, src_dir)
 
-# Enable MPS fallback for unsupported operations, as recommended by PyTorch.
-os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
-
+# Imports using relative imports since we're now in the src package
 from config import logging_config
 from utils.env_or_colab import load_env_or_colab
 from common.google_storage import get_storage
 from train.dataprep_pipeline import DataPrepPipeline
 from config.all_config import detection_config, training_config
 
+# Enable MPS fallback for unsupported operations, as recommended by PyTorch.
+os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 
 # --- Configure Logging ---
 # Note: This script assumes logging is configured elsewhere (e.g., in config)
@@ -144,7 +141,7 @@ def main(tenant_id: str, frames_per_video: int, verbose: bool, save_intermediate
     logger.info("--- End-to-End Workflow Finished ---")
 
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="Run the full LaxAI Data Prep and Training Workflow.")
     parser.add_argument("--tenant_id", type=str, default="tenant1", help="The tenant ID for GCS.")
     parser.add_argument("--frames", type=int, default=20, help="Number of frames to extract per video.")
@@ -158,3 +155,6 @@ if __name__ == "__main__":
         verbose=args.verbose,
         save_intermediate=args.save_intermediate
     )
+
+if __name__ == "__main__":
+    main()
