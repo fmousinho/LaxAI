@@ -1,0 +1,30 @@
+{
+  "pythonVersion": "3.12", // Adjust to your project's Python version
+  "pythonPlatform": "All",
+  "include": [
+    "."
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    ".venv",
+    ".git"
+  ],
+  "typeCheckingMode": "basic", // Or "strict", "off", depending on your overall desire
+  "extraPaths": [], // Add any paths Pylance needs to resolve imports
+
+  "overrides": [
+    {
+      "path": "rfdetr",  // Rules for the 'rfdetr' package (as it's untyped)
+      "reportUnknownMemberType": "none",
+      "reportUnknownVariableType": "none",
+      "reportAttributeAccessIssue": "none" 
+      // The 'rfdetr' import is type-ignored, so these help manage related diagnostics.
+    },
+    {
+      "path": "supervision", // Rules for the 'supervision' package
+      "reportPrivateImportUsage": "none" 
+    }
+  ],
+  "stubPath": ".vscode/PylanceStubs" // Optional: if you have stubs
+}
