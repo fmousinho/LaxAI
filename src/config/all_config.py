@@ -79,18 +79,11 @@ class TrainingConfig:
     num_workers: int = 8 if sys.platform != "darwin" else 0  # Used by PyTorch
     default_workers: int = 8  # Used for file uploads and dataloader
     prefetch_factor: int = 2  # Number of batches to prefetch for DataLoader
-    
-    # Performance optimization flags
-    use_mixed_precision: bool = True  # Enable mixed precision training (FP16) for GPU speedup
-    gradient_accumulation_steps: int = 1  # Number of steps to accumulate gradients before optimizer step
-    async_checkpoint_saving: bool = True  # Save checkpoints asynchronously in background thread
 
 @dataclass
 class EvaluatorConfig:
     """Configuration for model evaluation parameters."""
     threshold: float = 0.5  # Default similarity threshold for evaluation
-    batch_size: int = 64  # Batch size for embedding generation during evaluation
-    default_workers: int = 8  # Number of workers for DataLoader during evaluation
 
 
 @dataclass

@@ -361,7 +361,6 @@ class TrainPipeline(Pipeline):
             # Log key metrics
             cls_metrics = evaluation_results.get('classification_metrics', {})
             rank_metrics = evaluation_results.get('ranking_metrics', {})
-            distance_metrics = evaluation_results.get('distance_metrics', {})
             
             logger.info(f"  📊 Classification Accuracy: {cls_metrics.get('accuracy', 0):.4f}")
             logger.info(f"  📊 F1-Score: {cls_metrics.get('f1_score', 0):.4f}")
@@ -369,13 +368,26 @@ class TrainPipeline(Pipeline):
             logger.info(f"  🏆 Rank-5 Accuracy: {rank_metrics.get('rank_5_accuracy', 0):.4f}")
             logger.info(f"  📈 Mean Average Precision: {rank_metrics.get('mean_average_precision', 0):.4f}")
             
+            # Cross-validation summary
+            cv_metrics = evaluation_results.get('cross_validation', {})
+            if cv_metrics:
+                logger.info(f"  🔄 CV Accuracy: {cv_metrics.get('accuracy_mean', 0):.4f} ± {cv_metrics.get('accuracy_std', 0):.4f}")
+                logger.info(f"  🔄 CV Rank-1: {cv_metrics.get('rank_1_accuracy_mean', 0):.4f} ± {cv_metrics.get('rank_1_accuracy_std', 0):.4f}")
             
             # Update context with evaluation results
             context.update({
                 'evaluation_results': evaluation_results,
+                'evaluation_report': evaluation_report,
+                'evaluation_summary': {
+                    'accuracy': cls_metrics.get('accuracy', 0),
+                    'f1_score': cls_metrics.get('f1_score', 0),
+                    'rank_1_accuracy': rank_metrics.get('rank_1_accuracy', 0),
+                    'rank_5_accuracy': rank_metrics.get('rank_5_accuracy', 0),
+                    'mean_average_precision': rank_metrics.get('mean_average_precision', 0)
+                },
                 'status': StepStatus.COMPLETED.value
             })
-
+            
             # Print report to console if verbose
             if self.verbose:
                 print("\n" + evaluation_report)
