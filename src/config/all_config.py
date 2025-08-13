@@ -85,7 +85,7 @@ class EvaluatorConfig:
     """Configuration for model evaluation parameters."""
     threshold: float = 0.5  # Default similarity threshold for evaluation
     batch_size: int = 64  # Batch size for embedding generation during evaluation
-    default_workers: int = 0 if sys.platform == "darwin" else 2  # Number of workers for DataLoader during evaluation
+    default_workers: int = 8  # Number of workers for DataLoader during evaluation
 
 
 @dataclass
