@@ -416,6 +416,7 @@ class Training:
             # Log epoch metrics to wandb
             if wandb_config.enabled:
                 metrics = {
+                    "epoch": epoch + 1,  # Use 1-indexed epoch for clarity
                     "train_loss": epoch_train_loss,
                     "margin": current_margin,
                     "current_lr": self.optimizer.param_groups[0]['lr']
@@ -424,9 +425,8 @@ class Training:
                     metrics["val_loss"] = epoch_val_loss
                     metrics.update(reid_metrics) # Add re-id metrics to the log
                 
-                # Use a step that is guaranteed to be after all batch steps for this epoch
-                epoch_end_step = (epoch + 1) * len(self.dataloader)
-                wandb_logger.log_metrics(metrics, step=epoch_end_step)
+                # Use epoch number as step for cleaner timeline visualization
+                wandb_logger.log_metrics(metrics, step=epoch + 1)
 
             # Early stopping based on patience (now using the monitoring_loss)
             if early_stopping_patience is not None:

@@ -61,24 +61,28 @@ class LacrossePlayerDataset(Dataset):
         else:
             raise ValueError("image_dir must be either a string (single dataset) or a list of strings (multi-dataset)")
             
+        # Store tenant_id instead of the client object to avoid pickling issues
+        # The client will be recreated when needed
+        if storage_client is None:
+            raise ValueError("storage_client is required - local filesystem no longer supported")
+        
         self.storage_client = storage_client
+        
+        self.tenant_id = storage_client.user_id  # Store the tenant_id for recreating client
         self.transform = transform if transform is not None else get_transforms('training')
         self.min_images_per_player = min_images_per_player
 
-        # Initialize dataset by loading player images
-        if self.storage_client is None:
-            raise ValueError("storage_client is required - local filesystem no longer supported")
-
+        # Initialize dataset by loading player images using the provided client
         self.players = []
         self.player_to_images = {}
         self.dataset_to_players = {}
 
         # Process each dataset
         for dataset_dir in self.dataset_list:
-            potential_players = self.storage_client.list_blobs(prefix=dataset_dir, delimiter='/')
+            potential_players = storage_client.list_blobs(prefix=dataset_dir, delimiter='/')
             self.dataset_to_players[dataset_dir] = []
             for potential_player in potential_players:
-                player_images = self.storage_client.list_blobs(prefix=potential_player)
+                player_images = storage_client.list_blobs(prefix=potential_player)
                 if len(player_images) > self.min_images_per_player:
                     self.players.append(potential_player)
                     self.player_to_images[potential_player] = player_images
@@ -119,7 +123,7 @@ class LacrossePlayerDataset(Dataset):
         anchor_label = self.player_indices[anchor_player]
 
         try:
-            anchor_img = self.storage_client.download_as_appropriate_type(anchor_blob)
+            anchor_img =  self.storage_client.download_as_appropriate_type(anchor_blob)
         except Exception as e:
             logger.error(f"Error loading anchor image {anchor_blob}: {e}")
 

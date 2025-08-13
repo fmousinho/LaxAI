@@ -75,6 +75,7 @@ class WandbLogger:
         self.enabled = enabled
         self.run = None
         self.initialized = False
+        self._logged_in = False  # Track login state to avoid duplicate logins
         
         if not WANDB_AVAILABLE:
             self.enabled = False
@@ -94,7 +95,11 @@ class WandbLogger:
         if not api_key:
             return None
         
-        wandb.login(key=api_key)
+        # Only login if not already logged in
+        if not self._logged_in:
+            wandb.login(key=api_key)
+            self._logged_in = True
+        
         return wandb.Api()
     
     def _construct_artifact_path(self, artifact_name: str, version: str = "latest") -> str:
@@ -127,7 +132,10 @@ class WandbLogger:
             self.enabled = False
             return False
 
-        wandb.login(key=api_key)
+        # Only login if not already logged in
+        if not self._logged_in:
+            wandb.login(key=api_key)
+            self._logged_in = True
 
         run_params = {
             "project": wandb_config.project,
@@ -442,9 +450,10 @@ class WandbLogger:
             
         # List all versions of this artifact
         try:
-            artifact_versions = list(api.artifact_versions(
-                "model_checkpoint", 
-                f"{self.run.entity}/{self.run.project}/{artifact_name}"
+            # Use the new Api.artifacts() method instead of deprecated artifact_versions()
+            artifact_versions = list(api.artifacts(
+                type_name="model_checkpoint", 
+                name=f"{self.run.entity}/{self.run.project}/{artifact_name}"
             ))
             
             # Sort by version (latest first) and skip the ones we want to keep
@@ -482,9 +491,13 @@ class WandbLogger:
         
         # Download artifact
         artifact_path = self._construct_artifact_path(artifact_name, version)
-        artifact = api.artifact(artifact_path, type="model_checkpoint")
-        artifact_dir = artifact.download()
-        
+        try:
+            artifact = api.artifact(artifact_path, type="model_checkpoint")
+            artifact_dir = artifact.download()
+        except Exception as e:
+            logger.error(f"Failed to download artifact {artifact_name}:{version} from wandb: {e}")
+            return None
+
         # Find checkpoint file
         checkpoint_files = [f for f in os.listdir(artifact_dir) if f.endswith('.pth')]
         
