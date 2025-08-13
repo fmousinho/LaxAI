@@ -38,7 +38,7 @@ load_env_or_colab()
 
 
 
-def main(tenant_id: str, frames_per_video: int, verbose: bool, save_intermediate: bool):
+def load_transform(tenant_id: str, frames_per_video: int, verbose: bool, save_intermediate: bool):
     """
     Main function to orchestrate the data prep and training workflows.
 
@@ -149,7 +149,7 @@ def main():
     parser.add_argument("--save_intermediate", action="store_true", help="Save intermediate pipeline step results to GCS.")
     args = parser.parse_args()
 
-    main(
+    load_transform(
         tenant_id=args.tenant_id,
         frames_per_video=args.frames,
         verbose=args.verbose,

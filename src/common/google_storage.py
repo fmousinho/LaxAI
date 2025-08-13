@@ -309,7 +309,8 @@ class GoogleStorageClient:
             RuntimeError: If authentication fails
         """
         try:
-
+            if prefix:
+                prefix = prefix + "/"
             iterator = self._bucket.list_blobs(prefix=prefix, delimiter=delimiter)   # type: ignore
             user_id_len = len(self.user_id) if self.user_id else 0
             

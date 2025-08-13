@@ -14,16 +14,16 @@ import logging
 import json
 import argparse
 from pathlib import Path
-from typing import Any
+from typing import Optional
 
 # Ensure src is in the Python path for imports when running as script
-if __name__ == "__main__":
-    src_dir = Path(__file__).parent.parent
-    if str(src_dir) not in sys.path:
-        sys.path.insert(0, str(src_dir))
+# if __name__ == "__main__":
+#     src_dir = Path(__file__).parent
+#     if str(src_dir) not in sys.path:
+#         sys.path.insert(0, str(src_dir))
 
 # Imports using relative imports since we're now in the src package
-from config import logging_config
+from config import logging_config, training_config, model_config
 from common.google_storage import get_storage, GCSPaths
 from train.train_pipeline import TrainPipeline
 
@@ -39,14 +39,13 @@ logger = logging.getLogger(__name__)
 
 
 def train(tenant_id: str, 
-          frames_per_video: int, 
-          verbose: bool, 
-          save_intermediate: bool,
+          verbose: bool = True,
+          save_intermediate: bool = True,
           custom_name: str = "train_all_run",
           resume_from_checkpoint: bool = True,
-          wandb_tags: list = None,
-          training_kwargs: dict = None,
-          model_kwargs: dict = None):
+          wandb_tags: Optional[list] = None,
+          training_kwargs: Optional[dict] = None,
+          model_kwargs: Optional[dict] = None):
     """
     Main function to orchestrate the data prep and training workflows.
 
@@ -93,7 +92,7 @@ def train(tenant_id: str,
         if datasets_folder is None:
             raise ValueError("datasets_root path not found in GCSPaths configuration.")
         else:
-            datasets_folder = datasets_folder.rstrip('/')
+            datasets_folder = datasets_folder
         datasets = storage_client.list_blobs(prefix=datasets_folder, delimiter='/', exclude_prefix_in_return=True)
         datasets = list(datasets)  # Convert to list for easier processing
 
@@ -103,21 +102,10 @@ def train(tenant_id: str,
 
         datasets_to_use = [dataset.rstrip('/') for dataset in datasets[0:N_DATASETS_TO_USE]]
 
-        # Add configuration tags to wandb_tags
-        final_wandb_tags = wandb_tags.copy()
-        for keys, values in model_config.__dict__.items():
-            config = f"{keys}={values}"
-            final_wandb_tags.append(f"{config}")
-            
-        for keys, values in training_config.__dict__.items():
-            config = f"{keys}={values}"
-            final_wandb_tags.append(f"{config}")
-
         # Run the training pipeline with all the provided arguments
         train_results = train_pipeline.run(
             dataset_name=datasets_to_use, 
             custom_name=custom_name, 
-            wandb_run_tags=final_wandb_tags,
             resume_from_checkpoint=resume_from_checkpoint
         )
 
@@ -213,7 +201,6 @@ def main():
 
     train(
         tenant_id=args.tenant_id,
-        frames_per_video=args.frames,
         verbose=args.verbose,
         save_intermediate=args.save_intermediate,
         custom_name=args.custom_name,

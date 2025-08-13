@@ -73,7 +73,7 @@ class TrainPipeline(Pipeline):
 
         Args:
             dataset_name: Dataset name(s) - either a single string or list of strings for multi-dataset training.
-            resume_from_checkpoint: Whether to check for and resume from an existing checkpoint.
+            resume_from_checkpoint: Whether to check for and resume from an existing wandb checkpoint artifact.
             wandb_run_tags: Optional tags for the wandb run.
             custom_name: Custom name for the training run (used in wandb and logging).
 
@@ -85,26 +85,24 @@ class TrainPipeline(Pipeline):
             config = {
                 "pipeline": "training_pipeline",
                 "custom_name": custom_name,
+                "resume_from_checkpoint": resume_from_checkpoint,
             }
 
             wandb_logger.init_run(config=config, run_name=f"{custom_name}", tags=wandb_run_tags)
         try:
             if not dataset_name:
                 return {"status": PipelineStatus.ERROR.value, "error": "No dataset name provided"}
-            context = {"dataset_name": dataset_name, "custom_name": custom_name}
-            results = super().run(context, resume_from_checkpoint=resume_from_checkpoint)
+            context = {
+                "dataset_name": dataset_name, 
+                "custom_name": custom_name, 
+                "resume_from_checkpoint": resume_from_checkpoint
+            }
+            # Pass to generic pipeline without resume_from_checkpoint for the pipeline steps
+            results = super().run(context)
             return results
         except Exception as e:
             logger.error(f"Error occurred during training pipeline run: {e}")
             return {"status": PipelineStatus.ERROR.value, "error": str(e)}
-        finally:
-            if wandb_config.enabled:
-                context = results.get('context', {})
-                eval_results = context.get('evaluation_results', {})
-                wandb_logger.log_summary(eval_results)
-                training_info = context.get('training_info', {})                
-                wandb_logger.update_run_config(training_info)
-                wandb_logger.finish()
 
 
     def _create_dataset(self, context: dict) -> Dict[str, Any]:
@@ -147,6 +145,8 @@ class TrainPipeline(Pipeline):
                 
             elif isinstance(dataset_name, list):
                 # Multi-dataset mode
+                train_folders = []
+                val_folders = []
                 for name in dataset_name:
                     try:
                         train_folder = self.path_manager.get_path("train_dataset", dataset_id=name)
@@ -244,8 +244,12 @@ class TrainPipeline(Pipeline):
             training_dataset = context.get('training_dataset')
             val_dataset = context.get('validation_dataset')
             dataset_guid = context.get('dataset_name')
+            resume_from_checkpoint = context.get('resume_from_checkpoint', False)
+            custom_name = context.get('custom_name', 'run')
 
             logger.info(f"Starting model training with dataset from: {dataset_guid}")
+            if resume_from_checkpoint:
+                logger.info("Checkpoint resumption enabled - will check for existing checkpoints")
 
             # Initialize Training class
             try:
@@ -256,15 +260,16 @@ class TrainPipeline(Pipeline):
                 logger.error(f"Failed to initialize Training class: {e}")
                 return {"status": StepStatus.ERROR.value, "error": f"Failed to initialize Training class: {str(e)}"}
 
-            # Execute complete training pipeline
+            # Execute complete training pipeline with checkpoint support
             logger.info("Executing training pipeline...")
-
 
             trained_model = training.train_and_save(
                 model_class=self.model_class,
                 dataset=training_dataset,
                 model_name=self.collection_name,
-                val_dataset=val_dataset
+                val_dataset=val_dataset,
+                resume_from_checkpoint=resume_from_checkpoint,
+                checkpoint_name=f"{custom_name}_checkpoint"
             )
 
             training_info = training.get_training_info()

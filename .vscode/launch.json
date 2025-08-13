@@ -4,63 +4,24 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-
-        
-
-
         {
-            "name": "Load Transform",
+            "name": "Debug laxai-train (Script)",
             "type": "debugpy",
             "request": "launch",
-            "module": "LaxAI.src.features.load_transform",
-            "cwd": "${workspaceFolder}/..",
-            "console": "integratedTerminal",
-            "justMyCode": true,
-        },
-        
-       {
-            "name": "Train Pipeline",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/src/features/train_all.py",
-            "cwd": "${workspaceFolder}",
-            "console": "integratedTerminal",
-            "justMyCode": true,
+            "program": "${workspaceFolder}/src/scripts/train_all.py",
+            "python": "${command:python.interpreterPath}",
             "args": [
-                // Add any command line arguments here if needed
-                // "--tenant_id", "tenant1",
-                // "--verbose"
-            ]
-        },
-
-        {
-            "name": "Train Pipeline (Module)",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "LaxAI.src.features.train_all",
-            "cwd": "${workspaceFolder}/..",
+                "--tenant_id", "tenant1",
+                "--force_pretraining",
+                "--custom_name", "test_run",
+                "--num_epochs", "2"
+            ],
             "console": "integratedTerminal",
-            "justMyCode": true
-        },
-
-
-        {
-            "name": "LaxAI in Debug",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "LaxAI.main",
-            "cwd": "${workspaceFolder}/..",
-            "console": "integratedTerminal",
-            "justMyCode": true,
-            "args": [
-                // Replace with the actual path to your test video
-                "/Users/fernandomousinho/Library/CloudStorage/GoogleDrive-fmousinho76@gmail.com/My Drive/Colab_Notebooks/FCA_Upstate_NY_003.mp4", 
-                "--output_video_path", "debug_output.mp4",
-                "--device", "mps", // or "mps", "cuda"
-                "--debug_frames", "1200", // Example: process only 100 frames
-                "--log_level", "INFO"
-                //"--detections_import_path", "/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI/detections.json" // Optional: path to existing detections JSON file
-            ]
+            "cwd": "${workspaceFolder}"
         }
+       
     ]
 }
+
+
+        

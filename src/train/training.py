@@ -12,6 +12,8 @@ from .wandb_logger import wandb_logger
 
 logger = logging.getLogger(__name__)
 
+EPOCHS_PER_VAL = 10
+BATCHES_PER_LOG_MSG = 10
 
 class Training:
     """
@@ -81,9 +83,6 @@ class Training:
         self.loss_fn: Optional[nn.Module] = None
         self.dataloader = None
         self.val_dataloader = None
-
-        EPOCHS_PER_VAL = 10
-        BATCHES_PER_LOG_MSG = 10
 
 
     def _load_model_from_wandb(self, model_class, model_name: str, alias: Optional[str], **kwargs):
@@ -280,9 +279,12 @@ class Training:
             logger.error(f"Model setup failed: {e}")
             raise RuntimeError(f"Failed to setup model: {e}")
 
+
     def train(self, 
           margin_decay_rate: float = training_config.margin_decay_rate, 
-          margin_change_threshold: float = training_config.margin_change_threshold):
+          margin_change_threshold: float = training_config.margin_change_threshold,
+          start_epoch: int = 1,
+          checkpoint_name: str = "model_checkpoint"):
         """
         Execute the main training loop with early stopping, using a validation set
         to monitor for overfitting.
@@ -290,6 +292,8 @@ class Training:
         Args:
             margin_decay_rate: Rate at which to decay the triplet loss margin.
             margin_change_threshold: Minimum change in margin to trigger an update.
+            start_epoch: Epoch number to start training from (for checkpoint resumption).
+            checkpoint_name: Name for saving checkpoints to wandb.
             
         Returns:
             The trained model
@@ -309,7 +313,8 @@ class Training:
         # ========================================================================
         # Training setup and logging
         # ========================================================================
-        logger.info(f"Starting training for {self.num_epochs} epochs")
+        effective_epochs = self.num_epochs - (start_epoch - 1)
+        logger.info(f"Starting training for {effective_epochs} epochs (from epoch {start_epoch} to {self.num_epochs})")
         
         # Early stopping configuration
         early_stopping_patience = getattr(training_config, 'early_stopping_patience', None)
@@ -320,19 +325,18 @@ class Training:
         current_margin = self.margin
         self.loss_fn = nn.TripletMarginLoss(margin=current_margin, p=2)
         val_dataloader = self.val_dataloader
-
         
 
-        for epoch in range(self.num_epochs):
+        for epoch in range(start_epoch - 1, self.num_epochs):
             
             # ========================================================================
             # Training Phase
             # ========================================================================
             self.model.train()
             running_loss = 0.0
-            batch_count = 0
+            ttl_batches = len(self.dataloader)
 
-            # Update margin if decay rate is active
+            # Update margin if decay rate is active (use actual epoch number)
             new_margin = self.margin * (margin_decay_rate ** epoch)
             if abs(new_margin - current_margin) > margin_change_threshold:
                 current_margin = new_margin
@@ -342,6 +346,10 @@ class Training:
                 logger.debug(f"Margin unchanged for epoch {epoch+1}: {current_margin:.4f}")
                 
             for i, (anchor, positive, negative, _) in enumerate(self.dataloader):
+
+                if (i + 1) % BATCHES_PER_LOG_MSG == 0:
+                    logger.info(f"Training Batch {i+1}/{ttl_batches}")
+
                 anchor = anchor.to(self.device)
                 positive = positive.to(self.device)
                 negative = negative.to(self.device)
@@ -355,13 +363,8 @@ class Training:
 
                 running_loss += loss.item()
 
-                if (i + 1) % BATCHES_PER_LOG_MSG == 0:
-                    logger.info(f"Training Batch {i+1}/{batch_count}")
-
-                batch_count += 1
-
             # Calculate and log training loss
-            epoch_train_loss = running_loss / batch_count if batch_count > 0 else 0.0
+            epoch_train_loss = running_loss / ttl_batches if ttl_batches > 0 else 0.0
 
             # ========================================================================
             # Validation Phase (if dataloader is provided)
@@ -374,7 +377,7 @@ class Training:
                 
                 # 1. Calculate Validation Loss
                 running_val_loss = 0.0
-                val_batch_count = 0
+                ttl_batches = len(val_dataloader)
                 with torch.no_grad(): # No need to compute gradients
                     for j, (anchor, positive, negative, _) in enumerate(val_dataloader):
                         anchor = anchor.to(self.device)
@@ -387,12 +390,10 @@ class Training:
                         running_val_loss += loss.item()
 
                         if (j + 1) % BATCHES_PER_LOG_MSG == 0:
-                            logger.info(f"Validation Batch {j+1}/{val_batch_count}")
+                            logger.info(f"Validation Batch {j+1}/{ttl_batches}")
 
-                        val_batch_count += 1
-                
-                epoch_val_loss = running_val_loss / val_batch_count if val_batch_count > 0 else 0.0
-                
+                epoch_val_loss = running_val_loss / ttl_batches if ttl_batches > 0 else 0.0
+
                 # 2. Calculate Retrieval Metrics
                 reid_metrics = self._evaluate_reid_metrics(val_dataloader)
 
@@ -446,6 +447,29 @@ class Training:
                 self.lr_scheduler.step(monitoring_loss)
                 current_lr = self.optimizer.param_groups[0]['lr']
                 logger.info(f"Learning rate after scheduler step: {current_lr:.6f}")
+
+            # Save checkpoint at the end of each epoch
+            if wandb_config.enabled and self.optimizer is not None:
+                try:
+                    model_config_dict = {
+                        "margin": self.margin,
+                        "learning_rate": self.learning_rate,
+                        "batch_size": self.batch_size,
+                        "weight_decay": self.weight_decay
+                    }
+                    
+                    wandb_logger.save_checkpoint(
+                        epoch=epoch + 1,  # Save 1-indexed epoch number
+                        model_state_dict=self.model.state_dict(),
+                        optimizer_state_dict=self.optimizer.state_dict(),
+                        loss=monitoring_loss,
+                        model_name=checkpoint_name,
+                        model_config=model_config_dict
+                    )
+                    logger.debug(f"Checkpoint saved for epoch {epoch + 1}")
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to save checkpoint for epoch {epoch + 1}: {e}")
 
         logger.info("Training completed successfully")
         return self.model
@@ -559,16 +583,93 @@ class Training:
         }
 
 
-    def train_and_save(self, model_class, dataset: Dataset, model_name: str, val_dataset: Optional[Dataset] = None, model_kwargs: Dict[str, Any] = {}) -> Any:
+    def setup_training_pipeline(self, model_class, dataset: Dataset, model_name: str, val_dataset: Optional[Dataset] = None, model_kwargs: Dict[str, Any] = {}):
         """
-        Complete training pipeline: setup data, setup model, train, and save.
+        Setup the complete training pipeline components.
         
         Args:
             model_class: The model class to use (e.g., SiameseNet)
             dataset: The dataset instance to use (e.g., LacrossePlayerDataset)
             model_name: Name of the model to save in wandb registry
-            force_pretrained: If True, ignore saved weights and start fresh
             val_dataset: Optional validation dataset for early stopping and metrics
+            model_kwargs: Additional arguments for model instantiation
+        """
+        logger.info("Setting up training pipeline components...")
+        
+        # Setup data
+        logger.info("Setting up training data...")
+        self.setup_dataloader(dataset)
+
+        if val_dataset is not None:
+            logger.info("Setting up validation data...")
+            self.setup_dataloader(val_dataset, type='val')
+
+        # Setup model
+        logger.info("Setting up model...")
+        self.setup_model(model_class, model_name=model_name, **model_kwargs)
+
+    def check_for_checkpoint_resumption(self, checkpoint_name: str) -> int:
+        """
+        Check for existing checkpoint and determine starting epoch.
+        
+        Args:
+            checkpoint_name: Name for the checkpoint artifact (without version)
+            
+        Returns:
+            Starting epoch number (1 if no checkpoint, >1 if resuming)
+        """
+        start_epoch = 1
+        
+        if not wandb_config.enabled:
+            logger.info("WandB not enabled, starting fresh training")
+            return start_epoch
+            
+        logger.info(f"Checking for existing checkpoint: {checkpoint_name}")
+        try:
+            # Ensure optimizer exists before attempting to resume
+            if self.optimizer is None:
+                logger.warning("Optimizer not initialized, cannot resume from checkpoint")
+                return start_epoch
+                
+            start_epoch = wandb_logger.resume_training_from_checkpoint(
+                model=self.model,
+                optimizer=self.optimizer,
+                artifact_name=checkpoint_name,
+                version="latest"
+            )
+            
+            if start_epoch > 1:
+                logger.info(f"✅ Resumed training from checkpoint at epoch {start_epoch}")
+                # Check if training is already completed
+                remaining_epochs = max(0, self.num_epochs - (start_epoch - 1))
+                if remaining_epochs == 0:
+                    logger.info("Training already completed according to checkpoint!")
+                    # Return a special value to indicate completion
+                    return self.num_epochs + 1
+                logger.info(f"Training will continue for {remaining_epochs} more epochs")
+            else:
+                logger.info("No valid checkpoint found, starting fresh training")
+                
+        except Exception as e:
+            logger.warning(f"Failed to resume from checkpoint: {e}")
+            logger.info("Starting fresh training")
+            start_epoch = 1
+            
+        return start_epoch
+
+    def train_and_save(self, model_class, dataset: Dataset, model_name: str, val_dataset: Optional[Dataset] = None, model_kwargs: Dict[str, Any] = {}, resume_from_checkpoint: bool = True, checkpoint_name: str = "model_checkpoint") -> Any:
+        """
+        Complete training pipeline: setup, train, and save.
+        This is a convenience method with minimal logic.
+        
+        Args:
+            model_class: The model class to use (e.g., SiameseNet)
+            dataset: The dataset instance to use (e.g., LacrossePlayerDataset)
+            model_name: Name of the model to save in wandb registry
+            val_dataset: Optional validation dataset for early stopping and metrics
+            model_kwargs: Additional arguments for model instantiation
+            resume_from_checkpoint: Whether to resume from existing wandb checkpoint
+            checkpoint_name: Name for the checkpoint artifact (without version)
             
         Returns:
             The trained model
@@ -579,29 +680,26 @@ class Training:
         try:
             logger.info("Starting complete training pipeline")
             
-            # Setup data
-            logger.info("Setting up training data...")
-            self.setup_dataloader(dataset)
-
-            if val_dataset is not None:
-                logger.info("Setting up validation data...")
-                self.setup_dataloader(val_dataset, type='val')
-
+            # Setup pipeline components
+            self.setup_training_pipeline(model_class, dataset, model_name, val_dataset, model_kwargs)
             
-            # Setup model
-            logger.info("Setting up model...")
-            self.setup_model(model_class, model_name=model_name, **model_kwargs)
+            # Check for checkpoint resumption
+            start_epoch = 1
+            if resume_from_checkpoint:
+                start_epoch = self.check_for_checkpoint_resumption(checkpoint_name)
+                if start_epoch > self.num_epochs:
+                    logger.info("Training already completed!")
+                    return self.model
 
-            # Train
+            # Train with checkpoint support
             logger.info("Starting training...")
-            trained_model = self.train()
+            trained_model = self.train(start_epoch=start_epoch, checkpoint_name=checkpoint_name)
             
-            # Save
+            # Save final model
             logger.info("Saving model...")
             self.save_model(model_name=model_name)
               
             logger.info("Training pipeline completed successfully")
-            
             return trained_model
             
         except Exception as e:
