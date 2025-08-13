@@ -268,8 +268,7 @@ class TrainPipeline(Pipeline):
                 dataset=training_dataset,
                 model_name=self.collection_name,
                 val_dataset=val_dataset,
-                resume_from_checkpoint=resume_from_checkpoint,
-                checkpoint_name=f"{custom_name}_checkpoint"
+                resume_from_checkpoint=resume_from_checkpoint
             )
 
             training_info = training.get_training_info()

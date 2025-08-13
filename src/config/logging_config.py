@@ -1,7 +1,8 @@
 import logging.config
 import sys
 import time
-
+import os
+from filelock import FileLock # Make sure you have installed this library: pip install filelock
 
 LOGGING_LINE_SIZE = 110
 
@@ -11,18 +12,17 @@ def _is_notebook() -> bool:
         # Check for Google Colab
         if 'google.colab' in sys.modules:
             return True
-        # Check for Jupyter, an 'ipython' console does not count.
-        # get_ipython is a builtin in IPython environments.
+        # Check for Jupyter
         shell = get_ipython().__class__.__name__
         if shell == 'ZMQInteractiveShell':
-            return True   # Jupyter notebook, JupyterLab, qtconsole
+            return True
         return False
     except NameError:
-        return False      # Not in an IPython-like environment
+        return False
 
 class PipeFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
-        # Always format as HH:MM:SS,mmm (with milliseconds)
+        # Always format as HH:MM:SS,mmm
         ct = self.converter(record.created)
         s = time.strftime("%H:%M:%S", ct)
         msecs = int(record.msecs)
@@ -73,13 +73,15 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 logging.config.dictConfig(LOGGING)
 
-# Global flag to ensure banner is only shown once per session
-_BANNER_SHOWN = False
 
-# Print a banner and skip lines if running in a terminal (only once)
-if sys.stdout.isatty() and not _BANNER_SHOWN:
-    print("\n" * 10)
-    print("=" * LOGGING_LINE_SIZE)
-    print("{:^100}".format("LaxAI Starting Application"))
-    print("=" * LOGGING_LINE_SIZE)
-    _BANNER_SHOWN = True
+def print_banner() -> None:
+    """Print the application banner."""
+    if sys.stdout.isatty():
+        print("\n" * 10)
+        print("=" * LOGGING_LINE_SIZE)
+        print("{:^100}".format("LaxAI Starting Application"))
+        print("=" * LOGGING_LINE_SIZE)
+
+
+
+

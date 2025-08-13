@@ -5,7 +5,7 @@ This module defines the LacrossePlayerDataset class and related utilities for lo
 lacrosse player image crops for training deep learning models, especially for triplet loss setups.
 """
 import torch
-from typing import List, Union
+from typing import List, Union, Dict, Optional
 import logging
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
@@ -13,6 +13,7 @@ from PIL import Image
 import os
 import random
 import numpy as np
+from functools import lru_cache
 from config.transforms import get_transforms
 
 from config.all_config import training_config
@@ -50,7 +51,7 @@ class LacrossePlayerDataset(Dataset):
         tenant1/datasets/dataset_123/train/player_crop_id_2/image1.jpg
         tenant1/datasets/dataset_456/train/player_crop_id_3/image1.jpg
     """
-    def __init__(self, image_dir: Union[str, List[str]], storage_client, transform=None, min_images_per_player=training_config.min_images_per_player):
+    def __init__(self, image_dir: Union[str, List[str]], storage_client, transform=None, min_images_per_player=training_config.min_images_per_player, cache_size=1000):
         # Handle both single dataset and multi-dataset modes
         if isinstance(image_dir, str):
             self.dataset_list = [image_dir]
@@ -71,6 +72,10 @@ class LacrossePlayerDataset(Dataset):
         self.tenant_id = storage_client.user_id  # Store the tenant_id for recreating client
         self.transform = transform if transform is not None else get_transforms('training')
         self.min_images_per_player = min_images_per_player
+        
+        # Image caching to avoid repeated downloads
+        self.cache_size = cache_size
+        self._image_cache: Dict[str, Image.Image] = {}
 
         # Initialize dataset by loading player images using the provided client
         self.players = []
@@ -106,11 +111,60 @@ class LacrossePlayerDataset(Dataset):
                 for player in players:
                     self.player_to_dataset[player] = dataset_dir
 
+        # Pre-compute negative candidate lists for faster access
+        self._precompute_negative_candidates()
+
         logger.info(f"Dataset initialized with {len(self.players)} players and {len(self.all_images)} total images")
         if self.multi_dataset_mode:
             logger.info(f"Multi-dataset mode: {len(self.dataset_list)} datasets")
         else:
             logger.info(f"Single dataset mode: {self.dataset_list[0]}")
+        logger.info(f"Image cache size: {self.cache_size}")
+
+    def _precompute_negative_candidates(self):
+        """Pre-compute negative candidate lists for each player to avoid runtime computation."""
+        self.negative_candidates = {}
+        
+        for player in self.players:
+            if self.multi_dataset_mode:
+                # Multi-dataset mode: prefer negatives from the same dataset
+                player_dataset = self.player_to_dataset[player]
+                same_dataset_candidates = [p for p in self.dataset_to_players[player_dataset] if p != player]
+                
+                # If no other players in the same dataset, fall back to any other player
+                if not same_dataset_candidates:
+                    candidates = [p for p in self.players if p != player]
+                else:
+                    candidates = same_dataset_candidates
+            else:
+                # Single dataset mode: select from any other player
+                candidates = [p for p in self.players if p != player]
+            
+            self.negative_candidates[player] = candidates
+
+    def _get_negative_candidates(self, anchor_player: str):
+        """Get negative candidates for a player, computing lazily if needed."""
+        # Ensure negative_candidates exists (handles unpickling)
+        if not hasattr(self, 'negative_candidates'):
+            self._precompute_negative_candidates()
+        
+        return self.negative_candidates[anchor_player]
+
+    @lru_cache(maxsize=1000)
+    def _get_cached_image(self, blob_path: str):
+        """Cache frequently accessed images to avoid repeated downloads."""
+        try:
+            img = self.storage_client.download_as_appropriate_type(blob_path)
+            
+            # Convert numpy array to PIL Image if needed
+            if isinstance(img, np.ndarray) and img.ndim == 3 and img.shape[2] == 3:
+                img = Image.fromarray(img)
+                
+            return img
+        except Exception as e:
+            logger.error(f"Error loading image {blob_path}: {e}")
+            # Return a dummy image in case of error
+            return Image.new('RGB', (224, 224), color='black')
 
     def __len__(self):
         return len(self.all_images)
@@ -118,14 +172,11 @@ class LacrossePlayerDataset(Dataset):
     def __getitem__(self, index):
         # Anchor image
         anchor_blob = self.all_images[index]
-        
         anchor_player = os.path.dirname(anchor_blob) + '/' 
         anchor_label = self.player_indices[anchor_player]
 
-        try:
-            anchor_img =  self.storage_client.download_as_appropriate_type(anchor_blob)
-        except Exception as e:
-            logger.error(f"Error loading anchor image {anchor_blob}: {e}")
+        # Use cached image loading
+        anchor_img = self._get_cached_image(anchor_blob)
 
         # Select a positive image (different image of the same player)
         positive_list = self.player_to_images[anchor_player]
@@ -135,52 +186,23 @@ class LacrossePlayerDataset(Dataset):
             positive_candidates = [p for p in positive_list if p != anchor_blob]
             positive_blob = random.choice(positive_candidates)
         
-        try:
-            positive_img = self.storage_client.download_as_appropriate_type(positive_blob)
-        except Exception as e:
-            logger.error(f"Error loading positive image {positive_blob}: {e}")
-            positive_img = anchor_img
+        positive_img = self._get_cached_image(positive_blob)
 
-        # Select a negative image (different player, preferring same dataset in multi-dataset mode)
-        if self.multi_dataset_mode:
-            # Multi-dataset mode: prefer negatives from the same dataset
-            anchor_dataset = self.player_to_dataset[anchor_player]
-            negative_candidates = [p for p in self.dataset_to_players[anchor_dataset] if p != anchor_player]
-            
-            # If no other players in the same dataset, fall back to any other player
-            if not negative_candidates:
-                logger.warning(f"No other players in dataset {anchor_dataset}, using player from different dataset")
-                negative_candidates = [p for p in self.players if p != anchor_player]
-        else:
-            # Single dataset mode: select from any other player
-            negative_candidates = [p for p in self.players if p != anchor_player]
-            
+        # Select a negative image using pre-computed candidates
+        negative_candidates = self._get_negative_candidates(anchor_player)
         negative_player = random.choice(negative_candidates)
-        negative_img_candidates = list(self.player_to_images[negative_player])
-        negative_blob = random.choice(negative_img_candidates)
-        try:
-            negative_img = self.storage_client.download_as_appropriate_type(negative_blob)
-        except Exception as e:
-            logger.error(f"Error loading negative image {negative_blob}: {e}")
-            negative_img = anchor_img
+        negative_img_candidates = self.player_to_images[negative_player]
+        negative_blob = random.choice(list(negative_img_candidates))
+        negative_img = self._get_cached_image(negative_blob)
 
-        # Apply transformations
-
-        if isinstance(anchor_img, np.ndarray) and anchor_img.ndim == 3 and anchor_img.shape[2] == 3:
-            anchor_img = Image.fromarray(anchor_img)
-        if isinstance(positive_img, np.ndarray) and positive_img.ndim == 3 and positive_img.shape[2] == 3:
-            positive_img = Image.fromarray(positive_img)
-        if isinstance(negative_img, np.ndarray) and negative_img.ndim == 3 and negative_img.shape[2] == 3:
-            negative_img = Image.fromarray(negative_img)
-       
-
+        # Apply transformations - no need for type checking since _get_cached_image handles it
         if self.transform:
             try:
                 anchor_img = self.transform(anchor_img)
                 positive_img = self.transform(positive_img)
                 negative_img = self.transform(negative_img)
             except Exception as e:
-                print(f"Error applying transforms: {e}")
+                logger.error(f"Error applying transforms: {e}")
                 anchor_img = transforms.ToTensor()(anchor_img)
                 positive_img = transforms.ToTensor()(positive_img)
                 negative_img = transforms.ToTensor()(negative_img)
