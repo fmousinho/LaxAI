@@ -427,6 +427,7 @@ class WandbLogger:
         
         return f"{artifact_name}:latest"
 
+
     def _cleanup_old_checkpoints(self, artifact_name: str, keep_latest: int = 1):
         """
         Clean up old wandb checkpoint artifacts, keeping only the latest N versions.
@@ -498,6 +499,7 @@ class WandbLogger:
         logger.info(f"Loaded checkpoint from wandb: {artifact_name}:{version} (epoch {checkpoint_data.get('epoch', 'unknown')})")
         return checkpoint_data
 
+
     def resume_training_from_checkpoint(self, model: torch.nn.Module, optimizer: torch.optim.Optimizer, 
                                   artifact_name: str, version: str = "latest") -> int:
         """
@@ -534,6 +536,7 @@ class WandbLogger:
         except Exception as e:
             logger.error(f"Failed to resume from checkpoint: {e}")
             return 1
+
 
     @requires_wandb_initialized
     @safe_wandb_operation()
