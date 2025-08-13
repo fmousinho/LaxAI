@@ -288,6 +288,21 @@ class GoogleStorageClient:
             return self._authenticate()
         return True
 
+    def __getstate__(self):
+        """Prepare object for pickling by excluding unpickleable Google Cloud client objects."""
+        state = self.__dict__.copy()
+        # Remove the unpickleable Google Cloud client objects
+        state['_client'] = None
+        state['_bucket'] = None
+        state['_authenticated'] = False
+        return state
+
+    def __setstate__(self, state):
+        """Restore object from pickle by recreating the client connection."""
+        self.__dict__.update(state)
+        # Note: We don't automatically authenticate here to avoid side effects
+        # Authentication will happen lazily when the client is first used
+
 
     @ensure_ready
     @normalize_user_path
@@ -310,6 +325,7 @@ class GoogleStorageClient:
         """
         try:
             if prefix:
+                prefix = prefix.rstrip('/')
                 prefix = prefix + "/"
             iterator = self._bucket.list_blobs(prefix=prefix, delimiter=delimiter)   # type: ignore
             user_id_len = len(self.user_id) if self.user_id else 0
