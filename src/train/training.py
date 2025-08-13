@@ -7,7 +7,6 @@ from utils.env_or_colab import load_env_or_colab
 import torch.nn as nn
 import numpy as np
 import wandb
-from concurrent.futures import ThreadPoolExecutor
 from config.all_config import model_config, training_config, wandb_config
 from .wandb_logger import wandb_logger
 
@@ -70,11 +69,6 @@ class Training:
         self.prefetch_factor = get_kwarg_or_config('prefetch_factor')  # Default prefetch factor if not provided
         self.force_pretraining = get_kwarg_or_config('force_pretraining')
         self.default_workers = get_kwarg_or_config('default_workers')  #used by dataloader
-        
-        # Performance optimization parameters
-        self.use_mixed_precision = get_kwarg_or_config('use_mixed_precision', allow_none=True) or False
-        self.gradient_accumulation_steps = get_kwarg_or_config('gradient_accumulation_steps', allow_none=True) or 1
-        self.async_checkpoint_saving = get_kwarg_or_config('async_checkpoint_saving', allow_none=True) or False
 
         # Device: direct argument, else config, else autodetect
         if device is not None:
@@ -89,21 +83,6 @@ class Training:
         self.loss_fn: Optional[nn.Module] = None
         self.dataloader = None
         self.val_dataloader = None
-        
-        # Mixed precision training components
-        self.scaler = None
-        if self.use_mixed_precision and torch.cuda.is_available():
-            self.scaler = torch.cuda.amp.GradScaler()
-            logger.info("Mixed precision training enabled with GradScaler")
-        elif self.use_mixed_precision:
-            logger.warning("Mixed precision requested but CUDA not available, falling back to FP32")
-            self.use_mixed_precision = False
-        
-        # Background checkpoint saving
-        self.checkpoint_executor = None
-        if self.async_checkpoint_saving:
-            self.checkpoint_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="checkpoint_saver")
-            logger.info("Asynchronous checkpoint saving enabled")
 
 
     def _load_model_from_wandb(self, model_class, model_name: str, alias: Optional[str], **kwargs):
@@ -296,14 +275,6 @@ class Training:
             logger.info(f"Triplet margin: {self.margin}")
             logger.info(f"Optimizer: Adam (initial lr={self.learning_rate}, weight_decay={self.weight_decay})")
             logger.info(f"LR Scheduler: ReduceLROnPlateau (patience={self.scheduler_patience}, threshold={self.scheduler_threshold})")
-            
-            # Log optimization settings
-            if self.use_mixed_precision:
-                logger.info(f"Mixed precision training: ENABLED (requires CUDA)")
-            if self.gradient_accumulation_steps > 1:
-                logger.info(f"Gradient accumulation: {self.gradient_accumulation_steps} steps")
-            if self.async_checkpoint_saving:
-                logger.info(f"Asynchronous checkpoint saving: ENABLED")
         except Exception as e:
             logger.error(f"Model setup failed: {e}")
             raise RuntimeError(f"Failed to setup model: {e}")
@@ -364,7 +335,6 @@ class Training:
             self.model.train()
             running_loss = 0.0
             ttl_batches = len(self.dataloader)
-            accumulated_loss = 0.0
 
             # Update margin if decay rate is active (use actual epoch number)
             new_margin = self.margin * (margin_decay_rate ** epoch)
@@ -375,9 +345,6 @@ class Training:
             else:
                 logger.debug(f"Margin unchanged for epoch {epoch+1}: {current_margin:.4f}")
                 
-            # Zero gradients at the start of accumulation cycle
-            self.optimizer.zero_grad()
-            
             for i, (anchor, positive, negative, _) in enumerate(self.dataloader):
 
                 if (i + 1) % BATCHES_PER_LOG_MSG == 0:
@@ -387,53 +354,14 @@ class Training:
                 positive = positive.to(self.device)
                 negative = negative.to(self.device)
 
-                # Mixed precision forward pass
-                if self.use_mixed_precision and self.scaler is not None:
-                    with torch.cuda.amp.autocast():
-                        emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative)  # pyright: ignore[reportCallIssue]
-                        loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
-                        # Scale loss by accumulation steps for proper averaging
-                        loss = loss / self.gradient_accumulation_steps
-                    
-                    # Scaled backward pass
-                    self.scaler.scale(loss).backward()
-                else:
-                    # Standard precision forward pass
-                    emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative)  # pyright: ignore[reportCallIssue]
-                    loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
-                    # Scale loss by accumulation steps for proper averaging
-                    loss = loss / self.gradient_accumulation_steps
-                    loss.backward()
-
-                accumulated_loss += loss.item()
-
-                # Optimizer step with gradient accumulation
-                if (i + 1) % self.gradient_accumulation_steps == 0:
-                    if self.use_mixed_precision and self.scaler is not None:
-                        # Mixed precision optimizer step
-                        self.scaler.step(self.optimizer)
-                        self.scaler.update()
-                    else:
-                        # Standard optimizer step
-                        self.optimizer.step()
-                    
-                    # Zero gradients for next accumulation cycle
-                    self.optimizer.zero_grad()
-                    
-                    # Add to running loss (multiply back by accumulation steps for correct averaging)
-                    running_loss += accumulated_loss * self.gradient_accumulation_steps
-                    accumulated_loss = 0.0
-
-            # Handle any remaining gradients if batch doesn't divide evenly
-            if accumulated_loss > 0:
-                if self.use_mixed_precision and self.scaler is not None:
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                else:
-                    self.optimizer.step()
-                
-                running_loss += accumulated_loss * self.gradient_accumulation_steps
                 self.optimizer.zero_grad()
+                emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative)  # pyright: ignore[reportCallIssue]
+                loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
+
+                loss.backward()
+                self.optimizer.step()
+
+                running_loss += loss.item()
 
             # Calculate and log training loss
             epoch_train_loss = running_loss / ttl_batches if ttl_batches > 0 else 0.0
@@ -488,7 +416,6 @@ class Training:
             # Log epoch metrics to wandb
             if wandb_config.enabled:
                 metrics = {
-                    "epoch": epoch + 1,  # Use 1-indexed epoch for clarity
                     "train_loss": epoch_train_loss,
                     "margin": current_margin,
                     "current_lr": self.optimizer.param_groups[0]['lr']
@@ -497,8 +424,9 @@ class Training:
                     metrics["val_loss"] = epoch_val_loss
                     metrics.update(reid_metrics) # Add re-id metrics to the log
                 
-                # Use epoch number as step for cleaner timeline visualization
-                wandb_logger.log_metrics(metrics, step=epoch + 1)
+                # Use a step that is guaranteed to be after all batch steps for this epoch
+                epoch_end_step = (epoch + 1) * len(self.dataloader)
+                wandb_logger.log_metrics(metrics, step=epoch_end_step)
 
             # Early stopping based on patience (now using the monitoring_loss)
             if early_stopping_patience is not None:
@@ -527,48 +455,22 @@ class Training:
                         "margin": self.margin,
                         "learning_rate": self.learning_rate,
                         "batch_size": self.batch_size,
-                        "weight_decay": self.weight_decay,
-                        "use_mixed_precision": self.use_mixed_precision,
-                        "gradient_accumulation_steps": self.gradient_accumulation_steps
+                        "weight_decay": self.weight_decay
                     }
                     
-                    if self.async_checkpoint_saving and self.checkpoint_executor is not None:
-                        # Asynchronous checkpoint saving
-                        def save_checkpoint_async():
-                            wandb_logger.save_checkpoint(
-                                epoch=epoch + 1,  # Save 1-indexed epoch number
-                                model_state_dict=self.model.state_dict(),
-                                optimizer_state_dict=self.optimizer.state_dict(),
-                                loss=monitoring_loss,
-                                model_name=checkpoint_name,
-                                model_config=model_config_dict
-                            )
-                            return f"Checkpoint saved for epoch {epoch + 1}"
-                        
-                        # Submit to background thread
-                        future = self.checkpoint_executor.submit(save_checkpoint_async)
-                        logger.debug(f"Checkpoint save submitted to background thread for epoch {epoch + 1}")
-                    else:
-                        # Synchronous checkpoint saving
-                        wandb_logger.save_checkpoint(
-                            epoch=epoch + 1,  # Save 1-indexed epoch number
-                            model_state_dict=self.model.state_dict(),
-                            optimizer_state_dict=self.optimizer.state_dict(),
-                            loss=monitoring_loss,
-                            model_name=checkpoint_name,
-                            model_config=model_config_dict
-                        )
-                        logger.debug(f"Checkpoint saved for epoch {epoch + 1}")
+                    wandb_logger.save_checkpoint(
+                        epoch=epoch + 1,  # Save 1-indexed epoch number
+                        model_state_dict=self.model.state_dict(),
+                        optimizer_state_dict=self.optimizer.state_dict(),
+                        loss=monitoring_loss,
+                        model_name=checkpoint_name,
+                        model_config=model_config_dict
+                    )
+                    logger.debug(f"Checkpoint saved for epoch {epoch + 1}")
                     
                 except Exception as e:
                     logger.warning(f"Failed to save checkpoint for epoch {epoch + 1}: {e}")
 
-        # Wait for any pending checkpoint saves to complete
-        if self.async_checkpoint_saving and self.checkpoint_executor is not None:
-            logger.info("Waiting for background checkpoint saves to complete...")
-            self.checkpoint_executor.shutdown(wait=True)
-            logger.info("Background checkpoint saves completed")
-            
         logger.info("Training completed successfully")
         return self.model
 
@@ -576,11 +478,10 @@ class Training:
 
     def _evaluate_reid_metrics(self, dataloader: DataLoader) -> Dict[str, float]:
         """
-        Computes re-identification metrics (Recall@k and mAP) using vectorized operations.
+        Computes re-identification metrics (Recall@k and mAP) on the provided dataloader.
         
-        This optimized version uses vectorized similarity computations and batch processing
-        to achieve significant speedup (typically 10-20x faster) compared to the original
-        sequential implementation.
+        This function uses the current model to generate embeddings for all images
+        in the dataloader. For triplet datasets, uses only the anchor images for evaluation.
         
         Args:
             dataloader: The dataloader for the validation or test set (can be triplet format).
@@ -617,88 +518,69 @@ class Training:
         
         num_queries = len(all_embeddings)
         
-        # Calculate cosine similarity matrix (vectorized)
+        # Calculate cosine similarity matrix
         embeddings_norm = torch.nn.functional.normalize(all_embeddings, p=2, dim=1)
         similarity_matrix = torch.mm(embeddings_norm, embeddings_norm.T)
         
-        # Exclude diagonal (self-similarities) by setting to -1
-        similarity_matrix.fill_diagonal_(-1.0)
-        
-        # Vectorized ranking calculation
-        # Sort similarities for all queries at once
-        sorted_similarities, sorted_indices = torch.sort(similarity_matrix, dim=1, descending=True)
-        
-        # Convert to numpy for easier indexing
-        sorted_indices_np = sorted_indices.cpu().numpy()
-        all_pids_expanded = all_pids[sorted_indices_np]  # Shape: (num_queries, num_gallery)
-        query_pids = all_pids[:, np.newaxis]  # Shape: (num_queries, 1)
-        
-        # Vectorized rank calculation
-        # Create mask where matches occur
-        matches_mask = (all_pids_expanded == query_pids)  # Shape: (num_queries, num_gallery)
-        
-        # Calculate rank metrics using vectorized operations
-        # Rank-1: check if first position is a match
-        rank1_matches = matches_mask[:, 0]  # First column
-        rank1_accuracy = np.mean(rank1_matches)
-        
-        # Rank-5: check if any of first 5 positions have a match
-        rank5_matches = np.any(matches_mask[:, :5], axis=1)
-        rank5_accuracy = np.mean(rank5_matches)
-        
-        # Rank-10: check if any of first 10 positions have a match
-        rank10_matches = np.any(matches_mask[:, :10], axis=1)
-        rank10_accuracy = np.mean(rank10_matches)
-        
-        # Vectorized Average Precision calculation
-        average_precisions = self._compute_vectorized_average_precision(matches_mask)
+        # Initialize metrics
+        rank1_correct = 0
+        rank5_correct = 0
+        rank10_correct = 0
+        average_precisions = []
+
+        for i in range(num_queries):
+            query_pid = all_pids[i]
+            
+            # Get similarities for the current query
+            query_similarities = similarity_matrix[i, :]
+            
+            # Exclude the query itself from the gallery
+            # A simple way is to zero out its similarity
+            query_similarities[i] = -1.0
+            
+            # Sort by similarity in descending order
+            sorted_indices = torch.argsort(query_similarities, descending=True)
+            
+            # Get the pids of the ranked images
+            ranked_pids = all_pids[sorted_indices.numpy()]
+            
+            # Calculate precision and recall for this query
+            num_correct = 0
+            precision_at_k = 0.0
+            
+            # Count true matches at different ranks
+            if ranked_pids[0] == query_pid:
+                rank1_correct += 1
+            if query_pid in ranked_pids[:5]:
+                rank5_correct += 1
+            if query_pid in ranked_pids[:10]:
+                rank10_correct += 1
+                
+            # Calculate Average Precision for this query
+            # This is a bit simplified, but captures the core idea
+            for k, pid_k in enumerate(ranked_pids):
+                if pid_k == query_pid:
+                    num_correct += 1
+                    precision_at_k += num_correct / (k + 1.0)
+            
+            # Avoid division by zero if there are no correct matches
+            if num_correct > 0:
+                average_precisions.append(precision_at_k / num_correct)
+            else:
+                average_precisions.append(0.0)
+
+        # Compute final metrics
+        recall_1 = rank1_correct / num_queries
+        recall_5 = rank5_correct / num_queries
+        recall_10 = rank10_correct / num_queries
         mean_average_precision = float(np.mean(average_precisions))
         
         return {
-            "recall@1": float(rank1_accuracy),
-            "recall@5": float(rank5_accuracy),
-            "recall@10": float(rank10_accuracy),
+            "recall@1": recall_1,
+            "recall@5": recall_5,
+            "recall@10": recall_10,
             "mAP": mean_average_precision
         }
-    
-    def _compute_vectorized_average_precision(self, matches_mask: np.ndarray) -> np.ndarray:
-        """
-        Compute Average Precision for all queries using vectorized operations.
-        
-        Args:
-            matches_mask: Boolean mask of shape (num_queries, num_gallery) where
-                         True indicates a correct match for each query-gallery pair
-                         
-        Returns:
-            Array of Average Precision scores for each query
-        """
-        num_queries, num_gallery = matches_mask.shape
-        
-        # For each query, calculate cumulative precision at each rank
-        # Shape: (num_queries, num_gallery)
-        cumulative_matches = np.cumsum(matches_mask, axis=1)
-        ranks = np.arange(1, num_gallery + 1)[np.newaxis, :]  # Shape: (1, num_gallery)
-        
-        # Precision at each rank = cumulative_matches / rank
-        precisions_at_all_ranks = cumulative_matches / ranks
-        
-        # Only consider precisions at positions where there's a match
-        # Multiply by matches_mask to zero out non-matching positions
-        precisions_at_matches = precisions_at_all_ranks * matches_mask
-        
-        # Sum precisions at matching positions for each query
-        sum_precisions = np.sum(precisions_at_matches, axis=1)
-        
-        # Count total number of matches for each query
-        total_matches = np.sum(matches_mask, axis=1)
-        
-        # Average Precision = sum of precisions at match positions / total matches
-        # Use safe division to handle queries with no matches
-        average_precisions = np.divide(sum_precisions, total_matches, 
-                                     out=np.zeros_like(sum_precisions), 
-                                     where=total_matches > 0)
-        
-        return average_precisions
 
 
     def setup_training_pipeline(self, model_class, dataset: Dataset, model_name: str, val_dataset: Optional[Dataset] = None, model_kwargs: Dict[str, Any] = {}):
@@ -842,29 +724,4 @@ class Training:
             'lr_scheduler_min_lr': self.lr_scheduler_min_lr,
             'lr_scheduler_factor': self.lr_scheduler_factor,
             'device': str(self.device),
-            'use_mixed_precision': self.use_mixed_precision,
-            'gradient_accumulation_steps': self.gradient_accumulation_steps,
-            'async_checkpoint_saving': self.async_checkpoint_saving,
-            'default_workers': self.default_workers,
-            'prefetch_factor': self.prefetch_factor,
         }
-    
-    def cleanup(self):
-        """
-        Cleanup resources used by the training instance.
-        Should be called when training is complete or interrupted.
-        """
-        if self.checkpoint_executor is not None:
-            logger.info("Shutting down background checkpoint executor...")
-            self.checkpoint_executor.shutdown(wait=True)
-            self.checkpoint_executor = None
-            logger.info("Background checkpoint executor shutdown complete")
-    
-    def __del__(self):
-        """
-        Destructor to ensure proper cleanup of resources.
-        """
-        try:
-            self.cleanup()
-        except Exception:
-            pass  # Ignore errors during cleanup in destructor

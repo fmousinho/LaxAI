@@ -75,7 +75,6 @@ class WandbLogger:
         self.enabled = enabled
         self.run = None
         self.initialized = False
-        self._logged_in = False  # Track login state to avoid duplicate logins
         
         if not WANDB_AVAILABLE:
             self.enabled = False
@@ -95,11 +94,7 @@ class WandbLogger:
         if not api_key:
             return None
         
-        # Only login if not already logged in
-        if not self._logged_in:
-            wandb.login(key=api_key)
-            self._logged_in = True
-        
+        wandb.login(key=api_key)
         return wandb.Api()
     
     def _construct_artifact_path(self, artifact_name: str, version: str = "latest") -> str:
@@ -132,10 +127,7 @@ class WandbLogger:
             self.enabled = False
             return False
 
-        # Only login if not already logged in
-        if not self._logged_in:
-            wandb.login(key=api_key)
-            self._logged_in = True
+        wandb.login(key=api_key)
 
         run_params = {
             "project": wandb_config.project,
@@ -292,57 +284,6 @@ class WandbLogger:
 
         # Clean up old versions
         self._cleanup_old_model_versions(collection_name)
-        
-        # Delete all checkpoint artifacts for this model since we have the final version
-        self.delete_all_checkpoints_for_model(model_name)
-        
-        logger.info(f"Saved final model {model_name} and cleaned up all associated checkpoints")
-
-    def delete_all_checkpoints_for_model(self, model_name: str) -> None:
-        """
-        Delete all checkpoint artifacts for a specific model.
-        Called when final model is saved to clean up intermediate checkpoints.
-        
-        Args:
-            model_name: Name of the model whose checkpoints should be deleted
-        """
-        api = self._login_and_get_api()
-        if not api or not self.run:
-            logger.warning("Cannot delete checkpoints - wandb not properly initialized")
-            return
-            
-        checkpoint_artifact_name = f"{model_name}_checkpoint"
-        
-        try:
-            # Get the artifact type and collection
-            artifact_type = api.artifact_type("model_checkpoint", project=f"{self.run.entity}/{self.run.project}")
-            
-            # Try to get the collection for this artifact name
-            try:
-                collection = artifact_type.collection(checkpoint_artifact_name)
-                artifact_versions = list(collection.artifacts())
-            except Exception:
-                # If collection doesn't exist, no checkpoints to delete
-                logger.info(f"No checkpoint collection found for {model_name}")
-                return
-            
-            # Delete all checkpoint versions
-            deleted_count = 0
-            for version in artifact_versions:
-                try:
-                    version.delete()
-                    deleted_count += 1
-                    logger.debug(f"Deleted checkpoint artifact: {version.name}:v{version.version}")
-                except Exception as e:
-                    logger.warning(f"Failed to delete checkpoint {version.name}:v{version.version}: {e}")
-            
-            if deleted_count > 0:
-                logger.info(f"Deleted {deleted_count} checkpoint artifacts for {model_name}")
-            else:
-                logger.info(f"No checkpoints found to delete for {model_name}")
-                    
-        except Exception as e:
-            logger.warning(f"Failed to delete checkpoint artifacts for {model_name}: {e}")
 
     def _cleanup_old_model_versions(self, collection_name: str, keep_latest: int = 3) -> None:
         """
@@ -499,25 +440,15 @@ class WandbLogger:
         if not api or not self.run:
             return
             
+        # List all versions of this artifact
         try:
-            # Get the artifact type and collection
-            artifact_type = api.artifact_type("model_checkpoint", project=f"{self.run.entity}/{self.run.project}")
+            artifact_versions = list(api.artifact_versions(
+                "model_checkpoint", 
+                f"{self.run.entity}/{self.run.project}/{artifact_name}"
+            ))
             
-            # Try to get the collection for this artifact name
-            try:
-                collection = artifact_type.collection(artifact_name)
-                artifact_versions = list(collection.artifacts())
-            except Exception:
-                # If collection doesn't exist yet, no cleanup needed
-                logger.debug(f"No existing collection found for {artifact_name}")
-                return
-            
-            # Sort by creation time (newest first)
-            artifact_versions.sort(key=lambda x: x.created_at, reverse=True)
-            
-            # Skip the ones we want to keep
+            # Sort by version (latest first) and skip the ones we want to keep
             if len(artifact_versions) <= keep_latest:
-                logger.debug(f"Only {len(artifact_versions)} checkpoint versions exist, keeping all")
                 return
                 
             versions_to_delete = artifact_versions[keep_latest:]
@@ -525,14 +456,12 @@ class WandbLogger:
             for version in versions_to_delete:
                 try:
                     version.delete()
-                    logger.info(f"Deleted old checkpoint artifact: {version.name}:v{version.version}")
+                    logger.info(f"Deleted old checkpoint artifact: {version.name}")
                 except Exception as e:
-                    logger.warning(f"Failed to delete old checkpoint {version.name}:v{version.version}: {e}")
-            
-            logger.info(f"Cleaned up {len(versions_to_delete)} old checkpoint versions for {artifact_name}")
+                    logger.warning(f"Failed to delete old checkpoint {version.name}: {e}")
                     
         except Exception as e:
-            logger.warning(f"Failed to cleanup checkpoint artifacts for {artifact_name}: {e}")
+            logger.warning(f"Failed to access checkpoint artifacts: {e}")
 
     @requires_wandb_enabled
     @safe_wandb_operation()
