@@ -67,7 +67,7 @@ class TrainingConfig:
     lr_scheduler_factor: float = 0.5  # Factor by which to reduce learning rate
     lr_scheduler_min_lr: float = 1e-7  # Minimum learning rate after reduction
     num_epochs: int = 50
-    margin: float = 0.5
+    margin: float = 0.4
     weight_decay: float = 1e-4  # L2 regularization weight decay
     model_save_path: str = '/common/model/embeddings_latest.pth'
     train_ratio: float = 0.8
@@ -83,7 +83,7 @@ class TrainingConfig:
 @dataclass
 class EvaluatorConfig:
     """Configuration for model evaluation parameters."""
-    threshold: float = 0.5  # Default similarity threshold for evaluation
+    threshold: float = 0.5  # Starting similarity threshold for evaluation (adjusted during evaluation)
 
 
 @dataclass

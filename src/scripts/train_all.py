@@ -16,14 +16,10 @@ import argparse
 from pathlib import Path
 from typing import Optional
 
-# Ensure src is in the Python path for imports when running as script
-# if __name__ == "__main__":
-#     src_dir = Path(__file__).parent
-#     if str(src_dir) not in sys.path:
-#         sys.path.insert(0, str(src_dir))
 
 # Imports using relative imports since we're now in the src package
-from config import logging_config, training_config, model_config
+from config import logging_config
+from config.logging_config import print_banner
 from common.google_storage import get_storage, GCSPaths
 from train.train_pipeline import TrainPipeline
 
@@ -98,7 +94,7 @@ def train(tenant_id: str,
 
         logger.info(f"Found {len(datasets)} dataset directories in GCS.")
     
-        N_DATASETS_TO_USE = len(datasets)
+        N_DATASETS_TO_USE = 1
 
         datasets_to_use = [dataset.rstrip('/') for dataset in datasets[0:N_DATASETS_TO_USE]]
 
@@ -125,6 +121,8 @@ def train(tenant_id: str,
 
 
 def main():
+
+    print_banner()
     parser = argparse.ArgumentParser(description="Run the full LaxAI Data Prep and Training Workflow.")
     
     # Basic pipeline arguments

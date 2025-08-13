@@ -21,6 +21,8 @@ except ImportError:
     WANDB_AVAILABLE = False
     logger.warning("wandb not available. Training will continue without wandb logging.")
 
+CHECKPOINT_NAME = "checkpoint"
+
 
 def requires_wandb_enabled(func: Callable) -> Callable:
     """Decorator to check if wandb is enabled before executing method."""
@@ -196,6 +198,28 @@ class WandbLogger:
         self.run.watch(model, log_freq=freq)
         logger.info(f"Started watching model with log frequency: {freq}")
 
+    def _get_checkpoint_name(self) -> str:
+        """
+        Get the checkpoint name based on the current run name.
+        
+        Returns:
+            Checkpoint name in format: {run_name}_checkpoint
+        """
+        if self.run and self.run.name:
+            return f"{self.run.name}_checkpoint"
+        else:
+            # Fallback to default if run not initialized
+            return "checkpoint"
+
+    def get_checkpoint_name(self) -> str:
+        """
+        Public method to get the current checkpoint name.
+        
+        Returns:
+            Checkpoint name in format: {run_name}_checkpoint
+        """
+        return self._get_checkpoint_name()
+
     @requires_wandb_enabled
     @safe_wandb_operation()
     def load_model_from_registry(self, model_class, collection_name: str, 
@@ -282,8 +306,12 @@ class WandbLogger:
 
         logger.info(f"✓ Model saved to wandb registry: {collection_name}")
 
-        # Clean up old versions
+        # Clean up old model versions
         self._cleanup_old_model_versions(collection_name)
+        
+        # Clean up old checkpoints since final model is now saved
+        checkpoint_name = self._get_checkpoint_name()
+        self._cleanup_old_checkpoints(checkpoint_name, keep_latest=0)  # Remove all checkpoints
 
     def _cleanup_old_model_versions(self, collection_name: str, keep_latest: int = 3) -> None:
         """
@@ -398,7 +426,7 @@ class WandbLogger:
             checkpoint_path = tmp_file.name
         
         # Create wandb artifact
-        artifact_name = f"{model_name}_checkpoint"
+        artifact_name = self._get_checkpoint_name()
         artifact = wandb.Artifact(
             name=artifact_name,
             type="model_checkpoint",
@@ -423,8 +451,8 @@ class WandbLogger:
         logger.info(f"Saved model checkpoint to wandb for epoch {epoch}")
         
         # Clean up previous checkpoint artifacts (keep only latest)
-        self._cleanup_old_checkpoints(artifact_name, keep_latest=1)
-        
+        self._cleanup_old_checkpoints(artifact_name)
+
         return f"{artifact_name}:latest"
 
 

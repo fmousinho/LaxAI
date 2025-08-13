@@ -283,8 +283,7 @@ class Training:
     def train(self, 
           margin_decay_rate: float = training_config.margin_decay_rate, 
           margin_change_threshold: float = training_config.margin_change_threshold,
-          start_epoch: int = 1,
-          checkpoint_name: str = "model_checkpoint"):
+          start_epoch: int = 1):
         """
         Execute the main training loop with early stopping, using a validation set
         to monitor for overfitting.
@@ -293,7 +292,6 @@ class Training:
             margin_decay_rate: Rate at which to decay the triplet loss margin.
             margin_change_threshold: Minimum change in margin to trigger an update.
             start_epoch: Epoch number to start training from (for checkpoint resumption).
-            checkpoint_name: Name for saving checkpoints to wandb.
             
         Returns:
             The trained model
@@ -463,7 +461,7 @@ class Training:
                         model_state_dict=self.model.state_dict(),
                         optimizer_state_dict=self.optimizer.state_dict(),
                         loss=monitoring_loss,
-                        model_name=checkpoint_name,
+                        model_name=type(self.model).__name__,
                         model_config=model_config_dict
                     )
                     logger.debug(f"Checkpoint saved for epoch {epoch + 1}")
@@ -608,13 +606,10 @@ class Training:
         logger.info("Setting up model...")
         self.setup_model(model_class, model_name=model_name, **model_kwargs)
 
-    def check_for_checkpoint_resumption(self, checkpoint_name: str) -> int:
+    def check_for_checkpoint_resumption(self) -> int:
         """
         Check for existing checkpoint and determine starting epoch.
         
-        Args:
-            checkpoint_name: Name for the checkpoint artifact (without version)
-            
         Returns:
             Starting epoch number (1 if no checkpoint, >1 if resuming)
         """
@@ -624,7 +619,7 @@ class Training:
             logger.info("WandB not enabled, starting fresh training")
             return start_epoch
             
-        logger.info(f"Checking for existing checkpoint: {checkpoint_name}")
+        logger.info("Checking for existing checkpoint")
         try:
             # Ensure optimizer exists before attempting to resume
             if self.optimizer is None:
@@ -634,7 +629,7 @@ class Training:
             start_epoch = wandb_logger.resume_training_from_checkpoint(
                 model=self.model,
                 optimizer=self.optimizer,
-                artifact_name=checkpoint_name,
+                artifact_name=wandb_logger.get_checkpoint_name(),
                 version="latest"
             )
             
@@ -657,7 +652,7 @@ class Training:
             
         return start_epoch
 
-    def train_and_save(self, model_class, dataset: Dataset, model_name: str, val_dataset: Optional[Dataset] = None, model_kwargs: Dict[str, Any] = {}, resume_from_checkpoint: bool = True, checkpoint_name: str = "model_checkpoint") -> Any:
+    def train_and_save(self, model_class, dataset: Dataset, model_name: str, val_dataset: Optional[Dataset] = None, model_kwargs: Dict[str, Any] = {}, resume_from_checkpoint: bool = True) -> Any:
         """
         Complete training pipeline: setup, train, and save.
         This is a convenience method with minimal logic.
@@ -669,7 +664,6 @@ class Training:
             val_dataset: Optional validation dataset for early stopping and metrics
             model_kwargs: Additional arguments for model instantiation
             resume_from_checkpoint: Whether to resume from existing wandb checkpoint
-            checkpoint_name: Name for the checkpoint artifact (without version)
             
         Returns:
             The trained model
@@ -686,14 +680,14 @@ class Training:
             # Check for checkpoint resumption
             start_epoch = 1
             if resume_from_checkpoint:
-                start_epoch = self.check_for_checkpoint_resumption(checkpoint_name)
+                start_epoch = self.check_for_checkpoint_resumption()
                 if start_epoch > self.num_epochs:
                     logger.info("Training already completed!")
                     return self.model
 
             # Train with checkpoint support
             logger.info("Starting training...")
-            trained_model = self.train(start_epoch=start_epoch, checkpoint_name=checkpoint_name)
+            trained_model = self.train(start_epoch=start_epoch)
             
             # Save final model
             logger.info("Saving model...")

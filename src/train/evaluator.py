@@ -553,7 +553,7 @@ class ModelEvaluator:
             # Debug first few queries
             if query_idx < 3:
                 logger.info(f"Query {query_idx} (label={query_label}):")
-                logger.info(f"  Top 5 matches: {[(sorted_labels[i], sorted_similarities[i]) for i in range(min(5, len(sorted_labels)))]}")
+                logger.info(f"  Top 5 matches: {[(sorted_labels[i], float(sorted_similarities[i])) for i in range(min(5, len(sorted_labels)))]}")
                 correct_matches_in_top5 = [i for i in range(min(5, len(sorted_labels))) if sorted_labels[i] == query_label]
                 logger.info(f"  Correct matches in top 5: {correct_matches_in_top5}")
             
