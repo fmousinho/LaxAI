@@ -93,8 +93,8 @@ def train(tenant_id: str,
         datasets = list(datasets)  # Convert to list for easier processing
 
         logger.info(f"Found {len(datasets)} dataset directories in GCS.")
-    
-        N_DATASETS_TO_USE = 1
+
+        N_DATASETS_TO_USE = len(datasets)
 
         datasets_to_use = [dataset.rstrip('/') for dataset in datasets[0:N_DATASETS_TO_USE]]
 
