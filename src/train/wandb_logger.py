@@ -29,7 +29,7 @@ def requires_wandb_enabled(func: Callable) -> Callable:
     @wraps(func)
     def wrapper(self, *args, **kwargs):
         if not self.enabled:
-            logger.debug(f"Wandb not enabled, skipping {func.__name__}")
+            logger.error(f"Wandb not enabled, skipping {func.__name__}")
             return None
         return func(self, *args, **kwargs)
     return wrapper
@@ -40,7 +40,7 @@ def requires_wandb_initialized(func: Callable) -> Callable:
     @wraps(func)
     def wrapper(self, *args, **kwargs):
         if not self.enabled or not self.initialized or self.run is None:
-            logger.warning(f"Wandb logging is not enabled or initialized for {func.__name__}")
+            logger.error(f"Wandb logging is not enabled or initialized for {func.__name__}")
             return None
         return func(self, *args, **kwargs)
     return wrapper
@@ -81,7 +81,12 @@ class WandbLogger:
         if not WANDB_AVAILABLE:
             self.enabled = False
             logger.warning("wandb package not available, disabling wandb logging")
-    
+
+        self.wandb_api = self._login_and_get_api()
+        if not self.wandb_api:
+            self.enabled = False
+            logger.warning("Failed to login to wandb, disabling wandb logging")
+
     def _get_api_key(self) -> Optional[str]:
         """Get and validate wandb API key."""
         api_key = os.environ.get("WANDB_API_KEY")
@@ -122,14 +127,6 @@ class WandbLogger:
         all_tags = wandb_config.tags.copy()
         if tags:
             all_tags.extend(tags)
-        
-        # Validate API key and login
-        api_key = self._get_api_key()
-        if not api_key:
-            self.enabled = False
-            return False
-
-        wandb.login(key=api_key)
 
         run_params = {
             "project": wandb_config.project,
@@ -236,13 +233,10 @@ class WandbLogger:
         Returns:
             Loaded model instance or None if loading failed
         """
-        api = self._login_and_get_api()
-        if not api:
-            return None
         
         # Download artifact
         artifact_path = self._construct_artifact_path(collection_name, alias)
-        model_artifact = api.artifact(artifact_path, type="model")
+        model_artifact = self.wandb_api.artifact(artifact_path, type="model")
         model_dir = model_artifact.download()
 
         model_file_name = None
@@ -321,17 +315,14 @@ class WandbLogger:
             collection_name: Name of the model artifact
             keep_latest: Number of latest versions to keep (default: 3)
         """
-        api = self._login_and_get_api()
-        if not api:
-            return
         
         # Get all versions of this model
         artifact_collection_name = f"{wandb_config.team}/{wandb_config.project}/{collection_name}"
 
         try:
             # List all versions of the artifact
-            versions = list(api.artifact_type("model", project=wandb_config.project).collection(collection_name).artifacts())
-            
+            versions = list(self.wandb_api.artifact_type("model", project=wandb_config.project).collection(collection_name).artifacts())
+
             if len(versions) <= keep_latest:
                 logger.info(f"Only {len(versions)} versions exist, no cleanup needed")
                 return
@@ -464,14 +455,11 @@ class WandbLogger:
             artifact_name: Name of the artifact to clean up
             keep_latest: Number of latest versions to keep (default: 1)
         """
-        api = self._login_and_get_api()
-        if not api or not self.run:
-            return
             
         # List all versions of this artifact
         try:
-            artifact_versions = list(api.artifact_versions(
-                "model_checkpoint", 
+            artifact_versions = list(self.wandb_api.artifact_versions(
+                "model_checkpoint",
                 f"{self.run.entity}/{self.run.project}/{artifact_name}"
             ))
             
@@ -504,14 +492,11 @@ class WandbLogger:
         Returns:
             Checkpoint data dictionary or None if failed
         """
-        api = self._login_and_get_api()
-        if not api:
-            return None
         
         # Download artifact
         artifact_path = self._construct_artifact_path(artifact_name, version)
         try:
-            artifact = api.artifact(artifact_path, type="model_checkpoint")
+            artifact = self.wandb_api.artifact(artifact_path, type="model_checkpoint")
             artifact_dir = artifact.download()
         except Exception as e:
             logger.error(f"Failed to download artifact {artifact_name}:{version} from wandb: {e}")
