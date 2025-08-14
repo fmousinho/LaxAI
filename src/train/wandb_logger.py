@@ -517,8 +517,7 @@ class WandbLogger:
         return checkpoint_data
 
 
-    def resume_training_from_checkpoint(self, model: torch.nn.Module, optimizer: torch.optim.Optimizer, 
-                                  artifact_name: str, version: str = "latest") -> int:
+    def resume_training_from_checkpoint(self, model: torch.nn.Module, optimizer: torch.optim.Optimizer, artifact_name: str, version: str = "latest") -> int:
         """
         Resume training from a wandb checkpoint.
         
