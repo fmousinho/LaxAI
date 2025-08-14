@@ -422,9 +422,8 @@ class Training:
                     metrics["val_loss"] = epoch_val_loss
                     metrics.update(reid_metrics) # Add re-id metrics to the log
                 
-                # Use a step that is guaranteed to be after all batch steps for this epoch
-                epoch_end_step = (epoch + 1) * len(self.dataloader)
-                wandb_logger.log_metrics(metrics, step=epoch_end_step)
+              
+                wandb_logger.log_metrics(metrics)
 
             # Early stopping based on patience (now using the monitoring_loss)
             if early_stopping_patience is not None:
