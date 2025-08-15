@@ -4,6 +4,7 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
+        
 
         {
             "name": "Debug laxai-train (Script)",
@@ -18,7 +19,11 @@
                 "--num_epochs", "50"
             ],
             "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "GOOGLE_APPLICATION_CREDENTIALS": "/Users/fernandomousinho/Documents/Learning_to_Code/Vault/laxai-466119-fc03eb6bc2e0.json",
+                "GOOGLE_CLOUD_PROJECT": "laxai-466119"
+            }
         }
        
     ]
