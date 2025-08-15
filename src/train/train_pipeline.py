@@ -38,7 +38,6 @@ class TrainPipeline(Pipeline):
         model_class_str = model_config.model_class_str
         module = importlib.import_module(model_class_module)
         self.model_class = getattr(module, model_class_str)
-        self.training_kwargs = training_kwargs
         self.path_manager = GCSPaths()
         self.training_kwargs = training_kwargs
 

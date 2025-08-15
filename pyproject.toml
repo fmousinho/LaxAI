@@ -13,6 +13,7 @@ authors = [
 package-dir = {"" = "src"}
 
 [project.scripts]
+laxai-api = "main:app"
 laxai-train = "scripts.train_all:main"
 laxai-load-transform = "scripts.load_transform:main"
 

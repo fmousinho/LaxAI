@@ -89,6 +89,9 @@ class WandbLogger:
 
     def _get_api_key(self) -> Optional[str]:
         """Get and validate wandb API key."""
+        # Ensure environment is properly loaded first
+        load_env_or_colab()
+        
         api_key = os.environ.get("WANDB_API_KEY")
         if not api_key:
             logger.error("WANDB_API_KEY environment variable not found")

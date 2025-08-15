@@ -22,6 +22,28 @@ class Training:
 
     """
     
+    # Type annotations for dynamically assigned attributes
+    num_epochs: int
+    batch_size: int
+    learning_rate: float
+    margin: float
+    weight_decay: float
+    lr_scheduler_patience: int
+    lr_scheduler_threshold: float
+    lr_scheduler_min_lr: float
+    lr_scheduler_factor: float
+    force_pretraining: bool
+    num_workers: int
+    prefetch_factor: int
+    default_workers: int
+    margin_decay_rate: float
+    margin_change_threshold: float
+    early_stopping_patience: Optional[int]
+    
+    # Legacy attribute names for backward compatibility
+    scheduler_patience: int
+    scheduler_threshold: float
+    
     def __init__(self, 
                 device: Any = None,
                 **kwargs):
@@ -30,45 +52,31 @@ class Training:
         
         Args:
             device: Device to run the model on (CPU, GPU, or MPS)
-            All other hyperparameters must be provided as kwargs or present in training_config.
-
-        Kwargs (defaults to training_config if not provided):
-            margin (float): Margin for triplet loss
-            learning_rate (float): Learning rate for optimizer
-            batch_size (int): Batch size for training
-            num_epochs (int): Number of training epochs
-            weight_decay (float): Weight decay for optimizer
-            lr_scheduler_patience (int): Patience for LR scheduler
-            lr_scheduler_threshold (float): Threshold for LR scheduler
-            lr_scheduler_min_lr (float): Minimum LR for scheduler
-            lr_scheduler_factor (float): Factor for LR scheduler
-            force_pretraining (bool): True if pretrained should use ResNet defaults
-        If any required hyperparameter is missing in both kwargs and training_config, a ValueError will be raised.
+            **kwargs: Training parameters (see parameter_registry for complete list)
+        
+        All hyperparameters are defined in config.parameter_registry and will be
+        automatically validated. If any required hyperparameter is missing in both 
+        kwargs and training_config, a ValueError will be raised.
         """
+        from config.parameter_registry import parameter_registry
 
-     
-        def get_kwarg_or_config(key, config_obj=training_config, allow_none=False):
-            if key in kwargs:
-                return kwargs[key]
-            if hasattr(config_obj, key):
-                val = getattr(config_obj, key)
-                if val is not None or allow_none:
-                    return val
-            raise ValueError(f"Missing required hyperparameter '{key}' in kwargs and config.")
+        # Initialize all registered parameters using the centralized registry
+        for param_name in parameter_registry.parameters:
+            param_def = parameter_registry.parameters[param_name]
+            if param_def.config_path.startswith("training_config"):
+                try:
+                    value = parameter_registry.get_kwarg_or_config(param_name, kwargs)
+                    setattr(self, param_name, value)
+                except ValueError as e:
+                    if param_def.required:
+                        raise e
+                    # For non-required params, we can skip them
 
-        self.num_workers = get_kwarg_or_config('num_workers')
-        self.margin = get_kwarg_or_config('margin')
-        self.learning_rate = get_kwarg_or_config('learning_rate')
-        self.batch_size = get_kwarg_or_config('batch_size')
-        self.num_epochs = get_kwarg_or_config('num_epochs')
-        self.weight_decay = get_kwarg_or_config('weight_decay')
-        self.scheduler_patience = get_kwarg_or_config('lr_scheduler_patience')
-        self.scheduler_threshold = get_kwarg_or_config('lr_scheduler_threshold')
-        self.lr_scheduler_min_lr = get_kwarg_or_config('lr_scheduler_min_lr')
-        self.lr_scheduler_factor = get_kwarg_or_config('lr_scheduler_factor')
-        self.prefetch_factor = get_kwarg_or_config('prefetch_factor')  # Default prefetch factor if not provided
-        self.force_pretraining = get_kwarg_or_config('force_pretraining')
-        self.default_workers = get_kwarg_or_config('default_workers')  #used by dataloader
+        # Handle specific attribute name mappings for backward compatibility
+        if hasattr(self, 'lr_scheduler_patience'):
+            self.scheduler_patience = self.lr_scheduler_patience
+        if hasattr(self, 'lr_scheduler_threshold'):
+            self.scheduler_threshold = self.lr_scheduler_threshold
 
         # Device: direct argument, else config, else autodetect
         if device is not None:

@@ -16,10 +16,14 @@ import argparse
 from pathlib import Path
 from typing import Optional
 
+# IMPORTANT: Load environment variables and credentials FIRST
+# This must be imported before any modules that use GCS or WandB
+from utils.env_or_colab import load_env_or_colab
 
 # Imports using relative imports since we're now in the src package
 from config import logging_config
 from config.logging_config import print_banner
+from config.parameter_registry import parameter_registry
 from common.google_storage import get_storage, GCSPaths
 from train.train_pipeline import TrainPipeline
 
@@ -47,7 +51,6 @@ def train(tenant_id: str,
 
     Args:
         tenant_id: The tenant ID for GCS operations.
-        frames_per_video: Number of frames to extract per video in the data prep pipeline.
         verbose: Enable verbose logging for pipelines.
         save_intermediate: Save intermediate pipeline results to GCS.
         custom_name: Custom name for the training run (used in wandb and logging).
@@ -123,76 +126,36 @@ def train(tenant_id: str,
 def main():
 
     print_banner()
+    
+    # Create base parser with description
     parser = argparse.ArgumentParser(description="Run the full LaxAI Data Prep and Training Workflow.")
     
-    # Basic pipeline arguments
+    # Use parameter registry to add training/model arguments
+    parser = parameter_registry.generate_cli_parser(parser)
+    
+    # Add non-training specific arguments
     parser.add_argument("--tenant_id", type=str, default="tenant1", help="The tenant ID for GCS.")
     parser.add_argument("--frames", type=int, default=20, help="Number of frames to extract per video.")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose pipeline logging.")
     parser.add_argument("--save_intermediate", action="store_true", help="Save intermediate pipeline step results to GCS.")
-    
-    # Training pipeline specific arguments
     parser.add_argument("--custom_name", type=str, default="train_all_run", help="Custom name for the training run (used in wandb and logging).")
     parser.add_argument("--resume_from_checkpoint", action="store_true", default=True, help="Resume training from checkpoint if available.")
     parser.add_argument("--wandb_tags", nargs="*", default=[], help="List of tags for wandb tracking (space-separated).")
     
-    # Training kwargs (passed to Training class) - no defaults here, let inner functions handle defaults
-    parser.add_argument("--num_epochs", type=int, help="Number of training epochs.")
-    parser.add_argument("--batch_size", type=int, help="Training batch size.")
-    parser.add_argument("--learning_rate", type=float, help="Learning rate for training.")
-    parser.add_argument("--force_pretraining", action="store_true", help="Force use of pretrained weights even if custom weights exist.")
-    parser.add_argument("--early_stopping_patience", type=int, help="Early stopping patience (epochs without improvement).")
-    parser.add_argument("--min_images_per_player", type=int, help="Minimum number of images required per player.")
-    parser.add_argument("--margin", type=float, help="Triplet loss margin.")
-    parser.add_argument("--weight_decay", type=float, help="L2 regularization weight decay.")
-    parser.add_argument("--margin_decay_rate", type=float, help="Decay rate for triplet loss margin.")
-    parser.add_argument("--margin_change_threshold", type=float, help="Threshold for margin changes in triplet loss.")
-    parser.add_argument("--lr_scheduler_patience", type=int, help="Learning rate scheduler patience.")
-    parser.add_argument("--lr_scheduler_factor", type=float, help="Learning rate reduction factor.")
-    parser.add_argument("--lr_scheduler_min_lr", type=float, help="Minimum learning rate.")
-    parser.add_argument("--num_workers", type=int, help="Number of DataLoader workers.")
-    parser.add_argument("--prefetch_factor", type=int, help="DataLoader prefetch factor.")
-    
-    # Model kwargs (passed to model constructor) - no defaults here, let inner functions handle defaults
-    parser.add_argument("--embedding_dim", type=int, help="Dimension of output embeddings.")
-    parser.add_argument("--dropout_rate", type=float, help="Dropout rate in embedding layer.")
-    parser.add_argument("--use_cbam", action="store_true", help="Use CBAM attention modules in ResNet.")
-    parser.add_argument("--no_cbam", action="store_true", help="Disable CBAM attention modules.")
-    parser.add_argument("--attention_layers", nargs="*", help="ResNet layers to apply CBAM attention to.")
-    
     args = parser.parse_args()
 
-    # Build training_kwargs from only explicitly provided arguments
+    # Extract training and model kwargs using parameter registry
     training_kwargs = {}
-    training_arg_names = [
-        'num_epochs', 'batch_size', 'learning_rate', 'early_stopping_patience',
-        'min_images_per_player', 'margin', 'weight_decay', 'margin_decay_rate',
-        'margin_change_threshold', 'lr_scheduler_patience', 'lr_scheduler_factor',
-        'lr_scheduler_min_lr', 'num_workers', 'prefetch_factor'
-    ]
-    
-    for arg_name in training_arg_names:
-        if hasattr(args, arg_name) and getattr(args, arg_name) is not None:
-            training_kwargs[arg_name] = getattr(args, arg_name)
-    
-    # Handle force_pretraining flag (only add if True)
-    if args.force_pretraining:
-        training_kwargs['force_pretraining'] = True
-
-    # Build model_kwargs from only explicitly provided arguments
     model_kwargs = {}
-    model_arg_names = ['embedding_dim', 'dropout_rate', 'attention_layers']
     
-    for arg_name in model_arg_names:
-        if hasattr(args, arg_name) and getattr(args, arg_name) is not None:
-            model_kwargs[arg_name] = getattr(args, arg_name)
-    
-    # Handle CBAM flags (only add if explicitly provided)
-    if args.use_cbam and not args.no_cbam:
-        model_kwargs['use_cbam'] = True
-    elif args.no_cbam:
-        model_kwargs['use_cbam'] = False
-    # If neither flag is provided, let the model use its default
+    for param_name, param_def in parameter_registry.parameters.items():
+        arg_value = getattr(args, param_name, None)
+        if arg_value is not None:
+            # Determine if it's a model parameter by checking config_path
+            if param_def.config_path.startswith('model_config'):
+                model_kwargs[param_name] = arg_value
+            else:  # training parameters
+                training_kwargs[param_name] = arg_value
 
     # A basic logging config is needed if not configured globally
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')

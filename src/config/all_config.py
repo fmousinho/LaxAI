@@ -6,6 +6,16 @@ Centralized location for all hyperparameters and configuration settings.
 from dataclasses import dataclass, field
 from typing import Tuple, List, Optional
 import sys
+from datetime import datetime
+import uuid
+
+
+def generate_unique_run_name() -> str:
+    """Generate a unique run name with timestamp and short UUID"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    short_uuid = str(uuid.uuid4())[:8]
+    return f"api_run_{timestamp}_{short_uuid}"
+
 
 @dataclass
 class GoogleStorageConfig:
@@ -83,7 +93,7 @@ class TrainingConfig:
 @dataclass
 class EvaluatorConfig:
     """Configuration for model evaluation parameters."""
-    threshold: float = 0.5  # Starting similarity threshold for evaluation (adjusted during evaluation)
+    threshold: float = 0.7  # Starting similarity threshold for evaluation (adjusted during evaluation)
 
 
 @dataclass
@@ -204,6 +214,19 @@ class WandbConfig:
     run_name: str = "run"
 
 
+@dataclass 
+class APIConfig:
+    """Configuration for API endpoints and request handling."""
+    verbose: bool = False  # Enable verbose logging for API requests
+    resume_from_checkpoint: bool = True  # Resume from checkpoint if available
+    default_wandb_tags: List[str] = field(default_factory=lambda: ["api"])  # Default WandB tags for API requests
+    
+    @property
+    def default_custom_name(self) -> str:
+        """Generate a unique custom name for each API request"""
+        return generate_unique_run_name()
+
+
 # Global config instances - these can be imported and used directly
 google_storage_config = GoogleStorageConfig()
 model_config = ModelConfig()
@@ -218,3 +241,4 @@ background_mask_config = BackgroundMaskConfig()
 debug_config = DebugConfig()
 wandb_config = WandbConfig()
 evaluator_config = EvaluatorConfig()
+api_config = APIConfig()
