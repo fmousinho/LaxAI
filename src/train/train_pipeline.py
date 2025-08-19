@@ -2,7 +2,7 @@ import os
 import logging
 import importlib
 import traceback
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Callable
 
 
 from train.wandb_logger import wandb_logger
@@ -12,7 +12,6 @@ from common.google_storage import  get_storage, GCSPaths
 from common.pipeline import Pipeline, PipelineStatus
 from train.dataset import LacrossePlayerDataset
 from train.training import Training
-from train.siamesenet import SiameseNet
 from train.evaluator import ModelEvaluator
 from config.transforms import get_transforms
 from config.all_config import training_config, model_config, wandb_config
@@ -59,14 +58,14 @@ class TrainPipeline(Pipeline):
         
         # Initialize base pipeline
         super().__init__(
-            pipeline_name="training_pipeline",
             storage_client=self.storage_client,
             step_definitions=step_definitions,
             verbose=verbose,
-            save_intermediate=save_intermediate
+            save_intermediate=save_intermediate,
+            pipeline_name="training_pipeline"  # Default name, can be overridden
         )
 
-    def run(self, dataset_name: str | List[str], resume_from_checkpoint: bool = True, wandb_run_tags: Optional[List[str]] = None, custom_name: str = "run") -> Dict[str, Any]:
+    def run(self, dataset_name: str | List[str], resume_from_checkpoint: bool = True, wandb_run_tags: Optional[List[str]] = None, custom_name: Optional[str] = "run") -> Dict[str, Any]:
         """
         Execute the complete training pipeline for a given dataset.
 
@@ -227,7 +226,7 @@ class TrainPipeline(Pipeline):
             return {"status": StepStatus.ERROR.value, "error": f"Unexpected error: {str(e)}"}
         
 
-    def _train_model(self, context: dict) -> Dict[str, Any]:
+    def _train_model(self, context: dict, stop_callback: Optional[Callable[[], bool]] = None) -> Dict[str, Any]:
         """
         Train the neural network model using the Training class.
         
@@ -267,7 +266,8 @@ class TrainPipeline(Pipeline):
                 dataset=training_dataset,
                 model_name=self.collection_name,
                 val_dataset=val_dataset,
-                resume_from_checkpoint=resume_from_checkpoint
+                resume_from_checkpoint=resume_from_checkpoint,
+                stop_callback=stop_callback
             )
 
             training_info = training.get_training_info()
@@ -292,7 +292,8 @@ class TrainPipeline(Pipeline):
             })
             
             return context
-            
+        except InterruptedError as e:
+            logger.warning("Pipeline training was interrupted: %s", e)
         except Exception as e:
             error_msg = f"Model training failed: {str(e)}"
             logger.error(error_msg)
@@ -300,7 +301,7 @@ class TrainPipeline(Pipeline):
             return {"status": StepStatus.ERROR.value, "error": error_msg}
 
 
-    def _evaluate_model(self, context: dict) -> Dict[str, Any]:
+    def _evaluate_model(self, context: dict, stop_callback: Optional[Callable[[], bool]] = None) -> Dict[str, Any]:
         """
         Comprehensive model evaluation using multiple methodologies.
         

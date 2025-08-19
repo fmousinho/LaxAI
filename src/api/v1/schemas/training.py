@@ -42,11 +42,11 @@ ModelConfig = create_model_config_model()
 
 class TrainingRequest(BaseModel):
     """Request schema for training endpoint"""
-    tenant_id: str = Field(description="Tenant identifier")
+    tenant_id: str = Field(default="", description="Tenant identifier")
     verbose: bool = Field(default=api_config.verbose, description="Enable verbose logging")
-    custom_name: str = Field(default_factory=lambda: api_config.default_custom_name, description="Label used by WandB")
+    custom_name: str = Field(default="", description="Label used by WandB")
     resume_from_checkpoint: bool = Field(default=api_config.resume_from_checkpoint, description="Resume from checkpoint if available")
-    wandb_tags: List[str] = Field(default_factory=lambda: api_config.default_wandb_tags.copy(), description="WandB tags for this run")
+    wandb_tags: List[str] = Field(default=[], description="WandB tags for this run")
     training_params: Optional[TrainingConfig] = None
     model_params: Optional[ModelConfig] = None
 
@@ -55,6 +55,7 @@ class TrainingResponse(BaseModel):
     task_id: str = Field(description="Unique task identifier")
     status: str = Field(description="Current status")
     message: str = Field(description="Status message")
+    run_guid: Optional[str] = Field(default=None, description="Pipeline run GUID (if available)")
 
 class TrainingProgress(BaseModel):
     """Training progress tracking"""

@@ -1,6 +1,0 @@
-"""
-API v1 endpoints.
-"""
-from .train import router as train_router
-
-__all__ = ["train_router"]

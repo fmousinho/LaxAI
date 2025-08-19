@@ -5,7 +5,7 @@ google-cloud-storage
 google-cloud-secret-manager
 matplotlib
 numpy
-opencv-python
+opencv-python-headless
 Pillow
 python-dotenv
 python-json-logger

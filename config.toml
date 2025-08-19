@@ -7,8 +7,6 @@
 # Format: environment_variable = ["primary_secret_name", "alternative_secret_name"]
 
 WANDB_API_KEY = ["wandb-api-key", "WANDB_API_KEY"]
-OPENAI_API_KEY = ["openai-api-key", "OPENAI_API_KEY"] 
-HUGGINGFACE_TOKEN = ["huggingface-token", "HUGGINGFACE_TOKEN"]
 
 # Add more secrets as needed for your project
 # EXAMPLE_API_KEY = ["example-api-key", "EXAMPLE_API_KEY"]

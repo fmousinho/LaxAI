@@ -9,6 +9,7 @@ logging, error handling, and intermediate result saving.
 import json
 import logging
 import uuid
+import threading
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Callable
 from enum import Enum
@@ -18,6 +19,11 @@ from .google_storage import GoogleStorageClient
 
 logger = logging.getLogger(__name__)
 
+# Global registry for active pipelines keyed by run_guid
+# Keys are pipeline.run_guid -> Pipeline instance
+_active_pipelines: Dict[str, 'Pipeline'] = {}
+_registry_lock = threading.Lock()
+
 
 class PipelineStatus(Enum):
     """Enum for pipeline status values."""
@@ -26,6 +32,59 @@ class PipelineStatus(Enum):
     COMPLETED = "completed"
     ERROR = "error"
     CANCELLED = "cancelled"
+
+
+def get_active_pipelines() -> Dict[str, str]:
+    """Get list of currently active pipelines.
+
+    Returns a mapping of pipeline identifier -> status string. The identifier
+    is the pipeline's `run_guid` (the canonical identifier for a run). This
+    keeps the returned shape stable (dict[str, str]) while moving the
+    registry to run_guid keys.
+    """
+    with _registry_lock:
+        return {
+            run_guid: pipeline.status.value
+            for run_guid, pipeline in _active_pipelines.items()
+        }
+
+
+def stop_pipeline(pipeline_identifier: str) -> bool:
+    """
+    Stop a specific pipeline.
+
+    The registry is keyed by `run_guid`. This function accepts either a
+    `run_guid` (preferred) or a `pipeline_name` for backward compatibility.
+
+    Args:
+        pipeline_identifier: run_guid or pipeline_name of the pipeline to stop
+
+    Returns:
+        True if pipeline was found and stop initiated, False otherwise
+    """
+    with _registry_lock:
+        # Direct lookup by run_guid (preferred)
+        if pipeline_identifier in _active_pipelines:
+            pipeline = _active_pipelines[pipeline_identifier]
+            pipeline.request_stop()
+            return True
+
+        return False
+
+
+def stop_all_pipelines() -> int:
+    """
+    Stop all active pipelines.
+    
+    Returns:
+        Number of pipelines that were stopped
+    """
+    with _registry_lock:
+        count = 0
+        for pipeline in _active_pipelines.values():
+            pipeline.request_stop()
+            count += 1
+        return count
 
 
 class Pipeline:
@@ -41,16 +100,15 @@ class Pipeline:
     """
     
     def __init__(self, 
-                 pipeline_name: str,
                  storage_client: GoogleStorageClient,
                  step_definitions: Dict[str, Dict[str, Any]],
                  verbose: bool = False, 
-                 save_intermediate: bool = False):
+                 save_intermediate: bool = False,
+                 pipeline_name: str = "default_name"):
         """
         Initialize the pipeline.
         
         Args:
-            pipeline_name: Name of the pipeline for identification
             storage_client: Google Storage client for saving intermediate results
             step_definitions: Dictionary of step definitions with format:
                 {
@@ -62,19 +120,29 @@ class Pipeline:
                 }
             verbose: Enable verbose logging (default: False)
             save_intermediate: Save intermediate results for each step (default: False)
+            pipeline_name: Name of the pipeline (used for logging and storage)
         """
-        self.pipeline_name = pipeline_name
+
         self.storage_client = storage_client
         self.verbose = verbose
         self.save_intermediate = save_intermediate
         self.step_definitions = step_definitions
+        self.pipeline_name = pipeline_name
         
         self.run_guid = str(uuid.uuid4())
         self.run_folder = f"process/{pipeline_name}/run_{self.run_guid}"
         self.status = PipelineStatus.NOT_STARTED
         
+        # Cancellation support
+        self._stop_requested = False
+        self._stop_lock = threading.Lock()
+        
         # Initialize steps based on definitions
         self.steps = self._initialize_steps()
+        
+        # Register this pipeline globally keyed by run_guid
+        with _registry_lock:
+            _active_pipelines[self.run_guid] = self
         
         if self.verbose:
             logger.info(f"Initialized {pipeline_name} pipeline")
@@ -95,6 +163,31 @@ class Pipeline:
             description = step_config.get("description", f"Execute {step_name}")
             steps[step_name] = PipelineStep(step_name, description)
         return steps
+
+    def request_stop(self):
+        """Request the pipeline to stop execution at the next convenient point."""
+        with self._stop_lock:
+            self._stop_requested = True
+            logger.info(f"Stop requested for {self.pipeline_name}: {self.run_guid}")
+
+    def is_stop_requested(self) -> bool:
+        """Check if a stop has been requested."""
+        with self._stop_lock:
+            return self._stop_requested
+
+    def _check_cancellation(self):
+        """Check if cancellation was requested and raise exception if so."""
+        if self.is_stop_requested():
+            self.status = PipelineStatus.CANCELLED
+            logger.info(f"Pipeline {self.pipeline_name} ({self.run_guid}) cancelled by request")
+            raise InterruptedError("Pipeline execution cancelled by user request")
+
+    def _cleanup_registry(self):
+        """Remove this pipeline from the global registry."""
+        with _registry_lock:
+            if self.run_guid in _active_pipelines:
+                del _active_pipelines[self.run_guid]
+                logger.debug(f"Removed pipeline {self.run_guid} (name={self.pipeline_name}) from registry")
     
     def _log_step(self, step_name: str, message: str, level: str = "info"):
         """Log step message if verbose mode is enabled."""
@@ -172,7 +265,11 @@ class Pipeline:
             
         Raises:
             Exception: If the step fails
+            InterruptedError: If pipeline cancellation is requested
         """
+        # Check for cancellation before starting step
+        self._check_cancellation()
+        
         if step_name not in self.steps:
             raise ValueError(f"Step '{step_name}' not found in pipeline steps")
         
@@ -182,7 +279,16 @@ class Pipeline:
         self._log_step(step_name, f"Starting: {step.description}")
         
         try:
+            # Add stop_callback to kwargs if the function supports it
+            import inspect
+            sig = inspect.signature(func)
+            if 'stop_callback' in sig.parameters:
+                kwargs['stop_callback'] = self.is_stop_requested
+            
             result = func(*args, **kwargs)
+            
+            # Check for cancellation after step execution
+            self._check_cancellation()
             
             # Check if the result indicates an error
             if isinstance(result, dict) and result.get("status") == StepStatus.ERROR.value:
@@ -192,6 +298,11 @@ class Pipeline:
             step.complete(metadata={"args_count": len(args), "kwargs_count": len(kwargs)})
             self._log_step(step_name, f"Completed successfully in {step.duration:.2f}s")
             return result
+        except InterruptedError:
+            # Handle cancellation gracefully
+            step.error("Cancelled by user request")
+            self._log_step(step_name, f"Cancelled after {step.duration:.2f}s", "warning")
+            raise
         except Exception as e:
             step.error(str(e))
             self._log_step(step_name, f"Failed after {step.duration:.2f}s: {e}", "error")
@@ -534,7 +645,7 @@ class Pipeline:
     def _get_skipped_steps(self) -> List[str]:
         """Get list of step names that were skipped."""
         return [name for name, step in self.steps.items() if step.status == StepStatus.SKIPPED]
-    
+
     def run(self, context: Optional[Dict[str, Any]] = None, resume_from_checkpoint: bool = False) -> Dict[str, Any]:
         """
         Execute the pipeline by running all steps in order.
@@ -643,12 +754,24 @@ class Pipeline:
             logger.info(f"Pipeline completed. Steps completed: {results['steps_completed']}, Failed: {results['steps_failed']}")
             return results
             
+        except InterruptedError as e:
+            # Handle cancellation
+            self.status = PipelineStatus.CANCELLED
+            results["status"] = PipelineStatus.CANCELLED.value
+            results["errors"].append(f"Pipeline cancelled: {str(e)}")
+            results["pipeline_summary"] = self._get_pipeline_summary()
+            results["context"] = context
+            logger.info(f"Pipeline cancelled by user request. Steps completed: {results['steps_completed']}")
+            return results
         except Exception as e:
             self.status = PipelineStatus.ERROR
             results["status"] = PipelineStatus.ERROR.value
             results["errors"].append(str(e))
             logger.error(f"Pipeline failed: {e}")
             raise
+        finally:
+            # Always cleanup registry when pipeline ends
+            self._cleanup_registry()
     
     def _should_stop_on_error(self, step_name: str, step_config: Dict[str, Any]) -> bool:
         """

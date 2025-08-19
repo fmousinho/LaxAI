@@ -14,7 +14,7 @@ import logging
 import json
 import argparse
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Callable
 
 # IMPORTANT: Load environment variables and credentials FIRST
 # This must be imported before any modules that use GCS or WandB
@@ -37,15 +37,15 @@ os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 logger = logging.getLogger(__name__)
 
 
-
 def train(tenant_id: str, 
           verbose: bool = True,
           save_intermediate: bool = True,
-          custom_name: str = "train_all_run",
+          custom_name: Optional[str] = None,
           resume_from_checkpoint: bool = True,
           wandb_tags: Optional[list] = None,
           training_kwargs: Optional[dict] = None,
-          model_kwargs: Optional[dict] = None):
+          model_kwargs: Optional[dict] = None,
+          on_started: Optional[Callable[[str], None]] = None):
     """
     Main function to orchestrate the data prep and training workflows.
 
@@ -53,7 +53,7 @@ def train(tenant_id: str,
         tenant_id: The tenant ID for GCS operations.
         verbose: Enable verbose logging for pipelines.
         save_intermediate: Save intermediate pipeline results to GCS.
-        custom_name: Custom name for the training run (used in wandb and logging).
+        custom_name: Custom name for the training run (used in wandb and logging). Random name will be generated if not provided.
         resume_from_checkpoint: Resume training from checkpoint if available.
         wandb_tags: List of tags for wandb tracking.
         training_kwargs: Dictionary of training parameters to pass to TrainPipeline.
@@ -74,13 +74,20 @@ def train(tenant_id: str,
     try:
         # Combine training_kwargs and model_kwargs for TrainPipeline
         all_kwargs = {**training_kwargs, **model_kwargs}
-        
+
         train_pipeline = TrainPipeline(
             tenant_id=tenant_id, 
             verbose=verbose, 
             save_intermediate=save_intermediate,
             **all_kwargs
             )
+
+        # Notify caller that the pipeline has been created and provide run_guid
+        try:
+            if on_started is not None:
+                on_started(train_pipeline.run_guid)
+        except Exception:
+            logger.exception("on_started callback raised an exception")
 
         logger.info("Checking for available datasets..")
         # Use Google Storage functions to list directories
@@ -122,7 +129,6 @@ def train(tenant_id: str,
         logger.error(f"Details: {json.dumps(e.args, indent=2)}")
 
 
-
 def main():
 
     print_banner()
@@ -138,7 +144,7 @@ def main():
     parser.add_argument("--frames", type=int, default=20, help="Number of frames to extract per video.")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose pipeline logging.")
     parser.add_argument("--save_intermediate", action="store_true", help="Save intermediate pipeline step results to GCS.")
-    parser.add_argument("--custom_name", type=str, default="train_all_run", help="Custom name for the training run (used in wandb and logging).")
+    parser.add_argument("--custom_name", type=str, default="train_all_run", help="Custom name for the training run (used in wandb and logging.)")
     parser.add_argument("--resume_from_checkpoint", action="store_true", default=True, help="Resume training from checkpoint if available.")
     parser.add_argument("--wandb_tags", nargs="*", default=[], help="List of tags for wandb tracking (space-separated).")
     

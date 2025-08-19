@@ -1,7 +1,7 @@
 import os
 import torch
 import logging
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, Callable
 from torch.utils.data import DataLoader, Dataset
 from utils.env_or_colab import load_env_or_colab
 import torch.nn as nn
@@ -46,12 +46,16 @@ class Training:
     
     def __init__(self, 
                 device: Any = None,
+                enable_multithreading: bool = True,
+                num_workers: Optional[int] = None,
                 **kwargs):
         """
         Initialize the training class with hyperparameters.
         
         Args:
             device: Device to run the model on (CPU, GPU, or MPS)
+            enable_multithreading: Whether to enable multithreading for data loading
+            num_workers: Number of DataLoader workers (auto-detected if None)
             **kwargs: Training parameters (see parameter_registry for complete list)
         
         All hyperparameters are defined in config.parameter_registry and will be
@@ -59,6 +63,17 @@ class Training:
         kwargs and training_config, a ValueError will be raised.
         """
         from config.parameter_registry import parameter_registry
+
+        # Configure threading settings
+        self.enable_multithreading = enable_multithreading
+        if enable_multithreading:
+            # Use default PyTorch multiprocessing with safe number of workers
+            import multiprocessing as mp
+            self.num_workers = num_workers if num_workers is not None else min(mp.cpu_count(), 8)
+        else:
+            self.num_workers = 0
+        
+        logger.info(f"Training configured with multithreading={'enabled' if enable_multithreading else 'disabled'}, workers={self.num_workers}")
 
         # Initialize all registered parameters using the centralized registry
         for param_name in parameter_registry.parameters:
@@ -201,32 +216,50 @@ class Training:
                   If 'val', uses shuffle=False.
             
         """
+        # Configure DataLoader settings
+        dataloader_kwargs = {
+            'num_workers': self.num_workers,
+            'pin_memory': torch.cuda.is_available(),
+            'persistent_workers': self.num_workers > 0,
+            'prefetch_factor': 2 if self.num_workers > 0 else None
+        }
+        
+        # Add batch size and dataset-specific options
+        base_config = {
+            'batch_size': self.batch_size,
+            **dataloader_kwargs
+        }
+        
         if type == 'train':
             self.dataloader = DataLoader(
                 dataset,
-                batch_size=self.batch_size,
                 shuffle=True,
-                num_workers=self.default_workers,
-                prefetch_factor=self.prefetch_factor,
-                pin_memory=True
+                **base_config
             )
 
         elif type == 'val':
             self.val_dataloader = DataLoader(
                 dataset,
-                batch_size=self.batch_size,
                 shuffle=False,
-                num_workers=self.default_workers,
-                prefetch_factor=self.prefetch_factor,
-                pin_memory=True
+                **base_config
             )
         else:
             raise ValueError(f"Invalid dataloader type: {type}. Use 'train' or 'val'.")
 
-        logger.info(f"Dataset setup complete:")
-        logger.info(f"  Batch size: {self.batch_size}")
-        logger.info(f"  Number of workers: {self.num_workers}")
-        logger.info(f"  Number of batches: {len(self.dataloader) if self.dataloader is not None else 'N/A'}")
+        # Log configuration
+        active_dataloader = self.dataloader if type == 'train' else self.val_dataloader
+        if active_dataloader is not None:
+            logger.info(f"DataLoader setup complete for {type}:")
+            logger.info(f"  Multithreading: {'enabled' if self.enable_multithreading else 'disabled'}")
+            logger.info(f"  Workers: {active_dataloader.num_workers}")
+            logger.info(f"  Pin memory: {active_dataloader.pin_memory}")
+            if hasattr(active_dataloader, 'persistent_workers'):
+                logger.info(f"  Persistent workers: {active_dataloader.persistent_workers}")
+
+        logger.info(f"Dataset summary:")
+        logger.info(f"  - Type: {type}")
+        logger.info(f"  - Batch size: {self.batch_size}")
+        logger.info(f"  - Number of batches: {len(self.dataloader) if self.dataloader is not None else len(self.val_dataloader) if self.val_dataloader is not None else 'N/A'}")
 
 
 
@@ -291,7 +324,8 @@ class Training:
     def train(self, 
           margin_decay_rate: float = training_config.margin_decay_rate, 
           margin_change_threshold: float = training_config.margin_change_threshold,
-          start_epoch: int = 1):
+          start_epoch: int = 1,
+          stop_callback: Optional[Callable[[], bool]] = None):
         """
         Execute the main training loop with early stopping, using a validation set
         to monitor for overfitting.
@@ -300,12 +334,14 @@ class Training:
             margin_decay_rate: Rate at which to decay the triplet loss margin.
             margin_change_threshold: Minimum change in margin to trigger an update.
             start_epoch: Epoch number to start training from (for checkpoint resumption).
+            stop_callback: Optional callback function that returns True if training should stop.
             
         Returns:
             The trained model
             
         Raises:
             RuntimeError: If required components are not setup
+            InterruptedError: If training is cancelled via stop_callback
         """
         # ========================================================================
         # Sanity checks
@@ -335,6 +371,11 @@ class Training:
 
         for epoch in range(start_epoch - 1, self.num_epochs):
             
+            # Check for cancellation before starting epoch
+            if stop_callback and stop_callback():
+                logger.info(f"Training cancelled by stop_callback at epoch {epoch + 1}")
+                raise InterruptedError("Training cancelled by external request")
+            
             # ========================================================================
             # Training Phase
             # ========================================================================
@@ -352,6 +393,11 @@ class Training:
                 logger.debug(f"Margin unchanged for epoch {epoch+1}: {current_margin:.4f}")
                 
             for i, (anchor, positive, negative, _) in enumerate(self.dataloader):
+
+                # Check for cancellation every few batches
+                if stop_callback and i % 1 == 0 and stop_callback():
+                    logger.info(f"Training cancelled by stop_callback at epoch {epoch + 1}, batch {i + 1}")
+                    raise InterruptedError("Training cancelled by external request")
 
                 if (i + 1) % BATCHES_PER_LOG_MSG == 0:
                     logger.info(f"Training Batch {i+1}/{ttl_batches}")
@@ -377,6 +423,11 @@ class Training:
             # ========================================================================
             epoch_val_loss = None
             reid_metrics = {}
+
+            # Check for cancellation before validation
+            if stop_callback and stop_callback():
+                logger.info(f"Training cancelled by stop_callback before validation at epoch {epoch + 1}")
+                raise InterruptedError("Training cancelled by external request")
 
             if val_dataloader and (epoch + 1) % EPOCHS_PER_VAL == 0:
                 self.model.eval()  # Set model to evaluation mode
@@ -659,7 +710,7 @@ class Training:
             
         return start_epoch
 
-    def train_and_save(self, model_class, dataset: Dataset, model_name: str, val_dataset: Optional[Dataset] = None, model_kwargs: Dict[str, Any] = {}, resume_from_checkpoint: bool = True) -> Any:
+    def train_and_save(self, model_class, dataset: Dataset, model_name: str, val_dataset: Optional[Dataset] = None, model_kwargs: Dict[str, Any] = {}, resume_from_checkpoint: bool = True, stop_callback: Optional[Callable[[], bool]] = None) -> Any:
         """
         Complete training pipeline: setup, train, and save.
         This is a convenience method with minimal logic.
@@ -671,12 +722,14 @@ class Training:
             val_dataset: Optional validation dataset for early stopping and metrics
             model_kwargs: Additional arguments for model instantiation
             resume_from_checkpoint: Whether to resume from existing wandb checkpoint
+            stop_callback: Optional callback function that returns True if training should stop
             
         Returns:
             The trained model
             
         Raises:
             Exception: If any step in the training pipeline fails
+            InterruptedError: If training is cancelled via stop_callback
         """
         try:
             logger.info("Starting complete training pipeline")
@@ -694,7 +747,7 @@ class Training:
 
             # Train with checkpoint support
             logger.info("Starting training...")
-            trained_model = self.train(start_epoch=start_epoch)
+            trained_model = self.train(start_epoch=start_epoch, stop_callback=stop_callback)
             
             # Save final model
             logger.info("Saving model...")

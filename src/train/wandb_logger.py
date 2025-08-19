@@ -499,10 +499,11 @@ class WandbLogger:
         # Download artifact
         artifact_path = self._construct_artifact_path(artifact_name, version)
         try:
-            artifact = self.wandb_api.artifact(artifact_path, type="model_checkpoint")
-            artifact_dir = artifact.download()
+            if self.wandb_api.artifact_exists(artifact_path):
+                artifact = self.wandb_api.artifact(artifact_path, type="model_checkpoint")
+                artifact_dir = artifact.download()
         except Exception as e:
-            logger.error(f"Failed to download artifact {artifact_name}:{version} from wandb: {e}")
+            logger.info(f"Artifact {artifact_name}:{version} not found")
             return None
 
         # Find checkpoint file
