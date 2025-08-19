@@ -1,4 +1,9 @@
-FROM python:3.12-slim
+ARG BASE_IMAGE=pytorch/pytorch:2.2.0-cuda11.8-cudnn8-runtime
+FROM ${BASE_IMAGE}
+
+# Note: this image contains CUDA runtime libraries. It will also run on CPU-only
+# hosts (PyTorch will fall back to CPU). To build a CPU-only image, override the
+# build arg: `docker build --build-arg BASE_IMAGE=pytorch/pytorch:2.2.0-cpu -t laxai:local .`
 
 # Keep container output unbuffered and avoid writing .pyc files
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -35,6 +40,14 @@ RUN python -m pip install --upgrade pip setuptools wheel build \
 
 # Ensure our application code is importable from /app/src
 ENV PYTHONPATH=/app/src
+
+# Create a non-root user for runtime and give them ownership of /app
+RUN useradd -m -u 1000 laxai \
+ && chown -R laxai:laxai /app
+
+# Switch to non-root user for running the service
+USER laxai
+ENV HOME=/home/laxai
 
 EXPOSE 8000
 
