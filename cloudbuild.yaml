@@ -1,0 +1,72 @@
+# Cloud Build configuration for LaxAI
+# Builds Docker image, optional tests, pushes to Container Registry and can deploy to Cloud Run.
+
+substitutions:
+  _IMAGE: "gcr.io/$PROJECT_ID/laxai"
+  _SKIP_TESTS: "true"           # set to "false" in trigger to run pytest
+  _DEPLOY_TO_CLOUD_RUN: "false" # set to "true" in trigger to deploy
+  _CLOUD_RUN_SERVICE: "laxai-api"
+  _CLOUD_RUN_REGION: "us-central1"
+
+steps:
+  - id: "install-and-test"
+    name: "python:3.12-slim"
+    entrypoint: "/bin/bash"
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        # Install requirements if file exists
+        if [ -f requirements.txt ]; then
+          pip install --upgrade pip
+          pip install -r requirements.txt || true
+        fi
+
+        if [ "${_SKIP_TESTS}" != "true" ]; then
+          if command -v pytest >/dev/null 2>&1; then
+            pytest -q
+          else
+            echo "pytest not installed or no tests found; skipping"
+          fi
+        else
+          echo "Skipping tests (set _SKIP_TESTS to 'false' to run)"
+        fi
+
+  - id: "docker-build"
+    name: "gcr.io/cloud-builders/docker"
+    args: ["build", "-t", "${_IMAGE}:${SHORT_SHA}", "."]
+
+  - id: "docker-push"
+    name: "gcr.io/cloud-builders/docker"
+    args: ["push", "${_IMAGE}:${SHORT_SHA}"]
+
+  - id: "maybe-cloud-run-deploy"
+    name: "gcr.io/cloud-builders/gcloud"
+    entrypoint: "/bin/bash"
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        if [ "${_DEPLOY_TO_CLOUD_RUN}" = "true" ]; then
+          echo "Deploying to Cloud Run: ${_CLOUD_RUN_SERVICE} in ${_CLOUD_RUN_REGION}"
+          gcloud run deploy "${_CLOUD_RUN_SERVICE}" \
+            --image "${_IMAGE}:${SHORT_SHA}" \
+            --region "${_CLOUD_RUN_REGION}" \
+            --platform managed \
+            --allow-unauthenticated
+        else
+          echo "Skipping Cloud Run deploy (set _DEPLOY_TO_CLOUD_RUN to 'true' to enable)"
+        fi
+
+images:
+  - "${_IMAGE}:${SHORT_SHA}"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: "1200s"  # 20 minutes
+
+# Notes:
+# - Use substitutions to customize behavior when creating a build trigger.
+# - Example gcloud submit (uses docker build locally):
+#   gcloud builds submit --config cloudbuild.yaml --substitutions=_SKIP_TESTS=false,_DEPLOY_TO_CLOUD_RUN=false
