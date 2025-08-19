@@ -1,9 +1,9 @@
-ARG BASE_IMAGE=pytorch/pytorch:2.2.0-cuda11.8-cudnn8-runtime
+ARG BASE_IMAGE=python:3.12-slim
 FROM ${BASE_IMAGE}
 
-# Note: this image contains CUDA runtime libraries. It will also run on CPU-only
-# hosts (PyTorch will fall back to CPU). To build a CPU-only image, override the
-# build arg: `docker build --build-arg BASE_IMAGE=pytorch/pytorch:2.2.0-cpu -t laxai:local .`
+# Default base is a lightweight Python slim image (CPU). To use a different
+# base (for example a PyTorch CUDA runtime on GPU-enabled Linux hosts), pass
+# --build-arg BASE_IMAGE=<image> when building.
 
 # Keep container output unbuffered and avoid writing .pyc files
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -16,7 +16,6 @@ RUN apt-get update \
      && apt-get install -y --no-install-recommends \
          build-essential gcc curl \
          ffmpeg \
-         ca-certificates \
      && rm -rf /var/lib/apt/lists/*
 
 # Copy package metadata first to leverage Docker layer caching
