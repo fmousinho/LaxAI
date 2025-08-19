@@ -73,21 +73,43 @@ class DetectionModel:
         """
         temp_checkpoint_path = None
 
+        # Ensure environment variables / secrets are loaded
+        try:
+            load_env_or_colab()
+        except Exception:
+            logger.debug("Failed to refresh env via load_env_or_colab(), continuing with current env")
+
         wandb_api_key = os.getenv("WANDB_API_KEY")
 
         if not wandb_api_key:
-            logger.error("WANDB_API_KEY not found in environment variables or .env file.")
-            return
+            logger.error("WANDB_API_KEY not found in environment variables or Secret Manager. WandB is required.")
+            return False
         else:
-            logger.info("WANDB_API_KEY found in environment variables or .env file.")
-        wandb.login(key=wandb_api_key)
-       
+            logger.info("WANDB_API_KEY found in environment variables or Secret Manager")
+
+        # Attempt non-interactive login; if it fails, abort because WandB must be enabled
+        try:
+            wandb.login(key=wandb_api_key)
+            logger.info("Logged in to WandB for model download")
+        except Exception as e:
+            logger.error("Failed to login to WandB with provided API key: %s", e, exc_info=True)
+            return False
 
         try:
+            # Use safe settings to avoid spawn/port blocking in server environments
+            try:
+                # start_method is deprecated; only set supported options
+                settings = wandb.Settings(disable_git=True)
+            except Exception:
+                settings = None
+
             run = wandb.init(
                 entity=wandb_config.team,
                 project=wandb_config.project,
-                job_type="download-model"
+                job_type="download-model",
+                settings=settings if settings is not None else None,
+                # finish_previous=True ensures any prior run in this process is finished
+                finish_previous=True,
             )
 
             logger.info(f"Attempting to fetch artifact: {self.model_artifact}")

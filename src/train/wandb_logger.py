@@ -82,30 +82,59 @@ class WandbLogger:
             self.enabled = False
             logger.warning("wandb package not available, disabling wandb logging")
 
-        self.wandb_api = self._login_and_get_api()
-        if not self.wandb_api:
-            self.enabled = False
-            logger.warning("Failed to login to wandb, disabling wandb logging")
+        # Attempt to login to wandb early; record whether login succeeded.
+        self.wandb_api = None
+        self.login_ok = False
+        try:
+            self.wandb_api = self._login_and_get_api()
+            if self.wandb_api:
+                self.login_ok = True
+        except Exception as e:
+            logger.warning("Unexpected error during wandb login attempt: %s", e)
+            self.login_ok = False
 
     def _get_api_key(self) -> Optional[str]:
         """Get and validate wandb API key."""
         # Ensure environment is properly loaded first
         load_env_or_colab()
-        
         api_key = os.environ.get("WANDB_API_KEY")
         if not api_key:
-            logger.error("WANDB_API_KEY environment variable not found")
+            logger.debug("WANDB_API_KEY environment variable not found; proceeding without explicit key")
             return None
         return api_key
     
     def _login_and_get_api(self) -> Optional[object]:
         """Login to wandb and return API object."""
         api_key = self._get_api_key()
-        if not api_key:
+
+        try:
+            # If an API key is available, use it to login (non-interactive)
+            if api_key:
+                try:
+                    wandb.login(key=api_key)
+                    logger.info("Logged into wandb using provided API key")
+                except Exception as e:
+                    logger.warning("wandb.login with key failed: %s", e)
+                    # fall through and try anonymous/login without key
+
+            # Attempt a login without key (may pick up stored credentials or anonymous)
+            try:
+                wandb.login(anonymous='allow')
+                logger.info("wandb login succeeded (anonymous or stored credentials)")
+            except Exception:
+                logger.debug("wandb anonymous/stored login failed; continuing without complete login")
+
+            # Try to create API client to validate auth; this may still work in anonymous mode
+            try:
+                api = wandb.Api()
+                return api
+            except Exception as e:
+                logger.warning("Could not construct wandb.Api(): %s", e)
+                return None
+
+        except Exception as e:
+            logger.warning("Unexpected error during wandb login flow: %s", e)
             return None
-        
-        wandb.login(key=api_key)
-        return wandb.Api()
     
     def _construct_artifact_path(self, artifact_name: str, version: str = "latest") -> str:
         """Construct standardized artifact path."""
@@ -131,14 +160,34 @@ class WandbLogger:
         if tags:
             all_tags.extend(tags)
 
+        # Determine mode: prefer explicit env override, otherwise use online only
+        # when login succeeded; otherwise fall back to offline mode so we don't block
+        env_mode = os.environ.get("WANDB_MODE")
+        if env_mode:
+            mode = env_mode
+        else:
+            mode = "online" if getattr(self, "login_ok", False) else "offline"
+
+        settings = None
+        try:
+            # start_method is deprecated in recent wandb versions; only set supported options
+            settings = wandb.Settings(disable_git=True)
+        except Exception:
+            settings = None
+
         run_params = {
             "project": wandb_config.project,
             "entity": wandb_config.team,
             "name": run_name or wandb_config.run_name,
             "tags": all_tags,
             "config": config,
-            "reinit": True  # Allow multiple runs in same process
+            # finish_previous=True ensures any previous run is finished before starting a new one
+            "finish_previous": True,
+            "mode": mode,
         }
+        if settings is not None:
+            run_params["settings"] = settings
+
         # Initialize wandb run
         self.run = wandb.init(**run_params)
         
