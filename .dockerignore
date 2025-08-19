@@ -1,0 +1,75 @@
+# Docker ignore for LaxAI
+# Keep build context small and avoid accidentally including secrets, datasets, or envs
+
+# Git
+.git
+.git/**
+
+# Virtualenvs / env files
+.venv
+venv
+env
+ENV
+*.env
+
+# Python cache / compiled files
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDE / editor
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test / coverage / lint
+.pytest_cache/
+.coverage
+coverage.xml
+.mypy_cache/
+.tox/
+
+# Notebooks
+notebooks/
+**/.ipynb_checkpoints
+
+# Large data, artifacts and model checkpoints
+data/
+artifacts/
+model.pth
+wandb/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.log
+logs/
+
+# Secrets / keys
+*.pem
+*.key
+*.crt
+.aws/
+
+# Dockerfile output / local containers
+docker-compose.override.yml
+
+# Misc caches
+.cache/
+
+# Allow explicit includes below (example)
+# !src/

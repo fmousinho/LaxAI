@@ -16,6 +16,7 @@ RUN apt-get update \
      && apt-get install -y --no-install-recommends \
          build-essential gcc curl \
          ffmpeg \
+         ca-certificates \
      && rm -rf /var/lib/apt/lists/*
 
 # Copy package metadata first to leverage Docker layer caching
