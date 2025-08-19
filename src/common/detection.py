@@ -4,9 +4,9 @@ import tempfile
 from typing import List, Optional, Union
 
 import numpy as np
-import supervision as sv
+from supervision import Detections
 import torch
-from utils.env_or_colab import load_env_or_colab
+#from utils.env_or_colab import load_env_or_colab
 from PIL import Image
 from rfdetr import RFDETRBase  # type: ignore
 import wandb
@@ -73,43 +73,21 @@ class DetectionModel:
         """
         temp_checkpoint_path = None
 
-        # Ensure environment variables / secrets are loaded
-        try:
-            load_env_or_colab()
-        except Exception:
-            logger.debug("Failed to refresh env via load_env_or_colab(), continuing with current env")
-
         wandb_api_key = os.getenv("WANDB_API_KEY")
 
         if not wandb_api_key:
-            logger.error("WANDB_API_KEY not found in environment variables or Secret Manager. WandB is required.")
-            return False
+            logger.error("WANDB_API_KEY not found in environment variables or .env file.")
+            return
         else:
-            logger.info("WANDB_API_KEY found in environment variables or Secret Manager")
-
-        # Attempt non-interactive login; if it fails, abort because WandB must be enabled
-        try:
-            wandb.login(key=wandb_api_key)
-            logger.info("Logged in to WandB for model download")
-        except Exception as e:
-            logger.error("Failed to login to WandB with provided API key: %s", e, exc_info=True)
-            return False
+            logger.info("WANDB_API_KEY found in environment variables or .env file.")
+        wandb.login(key=wandb_api_key)
+       
 
         try:
-            # Use safe settings to avoid spawn/port blocking in server environments
-            try:
-                # start_method is deprecated; only set supported options
-                settings = wandb.Settings(disable_git=True)
-            except Exception:
-                settings = None
-
             run = wandb.init(
                 entity=wandb_config.team,
                 project=wandb_config.project,
-                job_type="download-model",
-                settings=settings if settings is not None else None,
-                # use reinit='finish_previous' to finish any prior run in this process before starting a new one
-                reinit="finish_previous",
+                job_type="download-model"
             )
 
             logger.info(f"Attempting to fetch artifact: {self.model_artifact}")
@@ -170,7 +148,7 @@ class DetectionModel:
         images: Union[str, Image.Image, np.ndarray, torch.Tensor, List[Union[str, np.ndarray, Image.Image, torch.Tensor]]],
         threshold: float = detection_config.prediction_threshold,
         **kwargs,
-    ) -> sv.Detections:
+    ) -> Union[Detections, List[Detections]]:
         """
         Runs inference using the loaded detection model on the provided image(s).
 
@@ -197,4 +175,4 @@ class DetectionModel:
 
     def empty_detections(self):
         """Returns an empty Detections object."""
-        return sv.Detections.empty()
+        return Detections.empty()

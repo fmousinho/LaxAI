@@ -5,7 +5,6 @@ import asyncio
 import logging
 import traceback
 import uuid
-import functools
 from typing import Dict, Any
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -18,15 +17,12 @@ from ..schemas.training import (
 )
 from scripts.train_all import train as train_function
 from common.pipeline import get_active_pipelines, stop_pipeline
-from services.training_service import (
-    start_job,
-    cancel_job,
-    get_job,
-    list_jobs,
-    list_active_pipelines as service_active_pipelines,
-)
 
 logger = logging.getLogger(__name__)
+
+# In-memory storage for tracking training jobs
+# In production, you'd want to use a proper database or Redis
+TRAINING_JOBS: Dict[str, Dict[str, Any]] = {}
 
 router = APIRouter()
 
@@ -54,7 +50,63 @@ def convert_request_to_kwargs(request: TrainingRequest) -> Dict[str, Any]:
     return kwargs
 
 
-# Background execution and job tracking handled by services/training_service
+async def run_training_task(task_id: str, kwargs: Dict[str, Any]):
+    """
+    Background task to run the training process.
+    """
+    try:
+        # Update status to running
+        TRAINING_JOBS[task_id]["status"] = "running"
+        TRAINING_JOBS[task_id]["progress"]["status"] = "initializing"
+        TRAINING_JOBS[task_id]["progress"]["message"] = "Starting training pipeline..."
+        
+        logger.info(f"Starting training task {task_id} with kwargs: {kwargs}")
+        
+        # Update progress
+        TRAINING_JOBS[task_id]["progress"]["status"] = "running"
+        TRAINING_JOBS[task_id]["progress"]["message"] = "Training in progress..."
+        
+        # Run the training function in a thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        
+        # Create a wrapper function that can be called with unpacked kwargs
+        def training_wrapper():
+            return train_function(**kwargs)
+        
+        await loop.run_in_executor(None, training_wrapper)
+        
+        # Training completed successfully
+        TRAINING_JOBS[task_id]["status"] = "completed"
+        TRAINING_JOBS[task_id]["progress"]["status"] = "completed"
+        TRAINING_JOBS[task_id]["progress"]["message"] = "Training completed successfully"
+        
+        logger.info(f"Training task {task_id} completed successfully")
+        
+    except InterruptedError as e:
+        # Handle pipeline cancellation
+        cancel_msg = f"Training cancelled: {str(e)}"
+        logger.info(f"Training task {task_id} was cancelled: {cancel_msg}")
+        
+        # Update status to cancelled
+        TRAINING_JOBS[task_id]["status"] = "cancelled"
+        TRAINING_JOBS[task_id]["progress"]["status"] = "cancelled"
+        TRAINING_JOBS[task_id]["progress"]["message"] = cancel_msg
+        
+    except Exception as e:
+        error_msg = f"Training failed: {str(e)}"
+        error_details = traceback.format_exc()
+        
+        logger.error(f"Training task {task_id} failed: {error_msg}")
+        logger.error(f"Error details: {error_details}")
+        
+        # Update status to failed
+        TRAINING_JOBS[task_id]["status"] = "failed"
+        TRAINING_JOBS[task_id]["progress"]["status"] = "failed"
+        TRAINING_JOBS[task_id]["progress"]["message"] = error_msg
+        TRAINING_JOBS[task_id]["error"] = {
+            "message": error_msg,
+            "details": error_details
+        }
 
 
 @router.post("/train", response_model=TrainingResponse)
@@ -74,17 +126,35 @@ async def start_training(
         # Convert request to kwargs for the train function
         kwargs = convert_request_to_kwargs(request)
         
-        # Delegate job start to the training service (runs in background)
-        scheduled_task_id = await start_job(kwargs)
-
-        logger.info(f"Started training task {scheduled_task_id} for tenant {request.tenant_id}")
-
-        job = get_job(scheduled_task_id)
+        # Initialize job tracking
+        TRAINING_JOBS[task_id] = {
+            "status": "pending",
+            "request": request.model_dump(),
+            "WandB_name": request.custom_name,
+            "pipeline_name": f"training_pipeline_{task_id}",  # Store unique pipeline name
+            "progress": {
+                "status": "pending",
+                "message": "Training job queued",
+                "current_epoch": None,
+                "total_epochs": None,
+                "current_loss": None,
+                "best_loss": None,
+                "datasets_found": None,
+                "datasets_processed": None,
+                "logs": []
+            },
+            "created_at": asyncio.get_event_loop().time()
+        }
+        
+        # Add background task
+        background_tasks.add_task(run_training_task, task_id, kwargs)
+        
+        logger.info(f"Started training task {task_id} for tenant {request.tenant_id}")
+        
         return TrainingResponse(
             status="accepted",
-            task_id=scheduled_task_id,
-            message=f"Training job started",
-            run_guid=job.get("run_guid") if job else None
+            task_id=task_id,
+            message=f"Training job started with ID: {task_id}"
         )
         
     except Exception as e:
@@ -106,8 +176,7 @@ async def get_training_status(task_id: str):
     """
     Get the status of a training job.
     """
-    job = get_job(task_id)
-    if job is None:
+    if task_id not in TRAINING_JOBS:
         raise HTTPException(
             status_code=404,
             detail=ErrorResponse(
@@ -116,11 +185,12 @@ async def get_training_status(task_id: str):
             ).model_dump()
         )
     
+    job = TRAINING_JOBS[task_id]
+    
     return TrainingResponse(
         status=job["status"],
         task_id=task_id,
-        message=f"Training job {task_id} is {job['status']}",
-        run_guid=job.get("run_guid")
+        message=f"Training job {task_id} is {job['status']}"
     )
 
 
@@ -129,21 +199,19 @@ async def list_training_jobs():
     """
     List all training jobs and their statuses.
     """
-    jobs = list_jobs()
     jobs_summary = {}
-    for tid, job in jobs.items():
-        jobs_summary[tid] = {
-            "status": job.get("status"),
-            "tenant_id": job.get("request", {}).get("tenant_id"),
-            "custom_name": job.get("request", {}).get("custom_name"),
-            "created_at": job.get("created_at"),
-            "progress_status": job.get("progress", {}).get("status"),
-            "progress_message": job.get("progress", {}).get("message"),
-            "run_guid": job.get("run_guid")
+    for task_id, job in TRAINING_JOBS.items():
+        jobs_summary[task_id] = {
+            "status": job["status"],
+            "tenant_id": job["request"]["tenant_id"],
+            "custom_name": job["request"]["custom_name"],
+            "created_at": job["created_at"],
+            "progress_status": job["progress"]["status"],
+            "progress_message": job["progress"]["message"]
         }
-
+    
     return {
-        "total_jobs": len(jobs),
+        "total_jobs": len(TRAINING_JOBS),
         "jobs": jobs_summary
     }
 
@@ -153,8 +221,7 @@ async def cancel_training_job(task_id: str):
     """
     Cancel a training job using the pipeline control system.
     """
-    job = get_job(task_id)
-    if job is None:
+    if task_id not in TRAINING_JOBS:
         raise HTTPException(
             status_code=404,
             detail=ErrorResponse(
@@ -162,10 +229,26 @@ async def cancel_training_job(task_id: str):
                 error_type="task_not_found"
             ).model_dump()
         )
-
-    pipeline_stopped = cancel_job(task_id)
-
-    return {"message": f"Training job {task_id} cancelled", "pipeline_stopped": pipeline_stopped}
+    
+    job = TRAINING_JOBS[task_id]
+    
+    if job["status"] in ["pending", "running"]:
+        # Try to stop the pipeline using the task_id as the pipeline name
+        pipeline_stopped = stop_pipeline(task_id)
+        
+        if pipeline_stopped:
+            job["status"] = "cancelling"  # Intermediate state while pipeline stops
+            job["progress"]["status"] = "cancelling"
+            job["progress"]["message"] = "Training pipeline cancellation requested"
+            logger.info(f"Successfully requested cancellation of pipeline '{task_id}' for task {task_id}")
+        else:
+            # Fallback to manual cancellation tracking
+            job["status"] = "cancelled"
+            job["progress"]["status"] = "cancelled"
+            job["progress"]["message"] = "Training job marked as cancelled (pipeline not found or already stopped)"
+            logger.warning(f"Pipeline '{task_id}' not found for task {task_id}, marked as cancelled in job tracking only")
+    
+    return {"message": f"Training job {task_id} cancelled", "pipeline_stopped": pipeline_stopped if 'pipeline_stopped' in locals() else False}
 
 
 @router.get("/train/pipelines", response_model=Dict[str, Any])

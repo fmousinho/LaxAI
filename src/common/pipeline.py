@@ -19,8 +19,7 @@ from .google_storage import GoogleStorageClient
 
 logger = logging.getLogger(__name__)
 
-# Global registry for active pipelines keyed by run_guid
-# Keys are pipeline.run_guid -> Pipeline instance
+# Global registry for active pipelines
 _active_pipelines: Dict[str, 'Pipeline'] = {}
 _registry_lock = threading.Lock()
 
@@ -35,40 +34,29 @@ class PipelineStatus(Enum):
 
 
 def get_active_pipelines() -> Dict[str, str]:
-    """Get list of currently active pipelines.
-
-    Returns a mapping of pipeline identifier -> status string. The identifier
-    is the pipeline's `run_guid` (the canonical identifier for a run). This
-    keeps the returned shape stable (dict[str, str]) while moving the
-    registry to run_guid keys.
-    """
+    """Get list of currently active pipelines."""
     with _registry_lock:
         return {
-            run_guid: pipeline.status.value
-            for run_guid, pipeline in _active_pipelines.items()
+            name: pipeline.status.value 
+            for name, pipeline in _active_pipelines.items()
         }
 
 
-def stop_pipeline(pipeline_identifier: str) -> bool:
+def stop_pipeline(pipeline_name: str) -> bool:
     """
-    Stop a specific pipeline.
-
-    The registry is keyed by `run_guid`. This function accepts either a
-    `run_guid` (preferred) or a `pipeline_name` for backward compatibility.
-
+    Stop a specific pipeline by name.
+    
     Args:
-        pipeline_identifier: run_guid or pipeline_name of the pipeline to stop
-
+        pipeline_name: Name of the pipeline to stop
+        
     Returns:
         True if pipeline was found and stop initiated, False otherwise
     """
     with _registry_lock:
-        # Direct lookup by run_guid (preferred)
-        if pipeline_identifier in _active_pipelines:
-            pipeline = _active_pipelines[pipeline_identifier]
+        if pipeline_name in _active_pipelines:
+            pipeline = _active_pipelines[pipeline_name]
             pipeline.request_stop()
             return True
-
         return False
 
 
@@ -120,7 +108,6 @@ class Pipeline:
                 }
             verbose: Enable verbose logging (default: False)
             save_intermediate: Save intermediate results for each step (default: False)
-            pipeline_name: Name of the pipeline (used for logging and storage)
         """
 
         self.storage_client = storage_client
@@ -140,9 +127,9 @@ class Pipeline:
         # Initialize steps based on definitions
         self.steps = self._initialize_steps()
         
-        # Register this pipeline globally keyed by run_guid
+        # Register this pipeline globally
         with _registry_lock:
-            _active_pipelines[self.run_guid] = self
+            _active_pipelines[pipeline_name] = self
         
         if self.verbose:
             logger.info(f"Initialized {pipeline_name} pipeline")
@@ -168,7 +155,7 @@ class Pipeline:
         """Request the pipeline to stop execution at the next convenient point."""
         with self._stop_lock:
             self._stop_requested = True
-            logger.info(f"Stop requested for {self.pipeline_name}: {self.run_guid}")
+            logger.info(f"Stop requested for pipeline: {self.pipeline_name}")
 
     def is_stop_requested(self) -> bool:
         """Check if a stop has been requested."""
@@ -179,15 +166,15 @@ class Pipeline:
         """Check if cancellation was requested and raise exception if so."""
         if self.is_stop_requested():
             self.status = PipelineStatus.CANCELLED
-            logger.info(f"Pipeline {self.pipeline_name} ({self.run_guid}) cancelled by request")
+            logger.info(f"Pipeline {self.pipeline_name} cancelled by request")
             raise InterruptedError("Pipeline execution cancelled by user request")
 
     def _cleanup_registry(self):
         """Remove this pipeline from the global registry."""
         with _registry_lock:
-            if self.run_guid in _active_pipelines:
-                del _active_pipelines[self.run_guid]
-                logger.debug(f"Removed pipeline {self.run_guid} (name={self.pipeline_name}) from registry")
+            if self.pipeline_name in _active_pipelines:
+                del _active_pipelines[self.pipeline_name]
+                logger.debug(f"Removed pipeline {self.pipeline_name} from registry")
     
     def _log_step(self, step_name: str, message: str, level: str = "info"):
         """Log step message if verbose mode is enabled."""

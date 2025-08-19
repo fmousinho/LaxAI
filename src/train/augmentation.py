@@ -5,7 +5,6 @@ This module provides functions for performing various augmentations on RGB image
 particularly useful for training embeddings models with enhanced data diversity.
 """
 
-import cv2
 import numpy as np
 import random
 from typing import List
@@ -13,7 +12,7 @@ from typing import List
 
 def augment_images(images: List[np.ndarray]) -> List[np.ndarray]:
     """
-    Perform various augmentations on a list of RGB images using OpenCV.
+    Perform various augmentations on a list of RGB images using numpy and random.
     
     This function applies multiple augmentation techniques to increase data diversity:
     - Horizontal flips

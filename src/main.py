@@ -38,7 +38,7 @@ class Settings:
         self.debug: bool = os.getenv("DEBUG", "false").lower() == "true"
         self.host: str = os.getenv("HOST", "0.0.0.0")
         self.port: int = int(os.getenv("PORT", "8000"))
-        self.reload: bool = os.getenv("RELOAD", "true").lower() == "true"
+        self.reload: bool = os.getenv("RELOAD", "false").lower() == "true"
         
         # CORS settings
         self.cors_origins: List[str] = self._parse_cors_origins()

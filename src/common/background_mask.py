@@ -44,7 +44,7 @@ Usage Examples:
     detector.update_bounds(1.5)
 """
 
-import cv2
+from cv2 import VideoCapture, cvtColor, inRange, COLOR_BGR2RGB, COLOR_RGB2HSV, COLOR_RGB2BGR
 import numpy as np
 from typing import List, Union, Tuple, Generator, Optional
 import logging
@@ -130,7 +130,7 @@ class BackgroundMaskDetector:
             for frame in frame_generator:
                 # Convert BGR to RGB for consistent processing
                 if len(frame.shape) == 3 and frame.shape[2] == 3:
-                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    rgb_frame = cvtColor(frame, COLOR_BGR2RGB)
                 else:
                     rgb_frame = frame  # Handle grayscale or other formats
                 frames.append(rgb_frame)
@@ -172,7 +172,7 @@ class BackgroundMaskDetector:
                 continue
             
             # Convert RGB to HSV for color analysis
-            hsv_frame = cv2.cvtColor(cropped_frame, cv2.COLOR_RGB2HSV)
+            hsv_frame = cvtColor(cropped_frame, COLOR_RGB2HSV)
             
             # Reshape to get all pixels
             pixels = hsv_frame.reshape(-1, 3)
@@ -221,7 +221,7 @@ class BackgroundMaskDetector:
             return image  # Return as-is for non-color images
         
         if input_format == 'BGR':
-            return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            return cvtColor(image, COLOR_BGR2RGB)
         else:
             return image  # Already RGB
     
@@ -276,10 +276,10 @@ class BackgroundMaskDetector:
             rgb_img = self._convert_to_rgb(img, input_format)
             
             # Convert RGB to HSV for color analysis
-            hsv_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2HSV)
+            hsv_img = cvtColor(rgb_img, COLOR_RGB2HSV)
             
             # Create mask for background pixels
-            mask = cv2.inRange(hsv_img, self.lower_bound, self.upper_bound)
+            mask = inRange(hsv_img, self.lower_bound, self.upper_bound)
             
             # Create output image (keep in original format)
             result = img.copy()
@@ -336,10 +336,10 @@ class BackgroundMaskDetector:
             rgb_img = self._convert_to_rgb(img, input_format)
             
             # Convert RGB to HSV for color analysis
-            hsv_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2HSV)
+            hsv_img = cvtColor(rgb_img, COLOR_RGB2HSV)
             
             # Create mask for background pixels
-            mask = cv2.inRange(hsv_img, self.lower_bound, self.upper_bound)
+            mask = inRange(hsv_img, self.lower_bound, self.upper_bound)
             
             masks.append(mask)
         
@@ -433,7 +433,7 @@ def create_frame_generator_from_video(video_path: str) -> Generator[np.ndarray, 
     Yields:
         BGR frames from the video (OpenCV default format)
     """
-    cap = cv2.VideoCapture(video_path)
+    cap = VideoCapture(video_path)
     
     try:
         while True:
@@ -462,7 +462,7 @@ def create_frame_generator_from_images(images: List[np.ndarray], input_format: s
     for img in images:
         if input_format == 'RGB':
             # Convert RGB to BGR for consistency
-            bgr_img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            bgr_img = cvtColor(img, COLOR_RGB2BGR)
             yield bgr_img
         else:
             # Already BGR

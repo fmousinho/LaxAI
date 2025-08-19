@@ -6,7 +6,7 @@ including integration with detection models and trackers, and saving results.
 """
 import logging
 import os
-import supervision as sv
+from supervision import Detections, JSONSink, VideoInfo, get_video_frames_generator
 import numpy as np
 from typing import Optional, List
 from collections import defaultdict
@@ -26,7 +26,7 @@ def process_frames(
     frame_target: int,
     detection_file_path: str,
     nms_iou: Optional[float] = None,
-) -> List[sv.Detections]:
+) -> List[Detections]:
     """
     Process all frames for detection and tracking.
     
@@ -54,7 +54,7 @@ def process_frames(
     affine_matrix = None
     current_frame_idx = 0
     
-    json_sink = sv.JSONSink(detection_file_path)
+    json_sink = JSONSink(detection_file_path)
     
     with json_sink as sink:
         for frame in frames_generator:
@@ -111,7 +111,7 @@ def load_detections_from_json(
     json_file_path: str,
     video_source: str,
     update_tracker_state: bool = True
-) -> List[sv.Detections]:
+) -> List[Detections]:
     """
     Load detections from a JSON file, and optionally updates the tracker internal state.
     
@@ -141,7 +141,7 @@ def load_detections_from_json(
 
     detections_list = []
 
-    video_info = sv.VideoInfo.from_video_path(video_path=video_source)
+    video_info = VideoInfo.from_video_path(video_path=video_source)
     total_frames = video_info.total_frames or 0
 
     for frame_id in range(total_frames):
@@ -173,7 +173,7 @@ def load_detections_from_json(
             if all([val == "" for val in tracker_id]):
                 tracker_id = None
 
-            detections = sv.Detections(
+            detections = Detections(
                 xyxy=np.array(xyxy, dtype=np.float32),
                 class_id=np.array(class_id, dtype=int),
                 confidence=np.array(confidence, dtype=np.float32),
@@ -186,7 +186,7 @@ def load_detections_from_json(
     # Update tracker state if requested
     if update_tracker_state and video_source:
         logger.info("Updating tracker state with loaded detections...")
-        frames_generator = sv.get_video_frames_generator(source_path=video_source)
+        frames_generator = get_video_frames_generator(source_path=video_source)
         for frame_idx, (frame, detections) in enumerate(zip(frames_generator, detections_list)):
             tracker.update_tracks_with_loaded_detections(detections, frame)
             if frame_idx >= len(detections_list) - 1:

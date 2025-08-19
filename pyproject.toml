@@ -55,7 +55,8 @@ exclude = ["tests*"]
 
 # Entry points for command line scripts
 [project.scripts]
-laxai-api = "main:app"
+laxai-api = "main:main"
+laxai-serve = "scripts.serve:main"  # Add a dedicated serve script
 laxai-train = "scripts.train_all:main"
 laxai-load-transform = "scripts.load_transform:main"
 
@@ -72,7 +73,7 @@ Issues = "https://github.com/fmousinho/LaxAI/issues"
 # Development tools configuration
 [tool.black]
 line-length = 88
-target-version = ['py312']
+target-version = ['py38']
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -95,7 +96,7 @@ line_length = 88
 known_first_party = ["laxai"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.8"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true

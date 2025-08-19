@@ -5,8 +5,6 @@ from datetime import datetime
 from functools import wraps
 from typing import Dict, Any, Optional, List, Callable
 import torch
-import numpy as np
-from PIL import Image
 from utils.env_or_colab import load_env_or_colab
 
 from config.all_config import wandb_config
@@ -82,90 +80,30 @@ class WandbLogger:
             self.enabled = False
             logger.warning("wandb package not available, disabling wandb logging")
 
-        # Attempt to login to wandb early; record whether login succeeded.
-        self.wandb_api = None
-        self.login_ok = False
-        try:
-            self.wandb_api = self._login_and_get_api()
-            if self.wandb_api:
-                self.login_ok = True
-        except Exception as e:
-            logger.warning("Unexpected error during wandb login attempt: %s", e)
-            self.login_ok = False
+        self.wandb_api = self._login_and_get_api()
+        if not self.wandb_api:
+            self.enabled = False
+            logger.warning("Failed to login to wandb, disabling wandb logging")
 
     def _get_api_key(self) -> Optional[str]:
         """Get and validate wandb API key."""
         # Ensure environment is properly loaded first
         load_env_or_colab()
-        # Prefer explicit env var
+        
         api_key = os.environ.get("WANDB_API_KEY")
-        if api_key:
-            return api_key
-
-        logger.debug("WANDB_API_KEY environment variable not found; attempting Secret Manager lookup")
-
-        # Try Google Secret Manager as a fallback (import at runtime to remain import-safe)
-        try:
-            from google.cloud import secretmanager
-        except Exception as e:
-            logger.debug("google-cloud-secret-manager not available or failed to import: %s", e)
+        if not api_key:
+            logger.error("WANDB_API_KEY environment variable not found")
             return None
-
-        try:
-            client = secretmanager.SecretManagerServiceClient()
-            project = os.environ.get("GOOGLE_CLOUD_PROJECT")
-            secret_name = os.environ.get("WANDB_SECRET_NAME", "wandb_api_key")
-            if not project:
-                logger.debug("GOOGLE_CLOUD_PROJECT not set; cannot access Secret Manager")
-                return None
-
-            secret_path = f"projects/{project}/secrets/{secret_name}/versions/latest"
-            response = client.access_secret_version(name=secret_path)
-            payload = response.payload.data.decode("UTF-8")
-            if payload:
-                # set it in env for the rest of the process and return
-                os.environ["WANDB_API_KEY"] = payload
-                logger.info("Loaded WANDB_API_KEY from Secret Manager: %s", secret_name)
-                return payload
-            else:
-                logger.debug("Secret Manager returned empty payload for %s", secret_name)
-        except Exception as e:
-            logger.debug("Failed to load WANDB_API_KEY from Secret Manager: %s", e)
-
-        return None
+        return api_key
     
     def _login_and_get_api(self) -> Optional[object]:
         """Login to wandb and return API object."""
         api_key = self._get_api_key()
-
-        try:
-            # If an API key is available, use it to login (non-interactive)
-            if api_key:
-                try:
-                    wandb.login(key=api_key)
-                    logger.info("Logged into wandb using provided API key")
-                except Exception as e:
-                    logger.warning("wandb.login with key failed: %s", e)
-                    # fall through and try anonymous/login without key
-
-            # Attempt a login without key (may pick up stored credentials or anonymous)
-            try:
-                wandb.login(anonymous='allow')
-                logger.info("wandb login succeeded (anonymous or stored credentials)")
-            except Exception:
-                logger.debug("wandb anonymous/stored login failed; continuing without complete login")
-
-            # Try to create API client to validate auth; this may still work in anonymous mode
-            try:
-                api = wandb.Api()
-                return api
-            except Exception as e:
-                logger.warning("Could not construct wandb.Api(): %s", e)
-                return None
-
-        except Exception as e:
-            logger.warning("Unexpected error during wandb login flow: %s", e)
+        if not api_key:
             return None
+        
+        wandb.login(key=api_key)
+        return wandb.Api()
     
     def _construct_artifact_path(self, artifact_name: str, version: str = "latest") -> str:
         """Construct standardized artifact path."""
@@ -191,34 +129,14 @@ class WandbLogger:
         if tags:
             all_tags.extend(tags)
 
-        # Determine mode: prefer explicit env override, otherwise use online only
-        # when login succeeded; otherwise fall back to offline mode so we don't block
-        env_mode = os.environ.get("WANDB_MODE")
-        if env_mode:
-            mode = env_mode
-        else:
-            mode = "online" if getattr(self, "login_ok", False) else "offline"
-
-        settings = None
-        try:
-            # start_method is deprecated in recent wandb versions; only set supported options
-            settings = wandb.Settings(disable_git=True)
-        except Exception:
-            settings = None
-
         run_params = {
             "project": wandb_config.project,
             "entity": wandb_config.team,
             "name": run_name or wandb_config.run_name,
             "tags": all_tags,
             "config": config,
-            # Use reinit='finish_previous' to finish any previous run in this process before starting a new one
-            "reinit": "finish_previous",
-            "mode": mode
+            "reinit": "finish_previous"
         }
-        if settings is not None:
-            run_params["settings"] = settings
-
         # Initialize wandb run
         self.run = wandb.init(**run_params)
         

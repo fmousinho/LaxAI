@@ -9,21 +9,18 @@ This script automates the following process:
 4. For each training dataset, it runs the Model Training Pipeline.
 """
 import os
-import sys
 import logging
-import json
 import argparse
-from pathlib import Path
+
 
 # IMPORTANT: Load environment variables and credentials FIRST
 # This must be imported before any modules that use GCS or WandB
 from utils.env_or_colab import load_env_or_colab
 
 # Imports using relative imports since we're now in the src package
-from config import logging_config
 from common.google_storage import get_storage
 from train.dataprep_pipeline import DataPrepPipeline
-from config.all_config import detection_config, training_config
+from config.all_config import detection_config
 
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'

@@ -6,10 +6,9 @@ Contains all image preprocessing pipelines and transform functions.
 import torchvision.transforms as transforms
 import cv2
 import numpy as np
-import torch
 import random
 from .all_config import model_config, transform_config, detection_config, background_mask_config
-from typing import Optional, List, Union, Tuple
+from typing import Optional, List, Tuple
 from PIL import Image
 
 
@@ -49,7 +48,7 @@ def create_background_detector_from_images(images: List[np.ndarray]) -> 'Backgro
         Trained BackgroundMaskDetector instance
     """
     # Import here to avoid circular imports
-    from modules.background_mask import BackgroundMaskDetector, create_frame_generator_from_images
+    from common.background_mask import BackgroundMaskDetector, create_frame_generator_from_images
     
     # Create frame generator
     frame_generator = create_frame_generator_from_images(images)

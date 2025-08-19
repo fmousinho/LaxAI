@@ -1,8 +1,6 @@
 import logging.config
 import sys
 import time
-import os
-from filelock import FileLock # Make sure you have installed this library: pip install filelock
 
 LOGGING_LINE_SIZE = 110
 
@@ -13,10 +11,14 @@ def _is_notebook() -> bool:
         if 'google.colab' in sys.modules:
             return True
         # Check for Jupyter
-        shell = get_ipython().__class__.__name__
-        if shell == 'ZMQInteractiveShell':
-            return True
-        return False
+        try:
+            from IPython import get_ipython
+            shell = get_ipython().__class__.__name__
+            if shell == 'ZMQInteractiveShell':
+                return True
+            return False
+        except ImportError:
+            return False
     except NameError:
         return False
 

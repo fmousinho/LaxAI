@@ -3,14 +3,16 @@ google-auth-httplib2
 google-auth-oauthlib
 google-cloud-storage
 google-cloud-secret-manager
+matplotlib
 numpy
-opencv-python-headless
+opencv-python
 Pillow
 python-dotenv
 python-json-logger
 requests
 rfdetr
 scikit-learn
+seaborn
 supervision
 toml
 torch

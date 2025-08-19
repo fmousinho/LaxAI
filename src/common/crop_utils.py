@@ -13,7 +13,7 @@ import numpy as np
 from collections import deque
 from typing import Tuple, List, Optional, Any
 
-import supervision as sv
+from supervision import Detections
 
 from config.all_config import detection_config
 from config.transforms import ensure_rgb_format
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 def extract_crops_from_video(
     frame_generator: Any,
-    all_detections: List[sv.Detections],
+    all_detections: List[Detections],
     temp_dir: str,
     crop_extract_interval: int = detection_config.crop_extract_interval
 ) -> Tuple[str, str]:
@@ -109,7 +109,7 @@ def extract_crops_from_video(
 
 def _extract_crops_from_frame(
     frame: np.ndarray,
-    detections: sv.Detections,
+    detections: Detections,
     frame_idx: int,
     all_crops_dir: str,
     crop_sizes: List[int],
@@ -528,7 +528,7 @@ class CropExtractor:
     but uses the new functional implementation internally.
     """
     
-    def __init__(self, frame_generator, all_detections: List[sv.Detections], temp_dir: str, 
+    def __init__(self, frame_generator, all_detections: List[Detections], temp_dir: str, 
                  crop_extract_interval: int = detection_config.crop_extract_interval):
         self.frame_generator = frame_generator
         self.all_detections = all_detections

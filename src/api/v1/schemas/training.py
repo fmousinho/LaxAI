@@ -55,7 +55,6 @@ class TrainingResponse(BaseModel):
     task_id: str = Field(description="Unique task identifier")
     status: str = Field(description="Current status")
     message: str = Field(description="Status message")
-    run_guid: Optional[str] = Field(default=None, description="Pipeline run GUID (if available)")
 
 class TrainingProgress(BaseModel):
     """Training progress tracking"""
