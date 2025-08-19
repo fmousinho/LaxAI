@@ -11,11 +11,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install OS-level build dependencies for typical Python wheels
+# Install OS-level build dependencies for typical Python wheels and CA roots
 RUN apt-get update \
      && apt-get install -y --no-install-recommends \
          build-essential gcc curl \
          ffmpeg \
+         ca-certificates \
      && rm -rf /var/lib/apt/lists/*
 
 # Copy package metadata first to leverage Docker layer caching
