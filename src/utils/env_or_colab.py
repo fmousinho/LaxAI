@@ -193,36 +193,53 @@ def setup_gcp_credentials():
     5. Google Secret Manager for sensitive configuration
     """
     logger.info("🌤️  Detected Google Cloud Platform environment")
-    
-    # In GCP, we usually don't need to set GOOGLE_APPLICATION_CREDENTIALS
-    # as it's handled by the platform, but we can check if it's already set
-    if not os.environ.get('GOOGLE_APPLICATION_CREDENTIALS'):
-        logger.info("Using GCP default credentials (Workload Identity or attached service account)")
-    else:
-        logger.info(f"Using explicit service account: {os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')}")
-    
-    # Check if we can detect the project ID from metadata
+
+    # Prefer Application Default Credentials (ADC) on GCP (Cloud Run, GCE, GKE).
+    # Do not force or set GOOGLE_APPLICATION_CREDENTIALS here — when running
+    # on Cloud Run the runtime provides ADC via the attached service account.
     project_id = None
     try:
-        import requests
-        response = requests.get(
-            'http://metadata.google.internal/computeMetadata/v1/project/project-id',
-            headers={'Metadata-Flavor': 'Google'},
-            timeout=2
-        )
-        if response.status_code == 200:
-            project_id = response.text
-            logger.info(f"Detected GCP Project ID: {project_id}")
-            
-            # Set project ID if not already set
-            if not os.environ.get('GOOGLE_CLOUD_PROJECT'):
-                os.environ['GOOGLE_CLOUD_PROJECT'] = project_id
-                logger.debug(f"Set GOOGLE_CLOUD_PROJECT to {project_id}")
-                
-    except ImportError:
-        logger.debug("requests module not available for metadata access")
+        # Try to detect ADC using google-auth if available. This will succeed
+        # on Cloud Run when the runtime provides credentials.
+        try:
+            import google.auth
+            creds, detected_project = google.auth.default()
+            if creds:
+                logger.info("Using Application Default Credentials (ADC) for GCP authentication")
+                # Prefer detected project from ADC if present
+                if detected_project:
+                    project_id = detected_project
+                    logger.info(f"ADC provided project id: {project_id}")
+                    os.environ.setdefault('GOOGLE_CLOUD_PROJECT', project_id)
+        except Exception:
+            logger.debug("google-auth not available or ADC not found; will fallback to metadata/env checks")
+
+        # If ADC did not yield a project_id, try metadata service (works on GCP)
+        if not project_id:
+            try:
+                import requests
+                response = requests.get(
+                    'http://metadata.google.internal/computeMetadata/v1/project/project-id',
+                    headers={'Metadata-Flavor': 'Google'},
+                    timeout=2
+                )
+                if response.status_code == 200:
+                    project_id = response.text
+                    logger.info(f"Detected GCP Project ID via metadata service: {project_id}")
+                    os.environ.setdefault('GOOGLE_CLOUD_PROJECT', project_id)
+            except ImportError:
+                logger.debug("requests module not available for metadata access")
+            except Exception as e:
+                logger.debug(f"Could not retrieve project ID from metadata: {e}")
+
+        # If an explicit GOOGLE_APPLICATION_CREDENTIALS is present, log it but do not require it
+        if os.environ.get('GOOGLE_APPLICATION_CREDENTIALS'):
+            logger.info(f"Using explicit service account via GOOGLE_APPLICATION_CREDENTIALS: {os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')}")
+        else:
+            logger.info("No GOOGLE_APPLICATION_CREDENTIALS set — relying on ADC or metadata service if available")
+
     except Exception as e:
-        logger.debug(f"Could not retrieve project ID from metadata: {e}")
+        logger.debug(f"Unexpected error while setting up GCP credentials: {e}")
     
     # Try to get secrets from Secret Manager based on configuration
     secrets_config = CONFIG.get('secrets', {})
