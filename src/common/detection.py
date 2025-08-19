@@ -108,8 +108,8 @@ class DetectionModel:
                 project=wandb_config.project,
                 job_type="download-model",
                 settings=settings if settings is not None else None,
-                # finish_previous=True ensures any prior run in this process is finished
-                finish_previous=True,
+                # use reinit='finish_previous' to finish any prior run in this process before starting a new one
+                reinit="finish_previous",
             )
 
             logger.info(f"Attempting to fetch artifact: {self.model_artifact}")

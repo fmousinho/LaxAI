@@ -370,6 +370,32 @@ class GoogleStorageClient:
 
     @ensure_ready
     @normalize_user_path
+    @build_full_path("destination_blob_name")
+    def upload_from_string(self, destination_blob_name: str, data: str, content_type: Optional[str] = None) -> bool:
+        """
+        Upload a string (text or JSON) to the specified blob path.
+
+        This exists for convenience because some callers prepare JSON/text
+        content as Python strings. Binary/image uploads should use
+        `upload_from_bytes`.
+        """
+        try:
+            blob = self._bucket.blob(destination_blob_name)  # type: ignore
+
+            # If the destination looks like JSON prefer the JSON content type
+            if destination_blob_name.endswith('.json'):
+                blob.upload_from_string(data, content_type=content_type or "application/json")
+                return True
+
+            # Default to plain text
+            blob.upload_from_string(data, content_type=content_type or "text/plain")
+            return True
+        except Exception:
+            logger.exception("upload_from_string failed")
+            return False
+
+    @ensure_ready
+    @normalize_user_path
     @build_full_path("source_blob_name")
     def download_as_appropriate_type(self, source_blob_name: str) -> Optional[Any]:
         try:

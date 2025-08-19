@@ -181,8 +181,8 @@ class WandbLogger:
             "name": run_name or wandb_config.run_name,
             "tags": all_tags,
             "config": config,
-            # finish_previous=True ensures any previous run is finished before starting a new one
-            "finish_previous": True,
+            # Use reinit='finish_previous' to finish any previous run in this process before starting a new one
+            "reinit": "finish_previous",
             "mode": mode,
         }
         if settings is not None:
