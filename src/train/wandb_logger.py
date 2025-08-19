@@ -97,11 +97,42 @@ class WandbLogger:
         """Get and validate wandb API key."""
         # Ensure environment is properly loaded first
         load_env_or_colab()
+        # Prefer explicit env var
         api_key = os.environ.get("WANDB_API_KEY")
-        if not api_key:
-            logger.debug("WANDB_API_KEY environment variable not found; proceeding without explicit key")
+        if api_key:
+            return api_key
+
+        logger.debug("WANDB_API_KEY environment variable not found; attempting Secret Manager lookup")
+
+        # Try Google Secret Manager as a fallback (import at runtime to remain import-safe)
+        try:
+            from google.cloud import secretmanager
+        except Exception as e:
+            logger.debug("google-cloud-secret-manager not available or failed to import: %s", e)
             return None
-        return api_key
+
+        try:
+            client = secretmanager.SecretManagerServiceClient()
+            project = os.environ.get("GOOGLE_CLOUD_PROJECT")
+            secret_name = os.environ.get("WANDB_SECRET_NAME", "wandb_api_key")
+            if not project:
+                logger.debug("GOOGLE_CLOUD_PROJECT not set; cannot access Secret Manager")
+                return None
+
+            secret_path = f"projects/{project}/secrets/{secret_name}/versions/latest"
+            response = client.access_secret_version(name=secret_path)
+            payload = response.payload.data.decode("UTF-8")
+            if payload:
+                # set it in env for the rest of the process and return
+                os.environ["WANDB_API_KEY"] = payload
+                logger.info("Loaded WANDB_API_KEY from Secret Manager: %s", secret_name)
+                return payload
+            else:
+                logger.debug("Secret Manager returned empty payload for %s", secret_name)
+        except Exception as e:
+            logger.debug("Failed to load WANDB_API_KEY from Secret Manager: %s", e)
+
+        return None
     
     def _login_and_get_api(self) -> Optional[object]:
         """Login to wandb and return API object."""
@@ -183,7 +214,7 @@ class WandbLogger:
             "config": config,
             # Use reinit='finish_previous' to finish any previous run in this process before starting a new one
             "reinit": "finish_previous",
-            "mode": mode,
+            "mode": mode
         }
         if settings is not None:
             run_params["settings"] = settings
