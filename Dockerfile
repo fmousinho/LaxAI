@@ -80,6 +80,13 @@ RUN python -m pip install --upgrade pip \
 # code is provided by the installed wheel(s) produced in the builder stage.
 COPY documentation /app/documentation
 COPY config.toml /app/
+# Also copy config.toml into the Python lib directory that the app
+# may look for (example: /usr/local/lib/python3.12/config.toml). We
+# compute the correct minor version at build time so images built with
+# different Python minors will still work.
+RUN PYDIR=$(python -c 'import sys; print(f"/usr/local/lib/python{sys.version_info.major}.{sys.version_info.minor}")') \
+    && mkdir -p "$PYDIR" \
+    && cp /app/config.toml "$PYDIR/config.toml" || true
 COPY src/config/gcs_structure.yaml /app/src/config/gcs_structure.yaml
 # Do NOT copy files into /opt/conda (avoid coupling to conda paths / copying conda)
 

@@ -167,7 +167,8 @@ class ParameterRegistry:
             # Add default from config if available
             try:
                 default_value = self.get_config_value(param.name)
-                if default_value is not None:
+                # Respect an explicit default provided via param.cli_kwargs
+                if 'default' not in kwargs and default_value is not None:
                     kwargs['default'] = default_value
                     kwargs['help'] += f" (default: {default_value})"
             except Exception:
@@ -433,6 +434,13 @@ class ParameterRegistry:
                 type=ParameterType.STR,
                 description="WandB run name",
                 config_path="training_config.wandb_run_name"
+            ),
+            ParameterDefinition(
+                name="n_datasets_to_use",
+                type=ParameterType.INT,
+                description="Number of datasets to use for training",
+                config_path="training_config.n_datasets_to_use",
+                cli_kwargs={ 'default': None }
             )
         ]
         

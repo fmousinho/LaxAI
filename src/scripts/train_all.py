@@ -75,12 +75,15 @@ def train(tenant_id: str,
         # Combine training_kwargs and model_kwargs for TrainPipeline
         all_kwargs = {**training_kwargs, **model_kwargs}
         
+        # Allow callers (API) to provide a pipeline_name to register the pipeline
+        pipeline_name_override = all_kwargs.pop('pipeline_name', None)
         train_pipeline = TrainPipeline(
             tenant_id=tenant_id, 
             verbose=verbose, 
             save_intermediate=save_intermediate,
+            pipeline_name=pipeline_name_override or None,
             **all_kwargs
-            )
+        )
 
         logger.info("Checking for available datasets..")
         # Use Google Storage functions to list directories

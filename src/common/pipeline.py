@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 # Global registry for active pipelines
 _active_pipelines: Dict[str, 'Pipeline'] = {}
 _registry_lock = threading.Lock()
+# Pending cancellation requests for pipeline names that are not yet registered
+_pending_cancellations: set = set()
 
 
 class PipelineStatus(Enum):
@@ -57,7 +59,12 @@ def stop_pipeline(pipeline_name: str) -> bool:
             pipeline = _active_pipelines[pipeline_name]
             pipeline.request_stop()
             return True
-        return False
+        else:
+            # Pipeline not yet registered: queue a pending cancellation so
+            # that when/if the pipeline registers it will immediately stop.
+            _pending_cancellations.add(pipeline_name)
+            logger.info(f"Queued cancellation request for future pipeline: {pipeline_name}")
+            return True
 
 
 def stop_all_pipelines() -> int:
@@ -130,6 +137,11 @@ class Pipeline:
         # Register this pipeline globally
         with _registry_lock:
             _active_pipelines[pipeline_name] = self
+            # If there was a pending cancellation for this pipeline name, apply it now
+            if pipeline_name in _pending_cancellations:
+                logger.info(f"Applying queued cancellation for pipeline during registration: {pipeline_name}")
+                self.request_stop()
+                _pending_cancellations.discard(pipeline_name)
         
         if self.verbose:
             logger.info(f"Initialized {pipeline_name} pipeline")
