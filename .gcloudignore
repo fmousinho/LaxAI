@@ -1,0 +1,45 @@
+# Exclude common unnecessary and large files from Cloud Build uploads
+# Follow same semantics as .gitignore
+
+# VCS
+.git
+.gitignore
+
+# Python virtualenvs and caches
+.venv
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+/dist/
+
+# Data, artifacts, models
+artifacts/
+data/
+models/
+model.pth
+*.pth
+*.pt
+
+# Training outputs / logs
+evaluation_results/
+wandb/
+*.log
+
+# OS files
+.DS_Store
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Docker / build outputs
+build/
+
+# Avoid uploading large local caches
+/root/.cache/
+**/__pycache__/
+
+# Keep cloudbuild.yaml and Dockerfile present
+# (do not ignore cloudbuild.yaml or Dockerfile)

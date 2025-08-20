@@ -5,44 +5,40 @@ substitutions:
   # _IMAGE should be just the image name; the PROJECT_ID built-in substitution
   # will be used at the call sites to avoid nested/unexpanded variables.
   _IMAGE: "laxai"
-  _SKIP_TESTS: "true"           # set to "false" in trigger to run pytest
   _DEPLOY_TO_CLOUD_RUN: "false" # set to "true" in trigger to deploy
   _CLOUD_RUN_SERVICE: "laxai-api"
   _CLOUD_RUN_REGION: "us-central1"
 
 steps:
-  # Build a test image with dev/test dependencies installed (using Kaniko with cache)
-  - id: "kaniko-build-test-image"
-    name: "gcr.io/kaniko-project/executor:latest"
+  # Build a test image with dev/test dependencies (using docker builder)
+  - id: "build-test-image"
+    name: "gcr.io/cloud-builders/docker"
     args:
-      - --context=dir://.
-      - --dockerfile=Dockerfile
-      - --destination=gcr.io/$PROJECT_ID/${_IMAGE}:test-${SHORT_SHA}
-      - --cache=true
-      - --verbosity=debug
-      - --cache-dir=/cache
-    volumes:
-      - name: "kaniko-cache"
-        path: "/cache"
+      - build
+      - -t
+      - "gcr.io/$PROJECT_ID/${_IMAGE}:test-${SHORT_SHA}"
+      - --build-arg
+      - "INSTALL_TEST_DEPS=true"
+      - .
 
-  # Run tests inside the test image (pulls test image from registry)
+  # Run tests inside the test image
   - id: "run-tests-in-image"
     name: "gcr.io/cloud-builders/docker"
     args: ["run", "--rm", "gcr.io/$PROJECT_ID/${_IMAGE}:test-${SHORT_SHA}", "pytest", "-q"]
 
-  # Build the final production image (no test deps) using Kaniko (will push)
-  - id: "kaniko-build"
-    name: "gcr.io/kaniko-project/executor:latest"
+  # Build the final production image (no test deps)
+  - id: "build-image"
+    name: "gcr.io/cloud-builders/docker"
     args:
-      - --context=dir://.
-      - --dockerfile=Dockerfile
-      - --destination=gcr.io/$PROJECT_ID/${_IMAGE}:${SHORT_SHA}
-      - --cache=true
-      - --verbosity=debug
-      - --cache-dir=/cache
-    volumes:
-      - name: "kaniko-cache"
-        path: "/cache"
+      - build
+      - -t
+      - "gcr.io/$PROJECT_ID/${_IMAGE}:${SHORT_SHA}"
+      - .
+
+  # Push the final image to Container Registry
+  - id: "push-image"
+    name: "gcr.io/cloud-builders/docker"
+    args: ["push", "gcr.io/$PROJECT_ID/${_IMAGE}:${SHORT_SHA}"]
 
   - id: "maybe-cloud-run-deploy"
     name: "gcr.io/cloud-builders/gcloud"

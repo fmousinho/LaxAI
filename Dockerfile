@@ -47,8 +47,8 @@ RUN python -m pip install --upgrade pip setuptools wheel build \
 ENV PYTHONPATH=/app/src
 
 # Create a non-root user for runtime and give them ownership of /app
-RUN useradd -m -u 1000 laxai \
- && chown -R laxai:laxai /app
+# RUN useradd -m -u 1000 laxai \
+#  && chown -R laxai:laxai /app
 
 # Switch to non-root user for running the service
 USER laxai
