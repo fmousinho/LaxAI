@@ -3,10 +3,7 @@
 .venv31211/
 .31211
 .env
-.venv31211/
 
-# Ignore models directory (large model files)
-models/
 token.json
 results*
 .git/
