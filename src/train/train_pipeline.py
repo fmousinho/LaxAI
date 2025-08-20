@@ -57,9 +57,11 @@ class TrainPipeline(Pipeline):
             }   
         }
         
-        # Initialize base pipeline
+        # Initialize base pipeline using the provided pipeline_name so external
+        # callers (for example the API) can create uniquely-named pipelines
+        # (e.g. training_pipeline_<task_id>) and cancel them by that name.
         super().__init__(
-            pipeline_name="training_pipeline",
+            pipeline_name=pipeline_name,
             storage_client=self.storage_client,
             step_definitions=step_definitions,
             verbose=verbose,

@@ -43,7 +43,8 @@ def train(tenant_id: str,
           wandb_tags: Optional[list] = None,
           training_kwargs: Optional[dict] = None,
           model_kwargs: Optional[dict] = None,
-          pipeline_name: Optional[str] = None):
+          pipeline_name: Optional[str] = None,
+          n_datasets_to_use: Optional[int] = None):
     """
     Main function to orchestrate the data prep and training workflows.
 
@@ -96,7 +97,9 @@ def train(tenant_id: str,
 
         logger.info(f"Found {len(datasets)} dataset directories in GCS.")
 
-        N_DATASETS_TO_USE = len(datasets)
+        # By default use all discovered datasets; tests may pass
+        # `n_datasets_to_use=1` to limit scope for fast runs.
+        N_DATASETS_TO_USE = n_datasets_to_use if n_datasets_to_use is not None else len(datasets)
 
         datasets_to_use = [dataset.rstrip('/') for dataset in datasets[0:N_DATASETS_TO_USE]]
 
@@ -116,9 +119,14 @@ def train(tenant_id: str,
 
         logger.info("--- End-to-End Workflow Finished ---")
 
+        # Return the pipeline results to callers (tests, API wrappers)
+        return train_results
+
     except Exception as e:
         logger.error(f"Error occurred during workflow: {e}")
         logger.error(f"Details: {json.dumps(e.args, indent=2)}")
+        # Surface exceptions to callers/tests
+        raise
 
 
 

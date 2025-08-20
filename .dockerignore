@@ -51,6 +51,7 @@ data/
 artifacts/
 model.pth
 wandb/
+src/utils/wandb
 
 # Temporary files
 tmp/
