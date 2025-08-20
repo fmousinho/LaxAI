@@ -5,8 +5,7 @@ substitutions:
   # Build-time and deployment substitutions. Override these when calling gcloud builds
   # submit or when creating a build trigger.
   _IMAGE: "laxai"
-  _REQS: "requirements-gpu.txt"        # maps from docker-compose build arg REQS
-  _INSTALL_GCLOUD: "false"            # maps from docker-compose build arg INSTALL_GCLOUD
+  _REQS: "requirements-gpu.txt"        # maps from docker-compose build arg REQS   
   _CLOUD_RUN_SERVICE: "laxai-api"
   _CLOUD_RUN_REGION: "us-central1"
   _DEPLOY_TO_CLOUD_RUN: "false"       # set to "true" to run the deploy step
@@ -32,24 +31,6 @@ steps:
     name: "gcr.io/cloud-builders/docker"
     args: ["push", "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA}"]
 
-  # Deploy to Cloud Run (gated by the substitution _DEPLOY_TO_CLOUD_RUN)
-  - id: "deploy-cloud-run"
-    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
-    entrypoint: "bash"
-    args:
-      - -c
-      - |
-        if [ "${_DEPLOY_TO_CLOUD_RUN}" = "true" ]; then
-          echo "Deploying ${_IMAGE}:${SHORT_SHA} to Cloud Run (${_CLOUD_RUN_REGION})"
-          gcloud run deploy ${_CLOUD_RUN_SERVICE} \
-            --image us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA} \
-            --region ${_CLOUD_RUN_REGION} \
-            --platform managed \
-            --set-env-vars "PORT=8000,GOOGLE_CLOUD_PROJECT=$PROJECT_ID" \
-            --quiet
-        else
-          echo "_DEPLOY_TO_CLOUD_RUN != true; skipping deploy step"
-        fi
 
 # Optional: make a secret available from Secret Manager to build steps.
 # Replace the versionName below with the actual secret resource name after
