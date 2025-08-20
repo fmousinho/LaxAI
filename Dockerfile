@@ -35,7 +35,7 @@ COPY config.toml /app/
 # console scripts / entrypoints become available.
 RUN python -m pip install --upgrade pip setuptools wheel build \
     && if [ -f /app/requirements.txt ]; then \
-        pip install --no-cache-dir -r /app/requirements.txt; \
+        pip install -r /app/requirements.txt; \
     fi \
     && pip install --no-cache-dir /app
 
@@ -50,7 +50,12 @@ RUN useradd -m -u 1000 laxai \
 USER laxai
 ENV HOME=/home/laxai
 
-EXPOSE 8000
+# Allow the runtime port to be configured at build or run time. Default is 8000.
+ARG PORT=8000
+ENV PORT=${PORT}
 
-# Default command: run uvicorn. For development, you can override to add --reload
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE ${PORT}
+
+# Default command: run uvicorn. Use shell form so ${PORT} is expanded at container start.
+# For development you can still override the command or set --reload.
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT}"]
