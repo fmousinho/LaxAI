@@ -298,6 +298,20 @@ def setup_gcp_credentials():
         else:
             logger.debug(f"✅ {env_var_name} already set in environment")
 
+    # Additional check: ensure Application Default Credentials (ADC) are available
+    try:
+        from google.auth import default as google_auth_default
+        creds, adc_project = google_auth_default()
+        logger.info(f"✅ Application Default Credentials available (project={adc_project})")
+        # If project was not set earlier, populate it from ADC
+        if not os.environ.get('GOOGLE_CLOUD_PROJECT') and adc_project:
+            os.environ['GOOGLE_CLOUD_PROJECT'] = adc_project
+            logger.debug(f"Set GOOGLE_CLOUD_PROJECT from ADC: {adc_project}")
+    except Exception as e:
+        logger.warning(f"⚠️  Application Default Credentials not available: {e}")
+        # Attempt to load missing credentials from Secret Manager
+        _fallback_to_secret_manager()
+
 
 def setup_colab_credentials():
     """Set up credentials for Google Colab environment."""
@@ -390,7 +404,15 @@ def setup_local_credentials():
             else:
                 logger.warning(f"⚠️  Google credentials file not found: {creds_path}")
         else:
-            logger.warning("⚠️  GOOGLE_APPLICATION_CREDENTIALS not found in .env file")
+            # Try ADC as fallback for local dev if SDK available
+            try:
+                from google.auth import default as google_auth_default
+                creds, adc_project = google_auth_default()
+                logger.info(f"✅ Application Default Credentials available locally (project={adc_project})")
+                if adc_project and not os.environ.get('GOOGLE_CLOUD_PROJECT'):
+                    os.environ['GOOGLE_CLOUD_PROJECT'] = adc_project
+            except Exception:
+                logger.warning("⚠️  GOOGLE_APPLICATION_CREDENTIALS not found in .env file and ADC not available")
     else:
         logger.warning(f"⚠️  Environment file not found: {env_path}")
         # If we have GCP setup but no .env, try Secret Manager

@@ -74,14 +74,26 @@ def train(tenant_id: str,
     try:
         # Combine training_kwargs and model_kwargs for TrainPipeline
         all_kwargs = {**training_kwargs, **model_kwargs}
-        
-        # Allow callers (API) to provide a pipeline_name to register the pipeline
-        pipeline_name_override = all_kwargs.pop('pipeline_name', None)
-        train_pipeline = TrainPipeline(
-            tenant_id=tenant_id, 
-            verbose=verbose, 
+
+        # Allow callers (API/service) to provide a pipeline_name to register the pipeline.
+        # Prefer the explicit top-level `pipeline_name` argument (if provided by caller).
+        # Fall back to a pipeline_name embedded inside training kwargs for backward compat.
+        pipeline_name_override = pipeline_name or all_kwargs.pop('pipeline_name', None)
+
+        # Prepare TrainPipeline init kwargs. Only include pipeline_name if
+        # an override was provided; passing None explicitly would override the
+        # TrainPipeline default and cause registration under `None`.
+        pipeline_init_kwargs = dict(
+            tenant_id=tenant_id,
+            verbose=verbose,
             save_intermediate=save_intermediate,
-            pipeline_name=pipeline_name_override or None,
+        )
+        if pipeline_name_override is not None:
+            pipeline_init_kwargs['pipeline_name'] = pipeline_name_override
+
+        # Merge other training/model kwargs into the constructor call
+        train_pipeline = TrainPipeline(
+            **pipeline_init_kwargs,
             **all_kwargs
         )
 

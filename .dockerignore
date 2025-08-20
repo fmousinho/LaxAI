@@ -74,3 +74,9 @@ docker-compose.override.yml
 
 # Allow explicit includes below (example)
 # !src/
+
+# Additional recommended ignores
+models/
+.venv31211/
+.env
+tests/

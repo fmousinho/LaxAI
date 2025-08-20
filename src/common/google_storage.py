@@ -233,28 +233,19 @@ class GoogleStorageClient:
             bool: True if authentication successful, False otherwise
         """
         try:
-            # If credentials object is provided, use it directly
+            # If explicit credentials object is provided, use it.
+            # Otherwise, defer to Application Default Credentials (ADC) or
+            # GOOGLE_APPLICATION_CREDENTIALS as provided by the environment.
             if self.credentials:
                 self._client = storage.Client(credentials=self.credentials, project=self.config.project_id)
                 logger.info(f"Using provided service account credentials for project: {self.config.project_id}")
             else:
-                # Check if credentials file path is set in environment
-                if self.config.credentials_name not in os.environ:
-                    raise ValueError(f"{self.config.credentials_name} not set in environment variables")
-                
-                credentials_path = os.environ[self.config.credentials_name]
-                
-                # Create client with explicit project ID if provided
+                # Do not inspect env vars here; rely on ADC/environment to supply credentials.
                 if self.config.project_id:
-                    self._client = storage.Client.from_service_account_json(
-                        credentials_path, 
-                        project=self.config.project_id
-                    )
-                    logger.info(f"Using service account file for project: {self.config.project_id}")
+                    self._client = storage.Client(project=self.config.project_id)
                 else:
-                    # Use default project from service account file
-                    self._client = storage.Client.from_service_account_json(credentials_path)
-                    logger.info(f"Using service account file with default project: {self._client.project}")
+                    self._client = storage.Client()
+                logger.info("Using Application Default Credentials or GOOGLE_APPLICATION_CREDENTIALS from environment")
 
             # Test authentication by trying to get bucket
             self._bucket = self._client.bucket(self.config.bucket_name)

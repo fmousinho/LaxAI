@@ -9,28 +9,39 @@ substitutions:
   _CLOUD_RUN_SERVICE: "laxai-api"
   _CLOUD_RUN_REGION: "us-central1"
   _DEPLOY_TO_CLOUD_RUN: "false"       # set to "true" to run the deploy step
+  _FETCH_CONFIG: "false"              # set to 'true' to fetch config.toml from Secret Manager during build
+  _CONFIG_SECRET_NAME: "config-toml"  # name of the Secret Manager secret that contains config.toml
 
 steps:
   # Build the final production image (no test deps)
-  - id: "build-image"
-    name: "gcr.io/cloud-builders/docker"
+  # Optional: fetch `config.toml` from Secret Manager and write it into the workspace
+  - id: "fetch-config"
+    name: "gcr.io/cloud-builders/gcloud"
+    entrypoint: "bash"
     args:
-      - build
-      - -t
-      - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA}"
-      - --build-arg
-      - "REQS=${_REQS}"
-      - --build-arg
-      - "INSTALL_GCLOUD=${_INSTALL_GCLOUD}"
-      - --build-arg
-      - "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
-      - .
+      - -c
+      - |
+        if [ "${_FETCH_CONFIG}" = "true" ]; then
+          echo "Fetching config from Secret Manager: ${_CONFIG_SECRET_NAME}"
+          # This requires the Cloud Build service account to have secretmanager.versions.access
+          gcloud secrets versions access latest --secret="${_CONFIG_SECRET_NAME}" --project="$PROJECT_ID" > config.toml
+          echo "Wrote config.toml"
+        else
+          echo "Skipping config fetch (_FETCH_CONFIG=${_FETCH_CONFIG})"
+        fi
 
-  # Push the final image to Artifact Registry
-  - id: "push-image"
-    name: "gcr.io/cloud-builders/docker"
-    args: ["push", "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA}"]
-
+  # Build the final production image using kaniko (supports registry caching)
+  - id: "build-image"
+    name: "gcr.io/kaniko-project/executor:latest"
+    args:
+      - --dockerfile=Dockerfile
+      - --context=dir://.
+      - --destination=us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA}
+      - --cache=true
+      - --cache-repo=us-central1-docker.pkg.dev/$PROJECT_ID/kaniko-cache
+      - --build-arg=REQS=${_REQS}
+      - --build-arg=INSTALL_GCLOUD=${_INSTALL_GCLOUD}
+      - --build-arg=GOOGLE_CLOUD_PROJECT=$PROJECT_ID
 
 # Optional: make a secret available from Secret Manager to build steps.
 # Replace the versionName below with the actual secret resource name after
