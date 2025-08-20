@@ -14,21 +14,77 @@ logger = logging.getLogger(__name__)
 
 # Load configuration from config.toml - REQUIRED
 def load_config():
-    """Load configuration from config.toml file. This file must exist."""
+    """Load configuration from config.toml file.
+
+    The function will attempt to find `config.toml` in several locations in this order:
+      1. Path specified via environment variables `CONFIG_TOML_PATH` or `CONFIG_PATH`.
+      2. Current working directory and its parent directories (walking up to root).
+      3. Project/package relative path (three levels up from this file) - original behavior.
+      4. The directory containing this file and its parent.
+
+    If the file cannot be found, a FileNotFoundError is raised listing all attempted locations.
+    """
     try:
         import toml
-        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'config.toml')
-        if not os.path.exists(config_path):
-            raise FileNotFoundError(f"Configuration file not found: {config_path}")
-        
-        with open(config_path, 'r') as f:
-            config = toml.load(f)
-        
-        logger.debug(f"✅ Loaded configuration from {config_path}")
-        return config
-        
+
+        searched_paths = []
+
+        # 1) Environment override
+        env_path = os.environ.get('CONFIG_TOML_PATH') or os.environ.get('CONFIG_PATH')
+        if env_path:
+            searched_paths.append(env_path)
+            if os.path.exists(env_path):
+                with open(env_path, 'r') as f:
+                    config = toml.load(f)
+                logger.debug(f"✅ Loaded configuration from (env) {env_path}")
+                return config
+
+        # 2) Walk up from current working directory
+        cwd = os.getcwd()
+        cur = cwd
+        while True:
+            candidate = os.path.join(cur, 'config.toml')
+            searched_paths.append(candidate)
+            if os.path.exists(candidate):
+                with open(candidate, 'r') as f:
+                    config = toml.load(f)
+                logger.debug(f"✅ Loaded configuration from {candidate}")
+                return config
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+
+        # 3) Package-relative (preserve original behavior)
+        package_based = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'config.toml')
+        searched_paths.append(package_based)
+        if os.path.exists(package_based):
+            with open(package_based, 'r') as f:
+                config = toml.load(f)
+            logger.debug(f"✅ Loaded configuration from package-relative {package_based}")
+            return config
+
+        # 4) Try simpler relatives (one/two levels)
+        simpler = [
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.toml'),
+            os.path.join(os.path.dirname(__file__), 'config.toml')
+        ]
+        for candidate in simpler:
+            searched_paths.append(candidate)
+            if os.path.exists(candidate):
+                with open(candidate, 'r') as f:
+                    config = toml.load(f)
+                logger.debug(f"✅ Loaded configuration from {candidate}")
+                return config
+
+        # If we reach here, nothing was found
+        raise FileNotFoundError(f"Configuration file not found. Searched locations:\n" + "\n".join(searched_paths))
+
     except ImportError:
         raise ImportError("toml package is required. Install with: pip install toml")
+    except FileNotFoundError:
+        # Re-raise FileNotFoundError so caller can distinguish missing config
+        raise
     except Exception as e:
         raise RuntimeError(f"Failed to load configuration from config.toml: {e}")
 

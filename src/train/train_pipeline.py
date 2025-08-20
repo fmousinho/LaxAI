@@ -12,7 +12,6 @@ from common.google_storage import  get_storage, GCSPaths
 from common.pipeline import Pipeline, PipelineStatus
 from train.dataset import LacrossePlayerDataset
 from train.training import Training
-from train.siamesenet import SiameseNet
 from train.evaluator import ModelEvaluator
 from config.transforms import get_transforms
 from config.all_config import training_config, model_config, wandb_config
