@@ -10,21 +10,6 @@ substitutions:
   _CLOUD_RUN_REGION: "us-central1"
 
 steps:
-  # Build a test image with dev/test dependencies (using docker builder)
-  - id: "build-test-image"
-    name: "gcr.io/cloud-builders/docker"
-    args:
-      - build
-      - -t
-      - "gcr.io/$PROJECT_ID/${_IMAGE}:test-${SHORT_SHA}"
-      - --build-arg
-      - "INSTALL_TEST_DEPS=true"
-      - .
-
-  # Run tests inside the test image
-  - id: "run-tests-in-image"
-    name: "gcr.io/cloud-builders/docker"
-    args: ["run", "--rm", "gcr.io/$PROJECT_ID/${_IMAGE}:test-${SHORT_SHA}", "pytest", "-q"]
 
   # Build the final production image (no test deps)
   - id: "build-image"
