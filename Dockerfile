@@ -33,9 +33,13 @@ COPY config.toml /app/
 # Upgrade pip and install build tools and the package. Installing the package via
 # `pip install .` builds and installs the wheel into the environment so the
 # console scripts / entrypoints become available.
+ARG INSTALL_TEST_DEPS=false
 RUN python -m pip install --upgrade pip setuptools wheel build \
     && if [ -f /app/requirements.txt ]; then \
         pip install -r /app/requirements.txt; \
+    fi \
+    && if [ "$INSTALL_TEST_DEPS" = "true" ] && [ -f /app/requirements-dev.txt ]; then \
+        pip install -r /app/requirements-dev.txt; \
     fi \
     && pip install --no-cache-dir /app
 
