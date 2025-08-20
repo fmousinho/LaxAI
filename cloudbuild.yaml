@@ -1,59 +1,72 @@
 # Cloud Build configuration for LaxAI
-# Builds Docker image, optional tests, pushes to Container Registry and can deploy to Cloud Run.
+# Builds Docker image, pushes to Artifact Registry and can deploy to Cloud Run.
 
 substitutions:
-  # _IMAGE should be just the image name; the PROJECT_ID built-in substitution
-  # will be used at the call sites to avoid nested/unexpanded variables.
+  # Build-time and deployment substitutions. Override these when calling gcloud builds
+  # submit or when creating a build trigger.
   _IMAGE: "laxai"
-  _DEPLOY_TO_CLOUD_RUN: "false" # set to "true" in trigger to deploy
+  _REQS: "requirements-gpu.txt"        # maps from docker-compose build arg REQS
+  _INSTALL_GCLOUD: "false"            # maps from docker-compose build arg INSTALL_GCLOUD
   _CLOUD_RUN_SERVICE: "laxai-api"
   _CLOUD_RUN_REGION: "us-central1"
+  _DEPLOY_TO_CLOUD_RUN: "false"       # set to "true" to run the deploy step
 
 steps:
-
   # Build the final production image (no test deps)
   - id: "build-image"
     name: "gcr.io/cloud-builders/docker"
     args:
       - build
       - -t
-      - "gcr.io/$PROJECT_ID/${_IMAGE}:${SHORT_SHA}"
+      - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA}"
+      - --build-arg
+      - "REQS=${_REQS}"
+      - --build-arg
+      - "INSTALL_GCLOUD=${_INSTALL_GCLOUD}"
+      - --build-arg
+      - "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
       - .
 
-  # Push the final image to Container Registry
+  # Push the final image to Artifact Registry
   - id: "push-image"
     name: "gcr.io/cloud-builders/docker"
-    args: ["push", "gcr.io/$PROJECT_ID/${_IMAGE}:${SHORT_SHA}"]
+    args: ["push", "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA}"]
 
-  - id: "maybe-cloud-run-deploy"
-    name: "gcr.io/cloud-builders/gcloud"
-    entrypoint: "/bin/bash"
+  # Deploy to Cloud Run (gated by the substitution _DEPLOY_TO_CLOUD_RUN)
+  - id: "deploy-cloud-run"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
     args:
       - -c
       - |
-        set -euo pipefail
         if [ "${_DEPLOY_TO_CLOUD_RUN}" = "true" ]; then
-          echo "Deploying to Cloud Run: ${_CLOUD_RUN_SERVICE} in ${_CLOUD_RUN_REGION}"
-          gcloud run deploy "${_CLOUD_RUN_SERVICE}" \
-            --image "gcr.io/$PROJECT_ID/${_IMAGE}:${SHORT_SHA}" \
-            --region "${_CLOUD_RUN_REGION}" \
+          echo "Deploying ${_IMAGE}:${SHORT_SHA} to Cloud Run (${_CLOUD_RUN_REGION})"
+          gcloud run deploy ${_CLOUD_RUN_SERVICE} \
+            --image us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA} \
+            --region ${_CLOUD_RUN_REGION} \
             --platform managed \
-            --allow-unauthenticated
+            --set-env-vars "PORT=8000,GOOGLE_CLOUD_PROJECT=$PROJECT_ID" \
+            --quiet
         else
-          echo "Skipping Cloud Run deploy (set _DEPLOY_TO_CLOUD_RUN to 'true' to enable)"
+          echo "_DEPLOY_TO_CLOUD_RUN != true; skipping deploy step"
         fi
 
+# Optional: make a secret available from Secret Manager to build steps.
+# Replace the versionName below with the actual secret resource name after
+# creating the secret in your project. This avoids mounting host files into the
+# build and is the recommended pattern for build-time credentials.
+availableSecrets:
+  secretManager: []
+
 images:
-  - "gcr.io/$PROJECT_ID/${_IMAGE}:${SHORT_SHA}"
+  - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA}"
 
 options:
   logging: CLOUD_LOGGING_ONLY
-  # Increase machine type to provide more memory/CPU for Kaniko builds (avoid OOM 137)
-  machineType: "E2_HIGHCPU_8"
 
 timeout: "3600s"  # 60 minutes
 
 # Notes:
 # - Use substitutions to customize behavior when creating a build trigger.
 # - Example gcloud submit (uses docker build locally):
-#   gcloud builds submit --config cloudbuild.yaml --substitutions=_SKIP_TESTS=false,_DEPLOY_TO_CLOUD_RUN=false
+#   gcloud builds submit --config cloudbuild.yaml --substitutions=_DEPLOY_TO_CLOUD_RUN=false
