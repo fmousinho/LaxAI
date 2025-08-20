@@ -3,6 +3,10 @@
 .venv31211/
 .31211
 .env
+.venv31211/
+
+# Ignore models directory (large model files)
+models/
 token.json
 results*
 .git/
@@ -13,6 +17,7 @@ analyse/reports/
 notebooks/data/
 temp
 data/
+models/
 artifacts/
 wandb/
 evaluation_results/
