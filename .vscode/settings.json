@@ -1,4 +1,13 @@
 {
+  "python.defaultInterpreterPath": "/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI/.venv31211/bin/python",
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": [
+    "tests"
+  ],
+  "python.testing.unittestEnabled": false,
+  "python.testing.autoTestDiscoverOnSaveEnabled": true
+}
+{
     "python.analysis.extraPaths": [
         "./tools"
     ],
@@ -48,5 +57,10 @@
         "**/*.mkv",
         "**/*.webm"
     ],
-    "python.analysis.diagnosticMode": "openFilesOnly"
+    "python.analysis.diagnosticMode": "openFilesOnly",
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true
 }

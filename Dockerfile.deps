@@ -1,0 +1,36 @@
+# Dependency-only Dockerfile for LaxAI
+# Builds an image that contains OS + Python + all pip dependencies from requirements files.
+# Tag this image by a hash of the requirements files so it can be reused when only code changes.
+
+FROM pytorch/pytorch:2.7.1-cuda11.8-cudnn9-runtime
+
+# Set a working directory
+WORKDIR /app
+
+# Install system packages required to build some Python packages (adjust as needed)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       build-essential \
+       ca-certificates \
+       git \
+    && rm -rf /var/lib/apt/lists/*
+
+# The build script will provide a `requirements/` directory in the build context
+# containing one or more requirements files (e.g. requirements.txt, requirements-dev.txt).
+# Copy that directory into the image and process any files found there.
+COPY requirements/ ./requirements/
+
+# Upgrade pip and build wheels for any requirements files found, then install
+RUN python -m pip install --upgrade pip wheel setuptools \
+ && mkdir /wheels \
+ # Build wheels for each requirements file present (if none exist, the loops are no-ops)
+ && for f in requirements/*.txt; do [ -f "$f" ] && pip wheel -r "$f" -w /wheels || true; done \
+ # Install from the built wheels for each requirements file
+ && for f in requirements/*.txt; do [ -f "$f" ] && pip install --no-index --find-links /wheels -r "$f" || true; done \
+ && rm -rf /wheels
+
+# Clear pip cache to reduce image size
+RUN python -m pip cache purge || true
+
+# Minimal default command
+CMD ["python", "-c", "print('Deps image ready')"]

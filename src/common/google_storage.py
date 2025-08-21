@@ -19,6 +19,7 @@ including error handling, credential management, and common operations.
 import logging
 import os
 import yaml
+from functools import wraps
 import tempfile
 import cv2
 import json
@@ -26,14 +27,13 @@ import numpy as np
 import weakref
 from typing import Optional, Any
 from supervision import Detections, JSONSink
-from utils.env_or_colab import load_env_or_colab
 from google.cloud import storage
 from google.cloud.storage import Blob
 from google.cloud.exceptions import NotFound, Forbidden
 from google.auth.exceptions import DefaultCredentialsError
 from google.oauth2 import service_account
 from config.all_config import google_storage_config
-from functools import wraps
+
 
 logger = logging.getLogger(__name__)
 
@@ -233,19 +233,28 @@ class GoogleStorageClient:
             bool: True if authentication successful, False otherwise
         """
         try:
-            # If explicit credentials object is provided, use it.
-            # Otherwise, defer to Application Default Credentials (ADC) or
-            # GOOGLE_APPLICATION_CREDENTIALS as provided by the environment.
+            # If credentials object is provided, use it directly
             if self.credentials:
                 self._client = storage.Client(credentials=self.credentials, project=self.config.project_id)
                 logger.info(f"Using provided service account credentials for project: {self.config.project_id}")
             else:
-                # Do not inspect env vars here; rely on ADC/environment to supply credentials.
+                # Check if credentials file path is set in environment
+                if self.config.credentials_name not in os.environ:
+                    raise ValueError(f"{self.config.credentials_name} not set in environment variables")
+                
+                credentials_path = os.environ[self.config.credentials_name]
+                
+                # Create client with explicit project ID if provided
                 if self.config.project_id:
-                    self._client = storage.Client(project=self.config.project_id)
+                    self._client = storage.Client.from_service_account_json(
+                        credentials_path, 
+                        project=self.config.project_id
+                    )
+                    logger.info(f"Using service account file for project: {self.config.project_id}")
                 else:
-                    self._client = storage.Client()
-                logger.info("Using Application Default Credentials or GOOGLE_APPLICATION_CREDENTIALS from environment")
+                    # Use default project from service account file
+                    self._client = storage.Client.from_service_account_json(credentials_path)
+                    logger.info(f"Using service account file with default project: {self._client.project}")
 
             # Test authentication by trying to get bucket
             self._bucket = self._client.bucket(self.config.bucket_name)

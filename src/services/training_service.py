@@ -196,4 +196,3 @@ def cancel_job(task_id: str) -> bool:
 		job["progress"]["message"] = "Training job marked as cancelled (pipeline not yet registered)"
 		logger.warning(f"Pipeline name not set for job {task_id}; marked as cancelled in tracker only")
 		return False
-
