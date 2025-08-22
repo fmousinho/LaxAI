@@ -33,21 +33,20 @@ RUN set -eux \
   && python -m pip install --upgrade pip wheel setuptools \
   && mkdir -p /wheels /tmp/reqsdir \
   && if [ -f requirements/requirements-cpu.txt ]; then \
-      # Copy all requirement files into the temp reqsdir so that any '-r' includes
-      # referenced from requirements-cpu.txt resolve correctly. We then run pip
-      # from inside that directory and wheel only the CPU requirements file.
+      # Copy requirement files so '-r' includes resolve correctly inside the temp dir
       cp requirements/*.txt /tmp/reqsdir/; \
       REQ_DIR=/tmp/reqsdir; \
     else \
       echo "ERROR: requirements/requirements-cpu.txt not found" >&2; \
       exit 1; \
     fi \
-  && echo "Building wheels from: $REQ_DIR/requirements-cpu.txt" \
-  # Prefer CPU-only PyTorch wheels to avoid requiring CUDA libraries at runtime.
-  # Use the official PyTorch CPU wheel index so pip wheel pulls +cpu variants when available.
   && TORCH_CPU_INDEX="https://download.pytorch.org/whl/cpu" \
   && PIP_NO_CACHE_DIR=1 \
-  && (cd $REQ_DIR && for f in requirements-cpu.txt; do [ -f "$f" ] && PIP_NO_CACHE_DIR=1 pip wheel --no-deps --find-links "$TORCH_CPU_INDEX/torch_stable.html" -r "$f" -w /wheels; done) \
+  # Build the PyTorch CPU wheel first so it's available to later installs
+  && (PIP_NO_CACHE_DIR=1 pip wheel --no-deps --find-links "$TORCH_CPU_INDEX/torch_stable.html" torch -w /wheels || true) \
+  # Build wheels from the copied temp reqsdir and prefer CPU-only PyTorch wheels
+  && (cd "$REQ_DIR" && PIP_NO_CACHE_DIR=1 pip wheel --no-deps --find-links "$TORCH_CPU_INDEX/torch_stable.html" -r "requirements-cpu.txt" -w /wheels) \
+  && echo "Building wheels from: $REQ_DIR/requirements-cpu.txt" \
   && ls -lah /wheels \
   && rm -rf /tmp/* /var/tmp/* /root/.cache/pip
 
