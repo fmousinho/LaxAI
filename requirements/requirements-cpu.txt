@@ -480,7 +480,7 @@ toml==0.10.2
     #   timm
     #   torchvision
     #   transformers
-torchvision==0.23.0
+#torchvision==0.23.0
     # via
     #   open-clip-torch
     #   rfdetr
