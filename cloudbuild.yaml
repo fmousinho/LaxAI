@@ -8,7 +8,7 @@ substitutions:
   _REQS: "requirements-gpu.txt"        # maps from docker-compose build arg REQS   
   _CLOUD_RUN_SERVICE: "laxai-api"
   _CLOUD_RUN_REGION: "us-central1"
-  _DEPLOY_TO_CLOUD_RUN: "false"       # set to "true" to run the deploy step
+  _DEPLOY_TO_CLOUD_RUN: "true"       # set to "true" to run the deploy step
 
 steps:
   # Build the final production image (no test deps)
