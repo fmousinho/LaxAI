@@ -11,11 +11,11 @@ requires-python = ">=3.8"
 authors = [
   { name="Fernando Mousinho", email="fernando@example.com" },
 ]
-license = {text = "MIT"}
+license = { text = "MIT" }
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+  # License is declared using SPDX expression in the 'license' field above.
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
@@ -73,7 +73,7 @@ Issues = "https://github.com/fmousinho/LaxAI/issues"
 # Development tools configuration
 [tool.black]
 line-length = 88
-target-version = ['py38']
+target-version = ['py312']
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -96,7 +96,7 @@ line_length = 88
 known_first_party = ["laxai"]
 
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true

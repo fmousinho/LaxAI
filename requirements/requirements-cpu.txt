@@ -4,6 +4,12 @@
 #
 #    pip-compile --output-file=requirements/requirements-cpu.lock.txt requirements/requirements-cpu.txt
 #
+# Ensure pip prefers CPU-only PyTorch wheels when building wheels in Docker.
+# The -f URL points pip to the PyTorch CPU wheel index.
+ -f https://download.pytorch.org/whl/cpu/torch_stable.html
+torch==2.8.0
+# Allow pip to select a torchvision compatible with torch==2.8.0
+
 accelerate==1.10.0
     # via
     #   -r requirements/requirements-base.txt
