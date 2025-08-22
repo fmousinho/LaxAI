@@ -470,7 +470,7 @@ tokenizers==0.21.4
     #   transformers
 toml==0.10.2
     # via -r requirements/requirements-base.txt
-torch==2.8.0
+torch==2.8.0+cpu
     # via
     #   accelerate
     #   fairscale
@@ -480,7 +480,7 @@ torch==2.8.0
     #   timm
     #   torchvision
     #   transformers
-torchvision==0.23.0
+torchvision==0.23.0+cpu
     # via
     #   open-clip-torch
     #   rfdetr

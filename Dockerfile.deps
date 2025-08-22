@@ -36,17 +36,20 @@ RUN set -eux \
       # Copy all requirement files into the temp reqsdir so that any '-r' includes
       # referenced from requirements-cpu.txt resolve correctly. We then run pip
       # from inside that directory and wheel only the CPU requirements file.
-      cp requirements/*.txt /tmp/reqsdir/ || true; \
+      cp requirements/*.txt /tmp/reqsdir/; \
       REQ_DIR=/tmp/reqsdir; \
     else \
       echo "ERROR: requirements/requirements-cpu.txt not found" >&2; \
       exit 1; \
     fi \
   && echo "Building wheels from: $REQ_DIR/requirements-cpu.txt" \
+  # Prefer CPU-only PyTorch wheels to avoid requiring CUDA libraries at runtime.
+  # Use the official PyTorch CPU wheel index so pip wheel pulls +cpu variants when available.
+  && TORCH_CPU_INDEX="https://download.pytorch.org/whl/cpu" \
   && PIP_NO_CACHE_DIR=1 \
-  && (cd $REQ_DIR && for f in requirements-cpu.txt; do [ -f "$f" ] && PIP_NO_CACHE_DIR=1 pip wheel --no-deps -r "$f" -w /wheels; done) \
-  && ls -lah /wheels || true \
-  && rm -rf /tmp/* /var/tmp/* /root/.cache/pip || true
+  && (cd $REQ_DIR && for f in requirements-cpu.txt; do [ -f "$f" ] && PIP_NO_CACHE_DIR=1 pip wheel --no-deps --find-links "$TORCH_CPU_INDEX/torch_stable.html" -r "$f" -w /wheels; done) \
+  && ls -lah /wheels \
+  && rm -rf /tmp/* /var/tmp/* /root/.cache/pip
 
 # Runtime image: small python base with only runtime deps installed from wheels
 FROM ${BASE_PYTHON_IMAGE} AS runtime
@@ -58,9 +61,9 @@ COPY --from=builder /wheels /wheels
 RUN set -eux \
   && if [ -d /wheels ] && [ "$(ls -A /wheels)" ]; then \
        # Install all wheels without using cache
-       for f in /wheels/*.whl; do [ -f "$f" ] && python -m pip install --no-index --no-deps --no-cache-dir "$f" || true; done; \
+       for f in /wheels/*.whl; do [ -f "$f" ] && python -m pip install --no-index --no-deps --no-cache-dir "$f"; done; \
      fi \
-  && rm -rf /wheels /tmp/* /var/tmp/* /root/.cache/pip || true
+  && rm -rf /wheels /tmp/* /var/tmp/* /root/.cache/pip
 
 # Common metadata and health
 LABEL org.opencontainers.image.title="laxai-deps" \

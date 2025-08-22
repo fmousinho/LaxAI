@@ -220,7 +220,7 @@ else
   LATEST_REF="${IMAGE_NAME}:latest"
 fi
 echo "Tagging ${IMAGE_REF} -> ${LATEST_REF}"
-docker tag "$IMAGE_REF" "$LATEST_REF" || true
+docker tag "$IMAGE_REF" "$LATEST_REF"
 
 # If we're pushing, push the :latest tag as well. However, if we already
 # created a multi-arch :latest manifest via buildx imagetools above, skip the
@@ -230,7 +230,7 @@ if [[ "$PUSH" == true ]]; then
     echo "Multi-arch :latest manifest already created remotely; skipping push of ${LATEST_REF}"
   else
     echo "Pushing ${LATEST_REF}"
-    docker push "$LATEST_REF" || true
+    docker push "$LATEST_REF"
   fi
 fi
 
