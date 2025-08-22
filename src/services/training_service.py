@@ -9,7 +9,7 @@ import logging
 import traceback
 import uuid
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import BackgroundTasks
 
@@ -34,17 +34,55 @@ def _convert_request_to_kwargs(request) -> Dict[str, Any]:
 		"custom_name": getattr(request, 'custom_name', None),
 		"resume_from_checkpoint": getattr(request, 'resume_from_checkpoint', True),
 		"wandb_tags": getattr(request, 'wandb_tags', []) or [],
-		"n_datasets_to_process": getattr(request, 'n_datasets_to_process', None),
+		"n_datasets_to_use": getattr(request, 'n_datasets_to_use', None),
 	}
 
+	# If n_datasets_to_use is explicitly set to 0, treat it as None (use all datasets)
+	if kwargs["n_datasets_to_use"] == 0:
+		kwargs["n_datasets_to_use"] = None
+
+
+
 	# Training and model params may be Pydantic models
-	if getattr(request, 'training_params', None):
-		training_dict = request.training_params.model_dump(exclude_none=True)
+	# training_params and model_params may be provided as Pydantic models,
+	# dicts (from parsed JSON), or raw JSON strings from some clients. Be
+	# defensive and coerce into dicts when possible.
+	tp = getattr(request, 'training_params', None)
+	if tp is not None:
+		if hasattr(tp, 'model_dump'):
+			training_dict = tp.model_dump(exclude_none=True)
+		elif isinstance(tp, dict):
+			training_dict = tp
+		elif isinstance(tp, str):
+			try:
+				import json
+				training_dict = json.loads(tp)
+			except Exception:
+				training_dict = {"raw": tp}
+		else:
+			training_dict = {"value": tp}
 		kwargs["training_kwargs"] = training_dict
 
-	if getattr(request, 'model_params', None):
-		model_dict = request.model_params.model_dump(exclude_none=True)
+	mp = getattr(request, 'model_params', None)
+	if mp is not None:
+		if hasattr(mp, 'model_dump'):
+			model_dict = mp.model_dump(exclude_none=True)
+		elif isinstance(mp, dict):
+			model_dict = mp
+		elif isinstance(mp, str):
+			try:
+				import json
+				model_dict = json.loads(mp)
+			except Exception:
+				model_dict = {"raw": mp}
+		else:
+			model_dict = {"value": mp}
 		kwargs["model_kwargs"] = model_dict
+
+	# If callers accidentally included `n_datasets_to_use` inside the dynamic
+	# training kwargs, promote it to the top-level `n_datasets_to_use` unless a
+	# top-level value was explicitly provided. This prevents conflicting
+	# values and keeps dataset selection deterministic
 
 	return kwargs
 
@@ -111,7 +149,7 @@ async def _run_training_task(task_id: str, kwargs: Dict[str, Any]):
 		TRAINING_JOBS[task_id]["error"] = {"message": error_msg, "details": error_details}
 
 
-def create_job(request, pipeline_name: Optional[str] = None) -> (str, Dict[str, Any]):
+def create_job(request) -> Tuple[str, Dict[str, Any]]:
 	"""Create a job entry and return (task_id, kwargs) to start it.
 
 	The caller should call `start_job(task_id, kwargs, background_tasks)` to schedule execution.
@@ -121,15 +159,18 @@ def create_job(request, pipeline_name: Optional[str] = None) -> (str, Dict[str, 
 	# Convert request to kwargs for training function
 	kwargs = _convert_request_to_kwargs(request)
 
-	# If caller didn't provide pipeline_name, generate one now
-	pipeline_name = pipeline_name or f"training_pipeline_{task_id}"
+	# Always use the task_id as the canonical pipeline name so cancellation
+	# requests can reliably reference the running pipeline by job id.
+	# Always use the task_id as the canonical pipeline name so cancellation
+	# requests can reliably reference the running pipeline by job id.
+	pipeline_name = task_id
 	kwargs["pipeline_name"] = pipeline_name
 
 	TRAINING_JOBS[task_id] = {
 		"status": "pending",
 		"request": request.model_dump() if hasattr(request, 'model_dump') else dict(request),
 		"WandB_name": getattr(request, 'custom_name', None),
-		"pipeline_name": pipeline_name,
+	"pipeline_name": pipeline_name,
 		"progress": {
 			"status": "pending",
 			"message": "Training job queued",

@@ -2,7 +2,7 @@ import os
 import logging
 import importlib
 import traceback
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Callable
 
 
 from train.wandb_logger import wandb_logger
@@ -105,9 +105,11 @@ class TrainPipeline(Pipeline):
             }
             # Pass to generic pipeline without resume_from_checkpoint for the pipeline steps
             results = super().run(context)
+            wandb_logger.finish()
             return results
         except Exception as e:
             logger.error(f"Error occurred during training pipeline run: {e}")
+            wandb_logger.finish()
             return {"status": PipelineStatus.ERROR.value, "error": str(e)}
 
 
@@ -234,7 +236,7 @@ class TrainPipeline(Pipeline):
             return {"status": StepStatus.ERROR.value, "error": f"Unexpected error: {str(e)}"}
         
 
-    def _train_model(self, context: dict) -> Dict[str, Any]:
+    def _train_model(self, context: dict, stop_callback: Optional[Callable] = None) -> Dict[str, Any]:
         """
         Train the neural network model using the Training class.
         
@@ -274,7 +276,8 @@ class TrainPipeline(Pipeline):
                 dataset=training_dataset,
                 model_name=self.collection_name,
                 val_dataset=val_dataset,
-                resume_from_checkpoint=resume_from_checkpoint
+                resume_from_checkpoint=resume_from_checkpoint,
+                stop_callback=stop_callback
             )
 
             training_info = training.get_training_info()
@@ -307,7 +310,7 @@ class TrainPipeline(Pipeline):
             return {"status": StepStatus.ERROR.value, "error": error_msg}
 
 
-    def _evaluate_model(self, context: dict) -> Dict[str, Any]:
+    def _evaluate_model(self, context: dict, stop_callback: Optional[Callable] = None) -> Dict[str, Any]:
         """
         Comprehensive model evaluation using multiple methodologies.
         
@@ -344,7 +347,8 @@ class TrainPipeline(Pipeline):
             try:
                 evaluator = ModelEvaluator(
                     model=trained_model,
-                    device=device
+                    device=device,
+                    stop_callback=stop_callback
                 )
                 logger.info("Model evaluator initialized successfully")
             except Exception as e:

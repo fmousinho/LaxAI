@@ -395,7 +395,7 @@ class Training:
             for i, (anchor, positive, negative, _) in enumerate(self.dataloader):
 
                 # Check for cancellation every few batches
-                if stop_callback and i % 1 == 0 and stop_callback():
+                if stop_callback and stop_callback():
                     logger.info(f"Training cancelled by stop_callback at epoch {epoch + 1}, batch {i + 1}")
                     raise InterruptedError("Training cancelled by external request")
 

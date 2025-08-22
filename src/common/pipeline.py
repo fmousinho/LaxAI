@@ -63,7 +63,7 @@ def stop_pipeline(pipeline_name: str) -> bool:
             # Pipeline not yet registered: queue a pending cancellation so
             # that when/if the pipeline registers it will immediately stop.
             _pending_cancellations.add(pipeline_name)
-            logger.info(f"Queued cancellation request for future pipeline: {pipeline_name}")
+            logger.warning(f"Could not find pipeline to cancel: {pipeline_name}. Will attempt later, but no guarantees.")
             return True
 
 
@@ -137,6 +137,7 @@ class Pipeline:
         # Register this pipeline globally
         with _registry_lock:
             _active_pipelines[pipeline_name] = self
+            logger.info(f"Registered pipeline: {pipeline_name}")
             # If there was a pending cancellation for this pipeline name, apply it now
             if pipeline_name in _pending_cancellations:
                 logger.info(f"Applying queued cancellation for pipeline during registration: {pipeline_name}")

@@ -47,8 +47,15 @@ class TrainingRequest(BaseModel):
     custom_name: str = Field(default="", description="Label used by WandB")
     resume_from_checkpoint: bool = Field(default=api_config.resume_from_checkpoint, description="Resume from checkpoint if available")
     wandb_tags: List[str] = Field(default=[], description="WandB tags for this run")
-    training_params: Optional[TrainingConfig] = None
-    model_params: Optional[ModelConfig] = None
+    # Number of discovered datasets to use for the run. This is a top-level
+    # field (not part of the dynamic training config) so callers can control
+    # dataset selection without embedding it in training_params.
+    n_datasets_to_use: Optional[int] = Field(default=None, description="Limit number of discovered datasets to use for training")
+    # Training and model params are generated dynamically at runtime from the
+    # parameter registry. Use the generated Pydantic models so FastAPI/OpenAPI
+    # renders them in the UI and request bodies are validated into model objects.
+    training_params: Optional['TrainingConfig'] = None
+    model_params: Optional['ModelConfig'] = None
 
 class TrainingResponse(BaseModel):
     """Response schema for training endpoint"""
@@ -98,7 +105,9 @@ def get_training_example() -> Dict[str, Any]:
             "custom_name": api_config.default_custom_name,
             "resume_from_checkpoint": api_config.resume_from_checkpoint,
             "wandb_tags": api_config.default_wandb_tags.copy(),
-            "training_config": example_config
+            # Example payload should match field names used by the request
+            "training_params": example_config,
+            "model_params": {}
         }
         
     except Exception as e:

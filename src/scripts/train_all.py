@@ -43,7 +43,7 @@ def train(tenant_id: str,
           wandb_tags: Optional[list] = None,
           training_kwargs: Optional[dict] = None,
           model_kwargs: Optional[dict] = None,
-          pipeline_name: Optional[str] = None,
+          pipeline_name: Optional[str] = "default",
           n_datasets_to_use: Optional[int] = None):
     """
     Main function to orchestrate the data prep and training workflows.
@@ -57,7 +57,7 @@ def train(tenant_id: str,
         wandb_tags: List of tags for wandb tracking.
         training_kwargs: Dictionary of training parameters to pass to TrainPipeline.
         model_kwargs: Dictionary of model parameters to pass to model constructor.
-        pipeline_name: Optional unique name for the pipeline (used for cancellation).
+        pipeline_name: Unique name for the pipeline (used for cancellation).
     """
     if wandb_tags is None:
         wandb_tags = []
@@ -76,12 +76,12 @@ def train(tenant_id: str,
         all_kwargs = {**training_kwargs, **model_kwargs}
         
         # Allow callers (API) to provide a pipeline_name to register the pipeline
-        pipeline_name_override = all_kwargs.pop('pipeline_name', None)
+        
         train_pipeline = TrainPipeline(
             tenant_id=tenant_id, 
             verbose=verbose, 
             save_intermediate=save_intermediate,
-            pipeline_name=pipeline_name_override or None,
+            pipeline_name=pipeline_name,
             **all_kwargs
         )
 
@@ -151,6 +151,7 @@ def main():
     parser.add_argument("--custom_name", type=str, default="train_all_run", help="Custom name for the training run (used in wandb and logging).")
     parser.add_argument("--resume_from_checkpoint", action="store_true", default=True, help="Resume training from checkpoint if available.")
     parser.add_argument("--wandb_tags", nargs="*", default=[], help="List of tags for wandb tracking (space-separated).")
+    parser.add_argument("--n_datasets_to_use", type=int, default=None, help="Limit number of discovered datasets to use for training (top-level param).")
     
     args = parser.parse_args()
 
@@ -165,6 +166,11 @@ def main():
             if param_def.config_path.startswith('model_config'):
                 model_kwargs[param_name] = arg_value
             else:  # training parameters
+                # Avoid elevating n_datasets_to_use into training_kwargs; it
+                # should be a top-level parameter passed directly to train().
+                if param_name == 'n_datasets_to_use':
+                    # already captured below from CLI arg --n_datasets_to_use
+                    continue
                 training_kwargs[param_name] = arg_value
 
     # A basic logging config is needed if not configured globally
@@ -177,8 +183,9 @@ def main():
         custom_name=args.custom_name,
         resume_from_checkpoint=args.resume_from_checkpoint,
         wandb_tags=args.wandb_tags,
-        training_kwargs=training_kwargs,
-        model_kwargs=model_kwargs
+    training_kwargs=training_kwargs,
+    model_kwargs=model_kwargs,
+    n_datasets_to_use=args.n_datasets_to_use
     )
 
 if __name__ == "__main__":

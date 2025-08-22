@@ -3,7 +3,7 @@ import logging
 import numpy as np
 import torch
 import torch.nn.functional as F
-from typing import Dict, List, Tuple, Any, Optional
+from typing import Dict, List, Tuple, Any, Optional, Callable
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, precision_recall_fscore_support, roc_auc_score
 from collections import defaultdict
 import json
@@ -29,7 +29,7 @@ class ModelEvaluator:
     """
     
     def __init__(self, model: torch.nn.Module, device: torch.device, 
-                 threshold: float = evaluator_config.threshold):
+                 threshold: float = evaluator_config.threshold, stop_callback: Optional[Callable] = None):
         """
         Initialize the evaluator.
         
@@ -42,7 +42,7 @@ class ModelEvaluator:
         self.device = device
         self.threshold = threshold
         self.model.eval()
-       
+        self.stop_callback = stop_callback
 
     def evaluate_comprehensive(self, dataset) -> Dict[str, Any]:
         """
@@ -131,6 +131,10 @@ class ModelEvaluator:
         
         with torch.no_grad():
             for i in range(len(dataset)):
+                # Check for cancellation at each item
+                if self.stop_callback and self.stop_callback():
+                    logger.info(f"Evaluation cancelled by stop_callback during embedding generation at index {i}")
+                    raise InterruptedError("Evaluation cancelled by user request")
                 try:
                     if i % EMBEDDINGS_PER_LOG_MSG == 0:
                         logger.info(f"Processing image {i}/{len(dataset)}")
@@ -222,6 +226,10 @@ class ModelEvaluator:
         same_player_pairs = []
         
         for i in range(len(embeddings)):
+            # Check for cancellation at each outer loop iteration
+            if self.stop_callback and self.stop_callback():
+                logger.info(f"Evaluation cancelled by stop_callback during distance evaluation at index {i}")
+                raise InterruptedError("Evaluation cancelled by user request")
             for j in range(i + 1, len(embeddings)):
                 # Euclidean distance
                 euclidean_dist = np.linalg.norm(embeddings[i] - embeddings[j])
@@ -325,7 +333,15 @@ class ModelEvaluator:
         
         logger.info("Generating pairs for classification...")
         for i in range(len(embeddings)):
+            # Check for cancellation at each outer loop iteration
+            if self.stop_callback and self.stop_callback():
+                logger.info(f"Evaluation cancelled by stop_callback during classification at outer index {i}")
+                raise InterruptedError("Evaluation cancelled by user request")
             for j in range(i + 1, len(embeddings)):
+                # Check for cancellation at each inner pair
+                if self.stop_callback and self.stop_callback():
+                    logger.info(f"Evaluation cancelled by stop_callback during classification pair generation at pair ({i},{j})")
+                    raise InterruptedError("Evaluation cancelled by user request")
                 # True label (1 if same player, 0 if different)
                 is_same_player = labels[i] == labels[j]
                 y_true.append(int(is_same_player))
@@ -508,6 +524,10 @@ class ModelEvaluator:
         average_precisions = []
         
         for query_idx in range(len(embeddings)):
+            # Check for cancellation at each query
+            if self.stop_callback and self.stop_callback():
+                logger.info(f"Evaluation cancelled by stop_callback during ranking evaluation at query {query_idx}")
+                raise InterruptedError("Evaluation cancelled by user request")
             query_embedding = embeddings[query_idx]
             query_label = labels[query_idx]
             

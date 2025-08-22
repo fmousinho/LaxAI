@@ -434,13 +434,6 @@ class ParameterRegistry:
                 type=ParameterType.STR,
                 description="WandB run name",
                 config_path="training_config.wandb_run_name"
-            ),
-            ParameterDefinition(
-                name="n_datasets_to_use",
-                type=ParameterType.INT,
-                description="Number of datasets to use for training. Use 1 for test, otherwise leave blank.",
-                config_path="training_config.n_datasets_to_use",
-                cli_kwargs={ 'default': None }
             )
         ]
         
