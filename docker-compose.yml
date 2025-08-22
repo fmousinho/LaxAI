@@ -4,10 +4,9 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        REQS: requirements-gpu.txt
-        INSTALL_GCLOUD: "false"
+        DEPS_IMAGE: "fmousinho/laxai-deps:latest"
         GOOGLE_CLOUD_PROJECT: "${GOOGLE_CLOUD_PROJECT:-laxai-466119}"
-    image: laxai:local-test
+    image: laxai:local
     ports:
       - "${PORT:-8000}:8000"
     environment:

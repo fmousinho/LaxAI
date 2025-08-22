@@ -79,7 +79,6 @@ class TrainingConfig:
     num_epochs: int = 50
     margin: float = 0.4
     weight_decay: float = 1e-4  # L2 regularization weight decay
-    model_save_path: str = '/common/model/embeddings_latest.pth'
     train_ratio: float = 0.8
     min_images_per_player: int = 2
     force_pretraining: bool = False  # Force using ResNet defaults for pretraining

@@ -33,7 +33,8 @@ def _convert_request_to_kwargs(request) -> Dict[str, Any]:
 		"save_intermediate": True,
 		"custom_name": getattr(request, 'custom_name', None),
 		"resume_from_checkpoint": getattr(request, 'resume_from_checkpoint', True),
-		"wandb_tags": getattr(request, 'wandb_tags', []) or []
+		"wandb_tags": getattr(request, 'wandb_tags', []) or [],
+		"n_datasets_to_process": getattr(request, 'n_datasets_to_process', None),
 	}
 
 	# Training and model params may be Pydantic models

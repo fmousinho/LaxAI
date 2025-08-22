@@ -150,20 +150,4 @@ async def list_active_pipelines():
     }
 
 
-@router.delete("/train/pipelines/{pipeline_name}")
-async def stop_training_pipeline(pipeline_name: str):
-    """
-    Stop a specific training pipeline by name.
-    """
-    pipeline_stopped = stop_pipeline(pipeline_name)
-    
-    if pipeline_stopped:
-        return {"message": f"Pipeline '{pipeline_name}' stop requested successfully"}
-    else:
-        raise HTTPException(
-            status_code=404,
-            detail=ErrorResponse(
-                detail=f"Pipeline '{pipeline_name}' not found or not active",
-                error_type="pipeline_not_found"
-            ).model_dump()
-        )
+

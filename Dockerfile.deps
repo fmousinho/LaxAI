@@ -1,36 +1,85 @@
-# Dependency-only Dockerfile for LaxAI
-# Builds an image that contains OS + Python + all pip dependencies from requirements files.
-# Tag this image by a hash of the requirements files so it can be reused when only code changes.
+# Dependency-only Dockerfile (CPU-first, Python 3.12 slim)
+# Purpose: build a deps image that contains Python, system libs, and wheels for
+# the project's stable dependency set. App code is applied later in a separate
+# build that reuses this image.
+#
+# Build modes: CPU-focused by default. ARGs are provided to switch platforms.
 
-FROM pytorch/pytorch:2.7.1-cuda11.8-cudnn9-runtime
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+ARG BASE_PYTHON_IMAGE=python:3.12-slim
 
-# Set a working directory
-WORKDIR /app
+# Builder: create wheels for requirements
+FROM ${BASE_PYTHON_IMAGE} AS builder
 
-# Install system packages required to build some Python packages (adjust as needed)
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+# Install build tools
+RUN set -eux \
+  && apt-get update \
+  && apt-get install -y -o APT::Install-Recommends=false --no-install-recommends \
        build-essential \
        ca-certificates \
        git \
-    && rm -rf /var/lib/apt/lists/*
+       wget \
+       gcc \
+       g++ \
+  && rm -rf /var/lib/apt/lists/*
 
-# The build script will provide a `requirements/` directory in the build context
-# containing one or more requirements files (e.g. requirements.txt, requirements-dev.txt).
-# Copy that directory into the image and process any files found there.
+WORKDIR /src
+
+# Copy requirements directory (builder needs all referenced files, e.g. 
+# requirements-base.txt referenced by requirements-cpu.txt)
 COPY requirements/ ./requirements/
 
-# Upgrade pip and build wheels for any requirements files found, then install
-RUN python -m pip install --upgrade pip wheel setuptools \
- && mkdir /wheels \
- # Build wheels for each requirements file present (if none exist, the loops are no-ops)
- && for f in requirements/*.txt; do [ -f "$f" ] && pip wheel -r "$f" -w /wheels || true; done \
- # Install from the built wheels for each requirements file
- && for f in requirements/*.txt; do [ -f "$f" ] && pip install --no-index --find-links /wheels -r "$f" || true; done \
- && rm -rf /wheels
+# Prefer requirements-base.txt + requirements-cpu.txt; otherwise use all requirements/*.txt
+RUN set -eux \
+  && python -m pip install --upgrade pip wheel setuptools \
+  && mkdir -p /wheels /tmp/reqsdir \
+  && if [ -f requirements/requirements-cpu.txt ]; then \
+      # Copy all requirement files into the temp reqsdir so that any '-r' includes
+      # referenced from requirements-cpu.txt resolve correctly. We then run pip
+      # from inside that directory and wheel only the CPU requirements file.
+      cp requirements/*.txt /tmp/reqsdir/ || true; \
+      REQ_DIR=/tmp/reqsdir; \
+    else \
+      echo "ERROR: requirements/requirements-cpu.txt not found" >&2; \
+      exit 1; \
+    fi \
+  && echo "Building wheels from: $REQ_DIR/requirements-cpu.txt" \
+  && PIP_NO_CACHE_DIR=1 \
+  && (cd $REQ_DIR && for f in requirements-cpu.txt; do [ -f "$f" ] && PIP_NO_CACHE_DIR=1 pip wheel --no-deps -r "$f" -w /wheels || true; done) \
+  && ls -lah /wheels || true \
+  && rm -rf /tmp/* /var/tmp/* /root/.cache/pip || true
 
-# Clear pip cache to reduce image size
-RUN python -m pip cache purge || true
+# Runtime image: small python base with only runtime deps installed from wheels
+FROM ${BASE_PYTHON_IMAGE} AS runtime
 
-# Minimal default command
-CMD ["python", "-c", "print('Deps image ready')"]
+ARG PYTORCH_CPU_INDEX=https://download.pytorch.org/whl/cpu
+
+# Create a venv to isolate installs (optional but clean)
+# Use system Python (do not create a venv in the image). Keep pip upgraded.
+RUN set -eux \
+  && python -m pip install --upgrade pip \
+  && rm -rf /root/.cache/pip
+WORKDIR /app
+
+# Install torch and torchvision (CPU wheels) first to ensure correct binaries are present
+RUN --mount=type=cache,target=/root/.cache/pip \
+  set -eux \
+  && python -m pip install --no-cache-dir --index-url ${PYTORCH_CPU_INDEX} "torch" "torchvision"
+ 
+
+# Copy wheels from builder and install remaining wheels
+COPY --from=builder /wheels /wheels
+RUN set -eux \
+  && if [ -d /wheels ] && [ "$(ls -A /wheels)" ]; then \
+       # Install all wheels without using cache
+       for f in /wheels/*.whl; do [ -f "$f" ] && python -m pip install --no-index --no-deps --no-cache-dir "$f" || true; done; \
+     fi \
+  && rm -rf /wheels /tmp/* /var/tmp/* /root/.cache/pip || true
+
+# Common metadata and health
+LABEL org.opencontainers.image.title="laxai-deps" \
+      org.opencontainers.image.description="Dependency-only image (CPU) for LaxAI" \
+      org.opencontainers.image.licenses=MIT
+
+CMD ["python","-c","print('Deps image ready')"]

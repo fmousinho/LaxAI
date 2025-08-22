@@ -4,4 +4,7 @@ Pillow
 supervision
 rfdetr
 wandb
+matplotlib
+seaborn
+scikit-learn
 # DO NOT include torch/torchvision if your BASE_IMAGE already provides them

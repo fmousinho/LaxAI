@@ -1,3 +1,54 @@
+# Ignore virtual environments
+.venv
+.venv*/
+venv/
+ENV/
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Editor/IDE files
+.vscode/
+.idea/
+
+# Git
+.git
+
+# Data, models, artifacts, logs
+data/
+models/
+artifacts/
+wandb/
+evaluation_results/
+
+# Notebooks and large assets
+notebooks/
+*.ipynb
+
+# Build and dist outputs
+build/
+dist/
+*.egg-info/
+
+# Docker and CI
+.dockerignore
+Dockerfile.deps
+
+# Secrets
+.env
+*.pem
+*.key
+
+# OS junk
+.DS_Store
+thumbs.db
+
+# Any local envs created by tooling
+.venv31*
+env/
 # Docker ignore for LaxAI
 # Keep build context small and avoid accidentally including secrets, datasets, or envs
 
@@ -52,6 +103,14 @@ artifacts/
 model.pth
 wandb/
 src/utils/wandb
+models/
+evaluation_results/
+
+# Explicitly ignore build artifacts that may live under src (sometimes created
+# by local builds) so they are not sent in the docker build context.
+src/*.egg-info
+src/**/__pycache__/
+src/**/.egg-info/
 
 # Temporary files
 tmp/
