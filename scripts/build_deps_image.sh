@@ -161,10 +161,43 @@ if [[ "${MULTIARCH:-}" == "true" ]]; then
 
   # If pushing, use --push to publish manifest; otherwise load the image locally (may not support multi-arch)
   if [[ "$PUSH" == true ]]; then
+    # Push a multi-arch manifest (amd64 + arm64)
     docker buildx build --platform linux/amd64,linux/arm64 -f "$TMP_DIR/Dockerfile" -t "$IMAGE_REF" ${NO_CACHE:+--no-cache} --push "$TMP_DIR"
+
+    # After pushing a multi-arch manifest, also create/update the :latest tag in the registry
+    # so consumers that pull ':latest' see the same multi-arch index. Use buildx imagetools
+    # which creates a manifest list referencing the pushed images.
+    if command -v docker >/dev/null 2>&1 && docker buildx imagetools --help >/dev/null 2>&1; then
+      if [[ -n "$REGISTRY" && -n "$PROJECT_ID" ]]; then
+        CREATE_LATEST_REF="${REGISTRY}/${PROJECT_ID}/${IMAGE_NAME}:latest"
+      elif [[ -n "$REGISTRY" ]]; then
+        CREATE_LATEST_REF="${REGISTRY}/${IMAGE_NAME}:latest"
+      else
+        CREATE_LATEST_REF="${IMAGE_NAME}:latest"
+      fi
+      echo "Creating multi-arch manifest tag ${CREATE_LATEST_REF} -> ${IMAGE_REF}"
+      # Try to create the remote :latest multi-arch manifest. If successful,
+      # set IMAGETOOLS_CREATED so we don't later push a local single-arch :latest
+      # which would overwrite the multi-arch manifest.
+      if docker buildx imagetools create --tag "$CREATE_LATEST_REF" "$IMAGE_REF"; then
+        IMAGETOOLS_CREATED=true
+      else
+        IMAGETOOLS_CREATED=false
+      fi
+    else
+      echo "docker buildx imagetools not available; skipping :latest manifest creation"
+    fi
   else
-    # Try to build and load the default platform (builder will select local platform)
-    docker buildx build --platform linux/amd64,linux/arm64 -f "$TMP_DIR/Dockerfile" -t "$IMAGE_REF" ${NO_CACHE:+--no-cache} --load "$TMP_DIR"
+    # When not pushing, --load only supports a single platform. Pick the local platform
+    # so the built image can be loaded into the local docker daemon.
+    UNAME_M="$(uname -m)"
+    case "$UNAME_M" in
+      x86_64|amd64) LOCAL_PLATFORM="linux/amd64" ;;
+      arm64|aarch64) LOCAL_PLATFORM="linux/arm64" ;;
+      *) LOCAL_PLATFORM="linux/amd64" ;;
+    esac
+    echo "Building for local platform $LOCAL_PLATFORM (use --push to publish multi-arch)"
+    docker buildx build --platform "$LOCAL_PLATFORM" -f "$TMP_DIR/Dockerfile" -t "$IMAGE_REF" ${NO_CACHE:+--no-cache} --load "$TMP_DIR"
   fi
 else
   docker build -f "$TMP_DIR/Dockerfile" -t "$IMAGE_REF" ${NO_CACHE:+--no-cache} "$TMP_DIR"
@@ -189,10 +222,16 @@ fi
 echo "Tagging ${IMAGE_REF} -> ${LATEST_REF}"
 docker tag "$IMAGE_REF" "$LATEST_REF" || true
 
-# If we're pushing, push the :latest tag as well
+# If we're pushing, push the :latest tag as well. However, if we already
+# created a multi-arch :latest manifest via buildx imagetools above, skip the
+# local push to avoid overwriting it with a single-arch reference.
 if [[ "$PUSH" == true ]]; then
-  echo "Pushing ${LATEST_REF}"
-  docker push "$LATEST_REF" || true
+  if [[ "${MULTIARCH:-}" == "true" && "${IMAGETOOLS_CREATED:-}" == "true" ]]; then
+    echo "Multi-arch :latest manifest already created remotely; skipping push of ${LATEST_REF}"
+  else
+    echo "Pushing ${LATEST_REF}"
+    docker push "$LATEST_REF" || true
+  fi
 fi
 
 # Unconditionally remove all other local images with the same repo/name
