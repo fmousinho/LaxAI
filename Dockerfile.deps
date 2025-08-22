@@ -3,10 +3,8 @@
 # the project's stable dependency set. App code is applied later in a separate
 # build that reuses this image.
 #
-# Build modes: CPU-focused by default. ARGs are provided to switch platforms.
 
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+
 ARG BASE_PYTHON_IMAGE=python:3.12-slim
 
 # Builder: create wheels for requirements
@@ -46,27 +44,14 @@ RUN set -eux \
     fi \
   && echo "Building wheels from: $REQ_DIR/requirements-cpu.txt" \
   && PIP_NO_CACHE_DIR=1 \
-  && (cd $REQ_DIR && for f in requirements-cpu.txt; do [ -f "$f" ] && PIP_NO_CACHE_DIR=1 pip wheel --no-deps -r "$f" -w /wheels || true; done) \
+  && (cd $REQ_DIR && for f in requirements-cpu.txt; do [ -f "$f" ] && PIP_NO_CACHE_DIR=1 pip wheel --no-deps -r "$f" -w /wheels; done) \
   && ls -lah /wheels || true \
   && rm -rf /tmp/* /var/tmp/* /root/.cache/pip || true
 
 # Runtime image: small python base with only runtime deps installed from wheels
 FROM ${BASE_PYTHON_IMAGE} AS runtime
 
-ARG PYTORCH_CPU_INDEX=https://download.pytorch.org/whl/cpu
-
-# Create a venv to isolate installs (optional but clean)
-# Use system Python (do not create a venv in the image). Keep pip upgraded.
-RUN set -eux \
-  && python -m pip install --upgrade pip \
-  && rm -rf /root/.cache/pip
 WORKDIR /app
-
-# Install torch and torchvision (CPU wheels) first to ensure correct binaries are present
-RUN --mount=type=cache,target=/root/.cache/pip \
-  set -eux \
-  && python -m pip install --no-cache-dir --index-url ${PYTORCH_CPU_INDEX} "torch" "torchvision"
- 
 
 # Copy wheels from builder and install remaining wheels
 COPY --from=builder /wheels /wheels
@@ -79,7 +64,7 @@ RUN set -eux \
 
 # Common metadata and health
 LABEL org.opencontainers.image.title="laxai-deps" \
-      org.opencontainers.image.description="Dependency-only image (CPU) for LaxAI" \
+      org.opencontainers.image.description="Dependency-only image for LaxAI" \
       org.opencontainers.image.licenses=MIT
 
 CMD ["python","-c","print('Deps image ready')"]
