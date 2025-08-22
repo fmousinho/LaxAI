@@ -31,6 +31,25 @@ steps:
     name: "gcr.io/cloud-builders/docker"
     args: ["push", "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA}"]
 
+  # Deploy to Cloud Run if requested via substitution
+  - id: "deploy-to-cloud-run"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        if [[ "${_DEPLOY_TO_CLOUD_RUN}" == "true" ]]; then
+          echo "Deploying to Cloud Run: ${_CLOUD_RUN_SERVICE} (${_CLOUD_RUN_REGION})"
+          gcloud run deploy "${_CLOUD_RUN_SERVICE}" \
+            --image="us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA}" \
+            --region="${_CLOUD_RUN_REGION}" \
+            --platform=managed \
+            --allow-unauthenticated \
+            --quiet
+        else
+          echo "Skipping Cloud Run deployment because _DEPLOY_TO_CLOUD_RUN != true"
+        fi
+
 
 # Optional: make a secret available from Secret Manager to build steps.
 # Replace the versionName below with the actual secret resource name after
