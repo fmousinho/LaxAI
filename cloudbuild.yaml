@@ -66,31 +66,107 @@ steps:
           echo "Deploying to Cloud Run: ${_CLOUD_RUN_SERVICE} (${_CLOUD_RUN_REGION})"
           gcloud run deploy "${_CLOUD_RUN_SERVICE}" \
             --image="us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA}" \
-            --region="${_CLOUD_RUN_REGION}" \
-            --platform=managed \
-            --allow-unauthenticated \
-            --quiet
-        else
-          echo "Skipping Cloud Run deployment because _DEPLOY_TO_CLOUD_RUN != true"
-        fi
+            # Cloud Build configuration for LaxAI
+            # Builds Docker image, pushes to Artifact Registry and can deploy to Cloud Run.
+
+            substitutions:
+              # Build-time and deployment substitutions. Override these when calling gcloud builds
+              # submit or when creating a build trigger.
+              _IMAGE: "laxai"
+              _REQS: "requirements-gpu.txt"        # maps from docker-compose build arg REQS  
+              _CLOUD_RUN_SERVICE: "laxai-api"
+              _CLOUD_RUN_REGION: "us-central1"
+              _DEPLOY_TO_CLOUD_RUN: "true"       # set to "true" to run the deploy step
+              _PROMOTE: "false"                    # set to "true" to create a promoted tag (e.g. latest)
+              _PROMOTE_TO: "latest"
+
+            steps:
+              # Build the final production image (no test deps)
+              - id: "build-image"
+                name: "gcr.io/cloud-builders/docker"
+                args:
+                  - "build"
+                  - "-t"
+                  - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA}"
+                  - "-t"
+                  - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:latest"
+                  - "--build-arg"
+                  - "REQS=${_REQS}"
+                  - "--build-arg"
+                  - "INSTALL_GCLOUD=${_INSTALL_GCLOUD}"
+                  - "--build-arg"
+                  - "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
+                  - "."
+
+              # Push the final image to Artifact Registry (SHA)
+              - id: "push-image"
+                name: "gcr.io/cloud-builders/docker"
+                args: ["push", "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA}"]
+
+              # Push the :latest tag as well
+              - id: "push-latest"
+                name: "gcr.io/cloud-builders/docker"
+                args: ["push", "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:latest"]
+
+              # Optionally promote the pushed image to another tag (server-side add-tag).
+              # This uses `gcloud container images add-tag` which updates tags in
+              # Artifact Registry without re-pushing image layers.
+              - id: "promote-image"
+                name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+                entrypoint: "bash"
+                args:
+                  - "-c"
+                  - |
+                    if [[ "${_PROMOTE}" == "true" ]]; then
+                      echo "Promoting image to ${_PROMOTE_TO}"
+                      # Use `gcloud container images add-tag` to add a tag server-side.
+                      # Also print gcloud version for debugging.
+                      gcloud --version || true
+                      gcloud container images add-tag \
+                        us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA} \
+                        us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${_PROMOTE_TO} \
+                        --quiet || true
+                    else
+                      echo "Skipping promotion (_PROMOTE != true)"
+                    fi
+
+              # Deploy to Cloud Run if requested via substitution
+              - id: "deploy-to-cloud-run"
+                name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+                entrypoint: "bash"
+                args:
+                  - "-c"
+                  - |
+                    if [[ "${_DEPLOY_TO_CLOUD_RUN}" == "true" ]]; then
+                      echo "Deploying to Cloud Run: ${_CLOUD_RUN_SERVICE} (${_CLOUD_RUN_REGION})"
+                      gcloud run deploy "${_CLOUD_RUN_SERVICE}" \
+                        --image="us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA}" \
+                        --region="${_CLOUD_RUN_REGION}" \
+                        --platform=managed \
+                        --allow-unauthenticated \
+                        --quiet
+                    else
+                      echo "Skipping Cloud Run deployment because _DEPLOY_TO_CLOUD_RUN != true"
+                    fi
 
 
-# Optional: make a secret available from Secret Manager to build steps.
-# Replace the versionName below with the actual secret resource name after
-# creating the secret in your project. This avoids mounting host files into the
-# build and is the recommended pattern for build-time credentials.
-availableSecrets:
-  secretManager: []
+            # Optional: make a secret available from Secret Manager to build steps.
+            # Replace the versionName below with the actual secret resource name after
+            # creating the secret in your project. This avoids mounting host files into the
+            # build and is the recommended pattern for build-time credentials.
+            availableSecrets:
+              secretManager: []
 
-images:
-  - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA}"
+            images:
+              - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA}"
+              - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:latest"
 
-options:
-  logging: CLOUD_LOGGING_ONLY
+            options:
+              logging: CLOUD_LOGGING_ONLY
 
-timeout: "3600s"  # 60 minutes
+            timeout: "3600s"  # 60 minutes
 
-# Notes:
-# - Use substitutions to customize behavior when creating a build trigger.
-# - Example gcloud submit (uses docker build locally):
-#   gcloud builds submit --config cloudbuild.yaml --substitutions=_DEPLOY_TO_CLOUD_RUN=false
+            # Notes:
+            # - Use substitutions to customize behavior when creating a build trigger.
+            # - Example gcloud submit (uses docker build locally):
+            #   gcloud builds submit --config cloudbuild.yaml --substitutions=_DEPLOY_TO_CLOUD_RUN=false

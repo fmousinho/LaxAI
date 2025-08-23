@@ -3,8 +3,14 @@
 # utils/__init__.py
 # Expose utility functions for environment setup, wandb uploading, and ID generation
 
-from .env_or_colab import load_env_or_colab
-from .id_generator import (
+try:
+    from .env_secrets import setup_environment_secrets
+except Exception:
+    # Defer import errors until the function is used
+    setup_environment_secrets = None
+
+try:
+    from .id_generator import (
     create_tenant_id,
     create_video_id,
     create_frame_id,
@@ -18,4 +24,8 @@ from .id_generator import (
     create_full_guid,
     create_short_guid
 )
+except Exception:
+    # id_generator may be unavailable during isolated tests; ignore
+    pass
+
 #from .wandb_uploader import wandb_uploader

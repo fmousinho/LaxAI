@@ -12,11 +12,12 @@ HUGGINGFACE_HUB_TOKEN = ["huggingface-hub-token", "HUGGINGFACE_HUB_TOKEN"]
 # Add more secrets as needed for your project
 # EXAMPLE_API_KEY = ["example-api-key", "EXAMPLE_API_KEY"]
 
+
 [environment]
 # Environment-specific configuration
 default_project_env_vars = ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GCP_PROJECT"]
-metadata_timeout = 2  # seconds
 metadata_base_url = "http://metadata.google.internal/computeMetadata/v1"
+GOOGLE_APPLICATION_CREDENTIALS = ["GOOGLE_APPLICATION_CREDENTIALS", "google-application-credentials"]
 
 [logging]
 # Logging configuration

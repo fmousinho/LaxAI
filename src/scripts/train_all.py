@@ -14,10 +14,6 @@ import json
 import argparse
 from typing import Optional
 
-# IMPORTANT: Load environment variables and credentials FIRST
-# This must be imported before any modules that use GCS or WandB
-from utils.env_or_colab import load_env_or_colab
-
 # Imports using relative imports since we're now in the src package
 from config.logging_config import print_banner
 from config.parameter_registry import parameter_registry
@@ -32,7 +28,6 @@ os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 # If not, uncomment the following lines for basic logging.
 # from config import logging_config
 logger = logging.getLogger(__name__)
-
 
 
 def train(tenant_id: str, 

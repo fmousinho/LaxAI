@@ -11,7 +11,6 @@ including error handling, credential management, and common operations.
 #
 #
 # TODO:
-# - Make sure credentials in Google console are restricted enough
 # - Add support for multi-tenancy
 #==========================================================================
 

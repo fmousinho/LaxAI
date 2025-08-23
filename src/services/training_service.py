@@ -10,8 +10,11 @@ import traceback
 import uuid
 import time
 from typing import Any, Dict, Optional, Tuple
-
 from fastapi import BackgroundTasks
+
+from utils.env_secrets import setup_environment_secrets
+setup_environment_secrets()
+
 
 from scripts.train_all import train as train_function
 from common.pipeline import get_active_pipelines, stop_pipeline
