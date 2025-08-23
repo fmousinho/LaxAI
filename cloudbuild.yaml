@@ -44,7 +44,9 @@ steps:
       - |
         if [[ "${_PROMOTE}" == "true" ]]; then
           echo "Promoting image to ${_PROMOTE_TO}"
-          gcloud artifacts docker images add-tag \
+          # Use `gcloud container images add-tag` which works for Artifact
+          # Registry image names and adds the new tag server-side.
+          gcloud container images add-tag \
             us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA} \
             us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${_PROMOTE_TO} \
             --quiet
