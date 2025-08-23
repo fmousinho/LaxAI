@@ -162,7 +162,7 @@ if [[ "${MULTIARCH:-}" == "true" ]]; then
   # If pushing, use --push to publish manifest; otherwise load the image locally (may not support multi-arch)
   if [[ "$PUSH" == true ]]; then
     # Push a multi-arch manifest (amd64 + arm64)
-    docker buildx build --platform linux/amd64,linux/arm64 -f "$TMP_DIR/Dockerfile" -t "$IMAGE_REF" ${NO_CACHE:+--no-cache} --push "$TMP_DIR"
+  DOCKER_BUILDKIT=1 docker buildx build --platform linux/amd64,linux/arm64 -f "$TMP_DIR/Dockerfile" -t "$IMAGE_REF" ${NO_CACHE:+--no-cache} --push "$TMP_DIR"
 
     # After pushing a multi-arch manifest, also create/update the :latest tag in the registry
     # so consumers that pull ':latest' see the same multi-arch index. Use buildx imagetools
@@ -197,10 +197,10 @@ if [[ "${MULTIARCH:-}" == "true" ]]; then
       *) LOCAL_PLATFORM="linux/amd64" ;;
     esac
     echo "Building for local platform $LOCAL_PLATFORM (use --push to publish multi-arch)"
-    docker buildx build --platform "$LOCAL_PLATFORM" -f "$TMP_DIR/Dockerfile" -t "$IMAGE_REF" ${NO_CACHE:+--no-cache} --load "$TMP_DIR"
+  DOCKER_BUILDKIT=1 docker buildx build --platform "$LOCAL_PLATFORM" -f "$TMP_DIR/Dockerfile" -t "$IMAGE_REF" ${NO_CACHE:+--no-cache} --load "$TMP_DIR"
   fi
 else
-  docker build -f "$TMP_DIR/Dockerfile" -t "$IMAGE_REF" ${NO_CACHE:+--no-cache} "$TMP_DIR"
+  DOCKER_BUILDKIT=1 docker build -f "$TMP_DIR/Dockerfile" -t "$IMAGE_REF" ${NO_CACHE:+--no-cache} "$TMP_DIR"
 fi
 
 # Clean up temporary dir
