@@ -5,7 +5,6 @@ from datetime import datetime
 from functools import wraps
 from typing import Dict, Any, Optional, List, Callable
 import torch
-from utils.env_or_colab import load_env_or_colab
 
 from config.all_config import wandb_config
 
