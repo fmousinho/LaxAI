@@ -12,11 +12,13 @@ substitutions:
   
 
 steps:
-  # Build the final production image, tagging it with only "latest".
+  # Build the final production image, tagging it with both the unique SHA and "latest".
   - id: "build-and-tag-image"
     name: "gcr.io/cloud-builders/docker"
     args:
       - "build"
+      - "-t"
+      - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA}"
       - "-t"
       - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:latest"
       - "--build-arg"
@@ -25,14 +27,21 @@ steps:
       - "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
       - "."
 
-  # Push the :latest tag only.
+  # Push the two newly created tags (SHA and latest) to Artifact Registry in a single step.
+  - id: "push-images"
+    name: "gcr.io/cloud-builders/docker"
+    args: 
+      - "push" 
+      - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA}"
+    
+  # Push the :latest tag as well. This can be combined with the previous push command if preferred.
   - id: "push-latest-image"
     name: "gcr.io/cloud-builders/docker"
     args: 
       - "push" 
       - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:latest"
 
-  # Deploy to Cloud Run using the "latest" tag and the correct flags for resources.
+  # Deploy to Cloud Run using the "latest" tag.
   - id: "deploy-to-cloud-run"
     name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     entrypoint: "bash"
@@ -46,20 +55,15 @@ steps:
             --region="${_CLOUD_RUN_REGION}" \
             --platform=managed \
             --allow-unauthenticated \
-            --quiet \
-            --cpu="4000m" \
-            --memory="16Gi" \
-            --service-account="googlebatch@laxai-466119.iam.gserviceaccount.com"
+            --quiet
         else
           echo "Skipping Cloud Run deployment because _DEPLOY_TO_CLOUD_RUN != true"
         fi
 
 # Images to be built and pushed to Artifact Registry
 images:
+  - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA}"
   - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:latest"
-
-# Note: The serviceAccountName is specified as a flag in gcloud run deploy
-# and no longer needed here.
 
 # Optional: make a secret available from Secret Manager to build steps.
 # Replace the versionName below with the actual secret resource name.

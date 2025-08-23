@@ -18,5 +18,5 @@ services:
     # Optional: mount your service account key from the host. Replace the host path below
     # with the actual path to your JSON key. Keep the mount read-only (:ro).
     volumes:
-      - /Users/fernandomousinho/Documents/Learning_to_Code/Vault/laxai-466119-5454645432ff.json:/run/secrets/gcloud/key.json:ro
+      -/Users/fernandomousinho/Documents/Learning_to_Code/Vault/laxai-466119-debef3c0d2f4.json:/run/secrets/gcloud/key.json:ro
     restart: unless-stopped
