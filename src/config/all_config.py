@@ -20,7 +20,7 @@ def generate_unique_run_name() -> str:
 @dataclass
 class GoogleStorageConfig:
     """Configuration for Google Cloud Storage."""
-    project_id: str = "LaxAI"
+    project_id: str = "laxai-466119"
     gcs_paths_file: str = "src/config/gcs_structure.yaml"  # Path to YAML file with GCS paths
     bucket_name: str = "laxai_dev"
     credentials_name: str = "GOOGLE_APPLICATION_CREDENTIALS"
