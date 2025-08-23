@@ -9,7 +9,7 @@ substitutions:
   _CLOUD_RUN_SERVICE: "laxai-api"
   _CLOUD_RUN_REGION: "us-central1"
   _DEPLOY_TO_CLOUD_RUN: "true"       # set to "true" to run the deploy step
-  _PROMOTE: "true"                    # set to "true" to create a promoted tag (e.g. latest)
+  _PROMOTE: "false"                    # set to "true" to create a promoted tag (e.g. latest)
   _PROMOTE_TO: "latest"
 
 steps:

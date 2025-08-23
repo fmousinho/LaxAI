@@ -398,6 +398,36 @@ def setup_local_credentials():
             _fallback_to_secret_manager()
 
 
+def ensure_credentials():
+        """
+        Detect runtime environment and configure credentials accordingly.
+
+        - If running on GCP (Cloud Run, GCE, GKE, Cloud Functions), do NOT set
+            GOOGLE_APPLICATION_CREDENTIALS. Rely on Application Default Credentials
+            provided by the platform (Workload Identity, attached service account,
+            or ADC).
+        - If running in Colab, attempt to load credentials from Colab userdata or
+            Secret Manager.
+        - Otherwise (local dev), load .env and set GOOGLE_APPLICATION_CREDENTIALS if
+            present in .env, or fall back to Secret Manager if configured and
+            credentials are available.
+        """
+        try:
+                if is_running_in_gcp():
+                        setup_gcp_credentials()
+                elif is_running_in_colab():
+                        setup_colab_credentials()
+                else:
+                        setup_local_credentials()
+        except Exception as e:
+                logger.debug(f"Credential setup encountered an error: {e}")
+
+
+# Auto-run credential setup by default. Set SKIP_AUTO_CREDENTIAL_SETUP=1 to disable.
+if os.environ.get('SKIP_AUTO_CREDENTIAL_SETUP', '').lower() not in ('1', 'true', 'yes'):
+        ensure_credentials()
+
+
 def get_environment_info():
     """
     Get information about the current environment.
