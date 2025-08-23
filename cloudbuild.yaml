@@ -44,11 +44,12 @@ steps:
       - |
         if [[ "${_PROMOTE}" == "true" ]]; then
           echo "Promoting image to ${_PROMOTE_TO}"
-          # Use `gcloud container images add-tag` which works for Artifact
-          # Registry image names and adds the new tag server-side.
-          gcloud container images add-tag \
+          # Use Artifact Registry `gcloud artifacts docker tags add` to create
+          # a server-side tag without re-pushing image layers.
+          gcloud artifacts docker tags add \
             us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${SHORT_SHA} \
-            us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:${_PROMOTE_TO} \
+            --tag=${_PROMOTE_TO} \
+            --location=us-central1 \
             --quiet
         else
           echo "Skipping promotion (_PROMOTE != true)"
