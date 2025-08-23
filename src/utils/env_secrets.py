@@ -144,56 +144,37 @@ def load_secrets(config: Dict[str, Any]):
         ValueError: If a required secret cannot be found.
     """
     secrets_to_load = config.get("secrets", [])
-    
+    # If config.toml used a [secrets] table with a `secrets` key, unwrap it.
+    if isinstance(secrets_to_load, dict) and 'secrets' in secrets_to_load:
+        secrets_to_load = secrets_to_load['secrets']
+    # If it's a single string, convert to list
+    if isinstance(secrets_to_load, str):
+        secrets_to_load = [secrets_to_load]
+
     project_id = os.getenv('GOOGLE_CLOUD_PROJECT')
     if not project_id:
         logging.warning("GOOGLE_CLOUD_PROJECT is not set. Secret Manager will not work.")
 
     for secret_name in secrets_to_load:
-        # Check environment variables first
-        for secret_name_alternative in secret_name.values():
-            secret_value = _get_from_env(secret_name_alternative)
-            if secret_value:
-                logging.info(f" ✅ Secret '{secret_name_alternative}' found in environment variables.")
-                break
-        else:
-            # If not found in any alternative names, continue to next source
-            secret_value = None
-
+        # 1) Check existing environment variable
+        secret_value = _get_from_env(secret_name)
         if secret_value:
             logging.info(f" ✅ Secret '{secret_name}' found in environment variables.")
             continue
 
-        # Check .env file next
-        for secret_name_alternative in secret_name.values():
-            secret_value = _get_from_dotenv(secret_name_alternative)
-            if secret_value:
-                os.environ[secret_name_alternative] = secret_value
-                logging.info(f" ✅ Secret '{secret_name_alternative}' loaded from .env file.")
-                break
-        else:
-            # If not found in any alternative names, continue to next source
-            secret_value = None
-
+        # 2) Check .env file
+        secret_value = _get_from_dotenv(secret_name)
         if secret_value:
-            logging.info(f" ✅ Secret '{secret_name}' found in .env file.")
+            os.environ[secret_name] = secret_value
+            logging.info(f" ✅ Secret '{secret_name}' loaded from .env file.")
             continue
-            
-        # Check Google Secret Manager
-        if project_id:
-            for secret_name_alternative in secret_name.values():
-                secret_value = _get_from_secret_manager(secret_name_alternative, project_id)
-                if secret_value:
-                    os.environ[secret_name_alternative] = secret_value
-                    logging.info(f" ✅ Secret '{secret_name_alternative}' loaded from Secret Manager.")
-                    break
-            else:
-                # If not found in any alternative names, continue to next source
-                secret_value = None
 
+        # 3) Check Secret Manager
+        if project_id:
+            secret_value = _get_from_secret_manager(secret_name, project_id)
             if secret_value:
                 os.environ[secret_name] = secret_value
-                logging.info(f" ✅ Secret '{secret_name}' loaded from Secret Manager and set as env var.")
+                logging.info(f" ✅ Secret '{secret_name}' loaded from Secret Manager.")
                 continue
 
         # Raise an error if the secret is not found
@@ -309,5 +290,6 @@ def setup_environment_secrets():
         load_secrets(CONFIG.get('secrets', {}))
     except Exception as e:
         logger.error(f"❌ Failed to load environment: {e}")
+        raise(e)
         # Continue anyway - some functionality might still work
 

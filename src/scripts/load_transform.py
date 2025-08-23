@@ -15,7 +15,6 @@ import argparse
 
 # IMPORTANT: Load environment variables and credentials FIRST
 # This must be imported before any modules that use GCS or WandB
-from utils.env_or_colab import load_env_or_colab
 
 # Imports using relative imports since we're now in the src package
 from common.google_storage import get_storage
@@ -30,10 +29,6 @@ os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 # If not, uncomment the following lines for basic logging.
 # from config import logging_config
 logger = logging.getLogger(__name__)
-
-# Load environment variables
-load_env_or_colab()
-
 
 
 

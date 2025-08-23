@@ -3,7 +3,6 @@ import torch
 import logging
 from typing import Optional, Any, Dict, Callable
 from torch.utils.data import DataLoader, Dataset
-from utils.env_or_colab import load_env_or_colab
 import torch.nn as nn
 import numpy as np
 import wandb

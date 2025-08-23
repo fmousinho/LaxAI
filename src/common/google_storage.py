@@ -237,9 +237,9 @@ class GoogleStorageClient:
                 self._client = storage.Client(credentials=self.credentials, project=self.config.project_id)
                 logger.info(f"Using provided service account credentials for project: {self.config.project_id}")
             else:
-                # Check if credentials file path is set in environment
-                if self.config.credentials_name not in os.environ:
-                    raise ValueError(f"{self.config.credentials_name} not set in environment variables")
+                # If no credentials object is provided, attempt to use Application Default Credentials (ADC).
+                self._client = storage.Client(project=self.config.project_id)
+                logger.info("Using Application Default Credentials (ADC).")
                 
                 credentials_path = os.environ[self.config.credentials_name]
                 
@@ -255,10 +255,8 @@ class GoogleStorageClient:
                     self._client = storage.Client.from_service_account_json(credentials_path)
                     logger.info(f"Using service account file with default project: {self._client.project}")
 
-            # Test authentication by trying to get bucket
+            # The rest of your code to test bucket access is correct
             self._bucket = self._client.bucket(self.config.bucket_name)
-            
-            # Test bucket access
             self._bucket.reload()
             
             self._authenticated = True
@@ -266,8 +264,8 @@ class GoogleStorageClient:
             return True
             
         except DefaultCredentialsError as e:
-            logger.error(f"Authentication failed - No valid credentials found:")
-            logger.error("Make sure to set GOOGLE_APPLICATION_CREDENTIALS in your .env file or environment variables.") 
+            logger.error("Authentication failed - No valid credentials found.")
+            logger.error("Set GOOGLE_APPLICATION_CREDENTIALS for local use, or ensure a service account is attached in GCP.") 
             return False
         except NotFound as e:
             logger.error(f"Authentication failed - Bucket '{self.config.bucket_name}' not found: {e}")
