@@ -239,21 +239,7 @@ class GoogleStorageClient:
             else:
                 # If no credentials object is provided, attempt to use Application Default Credentials (ADC).
                 self._client = storage.Client(project=self.config.project_id)
-                logger.info("Using Application Default Credentials (ADC).")
-                
-                credentials_path = os.environ[self.config.credentials_name]
-                
-                # Create client with explicit project ID if provided
-                if self.config.project_id:
-                    self._client = storage.Client.from_service_account_json(
-                        credentials_path, 
-                        project=self.config.project_id
-                    )
-                    logger.info(f"Using service account file for project: {self.config.project_id}")
-                else:
-                    # Use default project from service account file
-                    self._client = storage.Client.from_service_account_json(credentials_path)
-                    logger.info(f"Using service account file with default project: {self._client.project}")
+                logger.info("Using Application Default Credentials (ADC).")                
 
             # The rest of your code to test bucket access is correct
             self._bucket = self._client.bucket(self.config.bucket_name)
