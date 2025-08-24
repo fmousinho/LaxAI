@@ -242,6 +242,7 @@ class GoogleStorageClient:
                 logger.info("Using Application Default Credentials (ADC).")                
 
             # The rest of your code to test bucket access is correct
+            logger.info("Is the problem the bucket name?")
             logger.info(f"Accessing bucket: {self.config.bucket_name}")
             self._bucket = self._client.bucket(self.config.bucket_name)
             logger.info(f"Accessed bucket: {self.config.bucket_name}")
