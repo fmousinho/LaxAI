@@ -243,7 +243,6 @@ class GoogleStorageClient:
 
             # The rest of your code to test bucket access is correct
             self._bucket = self._client.bucket(self.config.bucket_name)
-            self._bucket.reload()
             
             self._authenticated = True
             logger.info(f"Successfully authenticated with Google Cloud Storage for bucket: {self.config.bucket_name}")
