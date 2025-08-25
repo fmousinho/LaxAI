@@ -24,7 +24,7 @@ deploy_main() {
 deploy_worker() {
     echo "Deploying training worker..."
     gcloud builds submit --config cloudbuild-worker.yaml \
-        --substitutions=_DEPLOY_TO_CLOUD_RUN=true,_REQS=${GPU_REQS}
+    --substitutions=_DEPLOY_TO_CLOUD_RUN=true,_REQS=${CLOUD_REQS}
 }
 
 case "${1:-both}" in

@@ -13,8 +13,8 @@ SERVICE_ACCOUNT_EMAIL="googlebatch@${PROJECT_ID}.iam.gserviceaccount.com"
 PUBSUB_TOPIC="training-jobs"
 SUBSCRIPTION_NAME="training-jobs-sub"
 ARTIFACT_REGISTRY_REPO="laxai-repo"
-IMAGE_NAME="us-central1-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/laxai-training-worker"
-WORKER_SERVICE_NAME="laxai-training-worker"
+IMAGE_NAME="us-central1-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/laxai-worker"
+WORKER_SERVICE_NAME="laxai-worker"
 
 # Colors for output
 RED='\033[0;31m'
@@ -200,7 +200,7 @@ show_usage() {
     echo "   curl 'https://your-function-url/status?task_id=<task_id>'"
     echo ""
     echo "3. Execute worker manually (for testing):"
-    echo "   gcloud run jobs execute $WORKER_SERVICE_NAME --region=$REGION"
+    echo "   gcloud run jobs execute laxai-worker --region=$REGION"
     echo ""
     echo "4. View logs:"
     echo "   gcloud logging read 'resource.type=\"cloud_run_job\"' --limit=50"

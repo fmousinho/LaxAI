@@ -3,11 +3,11 @@
 
 substitutions:
   # Build-time and deployment substitutions
-  _IMAGE: "laxai-training-worker"
-  _REQS: "requirements-gpu.txt"        # Use GPU requirements for training
-  _WORKER_SERVICE: "laxai-training-worker"
+  _IMAGE: "laxai-worker"
+  _REQS: "requirements-cloud.txt"        # Worker does not require GPU-specific requirements
+  _WORKER_SERVICE: "laxai-worker"
   _CLOUD_RUN_REGION: "us-central1"
-  _DEPLOY_TO_CLOUD_RUN: "false"       # Set to "true" to auto-deploy worker jobs
+  _DEPLOY_TO_CLOUD_RUN: "true"       # Set to "true" to auto-deploy worker jobs
 
 steps:
   # Build the GPU training worker image
@@ -91,18 +91,11 @@ steps:
                     - name: WORKER_TIMEOUT
                       value: "25200"
                     - name: MAX_CONCURRENT_JOBS
-                      value: "1"
+                      value: "2"
                     resources:
-                      limits:
-                        cpu: "4000m"
-                        memory: "16Gi"
-                        nvidia.com/gpu: "1"
                       requests:
                         cpu: "2000m"
                         memory: "8Gi"
-                        nvidia.com/gpu: "1"
-                    nodeSelector:
-                      run.googleapis.com/accelerator: nvidia-l4
         EOF
           
           # Deploy the job

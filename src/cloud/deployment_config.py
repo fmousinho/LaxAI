@@ -10,7 +10,7 @@ CLOUD_RUN_JOB_CONFIG = {
     "apiVersion": "run.googleapis.com/v1",
     "kind": "Job",
     "metadata": {
-        "name": "laxai-training-worker",
+        "name": "laxai-worker",
         "labels": {
             "cloud.googleapis.com/location": "us-central1"
         }
@@ -24,7 +24,7 @@ CLOUD_RUN_JOB_CONFIG = {
                         "taskTimeoutSeconds": 25200,  # 7 hours
                         "containers": [{
                             "name": "training-worker",
-                            "image": "gcr.io/{PROJECT_ID}/laxai-training-worker:latest",
+                            "image": "gcr.io/{PROJECT_ID}/laxai-worker:latest",
                             "env": [
                                 {"name": "GOOGLE_CLOUD_PROJECT", "value": "{PROJECT_ID}"},
                                 {"name": "TRAINING_JOBS_SUBSCRIPTION", "value": "training-jobs-sub"},
@@ -57,11 +57,11 @@ CLOUD_RUN_JOB_CONFIG = {
 
 # Deployment commands
 DEPLOYMENT_COMMANDS = {
-    "build_image": [
-        "docker build -f src/cloud/Dockerfile.worker -t gcr.io/{PROJECT_ID}/laxai-training-worker:latest ."
+        "build_image": [
+        "docker build -f src/cloud/Dockerfile.worker -t gcr.io/{PROJECT_ID}/laxai-worker:latest ."
     ],
     "push_image": [
-        "docker push gcr.io/{PROJECT_ID}/laxai-training-worker:latest"
+        "docker push gcr.io/{PROJECT_ID}/laxai-worker:latest"
     ],
     "create_subscription": [
         "gcloud pubsub subscriptions create training-jobs-sub --topic=training-jobs"
@@ -70,7 +70,7 @@ DEPLOYMENT_COMMANDS = {
         "gcloud run jobs replace cloud-run-job.yaml --region=us-central1"
     ],
     "execute_job": [
-        "gcloud run jobs execute laxai-training-worker --region=us-central1"
+        "gcloud run jobs execute laxai-worker --region=us-central1"
     ]
 }
 

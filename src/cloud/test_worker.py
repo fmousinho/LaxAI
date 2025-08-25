@@ -250,4 +250,4 @@ if __name__ == "__main__":
     print(f"\nTo deploy the worker:")
     print(f"  ./deploy-worker.sh")
     print(f"\nTo test manually:")
-    print(f"  gcloud run jobs execute laxai-training-worker --region=us-central1")
+    print(f"  gcloud run jobs execute laxai-worker --region=us-central1")
