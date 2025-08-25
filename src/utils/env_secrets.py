@@ -265,7 +265,49 @@ def set_google_application_credentials():
     If not set, attempts to fall back to default credentials.
     """
 
-    load_secrets({"GOOGLE_APPLICATION_CREDENTIALS": ["GOOGLE_APPLICATION_CREDENTIALS"]})
+    # 1) If already set and file exists, keep it
+    cred_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+    if cred_path:
+        if os.path.exists(cred_path):
+            logger.info(f"Using explicit service account file from env: {cred_path}")
+            return
+        else:
+            logger.warning(f"GOOGLE_APPLICATION_CREDENTIALS is set but path does not exist: {cred_path}")
+
+    # 2) Try loading from .env (if present). This supports the common workflow
+    # where sensitive paths are stored in a local .env file for development.
+    try:
+        if _DOTENV_INSTALLED:
+            load_dotenv()
+            env_val = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+            if env_val:
+                if os.path.exists(env_val):
+                    os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = env_val
+                    logger.info(f"Loaded GOOGLE_APPLICATION_CREDENTIALS from .env: {env_val}")
+                    return
+                else:
+                    logger.warning(f"GOOGLE_APPLICATION_CREDENTIALS from .env does not point to a file: {env_val}")
+    except Exception as e:
+        logger.debug(f"Error loading .env for GOOGLE_APPLICATION_CREDENTIALS: {e}")
+
+    # 3) As a last-resort, attempt to load from Secret Manager if configured.
+    # load_secrets expects a mapping with a 'secrets' key or a list/string; use the canonical form.
+    project_id = os.getenv('GOOGLE_CLOUD_PROJECT') or os.getenv('GCLOUD_PROJECT')
+    if project_id and _SECRETS_MANAGER_INSTALLED:
+        try:
+            load_secrets({'secrets': ['GOOGLE_APPLICATION_CREDENTIALS']})
+            # If set via secret manager, verify path exists
+            cred_path2 = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+            if cred_path2 and os.path.exists(cred_path2):
+                logger.info(f"Loaded GOOGLE_APPLICATION_CREDENTIALS from Secret Manager: {cred_path2}")
+                return
+            else:
+                logger.warning("GOOGLE_APPLICATION_CREDENTIALS loaded from Secret Manager but file not found or not a path.")
+        except Exception as e:
+            logger.warning(f"Could not load GOOGLE_APPLICATION_CREDENTIALS from Secret Manager: {e}")
+
+    # If we reach here, we did not set credentials. Log and continue.
+    logger.info("No GOOGLE_APPLICATION_CREDENTIALS found via env, .env, or Secret Manager. Relying on ADC if available.")
 
 def setup_environment_secrets():
     """

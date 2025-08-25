@@ -13,7 +13,7 @@ from config.all_config import tracker_config, model_config
 logger = logging.getLogger(__name__)
 
 
-def warp_bbox(bbox_tlbr: np.ndarray, affine_matrix: np.ndarray) -> np.ndarray:
+def warp_bbox(bbox_tlbr: Union[np.ndarray, "torch.Tensor"], affine_matrix: Union[np.ndarray, "torch.Tensor"]) -> np.ndarray:
     """
     Applies an affine transformation to a single bounding box.
 
@@ -32,9 +32,43 @@ def warp_bbox(bbox_tlbr: np.ndarray, affine_matrix: np.ndarray) -> np.ndarray:
         np.ndarray: A 1D NumPy array representing the warped bounding box
             coordinates as [x_min, y_min, x_max, y_max].
     """
-    # Ensure input bounding box coordinates are float32 for all calculations within this function.
-    if bbox_tlbr.dtype != np.float32:
-        bbox_tlbr = bbox_tlbr.astype(np.float32)
+    # Auto-dispatch to torch implementation when tensors are provided.
+    # Accept either a single bbox (shape (4,)) or a batch (N,4) when using torch.
+    try:
+        is_torch = isinstance(bbox_tlbr, torch.Tensor) or isinstance(affine_matrix, torch.Tensor)
+    except Exception:
+        is_torch = False
+
+    if is_torch:
+        # Ensure bbox is a torch tensor of shape (N,4)
+        if not isinstance(bbox_tlbr, torch.Tensor):
+            bbox_t = torch.as_tensor(bbox_tlbr, dtype=torch.float32)
+        else:
+            bbox_t = bbox_tlbr
+
+        # If single bbox provided as 1-D, make it batch of 1
+        if bbox_t.dim() == 1:
+            bbox_t = bbox_t.unsqueeze(0)
+
+        # Ensure affine is tensor
+        if not isinstance(affine_matrix, torch.Tensor):
+            affine_t = torch.as_tensor(affine_matrix, dtype=torch.float32, device=bbox_t.device)
+        else:
+            affine_t = affine_matrix.to(bbox_t.device)
+
+        # Call the batched torch implementation
+        warped = warp_bbox_torch(bbox_t, affine_t)
+
+        # Return the first (and only) warped bbox as numpy array if original input was 1-D
+        out = warped.cpu().numpy()
+        if out.shape[0] == 1:
+            return out[0]
+        return out
+
+    # Numpy fallback (existing behavior)
+    # Convert inputs to NumPy arrays (this handles cases where inputs are array-like)
+    bbox_tlbr = np.asarray(bbox_tlbr, dtype=np.float32)
+    affine_matrix = np.asarray(affine_matrix, dtype=np.float32)
 
     # The affine matrix from OpenCV is 2x3. We need a 3x3 for matrix multiplication
     # on homogenous coordinates.
@@ -73,6 +107,51 @@ def warp_bbox(bbox_tlbr: np.ndarray, affine_matrix: np.ndarray) -> np.ndarray:
 
     warped_xyxy = np.hstack([np.maximum(0, min_xy), np.maximum(0, max_xy)]) # Ensure no negative coordinates
 
+    return warped_xyxy
+
+
+def warp_bbox_torch(bboxes: "torch.Tensor", affine: "torch.Tensor") -> "torch.Tensor":
+    """
+    Batched bbox warping using torch tensors. Accepts bboxes of shape (N,4)
+    and affine matrices of shape (N,2,3) or (2,3) (broadcastable).
+
+    Returns a tensor of shape (N,4) with clipped coordinates (>=0).
+    """
+    # Ensure float32
+    bboxes = bboxes.float()
+    device = bboxes.device
+
+    N = bboxes.shape[0]
+
+    # corners: (N,4,2)
+    corners = torch.stack(
+        [
+            torch.stack([bboxes[:, 0], bboxes[:, 1]], dim=1),
+            torch.stack([bboxes[:, 2], bboxes[:, 1]], dim=1),
+            torch.stack([bboxes[:, 2], bboxes[:, 3]], dim=1),
+            torch.stack([bboxes[:, 0], bboxes[:, 3]], dim=1),
+        ],
+        dim=1,
+    ).to(device)
+
+    ones = torch.ones((N, 4, 1), device=device, dtype=torch.float32)
+    corners_h = torch.cat([corners, ones], dim=2)  # (N,4,3)
+
+    # Prepare affine matrices to (N,3,3)
+    if affine.dim() == 2:
+        affine = affine.unsqueeze(0).expand(N, -1, -1)
+    # Build 3x3 matrices
+    bottom = torch.tensor([0.0, 0.0, 1.0], device=device, dtype=torch.float32).view(1, 1, 3).expand(N, 1, 3)
+    M = torch.cat([affine, bottom], dim=1)  # (N,3,3)
+
+    # Apply transformation: (N,3,3) @ (N,3,4) -> (N,3,4)
+    warped = (M @ corners_h.permute(0, 2, 1)).permute(0, 2, 1)  # (N,4,3)
+    warped_xy = warped[:, :, :2] / warped[:, :, 2:].clamp(min=1e-6)
+
+    min_xy, _ = warped_xy.min(dim=1)
+    max_xy, _ = warped_xy.max(dim=1)
+
+    warped_xyxy = torch.cat([torch.clamp(min_xy, min=0.0), torch.clamp(max_xy, min=0.0)], dim=1)
     return warped_xyxy
 
 
@@ -588,7 +667,18 @@ class AffineAwareByteTrack(sv.ByteTrack):
                 # Pass crops directly to embeddings_processor (no manual preprocessing)
                 # The embeddings_processor will handle transforms and normalization
                 with torch.no_grad():
-                    track_embeddings = embeddings_processor(valid_crops)  # Shape: (num_crops, embedding_dim)
+                    # Prefer to batch-process crops as a torch tensor on the target device
+                    try:
+                        if isinstance(valid_crops, list) and len(valid_crops) > 0 and isinstance(valid_crops[0], np.ndarray):
+                            # Convert numpy crops to a single torch tensor batch
+                            batch = [torch.from_numpy(c).permute(2,0,1).float() for c in valid_crops]
+                            batch = torch.stack(batch, dim=0).to(device)
+                            track_embeddings = embeddings_processor(batch)
+                        else:
+                            track_embeddings = embeddings_processor(valid_crops)
+                    except Exception:
+                        # Fallback to original processor call (some processors expect PIL/ndarray inputs)
+                        track_embeddings = embeddings_processor(valid_crops)
                 
                 # Convert to tensor if needed for averaging and normalization
                 if isinstance(track_embeddings, np.ndarray):

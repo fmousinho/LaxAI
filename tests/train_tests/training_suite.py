@@ -1,25 +1,143 @@
-
+import os
+import json
 import time
 import uuid
-# ...existing code...
-import pytest
+import inspect
+import subprocess
+import tempfile
+import signal
+from types import SimpleNamespace
+import importlib
 
-# Pipeline stop helper
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 import utils.env_secrets as env_secrets
-env_secrets.setup_environment_secrets()
 
-from scripts import train_all
+# Ensure environment secrets for integration tests that require them
+try:
+    env_secrets.setup_environment_secrets()
+except Exception:
+    # Let tests that require secrets handle failures explicitly
+    pass
 
-from common.pipeline import stop_pipeline
+
+# ---------------------
+# Helpers and fixtures
+# ---------------------
+
+class DummyRequest:
+    """Minimal request object with attribute access and model_dump()."""
+    def __init__(self, tenant_id="tenant1", n_datasets_to_use=None):
+        self.tenant_id = tenant_id
+        self.verbose = True
+        self.custom_name = "run1"
+        self.resume_from_checkpoint = True
+        self.wandb_tags = ["tag1"]
+        self.n_datasets_to_use = n_datasets_to_use
+        self.training_params = None
+        self.model_params = None
+
+    def model_dump(self):
+        return {
+            "tenant_id": self.tenant_id,
+            "verbose": self.verbose,
+            "custom_name": self.custom_name,
+            "resume_from_checkpoint": self.resume_from_checkpoint,
+            "wandb_tags": self.wandb_tags,
+            "n_datasets_to_use": self.n_datasets_to_use,
+            "training_params": self.training_params,
+            "model_params": self.model_params,
+        }
+
+
+def make_request_obj(tenant_id="tenant1", n_datasets_to_use=None):
+    return DummyRequest(tenant_id=tenant_id, n_datasets_to_use=n_datasets_to_use)
+
+
+# ---------------------
+# Tests merged
+# ---------------------
+
+def test_cancel_via_service_cli():
+    # Import the training service module the router uses so the in-memory
+    # job store is shared.
+    training_service = importlib.import_module('services.training_service')
+    # Also import the router module for API endpoint tests
+    from src.api.v1.endpoints import train as train_router_module
+
+    # Create a job via the service create_job helper
+    req = make_request_obj()
+    task_id, kwargs = training_service.create_job(req)
+
+    # Ensure job exists and is pending
+    job = training_service.get_job(task_id)
+    assert job is not None
+    assert job["status"] == "pending"
+
+    # Call cancel_job directly (CLI-style / service API) and assert it updates state
+    result = training_service.cancel_job(task_id)
+
+    job_after = training_service.get_job(task_id)
+    assert job_after is not None
+    assert job_after["status"] in ("cancelled", "cancelling")
+
+
+def test_cancel_via_web_api_endpoint():
+    training_service = importlib.import_module('services.training_service')
+    from src.api.v1.endpoints import train as train_router_module
+
+    req = make_request_obj()
+    task_id, kwargs = training_service.create_job(req)
+
+    app = FastAPI()
+    app.include_router(train_router_module.router)
+    client = TestClient(app)
+
+    resp = client.delete(f"/train/{task_id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "message" in body
+    assert body["message"].startswith("Training job")
+
+    job_after = training_service.get_job(task_id)
+    assert job_after is not None
+    assert job_after["status"] in ("cancelled", "cancelling")
+
+
+def test_siamesenet_dino_can_download_and_initialize(tmp_path):
+    """Integration test: ensure SiameseNet downloads DINOv3 from Hugging Face and initializes."""
+    # Ensure environment secrets are set for the test run
+    env_secrets.setup_environment_secrets()
+
+    assert 'HUGGINGFACE_HUB_TOKEN' in os.environ and os.environ.get('HUGGINGFACE_HUB_TOKEN'), \
+        "HUGGINGFACE_HUB_TOKEN not found in environment after setup_environment_secrets()"
+
+    os.environ.setdefault('HF_HOME', str(tmp_path / 'hf_cache'))
+
+    try:
+        from src.train.siamesenet_dino import SiameseNet
+        import torch
+
+        net = SiameseNet()
+        net.eval()
+        with torch.no_grad():
+            h, w = getattr(net.backbone, '_expected_input_size', (224, 224))
+            x = torch.randn(1, 3, h, w)
+            emb = net(x)
+
+        assert emb is not None
+    except Exception as e:
+        pytest.fail(f"SiameseNet failed to download/initialize: {type(e).__name__}: {e}")
+
+
 def test_train_all_with_one_dataset():
-    """
-    Run a short real end-to-end training flow against one dataset.
+    # Ensure secrets for longer e2e tests
+    env_secrets.setup_environment_secrets()
 
-    This test uses real GCP and wandb as requested. We pass a small training
-    configuration (num_epochs=2, batch_size=16) and limit datasets to 1 to
-    keep the run short.
-    """
+    from scripts import train_all
+
     results = train_all.train(
         tenant_id="tenant1",
         verbose=False,
@@ -37,13 +155,9 @@ def test_train_all_with_one_dataset():
 
 
 def test_train_all_with_dino():
-    """
-    Run a short real end-to-end training flow against one dataset using the DINO model.
+    env_secrets.setup_environment_secrets()
+    from scripts import train_all
 
-    This test uses real GCP and wandb as requested. We pass a small training
-    configuration (num_epochs=2, batch_size=16) and limit datasets to 1 to
-    keep the run short.
-    """
     results = train_all.train(
         tenant_id="tenant1",
         verbose=False,
@@ -60,40 +174,23 @@ def test_train_all_with_dino():
     assert results.get("status") == "completed"
 
 
-
-
 def test_train_all_timeboxed_30_seconds(monkeypatch):
-    """
-    Start a full end-to-end training run but request cancellation after 30 seconds.
-
-    This verifies the pipeline responds to cancellation requests coming from
-    external controllers (for example the API service). The test starts the
-    training in a background thread, sleeps 30s, then calls
-    `stop_pipeline(pipeline_name)` and waits for the run to finish.
-    """
     pipeline_name = f"test_timeboxed_{uuid.uuid4().hex}"
 
-    # Monkeypatch storage and wandb logger to fast no-op implementations
     class FakeStorage:
         def list_blobs(self, prefix=None, delimiter=None, exclude_prefix_in_return=False):
-            # Return a single fake dataset directory
             return ["tenant1/datasets/dataset_fbbc3ca7/"]
-
         def upload_from_string(self, blob_name, content):
             return True
-
         def blob_exists(self, blob_name):
             return False
-
         def download_as_string(self, blob_name):
             return b""
-
         def delete_blob(self, blob_name):
             return True
 
     class FakeGCSPaths:
         def get_path(self, key, dataset_id=None):
-            # simple mapping used by train_all and TrainPipeline
             if key == "datasets_root":
                 return "tenant1/datasets/"
             if key == "train_dataset":
@@ -106,39 +203,23 @@ def test_train_all_timeboxed_30_seconds(monkeypatch):
     monkeypatch.setattr('common.google_storage.get_storage', lambda tenant_id: fake_storage)
     monkeypatch.setattr('common.google_storage.GCSPaths', FakeGCSPaths)
 
-    # Fake wandb logger with minimal methods used by the pipeline
     class FakeWandB:
         def init_run(self, *args, **kwargs):
             return None
-
         def log(self, *args, **kwargs):
             return None
-
         def finish(self):
             return None
-
         def save_model_checkpoint(self, *args, **kwargs):
             return None
 
     monkeypatch.setattr('train.wandb_logger', FakeWandB())
 
-    # Intentionally long number of epochs so the run will still be active
-    # when we trigger cancellation.
     training_kwargs = {"num_epochs": 1000, "batch_size": 16, "pipeline_name": pipeline_name}
-
-    # Run the training in a subprocess so we can force-terminate it if it
-    # doesn't exit within the timebox. We write a small runner script that
-    # re-creates the minimal fake environment (FakeStorage/FakeGCSPaths and
-    # FakeWandB) and then calls train_all.train with the same args.
-    import subprocess
-    import tempfile
-    import os
 
     runner_code = """
 import json
 from scripts import train_all
-# Ensure the child process responds to SIGTERM/SIGINT by printing a JSON
-# cancelled result so the parent test can detect it.
 import signal, sys
 def _term_handler(signum, frame):
     try:
@@ -146,10 +227,8 @@ def _term_handler(signum, frame):
         sys.stdout.flush()
     finally:
         sys.exit(0)
-
 signal.signal(signal.SIGTERM, _term_handler)
 signal.signal(signal.SIGINT, _term_handler)
-# Minimal fakes to avoid external GCS/WandB calls
 class FakeStorage:
     def list_blobs(self, prefix=None, delimiter=None, exclude_prefix_in_return=False):
         return ["tenant1/datasets/dataset_fbbc3ca7/"]
@@ -202,14 +281,12 @@ results = train_all.train(
 print(json.dumps(results))
 """
 
-    # Inject pipeline name safely without using outer f-string interpolation
     runner_code = runner_code.replace('{PIPELINE_NAME}', pipeline_name)
 
     with tempfile.NamedTemporaryFile('w', delete=False, suffix='.py') as f:
         f.write(runner_code)
         runner_path = f.name
 
-    # Start subprocess using the same venv python and PYTHONPATH so imports resolve
     python_bin = os.environ.get('PYTHON_EXECUTABLE', None) or './.venv31211/bin/python'
     env = os.environ.copy()
     env['PYTHONPATH'] = './src'
@@ -217,16 +294,13 @@ print(json.dumps(results))
     proc = subprocess.Popen([python_bin, runner_path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, text=True)
 
     try:
-        # Let the process run for 30s, then request cancellation and give it 30s to exit.
-        # stop_pipeline only affects in-process registries, so also send SIGTERM
-        # to the subprocess to simulate an external controller killing the job.
         time.sleep(30)
+        from common.pipeline import stop_pipeline
         try:
             stopped = stop_pipeline(pipeline_name)
         except Exception:
             stopped = False
 
-        import signal
         try:
             proc.send_signal(signal.SIGTERM)
         except Exception:
@@ -235,23 +309,17 @@ print(json.dumps(results))
         try:
             out, _ = proc.communicate(timeout=30)
         except subprocess.TimeoutExpired:
-            # Didn't exit in time: kill it and fail the test
             proc.kill()
             out, _ = proc.communicate(timeout=5)
             pytest.fail("Training subprocess did not exit within 30s after cancellation; killed")
 
-        # If the process exited, parse returned JSON results and validate.
-        # The child prints logs and then a JSON line; find the last valid JSON dict
-        import json as _json
         results = {}
-        # Prefer JSON objects that include a 'status' key (final result). Many
-        # logs are emitted as JSON dicts too; avoid selecting those.
         for line in out.splitlines():
             line = line.strip()
             if not line:
                 continue
             try:
-                parsed = _json.loads(line)
+                parsed = json.loads(line)
             except Exception:
                 continue
             if not isinstance(parsed, dict):
@@ -271,3 +339,30 @@ print(json.dumps(results))
             os.unlink(runner_path)
         except Exception:
             pass
+
+
+def test_train_signature_has_n_datasets_to_use():
+    from src.scripts.train_all import train
+    sig = inspect.signature(train)
+    assert "n_datasets_to_use" in sig.parameters
+
+
+def test_convert_request_to_kwargs_includes_top_level_n_datasets():
+    from src.services.training_service import _convert_request_to_kwargs
+
+    req = SimpleNamespace(
+        tenant_id="tenant1",
+        verbose=True,
+        custom_name="run1",
+        resume_from_checkpoint=True,
+        wandb_tags=["tag1"],
+        n_datasets_to_use=5,
+        training_params=None,
+        model_params=None,
+    )
+
+    kwargs = _convert_request_to_kwargs(req)
+
+    assert "n_datasets_to_use" in kwargs
+    assert kwargs["n_datasets_to_use"] == 5
+    assert "training_kwargs" not in kwargs

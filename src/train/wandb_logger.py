@@ -5,6 +5,7 @@ from datetime import datetime
 from functools import wraps
 from typing import Dict, Any, Optional, List, Callable
 import torch
+import re
 
 from config.all_config import wandb_config
 
@@ -83,14 +84,15 @@ class WandbLogger:
             enabled: Override config setting for wandb logging
         """
         self.enabled = enabled
-        self.run = None
+        # Use Any to avoid static analyzer complaints about wandb runtime types
+        self.run: Any = None
         self.initialized = False
-        
+
         if not WANDB_AVAILABLE:
             self.enabled = False
             logger.warning("wandb package not available, disabling wandb logging")
 
-        self.wandb_api = self._login_and_get_api()
+        self.wandb_api: Any = self._login_and_get_api()
         if not self.wandb_api:
             self.enabled = False
             logger.warning("Failed to login to wandb, disabling wandb logging")
@@ -116,7 +118,29 @@ class WandbLogger:
     
     def _construct_artifact_path(self, artifact_name: str, version: str = "latest") -> str:
         """Construct standardized artifact path."""
-        return f"{wandb_config.team}/{wandb_config.project}/{artifact_name}:{version}"
+        safe_name = self._sanitize_artifact_name(artifact_name)
+        return f"{wandb_config.team}/{wandb_config.project}/{safe_name}:{version}"
+
+    def _sanitize_artifact_name(self, name: Optional[str]) -> str:
+        """
+        Sanitize artifact/model/checkpoint names so they only contain
+        allowed characters for wandb artifact names: alphanumeric, dash,
+        underscore and dot.
+
+        Any disallowed character is replaced with an underscore. If the
+        resulting name is empty, return a safe default.
+        """
+        if not name:
+            return "artifact"
+        # Replace any sequence of invalid chars with a single underscore
+        safe = re.sub(r'[^A-Za-z0-9._-]+', '_', str(name))
+        # Trim leading/trailing underscores or dots
+        safe = safe.strip('_.-')
+        if not safe:
+            return "artifact"
+        if safe != name:
+            logger.info(f"Sanitized artifact name '{name}' -> '{safe}'")
+        return safe
     
     @requires_wandb_enabled
     @safe_wandb_operation(default_return=False)
@@ -391,31 +415,43 @@ class WandbLogger:
         merged_meta.setdefault('model_config', {})
         merged_meta['model_config'].update(auto_meta)
 
-        # Create artifact
+        # Use the collection name as provided (do not alter collection naming here)
         artifact = wandb.Artifact(
             name=collection_name,
             type="model",
             metadata=merged_meta
         )
 
-        # Save model state dict
+        # Save model state dict to a local file and attach to artifact
         model_path = file_name
         torch.save(model.state_dict(), model_path)
         artifact.add_file(model_path)
-        
-        # Log artifact
+
+        # Log artifact to wandb and attempt to link it under a registry path
         logged_artifact = self.run.log_artifact(artifact, type="model", tags=tags)
         target_path = f"wandb-registry-model/{collection_name}"
-        self.run.link_artifact(logged_artifact, target_path=target_path)
+        try:
+            self.run.link_artifact(logged_artifact, target_path=target_path)
+        except Exception as e:
+            logger.warning(f"Failed to link artifact to {target_path}: {e}")
 
         logger.info(f"✓ Model saved to wandb registry: {collection_name}")
 
-        # Clean up old model versions
-        self._cleanup_old_model_versions(collection_name)
-        
+        # Clean up old model versions (use collection_name as provided)
+        try:
+            self._cleanup_old_model_versions(collection_name)
+        except Exception as e:
+            logger.warning(f"Failed to cleanup old model versions for {collection_name}: {e}")
+
         # Clean up old checkpoints since final model is now saved
         checkpoint_name = self._get_checkpoint_name()
-        self._cleanup_old_checkpoints(checkpoint_name, keep_latest=0)  # Remove all checkpoints
+        safe_checkpoint = self._sanitize_artifact_name(checkpoint_name)
+        try:
+            self._cleanup_old_checkpoints(safe_checkpoint, keep_latest=0)  # Remove all checkpoints
+        except Exception as e:
+            logger.warning(f"Failed to cleanup checkpoints for {safe_checkpoint}: {e}")
+
+        return None
 
     def _cleanup_old_model_versions(self, collection_name: str, keep_latest: int = 3) -> None:
         """
@@ -528,8 +564,9 @@ class WandbLogger:
         
         # Create wandb artifact
         artifact_name = self._get_checkpoint_name()
+        safe_artifact_name = self._sanitize_artifact_name(artifact_name)
         artifact = wandb.Artifact(
-            name=artifact_name,
+            name=safe_artifact_name,
             type="model_checkpoint",
             description=f"Model checkpoint for epoch {epoch}",
             metadata={
@@ -550,11 +587,13 @@ class WandbLogger:
         os.unlink(checkpoint_path)
         
         logger.info(f"Saved model checkpoint to wandb for epoch {epoch}")
-        
-        # Clean up previous checkpoint artifacts (keep only latest)
-        self._cleanup_old_checkpoints(artifact_name)
+        # Clean up previous checkpoint artifacts (keep only latest) using sanitized name
+        try:
+            self._cleanup_old_checkpoints(safe_artifact_name)
+        except Exception as e:
+            logger.warning(f"Failed to cleanup checkpoints for {safe_artifact_name}: {e}")
 
-        return f"{artifact_name}:latest"
+        return f"{safe_artifact_name}:latest"
 
 
     def _cleanup_old_checkpoints(self, artifact_name: str, keep_latest: int = 1):
