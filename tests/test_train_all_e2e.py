@@ -264,7 +264,7 @@ print(json.dumps(results))
             pytest.fail(f"No JSON results with 'status' printed by training subprocess; output:\n{out}")
 
         assert isinstance(results, dict)
-        assert results.get("status") in ("cancelled", "finished", "completed", "error")
+        assert results.get("status") == "cancelled"
 
     finally:
         try:

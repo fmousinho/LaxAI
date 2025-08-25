@@ -69,6 +69,13 @@ def train(tenant_id: str,
     try:
         # Combine training_kwargs and model_kwargs for TrainPipeline
         all_kwargs = {**training_kwargs, **model_kwargs}
+
+        # Prevent duplicate pipeline_name if callers included it in
+        # training_kwargs (tests sometimes pass pipeline_name there).
+        # TrainPipeline receives pipeline_name explicitly below.
+        if 'pipeline_name' in all_kwargs:
+            logger.debug("Removing duplicate 'pipeline_name' from merged kwargs to avoid TypeError")
+            all_kwargs.pop('pipeline_name')
         
         # Allow callers (API) to provide a pipeline_name to register the pipeline
         
