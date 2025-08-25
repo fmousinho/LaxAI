@@ -428,12 +428,6 @@ class ParameterRegistry:
                 type=ParameterType.STR,
                 description="WandB project name",
                 config_path="training_config.wandb_project"
-            ),
-            ParameterDefinition(
-                name="wandb_run_name",
-                type=ParameterType.STR,
-                description="WandB run name",
-                config_path="training_config.wandb_run_name"
             )
         ]
         

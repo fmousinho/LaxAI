@@ -4,6 +4,20 @@
 #
 #    pip-compile --output-file=requirements/requirements-base.lock.txt requirements/requirements-base.txt
 #
+# NOTE: CPU-specific wheel index and a CPU torch pin were moved here so
+# that `requirements/requirements-cpu.txt` can be a single-line include of
+# this file. If you prefer to keep CPU-only wheels separate, revert this
+# change and keep the -f line only in `requirements/requirements-cpu.txt`.
+
+# Prefer the PyTorch CPU wheel index when installing the CPU bundle
+# (keeps compatibility when installing torch in CPU-only build contexts)
+-f https://download.pytorch.org/whl/cpu/torch_stable.html
+
+# Pin the CPU torch build here so the CPU requirements file can simply
+# reference this file. Change or remove if you want a different torch
+# version for GPU setups.
+torch==2.8.0
+
 accelerate==1.10.0
     # via
     #   -r requirements/requirements-base.txt
@@ -456,7 +470,8 @@ traitlets==5.14.3
     #   ipython
     #   ipywidgets
     #   matplotlib-inline
-transformers[torch]==4.55.3
+# Use the bleeding-edge transformers from GitHub main to support newer model types (dinov3)
+transformers[torch] @ git+https://github.com/huggingface/transformers.git@main
     # via
     #   -r requirements/requirements-base.txt
     #   peft

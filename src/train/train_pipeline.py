@@ -30,7 +30,7 @@ class TrainPipeline(Pipeline):
         self.verbose = verbose
         self.save_intermediate = save_intermediate
         self.storage_client = get_storage(tenant_id)
-        self.collection_name = wandb_config.embeddings_model_collection
+       
 
         if training_kwargs.get("model_class_module"):
             model_class_module = training_kwargs["model_class_module"]
@@ -41,6 +41,8 @@ class TrainPipeline(Pipeline):
         else:
             model_class_str = model_config.model_class_str
         module = importlib.import_module(model_class_module)
+
+        self.collection_name = model_class_module
         
         self.model_class = getattr(module, model_class_str)
         self.path_manager = GCSPaths()

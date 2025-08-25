@@ -205,10 +205,10 @@ class WandbConfig:
     log_sample_images: bool = True
     sample_images_count: int = 20
     log_all_images: bool = True
-    model_name: str = "siamese-net-embeddings"
-    embeddings_model_name: str = "resnet-cbam-embeddings"
+    #model_name: str = "siamese-net-embeddings"
+    #embeddings_model_name: str = "resnet-cbam-embeddings"
     detection_model_collection: str = "Detections"
-    embeddings_model_collection: str = "PlayerEmbeddings"
+    #embeddings_model_collection: str = "PlayerEmbeddings"
     default_model_versions_to_keep: int = 3
     model_tags_to_skip_deletion: List[str] = field(default_factory=lambda: ["do_not_delete"])
     run_name: str = "run"

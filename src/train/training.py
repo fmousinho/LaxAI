@@ -5,9 +5,8 @@ from typing import Optional, Any, Dict, Callable
 from torch.utils.data import DataLoader, Dataset
 import torch.nn as nn
 import numpy as np
-import wandb
 from config.all_config import model_config, training_config, wandb_config
-from wandb_logger import wandb_logger
+from train.wandb_logger import wandb_logger
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +175,6 @@ class Training:
                 "optimizer_type": "Adam",
                 "model_architecture": type(self.model).__name__ if self.model is not None else None,
                 "timestamp": datetime.datetime.now().isoformat(),
-                "wandb_run_id": wandb.run.id if hasattr(wandb, 'run') and wandb.run is not None else None,
                 "notes": getattr(self, 'notes', None),
             }
 
