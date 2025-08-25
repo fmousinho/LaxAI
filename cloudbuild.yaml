@@ -5,14 +5,13 @@ substitutions:
   # Build-time and deployment substitutions. Override these when calling `gcloud builds`
   # or when creating a build trigger.
   _IMAGE: "laxai"
-  _REQS: "requirements-gpu.txt"        # maps from docker-compose build arg REQS   
-  _CLOUD_RUN_SERVICE: "laxai-worker"
+  _REQS: "requirements-cloud.txt"     # Main app only needs cloud dependencies
+  _CLOUD_RUN_SERVICE: "laxai-api"
   _CLOUD_RUN_REGION: "us-central1"
   _DEPLOY_TO_CLOUD_RUN: "true"       # set to "true" to run the deploy step
-  _CPU_LIMIT: "4000m"
-  _MEMORY_LIMIT: "16Gi"
-  _GPU_COUNT: "1"
-  _GPU_TYPE: "nvidia-l4"
+  _CPU_LIMIT: "1000m"                # 1 vCPU - lean for API
+  _MEMORY_LIMIT: "512Mi"             # 512MB - sufficient for web API
+  # No GPU settings - main app doesn't need GPUs
   
 
 steps:
@@ -53,8 +52,6 @@ steps:
             --quiet \
             --cpu="${_CPU_LIMIT}" \
             --memory="${_MEMORY_LIMIT}" \
-            --gpu="${_GPU_COUNT}" \
-            --gpu-type="${_GPU_TYPE}" \
             --service-account="googlebatch@$PROJECT_ID.iam.gserviceaccount.com"
         else
           echo "Skipping Cloud Run deployment because _DEPLOY_TO_CLOUD_RUN != true"

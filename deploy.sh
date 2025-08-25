@@ -18,16 +18,14 @@ fi
 deploy_main() {
     echo "Deploying main application..."
     gcloud builds submit --config cloudbuild.yaml \
-        --substitutions=_DEPLOY_TO_CLOUD_RUN=true,_REQS=${GPU_REQS},_CPU_LIMIT=${CPU_LIMIT},_MEMORY_LIMIT=${MEMORY_LIMIT},_GPU_COUNT=${GPU_COUNT},_GPU_TYPE=${GPU_TYPE}
+        --substitutions=_DEPLOY_TO_CLOUD_RUN=true,_REQS=${CLOUD_REQS},_CPU_LIMIT=${MAIN_CPU_LIMIT},_MEMORY_LIMIT=${MAIN_MEMORY_LIMIT}
 }
 
 deploy_worker() {
     echo "Deploying training worker..."
     gcloud builds submit --config cloudbuild-worker.yaml \
-    --substitutions=_DEPLOY_TO_CLOUD_RUN=true,_REQS=${CLOUD_REQS}
-}
-
-case "${1:-both}" in
+        --substitutions=_DEPLOY_TO_CLOUD_RUN=true,_REQS=${GPU_REQS}
+}case "${1:-both}" in
     "main")
         deploy_main
         ;;
