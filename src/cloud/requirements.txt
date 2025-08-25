@@ -1,0 +1,17 @@
+# Cloud Function deployment configuration
+functions-framework==3.*
+google-cloud-firestore
+google-cloud-pubsub
+google-cloud-logging
+
+# FastAPI/Pydantic for request validation (reusing existing schemas)
+pydantic>=2.0
+fastapi
+
+# Core dependencies
+requests
+python-dotenv
+
+# Local development (optional)
+flask
+werkzeug

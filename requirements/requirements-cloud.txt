@@ -1,0 +1,21 @@
+# Cloud Training Job Dependencies
+# Core Google Cloud dependencies for the training job orchestration system
+
+# Firestore for job state management
+google-cloud-firestore>=2.13.0
+
+# Pub/Sub for job queueing 
+google-cloud-pubsub>=2.18.0
+
+# Cloud Functions framework
+functions-framework>=3.5.0
+
+# Cloud Storage for artifacts (optional)
+google-cloud-storage>=2.10.0
+
+# Cloud Logging
+google-cloud-logging>=3.8.0
+
+# General utilities
+python-dateutil>=2.8.2
+pydantic>=2.5.0

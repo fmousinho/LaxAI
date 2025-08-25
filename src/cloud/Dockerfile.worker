@@ -1,0 +1,60 @@
+# Cloud Run Job Dockerfile for GPU training worker
+# Based on NVIDIA's PyTorch container with CUDA support
+# Aligned with existing LaxAI Dockerfile patterns
+
+ARG BASE_IMAGE=nvidia/pytorch:2.0.1-devel-ubuntu20.04
+ARG DEPS_IMAGE=fmousinho/laxai-deps:latest
+
+# Use the same dependency approach as main Dockerfile
+FROM ${DEPS_IMAGE} AS deps
+
+# Main worker image with GPU support
+FROM ${BASE_IMAGE}
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV GOOGLE_CLOUD_PROJECT=""
+ENV TRAINING_JOBS_SUBSCRIPTION="training-jobs-sub"
+ENV FIRESTORE_ENABLED="true"
+ENV WORKER_TIMEOUT="25200"
+ENV MAX_CONCURRENT_JOBS="1"
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-pip \
+    git \
+    wget \
+    curl \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy wheels from deps image (if available)
+COPY --from=deps /wheels /wheels
+
+# Copy requirements and install
+ARG REQS=requirements-gpu.txt
+COPY requirements/ requirements/
+RUN pip install --no-cache-dir --find-links /wheels -r requirements/${REQS}
+
+# Install cloud-specific dependencies
+COPY requirements/requirements-cloud.txt requirements-cloud.txt
+RUN pip install --no-cache-dir -r requirements-cloud.txt
+
+# Copy source code
+COPY src/ src/
+COPY pyproject.toml .
+COPY README.md .
+
+# Install the package in development mode
+RUN pip install -e .
+
+# Create directory for model outputs
+RUN mkdir -p /tmp/models /tmp/artifacts
+
+# Set the entrypoint
+CMD ["python", "src/cloud/worker.py"]

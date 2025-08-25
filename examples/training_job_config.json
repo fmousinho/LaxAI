@@ -1,0 +1,29 @@
+{
+  "tenant_id": "production-tenant",
+  "training_params": {
+    "epochs": 50,
+    "batch_size": 32,
+    "learning_rate": 0.0001,
+    "model_type": "detection",
+    "optimizer": "adamw",
+    "scheduler": "cosine",
+    "warmup_epochs": 5,
+    "weight_decay": 0.0005,
+    "momentum": 0.9
+  },
+  "model_params": {
+    "architecture": "yolo",
+    "input_size": 640,
+    "num_classes": 80,
+    "pretrained": true,
+    "backbone": "resnet50"
+  },
+  "custom_name": "production-detection-model-v1.2",
+  "wandb_tags": [
+    "production",
+    "detection",
+    "yolo",
+    "gpu-training",
+    "v1.2"
+  ]
+}
