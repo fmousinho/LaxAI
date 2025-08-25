@@ -140,6 +140,11 @@ class Training:
                 return False
                 
         except Exception as e:
+            # If wandb is expected to be enabled, surface the error so the
+            # pipeline fails loudly instead of silently falling back.
+            if getattr(wandb_config, 'enabled', False):
+                logger.error(f"Failed to load model from wandb registry while wandb is enabled: {e}")
+                raise
             logger.info(f"Could not load model from wandb registry: {e}")
             return False
 
@@ -200,6 +205,10 @@ class Training:
             )
             logger.info(f"✓ Model saved to wandb registry: {model_name}:latest")
         except Exception as e:
+            # If wandb is expected to be enabled, fail the pipeline
+            if getattr(wandb_config, 'enabled', False):
+                logger.error(f"Failed to save model to wandb registry while wandb is enabled: {e}")
+                raise
             logger.error(f"Failed to save model to wandb registry: {e}")
 
 
@@ -522,6 +531,9 @@ class Training:
                     logger.debug(f"Checkpoint saved for epoch {epoch + 1}")
                     
                 except Exception as e:
+                    if getattr(wandb_config, 'enabled', False):
+                        logger.error(f"Failed to save checkpoint for epoch {epoch + 1} while wandb is enabled: {e}")
+                        raise
                     logger.warning(f"Failed to save checkpoint for epoch {epoch + 1}: {e}")
 
         logger.info("Training completed successfully")

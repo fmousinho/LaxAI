@@ -1,13 +1,17 @@
-from scripts import train_all
+
 import time
 import uuid
 # ...existing code...
 import pytest
 
 # Pipeline stop helper
+
+import utils.env_secrets as env_secrets
+env_secrets.setup_environment_secrets()
+
+from scripts import train_all
+
 from common.pipeline import stop_pipeline
-
-
 def test_train_all_with_one_dataset():
     """
     Run a short real end-to-end training flow against one dataset.
@@ -29,7 +33,7 @@ def test_train_all_with_one_dataset():
     )
 
     assert isinstance(results, dict)
-    assert results.get("status") in ("completed", "finished", "cancelled", "error")
+    assert results.get("status") == "completed"
 
 
 def test_train_all_with_dino():
@@ -53,7 +57,7 @@ def test_train_all_with_dino():
     )
 
     assert isinstance(results, dict)
-    assert results.get("status") in ("completed", "finished", "cancelled", "error")
+    assert results.get("status") == "completed"
 
 
 

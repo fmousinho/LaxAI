@@ -46,7 +46,7 @@ LOGGING = {
     "formatters": {
         "json": {
             "format": "%(asctime)s %(levelname)s %(filename)s %(message)s",
-            "class": "pythonjsonlogger.jsonlogger.JsonFormatter",
+            "class": "pythonjsonlogger.json.JsonFormatter",
         },
         "pipe": {
             '()': PipeFormatter,

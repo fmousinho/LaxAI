@@ -6,7 +6,7 @@ substitutions:
   # or when creating a build trigger.
   _IMAGE: "laxai"
   _REQS: "requirements-cpu.txt"        # maps from docker-compose build arg REQS   
-  _CLOUD_RUN_SERVICE: "laxai-api"
+  _CLOUD_RUN_SERVICE: "laxai-gpu"
   _CLOUD_RUN_REGION: "us-central1"
   _DEPLOY_TO_CLOUD_RUN: "true"       # set to "true" to run the deploy step
   

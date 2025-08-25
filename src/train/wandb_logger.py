@@ -26,8 +26,10 @@ def requires_wandb_enabled(func: Callable) -> Callable:
     @wraps(func)
     def wrapper(self, *args, **kwargs):
         if not self.enabled:
-            logger.error(f"Wandb not enabled, skipping {func.__name__}")
-            return None
+            msg = f"Wandb not enabled or available for {func.__name__}"
+            logger.error(msg)
+            # Strict behavior: fail fast when wandb is not available
+            raise RuntimeError(msg)
         return func(self, *args, **kwargs)
     return wrapper
 
@@ -37,8 +39,10 @@ def requires_wandb_initialized(func: Callable) -> Callable:
     @wraps(func)
     def wrapper(self, *args, **kwargs):
         if not self.enabled or not self.initialized or self.run is None:
-            logger.error(f"Wandb logging is not enabled or initialized for {func.__name__}")
-            return None
+            msg = f"Wandb logging is not enabled or initialized for {func.__name__}"
+            logger.error(msg)
+            # Strict behavior: fail fast when wandb is not initialized
+            raise RuntimeError(msg)
         return func(self, *args, **kwargs)
     return wrapper
 
@@ -52,6 +56,13 @@ def safe_wandb_operation(default_return=None):
                 return func(self, *args, **kwargs)
             except Exception as e:
                 logger.warning(f"Failed to execute {func.__name__}: {e}")
+                # If wandb is expected to be enabled, surface the error to fail fast
+                try:
+                    if wandb_config.enabled:
+                        raise
+                except Exception:
+                    # Re-raise original exception
+                    raise
                 return default_return
         return wrapper
     return decorator
