@@ -241,13 +241,8 @@ class GoogleStorageClient:
                 self._client = storage.Client(project=self.config.project_id)
                 logger.info("Using Application Default Credentials (ADC).")                
 
-            # The rest of your code to test bucket access is correct
-            logger.info("Is the problem the bucket name?")
-            logger.info(self.config)
-            logger.info(f"credentials in env: {os.environ.get(self.config.credentials_name)}")
-            logger.info(f"Accessing bucket: {self.config.bucket_name}")
+
             self._bucket = self._client.bucket(self.config.bucket_name)
-            logger.info(f"Accessed bucket: {self.config.bucket_name}")
             
             self._authenticated = True
             logger.info(f"Successfully authenticated with Google Cloud Storage for bucket: {self.config.bucket_name}")

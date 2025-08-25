@@ -7,7 +7,7 @@ import torch.nn as nn
 import numpy as np
 import wandb
 from config.all_config import model_config, training_config, wandb_config
-from .wandb_logger import wandb_logger
+from wandb_logger import wandb_logger
 
 logger = logging.getLogger(__name__)
 
@@ -282,7 +282,7 @@ class Training:
 
             # Try to load from wandb registry first (unless forcing pretrained)
             if self.force_pretraining:
-                logger.info("Forcing fresh start with pre-trained ResNet18 weights")
+                logger.info("Forcing fresh start with pre-trained weights")
                 self.model = model_class(**kwargs)
             else:
                 model_loaded = self._load_model_from_wandb(model_class, model_name=model_name, alias="latest", **kwargs)

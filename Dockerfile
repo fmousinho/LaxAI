@@ -51,12 +51,7 @@ WORKDIR /app
 # override this at runtime with `docker run -e GOOGLE_CLOUD_PROJECT=...`.
 ARG GOOGLE_CLOUD_PROJECT="laxai-466119"
 ENV GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
-# RUN apt-get update && apt-get install -y --no-install-recommends \
-#     curl \
-#     ca-certificates \
-#     libgl1 \
-#     libglib2.0-0 \
-#     && rm -rf /var/lib/apt/lists/*
+
 
 
 # Copy dependency wheels from the deps image and then overlay the app wheel
