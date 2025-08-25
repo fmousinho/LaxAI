@@ -81,8 +81,10 @@ RUN --mount=type=cache,target=/root/.cache/pip set -eux \
   # Ensure runtime has system GL libs required by OpenCV and similar packages
   && apt-get update \
   && apt-get install -y -o APT::Install-Recommends=false --no-install-recommends \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
+  ca-certificates \
+  git \
+  libgl1-mesa-glx \
+  libglib2.0-0 \
   && rm -rf /var/lib/apt/lists/* \
   && python -m pip install --upgrade pip setuptools wheel \
   && if [ -f /tmp/requirements/requirements-cpu.txt ]; then \
