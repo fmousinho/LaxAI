@@ -51,6 +51,38 @@ class DINOv3Backbone(nn.Module):
         )
         return head
 
+    def ensure_head_initialized(self, device: str = "cpu", input_shape=(1, 3, 224, 224)) -> None:
+        """
+        Ensure the lazy-created head is constructed. This is idempotent and
+        safe to call from loaders before attempting to load state dicts.
+
+        Args:
+            device: Device to run the dummy forward on (e.g. 'cpu' or 'cuda')
+            input_shape: Shape of the dummy input used to trigger lazy init
+        """
+        if getattr(self, "_head", None) is not None:
+            return
+
+        try:
+            dev = torch.device(device)
+        except Exception:
+            dev = torch.device("cpu")
+
+        # Preserve training mode and restore afterwards
+        prev_mode = self.training
+        try:
+            self.to(dev)
+            self.eval()
+            with torch.no_grad():
+                dummy = torch.zeros(input_shape, device=dev)
+                # call backbone forward (this will create the head via forward)
+                _ = self(dummy)
+        except Exception as e:
+            logger.warning(f"ensure_head_initialized failed: {e}")
+        finally:
+            if prev_mode:
+                self.train()
+
     def _extract_features(self, x: torch.Tensor) -> torch.Tensor:
         """Run the backbone and normalize the output to a (B, C) tensor."""
         func = getattr(self.backbone, 'forward_features', None)
@@ -147,3 +179,28 @@ class SiameseNet(nn.Module):
         if not attn:
             logger.warning("No attention maps available from DINOv3 backbone (model may not expose internals).")
         return attn
+
+    def ensure_head_initialized(self, device: str = "cpu", input_shape=(1, 3, 224, 224)) -> None:
+        """
+        Public convenience wrapper that ensures the backbone's lazy head is initialized.
+        """
+        if hasattr(self.backbone, "ensure_head_initialized"):
+            return self.backbone.ensure_head_initialized(device=device, input_shape=input_shape)
+        # Fallback: run a dummy forward
+        try:
+            dev = torch.device(device)
+        except Exception:
+            dev = torch.device("cpu")
+
+        prev_mode = self.training
+        try:
+            self.to(dev)
+            self.eval()
+            with torch.no_grad():
+                dummy = torch.zeros(input_shape, device=dev)
+                _ = self(dummy)
+        except Exception as e:
+            logger.warning(f"SiameseNet.ensure_head_initialized fallback failed: {e}")
+        finally:
+            if prev_mode:
+                self.train()

@@ -244,10 +244,17 @@ class WandbLogger:
             Loaded model instance or None if loading failed
         """
         
-        # Download artifact
+        # Download artifact (guard against missing artifact / membership errors)
         artifact_path = self._construct_artifact_path(collection_name, alias)
-        model_artifact = self.wandb_api.artifact(artifact_path, type="model")
-        model_dir = model_artifact.download()
+        try:
+            model_artifact = self.wandb_api.artifact(artifact_path, type="model")
+            model_dir = model_artifact.download()
+        except Exception as e:
+            # Specific wandb errors (CommError / ValueError) indicate the artifact
+            # or membership was not found. Log a clear message and return None so
+            # callers can handle absence gracefully.
+            logger.warning(f"Could not retrieve wandb artifact '{artifact_path}': {e}")
+            return None
 
         model_file_name = None
         for file in model_artifact.files():
@@ -263,13 +270,80 @@ class WandbLogger:
         logger.info(f"Model path: {model_path}")
         
         if os.path.exists(model_path):
-            # Initialize model and load weights
+            # Initialize model and load weights with robust handling for mismatched keys
             model = model_class(**kwargs)
-            model.load_state_dict(torch.load(model_path, map_location=device))
-            model.to(device)
 
-            logger.info(f"✓ Successfully loaded model from wandb registry: {collection_name}:{alias}")
-            return model
+            # Load raw checkpoint (may be a state_dict or a full checkpoint dict)
+            raw = torch.load(model_path, map_location=device)
+            if isinstance(raw, dict) and 'model_state_dict' in raw:
+                state_dict = raw['model_state_dict']
+            else:
+                state_dict = raw
+
+            model_state = model.state_dict()
+
+            # If the checkpoint contains keys for a lazy-created head, ensure the model
+            # has its head constructed before attempting a strict load. This avoids
+            # "unexpected key" errors when the model lazily creates the head on first
+            # forward.
+            try:
+                sd_keys = set(state_dict.keys())
+            except Exception:
+                sd_keys = set()
+
+            if any(k.startswith('backbone._head') for k in sd_keys) and getattr(model.backbone, '_head', None) is None:
+                logger.info("Checkpoint contains backbone._head keys; initializing head via model API if available")
+                try:
+                    # Prefer a model-provided initialization API
+                    if hasattr(model, 'ensure_head_initialized'):
+                        model.ensure_head_initialized(device=device)
+                    else:
+                        # Fallback to conservative dummy forward
+                        model.to(device)
+                        model.eval()
+                        with torch.no_grad():
+                            dummy = torch.zeros((1, 3, 224, 224), device=device)
+                            model(dummy)
+                except Exception as e:
+                    logger.warning(f"Could not initialize model head before loading: {e}")
+
+            # Simple fast attempt: try strict load first to detect perfect matches
+            try:
+                model.load_state_dict(state_dict)
+                model.to(device)
+                logger.info(f"✓ Successfully loaded model from wandb registry (strict): {collection_name}:{alias}")
+                return model
+            except RuntimeError as e:
+                logger.warning(f"Strict state_dict load failed: {e}")
+
+            # Attempt non-strict load (will ignore unexpected/missing keys)
+            try:
+                model.load_state_dict(state_dict, strict=False)
+                model.to(device)
+                # Report unexpected/missing keys for visibility
+                sd_keys = set(state_dict.keys())
+                unexpected = [k for k in sd_keys if k not in model_state]
+                missing = [k for k in model_state.keys() if k not in sd_keys]
+                if unexpected:
+                    logger.warning(f"State dict contained unexpected keys (they were ignored): {unexpected[:10]}{('...' if len(unexpected)>10 else '')}")
+                if missing:
+                    logger.info(f"State dict is missing keys (these were left at defaults): {missing[:10]}{('...' if len(missing)>10 else '')}")
+
+                logger.info(f"✓ Successfully loaded model from wandb registry (lenient): {collection_name}:{alias}")
+                return model
+            except Exception as e:
+                logger.warning(f"Lenient state_dict load failed: {e}")
+
+            # As a last resort, filter state_dict to keys that exist in the model and try strict load
+            try:
+                filtered = {k: v for k, v in state_dict.items() if k in model_state}
+                model.load_state_dict(filtered)
+                model.to(device)
+                logger.info(f"✓ Successfully loaded filtered model state from wandb registry: {collection_name}:{alias}")
+                return model
+            except Exception as e:
+                logger.error(f"Failed to load model after filtering state_dict: {e}")
+                return None
         else:
             logger.warning(f"Model file not found in wandb artifact: {model_path}")
             return None
@@ -291,11 +365,37 @@ class WandbLogger:
             metadata: Additional metadata to include
             tags: Optional list of tags to add to the artifact
         """
+        # Build metadata: merge user-provided metadata with detected model config
+        auto_meta: Dict[str, Any] = {}
+        try:
+            # Common high-level attrs
+            auto_meta['embedding_dim'] = getattr(model, 'embedding_dim', None)
+            auto_meta['dropout'] = getattr(model, 'dropout', getattr(model, 'dropout_rate', None))
+
+            # Try to detect backbone head linear layer shape(s)
+            head_info = {}
+            backbone = getattr(model, 'backbone', None)
+            if backbone is not None and getattr(backbone, '_head', None) is not None:
+                head = backbone._head
+                # find any Linear modules inside the head
+                for name, mod in head.named_modules():
+                    if isinstance(mod, torch.nn.Linear):
+                        head_info['linear_'+name] = {'in_features': mod.in_features, 'out_features': mod.out_features}
+                if head_info:
+                    auto_meta['head'] = head_info
+        except Exception as e:
+            logger.debug(f"Failed to auto-detect model metadata: {e}")
+
+        merged_meta = {} if metadata is None else dict(metadata)
+        # Put auto-detected metadata under key 'model_config' for loader consumption
+        merged_meta.setdefault('model_config', {})
+        merged_meta['model_config'].update(auto_meta)
+
         # Create artifact
         artifact = wandb.Artifact(
             name=collection_name,
             type="model",
-            metadata=metadata or {}
+            metadata=merged_meta
         )
 
         # Save model state dict
@@ -468,7 +568,8 @@ class WandbLogger:
             
         # List all versions of this artifact
         try:
-            artifact_versions = list(self.wandb_api.artifact_versions(
+            # Use the newer `artifacts` API instead of deprecated `artifact_versions`
+            artifact_versions = list(self.wandb_api.artifacts(
                 "model_checkpoint",
                 f"{self.run.entity}/{self.run.project}/{artifact_name}"
             ))
