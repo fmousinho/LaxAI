@@ -39,7 +39,3 @@ dist/
 
 # Log files
 *.log
-
-# Do not commit large model weights
-# This prevents accidentally committing model.pth again
-model.pth
