@@ -4,6 +4,7 @@
 .31211
 .env
 
+model.pth
 token.json
 results*
 .git/
