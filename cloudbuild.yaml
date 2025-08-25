@@ -52,7 +52,6 @@ steps:
             --quiet \
             --cpu="${_CPU_LIMIT}" \
             --memory="${_MEMORY_LIMIT}" \
-            --cpu-allocation=request \
             --concurrency=10 \
             --max-instances=3 \
             --service-account="googlebatch@$PROJECT_ID.iam.gserviceaccount.com"
