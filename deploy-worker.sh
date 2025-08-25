@@ -146,7 +146,7 @@ spec:
       template:
         spec:
           restartPolicy: Never
-          taskTimeoutSeconds: 25200  # 7 hours
+          taskTimeoutSeconds: 36000  # 10 hours
           serviceAccountName: $SERVICE_ACCOUNT_EMAIL
           containers:
           - name: training-worker
@@ -159,7 +159,7 @@ spec:
             - name: FIRESTORE_ENABLED
               value: "true"
             - name: WORKER_TIMEOUT
-              value: "25200"
+              value: "36000"
             - name: MAX_CONCURRENT_JOBS
               value: "1"
             resources:

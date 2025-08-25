@@ -76,7 +76,7 @@ steps:
               template:
                 spec:
                   restartPolicy: Never
-                  taskTimeoutSeconds: 25200
+                  taskTimeoutSeconds: 36000
                   serviceAccountName: googlebatch@$PROJECT_ID.iam.gserviceaccount.com
                   containers:
                   - name: training-worker
@@ -89,7 +89,7 @@ steps:
                     - name: FIRESTORE_ENABLED
                       value: "true"
                     - name: WORKER_TIMEOUT
-                      value: "25200"
+                      value: "36000"
                     - name: MAX_CONCURRENT_JOBS
                       value: "2"
                     resources:
