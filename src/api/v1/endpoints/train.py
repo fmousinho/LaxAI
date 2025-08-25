@@ -13,8 +13,10 @@ from ..schemas.training import (
     TrainingRequest, 
     TrainingResponse, 
     TrainingProgress, 
-    ErrorResponse
+    ErrorResponse,
+    TrainingConfig,
 )
+from pydantic import ValidationError
 from common.pipeline import get_active_pipelines
 from services.training_service import (
     create_job,
@@ -48,6 +50,17 @@ async def start_training(
     Returns a task ID that can be used to track progress.
     """
     try:
+        # Defer validation to the service layer so the API does not depend on
+        # schema internals directly. The service will raise on validation
+        # failure and we map that to a 422 below.
+        from services import training_service
+        try:
+            training_service.validate_training_params(request.training_params)
+        except Exception as ve:
+            raise HTTPException(status_code=422, detail=ErrorResponse(
+                detail=f"training_params validation failed: {ve}",
+                error_type="validation_error"
+            ).model_dump())
         # Create job entry and get kwargs
         task_id, kwargs = create_job(request)
 

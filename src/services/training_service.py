@@ -21,6 +21,35 @@ from common.pipeline import get_active_pipelines, stop_pipeline
 
 logger = logging.getLogger(__name__)
 
+
+def validate_training_params(payload) -> None:
+	"""
+	Validate training_params against the dynamic TrainingConfig.
+
+	Raises a pydantic.ValidationError (or other exception) on invalid input.
+	This function imports the schema at call time to avoid import cycles
+	during module initialization.
+	"""
+	try:
+		# Import the dynamic TrainingConfig here to avoid circular imports
+		from src.api.v1.schemas.training import TrainingConfig
+	except Exception as e:
+		# If the dynamic schema cannot be imported, raise a clear error
+		raise RuntimeError(f"Failed to load TrainingConfig for validation: {e}")
+
+	# Normalize payload
+	if payload is None:
+		payload_to_validate = {}
+	else:
+		if hasattr(payload, 'model_dump'):
+			payload_to_validate = payload.model_dump()
+		else:
+			payload_to_validate = payload if isinstance(payload, dict) else dict(payload)
+
+	# Use pydantic model validate; will raise on errors
+	TrainingConfig.model_validate(payload_to_validate)
+
+
 # In-memory job store. In production, replace with persistent store (DB/Redis).
 TRAINING_JOBS: Dict[str, Dict[str, Any]] = {}
 
