@@ -25,6 +25,7 @@ CLOUD_RUN_JOB_CONFIG = {
                         "containers": [{
                             "name": "training-worker",
                             "image": "gcr.io/{PROJECT_ID}/laxai-worker:latest",
+                            
                             "env": [
                                 {"name": "GOOGLE_CLOUD_PROJECT", "value": "{PROJECT_ID}"},
                                 {"name": "TRAINING_JOBS_SUBSCRIPTION", "value": "training-jobs-sub"},
@@ -58,10 +59,10 @@ CLOUD_RUN_JOB_CONFIG = {
 # Deployment commands
 DEPLOYMENT_COMMANDS = {
         "build_image": [
-        "docker build -f src/cloud/Dockerfile.worker -t gcr.io/{PROJECT_ID}/laxai-worker:latest ."
-    ],
+            "docker build -f docker/worker/Dockerfile.worker -t us-central1-docker.pkg.dev/{PROJECT_ID}/laxai-repo/laxai-worker:latest ."
+        ],
     "push_image": [
-        "docker push gcr.io/{PROJECT_ID}/laxai-worker:latest"
+            "docker push us-central1-docker.pkg.dev/{PROJECT_ID}/laxai-repo/laxai-worker:latest"
     ],
     "create_subscription": [
         "gcloud pubsub subscriptions create training-jobs-sub --topic=training-jobs"

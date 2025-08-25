@@ -122,7 +122,7 @@ build_and_push_image() {
     gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
     
     # Build the image using the same repo structure as your existing setup
-    docker build -f src/cloud/Dockerfile.worker -t $IMAGE_NAME:latest .
+    docker build -f docker/worker/Dockerfile.worker -t $IMAGE_NAME:latest .
     
     # Push to Artifact Registry
     docker push $IMAGE_NAME:latest

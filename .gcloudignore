@@ -41,5 +41,5 @@ build/
 /root/.cache/
 **/__pycache__/
 
-# Keep cloudbuild.yaml and Dockerfile present
-# (do not ignore cloudbuild.yaml or Dockerfile)
+# Keep deploy/cloudbuild/cloudbuild.yaml and Dockerfile present
+# (do not ignore deploy/cloudbuild/cloudbuild.yaml or Dockerfile)

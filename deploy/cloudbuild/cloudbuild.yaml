@@ -1,0 +1,64 @@
+# Cloud Build configuration for LaxAI
+# Builds Docker image, pushes to Artifact Registry and deploys to Cloud Run.
+
+substitutions:
+  _IMAGE: "laxai"
+  _REQS: "requirements-cloud.txt"
+  _CLOUD_RUN_SERVICE: "laxai-api"
+  _CLOUD_RUN_REGION: "us-central1"
+  _DEPLOY_TO_CLOUD_RUN: "true"
+  _CPU_LIMIT: "1000m"
+  _MEMORY_LIMIT: "512Mi"
+
+steps:
+  - id: "build-and-tag-image"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:latest"
+      - "--build-arg"
+      - "REQS=${_REQS}"
+      - "--build-arg"
+      - "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
+      - "."
+
+  - id: "push-latest-image"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:latest"
+
+  - id: "deploy-to-cloud-run"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        if [[ "${_DEPLOY_TO_CLOUD_RUN}" == "true" ]]; then
+          echo "Deploying to Cloud Run: ${_CLOUD_RUN_SERVICE} (${_CLOUD_RUN_REGION})"
+          gcloud run deploy "${_CLOUD_RUN_SERVICE}" \
+            --image="us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:latest" \
+            --region="${_CLOUD_RUN_REGION}" \
+            --platform=managed \
+            --allow-unauthenticated \
+            --quiet \
+            --cpu="${_CPU_LIMIT}" \
+            --memory="${_MEMORY_LIMIT}" \
+            --concurrency=10 \
+            --max-instances=3 \
+            --service-account="googlebatch@$PROJECT_ID.iam.gserviceaccount.com"
+        else
+          echo "Skipping Cloud Run deployment because _DEPLOY_TO_CLOUD_RUN != true"
+        fi
+
+images:
+  - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:latest"
+
+availableSecrets:
+  secretManager: []
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: "3600s"

@@ -46,8 +46,8 @@ python src/cloud/client.py --url https://your-function-url --action status --tas
 - `src/config/cloud-config.env` - Centralized configuration
 
 ### Deployment
-- `cloudbuild.yaml` - Updated with GPU support
-- `cloudbuild-worker.yaml` - Worker-specific build config
+- `deploy/cloudbuild/cloudbuild.yaml` - Updated with GPU support
+- `deploy/cloudbuild/cloudbuild-worker.yaml` - Worker-specific build config
 - `deploy.sh` - Simple deployment script
 - `deploy-worker.sh` - Detailed worker deployment
 

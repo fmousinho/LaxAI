@@ -1,0 +1,108 @@
+# syntax=docker/dockerfile:1.4
+# Dependency-only Dockerfile (CPU-first, Python 3.12 slim)
+# Purpose: build a deps image that contains Python, system libs, and wheels for
+# the project's stable dependency set. App code is applied later in a separate
+# build that reuses this image.
+#
+
+
+# ARG BASE_PYTHON_IMAGE=python:3.12-slim
+
+# Control whether to force CPU-only PyTorch wheels. Set to "false" to allow
+# the default (GPU) wheels from PyPI or other indexes. This value can be
+# overridden at build time with --build-arg TORCH_CPU_ONLY=false
+ARG TORCH_CPU_ONLY=false
+# Allow customizing the CPU wheel index if needed
+ARG TORCH_CPU_INDEX="https://download.pytorch.org/whl/cpu/torch_stable.html"
+
+ARG BASE_PYTHON_IMAGE=pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
+
+# Builder: create wheels for requirements
+FROM ${BASE_PYTHON_IMAGE} AS builder
+ARG TORCH_CPU_ONLY
+ARG TORCH_CPU_INDEX
+
+# Install build tools
+RUN set -eux \
+  && apt-get update \
+  && apt-get install -y -o APT::Install-Recommends=false --no-install-recommends \
+       build-essential \
+       ca-certificates \
+       git \
+       wget \
+       gcc \
+       g++ \
+  libgl1-mesa-glx \
+  libglib2.0-0 \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# Copy requirements directory (builder needs all referenced files, e.g. 
+# requirements-base.txt referenced by requirements-cpu.txt)
+COPY requirements/ ./requirements/
+
+# Prefer requirements-base.txt + requirements-cpu.txt; otherwise use all requirements/*.txt
+RUN --mount=type=cache,target=/root/.cache/pip --mount=type=cache,target=/wheels set -eux \
+  && python -m pip install --upgrade pip wheel setuptools \
+  && mkdir -p /wheels /tmp/reqsdir \
+  && if [ -f requirements/requirements-cpu.txt ]; then \
+      # Copy requirement files so '-r' resolves correctly inside the temp dir
+      cp requirements/*.txt /tmp/reqsdir/; \
+      REQ_DIR=/tmp/reqsdir; \
+    else \
+      echo "ERROR: requirements/requirements-cpu.txt not found" >&2; \
+      exit 1; \
+    fi \
+  # Build wheels for all requirements. If TORCH_CPU_ONLY is true, point pip
+  # to the PyTorch CPU wheel index so a CPU-only torch wheel is selected.
+  && if [ "$TORCH_CPU_ONLY" = "true" ]; then \
+       echo "Building wheels using CPU PyTorch index: $TORCH_CPU_INDEX"; \
+       (cd "$REQ_DIR" && python -m pip wheel -r "requirements-cpu.txt" --wheel-dir /wheels --find-links "$TORCH_CPU_INDEX"); \
+     else \
+       echo "Building wheels without forcing CPU PyTorch index"; \
+       (cd "$REQ_DIR" && python -m pip wheel -r "requirements-cpu.txt" --wheel-dir /wheels); \
+     fi \
+  && echo "Building wheels from: $REQ_DIR/requirements-cpu.txt" \
+  && ls -lah /wheels || true \
+  && rm -rf /tmp/* /var/tmp/*
+
+# Runtime image: small python base with only runtime deps installed from wheels
+FROM ${BASE_PYTHON_IMAGE} AS runtime
+ARG TORCH_CPU_ONLY
+ARG TORCH_CPU_INDEX
+
+WORKDIR /app
+
+# Copy the requirements from the builder and install them in the runtime image
+# using the PyTorch CPU wheel index so the final image gets a CPU-only torch.
+COPY --from=builder /src/requirements /tmp/requirements
+RUN --mount=type=cache,target=/root/.cache/pip set -eux \
+  # Ensure runtime has system GL libs required by OpenCV and similar packages
+  && apt-get update \
+  && apt-get install -y -o APT::Install-Recommends=false --no-install-recommends \
+  ca-certificates \
+  git \
+  libgl1-mesa-glx \
+  libglib2.0-0 \
+  && rm -rf /var/lib/apt/lists/* \
+  && python -m pip install --upgrade pip setuptools wheel \
+  && if [ -f /tmp/requirements/requirements-cpu.txt ]; then \
+       if [ "$TORCH_CPU_ONLY" = "true" ]; then \
+         echo "Installing runtime requirements using CPU PyTorch index: $TORCH_CPU_INDEX"; \
+         python -m pip install --find-links "$TORCH_CPU_INDEX" -r /tmp/requirements/requirements-cpu.txt; \
+       else \
+         echo "Installing runtime requirements without forcing CPU PyTorch index"; \
+         python -m pip install -r /tmp/requirements/requirements-cpu.txt; \
+       fi; \
+     else \
+       echo "No requirements-cpu.txt found in /tmp/requirements; skipping runtime install"; \
+     fi \
+  && rm -rf /tmp/requirements
+
+# Common metadata and health
+LABEL org.opencontainers.image.title="laxai-deps" \
+      org.opencontainers.image.description="Dependency-only image for LaxAI" \
+      org.opencontainers.image.licenses=MIT
+
+CMD ["python","-c","print('Deps image ready')"]

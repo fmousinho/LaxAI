@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Simple deployment script that uses shared configuration
-# Usage: ./deploy.sh [main|worker|both]
+# Usage: ./scripts/deploy.sh [main|worker|both]
 
 set -e
 
@@ -25,7 +25,9 @@ deploy_worker() {
     echo "Deploying training worker..."
     gcloud builds submit --config deploy/cloudbuild/cloudbuild-worker.yaml \
         --substitutions=_DEPLOY_TO_CLOUD_RUN=true,_REQS=${GPU_REQS}
-}case "${1:-both}" in
+}
+
+case "${1:-both}" in
     "main")
         deploy_main
         ;;

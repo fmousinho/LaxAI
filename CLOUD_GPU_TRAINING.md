@@ -133,8 +133,8 @@ curl -X POST https://your-function-url/orchestrate \
       - **`src/config/cloud-config.env`** - Centralized configuration
 
       ### Deployment & Configuration
-      - **`cloudbuild.yaml`** - Main application build/deploy
-      - **`cloudbuild-worker.yaml`** - Training worker build/deploy
+  - **`deploy/cloudbuild/cloudbuild.yaml`** - Main application build/deploy
+  - **`deploy/cloudbuild/cloudbuild-worker.yaml`** - Training worker build/deploy
       - **`deploy.sh`** - Simple deployment script
       - **`deploy-worker.sh`** - Detailed worker deployment
 
