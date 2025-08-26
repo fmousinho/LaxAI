@@ -9,7 +9,7 @@ substitutions:
   _CLOUD_RUN_REGION: "us-central1"
   _DEPLOY_TO_CLOUD_RUN: "true"       # Set to "true" to auto-deploy worker jobs
   _WORKER_TIMEOUT: "36000"          # Worker timeout in seconds (10 hours)
- 
+  _SERVICE_ACCOUNT: "googlebatch@${PROJECT_ID}.iam.gserviceaccount.com"
 
 steps:
   # Build the GPU training worker image
@@ -81,7 +81,7 @@ steps:
               template:
                 spec:
                   restartPolicy: Never
-                  serviceAccountName: googlebatch@${PROJECT_ID}.iam.gserviceaccount.com
+                  serviceAccountName: "${_SERVICE_ACCOUNT}"
                   containers:
                   - name: training-worker
                     image: us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/${_IMAGE}:latest
