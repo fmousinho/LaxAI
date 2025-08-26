@@ -122,16 +122,17 @@ echo "Requirements file considered: $REQUIRED_FILE"
 echo "Computed hash: $HASH"
 echo "Building dependency image: $IMAGE_REF"
 
-# Create a temporary build context that contains the Dockerfile and a requirements/ dir
-TMP_DIR=$(mktemp -d)
-mkdir -p "$TMP_DIR/requirements"
-cp "$DOCKERFILE" "$TMP_DIR/Dockerfile"
+# Build directly from the repository root so the Dockerfile can COPY top-level
+# paths (like requirements/). Pass the selected requirements file via build-arg
+# so Dockerfile.deps can choose which requirements file to use.
+BUILD_CONTEXT="$REPO_ROOT"
 
-# --- START MODIFICATION ---
-# Only copy the specified requirements file
-cp "$REQUIRED_FILE" "$TMP_DIR/requirements/requirements-gpu.txt"
-cp "$REQUIRED_FILE" "$TMP_DIR/requirements-gpu.txt"
-# --- END MODIFICATION ---
+BUILD_ARGS=(
+  "-f" "$DOCKERFILE"
+  "-t" "$IMAGE_REF"
+  ${NO_CACHE:+--no-cache}
+  "--build-arg" "REQUIREMENTS_FILE=${REQUIRED_FILE}"
+)
 
 if [[ "${MULTIARCH:-}" == "true" ]]; then
   echo "Multi-arch build requested. Using docker buildx."
@@ -142,7 +143,7 @@ if [[ "${MULTIARCH:-}" == "true" ]]; then
   # If pushing, use --push to publish manifest; otherwise load the image locally (may not support multi-arch)
   if [[ "$PUSH" == true ]]; then
     # Push a multi-arch manifest (amd64 + arm64)
-  DOCKER_BUILDKIT=1 docker buildx build --platform linux/amd64,linux/arm64 -f "$TMP_DIR/Dockerfile" -t "$IMAGE_REF" ${NO_CACHE:+--no-cache} --push "$TMP_DIR"
+  DOCKER_BUILDKIT=1 docker buildx build --platform linux/amd64,linux/arm64 -f "$DOCKERFILE" -t "$IMAGE_REF" ${NO_CACHE:+--no-cache} --push "$BUILD_CONTEXT"
 
     # After pushing a multi-arch manifest, also create/update the :latest tag in the registry
     # so consumers that pull ':latest' see the same multi-arch index. Use buildx imagetools
@@ -177,14 +178,12 @@ if [[ "${MULTIARCH:-}" == "true" ]]; then
       *) LOCAL_PLATFORM="linux/amd64" ;;
     esac
     echo "Building for local platform $LOCAL_PLATFORM (use --push to publish multi-arch)"
-  DOCKER_BUILDKIT=1 docker buildx build --platform "$LOCAL_PLATFORM" -f "$TMP_DIR/Dockerfile" -t "$IMAGE_REF" ${NO_CACHE:+--no-cache} --load "$TMP_DIR"
+  DOCKER_BUILDKIT=1 docker buildx build --platform "$LOCAL_PLATFORM" -f "$DOCKERFILE" -t "$IMAGE_REF" ${NO_CACHE:+--no-cache} --load "$BUILD_CONTEXT"
   fi
 else
-  DOCKER_BUILDKIT=1 docker build -f "$TMP_DIR/Dockerfile" -t "$IMAGE_REF" ${NO_CACHE:+--no-cache} "$TMP_DIR"
+  DOCKER_BUILDKIT=1 docker build "${BUILD_ARGS[@]}" "$BUILD_CONTEXT"
 fi
 
-# Clean up temporary dir
-rm -rf "$TMP_DIR"
 
 if [[ "$PUSH" == true ]]; then
   echo "Pushing $IMAGE_REF"
