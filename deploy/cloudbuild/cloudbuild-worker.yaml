@@ -18,11 +18,11 @@ steps:
       - "-f"
       - "docker/worker/Dockerfile.worker"
       - "-t"
-      - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:latest"
+      - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/${_IMAGE}:latest"
       - "--build-arg"
       - "REQS=${_REQS}"
       - "--build-arg"
-      - "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
+      - "GOOGLE_CLOUD_PROJECT=${PROJECT_ID}"
       - "."
 
   # Push the worker image
@@ -30,7 +30,7 @@ steps:
     name: "gcr.io/cloud-builders/docker"
     args:
       - "push"
-      - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:latest"
+      - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/${_IMAGE}:latest"
 
   # Setup Pub/Sub infrastructure
   - id: "setup-pubsub"
@@ -77,13 +77,13 @@ steps:
                 spec:
                   restartPolicy: Never
                   taskTimeoutSeconds: 36000
-                  serviceAccountName: googlebatch@$PROJECT_ID.iam.gserviceaccount.com
+                  serviceAccountName: googlebatch@${PROJECT_ID}.iam.gserviceaccount.com
                   containers:
                   - name: training-worker
-                    image: us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:latest
+                    image: us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/${_IMAGE}:latest
                     env:
                     - name: GOOGLE_CLOUD_PROJECT
-                      value: "$PROJECT_ID"
+                      value: "${PROJECT_ID}"
                     - name: TRAINING_JOBS_SUBSCRIPTION
                       value: "training-jobs-sub"
                     - name: FIRESTORE_ENABLED
@@ -115,7 +115,7 @@ steps:
         fi
 
 images:
-  - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:latest"
+  - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/${_IMAGE}:latest"
 
 options:
   logging: CLOUD_LOGGING_ONLY

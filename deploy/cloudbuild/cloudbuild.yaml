@@ -9,9 +9,9 @@ substitutions:
   _DEPLOY_TO_CLOUD_RUN: "true"
   _CPU_LIMIT: "1000m"
   _MEMORY_LIMIT: "1Gi"
-  _REGISTRY_BASE: "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo"
+  _REGISTRY_BASE: "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo"
   _DOCKERFILE: "docker/thin_api/Dockerfile"
-  _SERVICE_ACCOUNT: "googlebatch@$PROJECT_ID.iam.gserviceaccount.com"
+  _SERVICE_ACCOUNT: "googlebatch@${PROJECT_ID}.iam.gserviceaccount.com"
 
 steps:
   - id: "build-and-tag-image"
@@ -25,7 +25,7 @@ steps:
       - "--build-arg"
       - "REQS=${_REQS}"
       - "--build-arg"
-      - "GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
+      - "GOOGLE_CLOUD_PROJECT=${PROJECT_ID}"
       - "."
 
   - id: "push-latest-image"
@@ -58,7 +58,7 @@ steps:
         fi
 
 images:
-  - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:latest"
+  - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/${_IMAGE}:latest"
 
 availableSecrets:
   secretManager: []
