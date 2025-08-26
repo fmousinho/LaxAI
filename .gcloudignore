@@ -43,3 +43,40 @@ build/
 
 # Keep deploy/cloudbuild/cloudbuild.yaml and Dockerfile present
 # (do not ignore deploy/cloudbuild/cloudbuild.yaml or Dockerfile)
+
+# Recommended additional ignores
+# Local environment files and secrets
+.env
+.env.*
+**/credentials.json
+token.json
+tools/token.json
+tools/credentials.json
+
+# Testing and cache dirs
+.pytest_cache/
+.mypy_cache/
+.tox/
+.coverage
+coverage.xml
+
+# pip / wheel caches and local wheels
+.wheels/
+wheels/
+.cache/
+~/.cache/pip
+
+# IDE/editor
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Docker auth
+.docker/config.json
+
+# Binary artifacts
+*.so
+*.a
+*.dll
+*.dylib

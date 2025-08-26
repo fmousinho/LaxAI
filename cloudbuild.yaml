@@ -1,5 +1,0 @@
-"# This repository has moved Cloud Build configs to deploy/cloudbuild/"
-# Use these commands instead of the top-level config:
-#   gcloud builds submit --config=deploy/cloudbuild/cloudbuild.yaml .
-#   gcloud builds submit --config=deploy/cloudbuild/cloudbuild-worker.yaml .
-  _DEPLOY_TO_CLOUD_RUN: "true"       # set to "true" to run the deploy step

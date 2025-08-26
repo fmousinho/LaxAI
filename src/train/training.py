@@ -554,92 +554,92 @@ class Training:
         Returns:
             A dictionary containing the calculated metrics.
         """
+        # Evaluate embeddings in a memory-efficient way. The previous
+        # implementation built a full N x N similarity matrix which can
+        # OOM for large validation sets. Instead compute per-query
+        # similarities (O(N) memory per query) and keep tensors on CPU.
         self.model.eval()
         all_embeddings = []
         all_pids = []  # Player IDs
-        
-        # Generate embeddings for all images in the dataset
+
+        # Generate embeddings for all images in the dataset (on CPU)
         with torch.no_grad():
             for batch_data in dataloader:
-                # Handle both triplet format (anchor, positive, negative, label) 
-                # and simple format (images, labels)
                 if len(batch_data) == 4:
-                    # Triplet format: use only anchor images
                     anchor, positive, negative, pids = batch_data
                     images = anchor.to(self.device)
                 elif len(batch_data) == 2:
-                    # Simple format: use images directly
                     images, pids = batch_data
                     images = images.to(self.device)
                 else:
                     raise ValueError(f"Unexpected batch format with {len(batch_data)} elements")
-                    
+
                 embeddings = self.model.forward(images)
-                all_embeddings.append(embeddings.cpu())
+                # Move to CPU and ensure float32 to reduce peak memory
+                all_embeddings.append(embeddings.cpu().float())
                 all_pids.extend(pids.tolist())
-        
+
+        if len(all_embeddings) == 0:
+            return {"recall@1": 0.0, "recall@5": 0.0, "recall@10": 0.0, "mAP": 0.0}
+
         all_embeddings = torch.cat(all_embeddings, dim=0)
         all_pids = np.array(all_pids)
-        
-        num_queries = len(all_embeddings)
-        
-        # Calculate cosine similarity matrix
+
+        # Normalize embeddings once (CPU)
         embeddings_norm = torch.nn.functional.normalize(all_embeddings, p=2, dim=1)
-        similarity_matrix = torch.mm(embeddings_norm, embeddings_norm.T)
-        
-        # Initialize metrics
+        num_queries = embeddings_norm.shape[0]
+
+        # Prepare accumulators
         rank1_correct = 0
         rank5_correct = 0
         rank10_correct = 0
         average_precisions = []
 
+        # For each query, compute similarities to all gallery vectors as a single
+        # vector (O(N) memory). This avoids allocating an N x N matrix.
         for i in range(num_queries):
             query_pid = all_pids[i]
-            
-            # Get similarities for the current query
-            query_similarities = similarity_matrix[i, :]
-            
-            # Exclude the query itself from the gallery
-            # A simple way is to zero out its similarity
-            query_similarities[i] = -1.0
-            
-            # Sort by similarity in descending order
-            sorted_indices = torch.argsort(query_similarities, descending=True)
-            
-            # Get the pids of the ranked images
-            ranked_pids = all_pids[sorted_indices.numpy()]
-            
-            # Calculate precision and recall for this query
-            num_correct = 0
-            precision_at_k = 0.0
-            
-            # Count true matches at different ranks
-            if ranked_pids[0] == query_pid:
+            query_vec = embeddings_norm[i]
+
+            # Compute dot-product similarities (CPU vector of length N)
+            sims = torch.mv(embeddings_norm, query_vec)
+
+            # Exclude self-match
+            sims[i] = -1.0
+
+            # Get top-k indices (we only need up to 10)
+            k = min(10, num_queries)
+            topk = torch.topk(sims, k=k).indices.cpu().numpy()
+            ranked_pids = all_pids[topk]
+
+            # Compute recall@1/5/10
+            if ranked_pids.size > 0 and ranked_pids[0] == query_pid:
                 rank1_correct += 1
             if query_pid in ranked_pids[:5]:
                 rank5_correct += 1
             if query_pid in ranked_pids[:10]:
                 rank10_correct += 1
-                
-            # Calculate Average Precision for this query
-            # This is a bit simplified, but captures the core idea
-            for k, pid_k in enumerate(ranked_pids):
+
+            # Average precision for this query (simplified single-match AP)
+            num_correct = 0
+            precision_sum = 0.0
+            for k_idx, pid_k in enumerate(ranked_pids):
                 if pid_k == query_pid:
                     num_correct += 1
-                    precision_at_k += num_correct / (k + 1.0)
-            
-            # Avoid division by zero if there are no correct matches
+                    precision_sum += num_correct / (k_idx + 1.0)
+
             if num_correct > 0:
-                average_precisions.append(precision_at_k / num_correct)
+                average_precisions.append(precision_sum / num_correct)
             else:
                 average_precisions.append(0.0)
 
-        # Compute final metrics
-        recall_1 = rank1_correct / num_queries
-        recall_5 = rank5_correct / num_queries
-        recall_10 = rank10_correct / num_queries
-        mean_average_precision = float(np.mean(average_precisions))
-        
+        # Compute final metrics (avoid division by zero)
+        denom = float(num_queries) if num_queries > 0 else 1.0
+        recall_1 = rank1_correct / denom
+        recall_5 = rank5_correct / denom
+        recall_10 = rank10_correct / denom
+        mean_average_precision = float(np.mean(average_precisions)) if average_precisions else 0.0
+
         return {
             "recall@1": recall_1,
             "recall@5": recall_5,
