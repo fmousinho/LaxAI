@@ -8,15 +8,12 @@
 # Cloud Build configuration for LaxAI
 # Builds Docker image, pushes to Artifact Registry and deploys to Cloud Run.
 
-
 substitutions:
   _IMAGE: "laxai-api"
   _REQS: "requirements-cloud.txt"
   _CLOUD_RUN_SERVICE: "laxai-api"
   _CLOUD_RUN_REGION: "us-central1"
   _DEPLOY_TO_CLOUD_RUN: "true"
-  _CPU_LIMIT: "1000m"
-  _MEMORY_LIMIT: "1Gi"
   _REGISTRY_BASE: "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo"
   _DOCKERFILE: "docker/thin_api/Dockerfile"
   _SERVICE_ACCOUNT: "googlebatch@${PROJECT_ID}.iam.gserviceaccount.com"
@@ -42,31 +39,65 @@ steps:
       - "push"
       - "${_REGISTRY_BASE}/${_IMAGE}:latest"
 
+  - id: "create-cloud-run-service-yaml"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        # Creates a YAML file for Cloud Run deployment from the provided settings.
+        cat <<EOF > cloudrun-service.yaml
+        apiVersion: serving.knative.dev/v1
+        kind: Service
+        metadata:
+          name: ${_CLOUD_RUN_SERVICE}
+          labels:
+            cloud.googleapis.com/location: ${_CLOUD_RUN_REGION}
+        spec:
+          template:
+            metadata:
+              annotations:
+                autoscaling.knative.dev/maxScale: '3'
+                run.googleapis.com/startup-cpu-boost: 'true'
+            spec:
+              containerConcurrency: 10
+              timeoutSeconds: 300
+              serviceAccountName: ${_SERVICE_ACCOUNT}
+              containers:
+              - image: ${_REGISTRY_BASE}/${_IMAGE}:latest
+                ports:
+                - name: http1
+                  containerPort: 8000
+                resources:
+                  limits:
+                    cpu: 1000m
+                    memory: 512Mi
+                startupProbe:
+                  timeoutSeconds: 240
+                  periodSeconds: 240
+                  failureThreshold: 1
+                  tcpSocket:
+                    port: 8000
+        EOF
+
   - id: "deploy-to-cloud-run"
     name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     entrypoint: "bash"
     args:
       - "-c"
       - |
+        # Uses the generated YAML file for a complete and consistent deployment.
         if [[ "${_DEPLOY_TO_CLOUD_RUN}" == "true" ]]; then
           echo "Deploying to Cloud Run: ${_CLOUD_RUN_SERVICE} (${_CLOUD_RUN_REGION})"
-          gcloud run deploy "${_CLOUD_RUN_SERVICE}" \
-            --image="${_REGISTRY_BASE}/${_IMAGE}:latest" \
+          gcloud run services replace cloudrun-service.yaml \
             --region="${_CLOUD_RUN_REGION}" \
-            --platform=managed \
-            --allow-unauthenticated \
-            --quiet \
-            --cpu="${_CPU_LIMIT}" \
-            --memory="${_MEMORY_LIMIT}" \
-            --concurrency=10 \
-            --max-instances=3 \
-            --service-account="${_SERVICE_ACCOUNT}"
+            --quiet
         else
           echo "Skipping Cloud Run deployment because _DEPLOY_TO_CLOUD_RUN != true"
         fi
 
 images:
-  - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/${_IMAGE}:latest"
+  - "${_REGISTRY_BASE}/${_IMAGE}:latest"
 
 availableSecrets:
   secretManager: []
