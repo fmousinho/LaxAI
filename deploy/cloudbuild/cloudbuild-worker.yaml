@@ -110,6 +110,5 @@ images:
 
 options:
   logging: CLOUD_LOGGING_ONLY
-  machineType: 'G2_STANDARD_8'
 
 timeout: "3600s"
