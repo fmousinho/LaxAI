@@ -2,6 +2,12 @@
 Main FastAPI entry point for LaxAI.
 """
 import os
+
+from utils.env_secrets import setup_environment_secrets
+setup_environment_secrets()
+
+import config.logging_config
+
 import multiprocessing as mp
 import logging
 from contextlib import asynccontextmanager
@@ -21,11 +27,6 @@ except RuntimeError:
 
 from api.v1.endpoints.cloud import router as cloud_router
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 
 logger = logging.getLogger(__name__)
 
@@ -87,12 +88,6 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Include API routers
-    app.include_router(
-        train_router,
-        prefix="/api/v1",
-        tags=["training"]
-    )
     
     app.include_router(
         cloud_router,
