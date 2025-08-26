@@ -3,12 +3,22 @@
 # Patterns follow .gitignore semantics
 
 # Version control
-.git
+
+# .gcloudignore - minimal, deduplicated ignore rules to keep Cloud Build context small
+# Patterns follow .gitignore semantics
+
+# Version control
+.git/
 .gitignore
 
-# Python virtualenvs
+# Local caches not needed for builds
+.file_cache/
+
+# Python virtualenvs (explicit local names and patterns)
 .venv/
+.venv31211/
 venv/
+.venv*/
 
 # Python build/artifact caches
 __pycache__/
