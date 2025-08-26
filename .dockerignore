@@ -105,6 +105,7 @@ wandb/
 src/utils/wandb
 models/
 evaluation_results/
+.file_cache/
 
 # Explicitly ignore build artifacts that may live under src (sometimes created
 # by local builds) so they are not sent in the docker build context.
