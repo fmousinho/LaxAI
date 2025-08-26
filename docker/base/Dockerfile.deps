@@ -77,6 +77,11 @@ WORKDIR /app
 # Copy the requirements from the builder and install them in the runtime image
 # using the PyTorch CPU wheel index so the final image gets a CPU-only torch.
 COPY --from=builder /src/requirements /tmp/requirements
+# Include built wheels from the builder stage so downstream images can
+# COPY --from=deps /wheels /wheels successfully. This keeps the same
+# wheel cache that was produced in the builder stage available in the
+# runtime/deps image.
+COPY --from=builder /wheels /wheels
 RUN --mount=type=cache,target=/root/.cache/pip set -eux \
   # Ensure runtime has system GL libs required by OpenCV and similar packages
   && apt-get update \

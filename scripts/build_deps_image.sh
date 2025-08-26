@@ -13,7 +13,7 @@ PUSH=false
 REGISTRY="docker.io"
 PROJECT_ID="fmousinho"
 IMAGE_NAME="laxai-deps"
-DOCKERFILE="Dockerfile.deps"
+DOCKERFILE="docker/base/Dockerfile.deps"
 MULTIARCH=false
 # Tagging behaviour: hash (default), timestamp, git, or explicit
 TAG_MODE="hash"

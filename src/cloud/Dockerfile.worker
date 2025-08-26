@@ -33,13 +33,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set working directory
 WORKDIR /app
 
-# Copy wheels from deps image (if available)
+# Copy wheels from deps image (if available). The COPY step will succeed
+# now because the deps image was updated to include /wheels. Keep a
+# defensive runtime check so pip falls back to PyPI if /wheels is absent
+# in some registries or older images.
 COPY --from=deps /wheels /wheels
 
-# Copy requirements and install
+# Copy requirements and install. Use /wheels as a local find-links only
+# when it exists; otherwise fall back to standard pip installation.
 ARG REQS=requirements-gpu.txt
 COPY requirements/ requirements/
-RUN pip install --no-cache-dir --find-links /wheels -r requirements/${REQS}
+RUN if [ -d /wheels ] && [ "$(ls -A /wheels)" ]; then \
+            echo "Using local wheel cache at /wheels"; \
+            pip install --no-cache-dir --find-links /wheels -r requirements/${REQS}; \
+        else \
+            echo "/wheels not present or empty, installing from PyPI"; \
+            pip install --no-cache-dir -r requirements/${REQS}; \
+        fi
 
 # Install cloud-specific dependencies
 COPY requirements/requirements-cloud.txt requirements-cloud.txt
