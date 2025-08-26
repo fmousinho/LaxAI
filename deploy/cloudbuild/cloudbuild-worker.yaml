@@ -8,6 +8,8 @@ substitutions:
   _WORKER_SERVICE: "laxai-worker"
   _CLOUD_RUN_REGION: "us-central1"
   _DEPLOY_TO_CLOUD_RUN: "true"       # Set to "true" to auto-deploy worker jobs
+  _WORKER_TIMEOUT: "36000"          # Worker timeout in seconds (10 hours)
+ 
 
 steps:
   # Build the GPU training worker image
@@ -76,7 +78,7 @@ steps:
               template:
                 spec:
                   restartPolicy: Never
-                  taskTimeoutSeconds: 36000
+                  taskTimeoutSeconds: "${_WORKER_TIMEOUT}"
                   serviceAccountName: googlebatch@${PROJECT_ID}.iam.gserviceaccount.com
                   containers:
                   - name: training-worker
@@ -89,7 +91,7 @@ steps:
                     - name: FIRESTORE_ENABLED
                       value: "true"
                     - name: WORKER_TIMEOUT
-                      value: "36000"
+                      value: "${_WORKER_TIMEOUT}"
                     - name: MAX_CONCURRENT_JOBS
                       value: "1"
                     resources:

@@ -10,7 +10,7 @@
 
 
 substitutions:
-  _IMAGE: "laxai"
+  _IMAGE: "laxai-api"
   _REQS: "requirements-cloud.txt"
   _CLOUD_RUN_SERVICE: "laxai-api"
   _CLOUD_RUN_REGION: "us-central1"
