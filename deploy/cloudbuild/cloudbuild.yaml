@@ -8,7 +8,7 @@ substitutions:
   _CLOUD_RUN_REGION: "us-central1"
   _DEPLOY_TO_CLOUD_RUN: "true"
   _CPU_LIMIT: "1000m"
-  _MEMORY_LIMIT: "512Mi"
+  _MEMORY_LIMIT: "1Gi"
 
 steps:
   - id: "build-and-tag-image"
