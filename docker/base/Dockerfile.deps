@@ -43,7 +43,7 @@ WORKDIR /src
 COPY requirements/ ./requirements/
 
 # Prefer requirements-base.txt + requirements-cpu.txt; otherwise use all requirements/*.txt
-RUN --mount=type=cache,target=/root/.cache/pip --mount=type=cache,target=/wheels set -eux \
+RUN --mount=type=cache,target=/root/.cache/pip set -eux \
   && python -m pip install --upgrade pip wheel setuptools \
   && mkdir -p /wheels /tmp/reqsdir \
   && if [ -f requirements/requirements-cpu.txt ]; then \

@@ -52,41 +52,22 @@ if [[ "$PUSH" != true && -n "$REGISTRY" ]]; then
     PUSH=true
   fi
 fi
-# Prefer requirements inside the `requirements/` directory (recommended).
-# This keeps the deps image focused on the repo's declared files.
-REQ_DIR="requirements"
-EXISTS=()
-PREFERRED_REQS=("$REQ_DIR/requirements-base.txt" "$REQ_DIR/requirements-cpu.txt")
-for f in "${PREFERRED_REQS[@]}"; do
-  if [[ -f "$f" ]]; then
-    EXISTS+=("$f")
-  fi
-done
 
-if [[ ${#EXISTS[@]} -eq 0 ]]; then
-  # Fallback: look for any requirements in requirements/ first, then repo root
-  shopt -s nullglob
-  ALL_REQS=("$REQ_DIR"/requirements*.txt "$REQ_DIR"/requirements*.pip "$REQ_DIR"/requirements*.in requirements*.txt requirements*.pip requirements*.in)
-  shopt -u nullglob
-  for f in "${ALL_REQS[@]:-}"; do
-    if [[ -f "$f" ]]; then
-      EXISTS+=("$f")
-    fi
-  done
+# --- START MODIFICATION ---
+
+# Use only the specified requirements file
+REQUIRED_FILE="requirements/requirements-gpu.txt"
+
+# Check if the file exists
+if [[ ! -f "$REQUIRED_FILE" ]]; then
+    echo "Required file not found: $REQUIRED_FILE"
+    exit 1
 fi
 
-if [[ ${#EXISTS[@]} -eq 0 ]]; then
-  echo "No requirements files found in repo (checked $REQ_DIR and repo root). Ensure requirements files exist."
-  exit 1
-fi
-
-# Compute short sha1 hash from filenames and their contents (stable order)
+# Compute short sha1 hash from the file's contents
 TMP_HASH_FILE=$(mktemp)
-for fn in "${EXISTS[@]}"; do
-  # write basename first to keep order stable and avoid including full paths
-  echo "$(basename "$fn")" >> "$TMP_HASH_FILE"
-  cat "$fn" >> "$TMP_HASH_FILE"
-done
+cat "$REQUIRED_FILE" > "$TMP_HASH_FILE"
+
 # Use a portable sha1 command (macOS has shasum)
 if command -v sha1sum >/dev/null 2>&1; then
   HASH=$(sha1sum "$TMP_HASH_FILE" | awk '{print substr($1,1,12)}')
@@ -94,6 +75,8 @@ else
   HASH=$(shasum -a 1 "$TMP_HASH_FILE" | awk '{print substr($1,1,12)}')
 fi
 rm -f "$TMP_HASH_FILE"
+
+# --- END MODIFICATION ---
 
 # Compose image reference
 
@@ -134,8 +117,7 @@ else
   IMAGE_REF="${IMAGE_NAME}:${TAG}"
 fi
 
-echo "Requirements files considered:"
-for f in "${EXISTS[@]}"; do echo "  - $f"; done
+echo "Requirements file considered: $REQUIRED_FILE"
 
 echo "Computed hash: $HASH"
 echo "Building dependency image: $IMAGE_REF"
@@ -144,14 +126,12 @@ echo "Building dependency image: $IMAGE_REF"
 TMP_DIR=$(mktemp -d)
 mkdir -p "$TMP_DIR/requirements"
 cp "$DOCKERFILE" "$TMP_DIR/Dockerfile"
-for f in "${EXISTS[@]}"; do
-  basefn=$(basename "$f")
-  cp "$f" "$TMP_DIR/requirements/$basefn"
-  # Also copy into the build context root to support Dockerfiles that expect
-  # requirements files at the context root (some Dockerfiles use -r requirements-base.txt)
-  cp "$f" "$TMP_DIR/$basefn"
-done
 
+# --- START MODIFICATION ---
+# Only copy the specified requirements file
+cp "$REQUIRED_FILE" "$TMP_DIR/requirements/requirements-gpu.txt"
+cp "$REQUIRED_FILE" "$TMP_DIR/requirements-gpu.txt"
+# --- END MODIFICATION ---
 
 if [[ "${MULTIARCH:-}" == "true" ]]; then
   echo "Multi-arch build requested. Using docker buildx."
