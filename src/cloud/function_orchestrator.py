@@ -27,7 +27,8 @@ except ImportError:
 # Import our custom modules
 from cloud.firestore_client import get_firestore_client, JobStatus
 from services.training_service import validate_training_params
-from api.v1.schemas.training import TrainingRequest
+# Import TrainingRequest lazily to avoid heavy ML config dependencies
+# from api.v1.schemas.training import TrainingRequest
 
 # Environment variables
 PROJECT_ID = os.getenv('GOOGLE_CLOUD_PROJECT')
@@ -55,7 +56,7 @@ def get_pubsub_publisher():
     return _pubsub_publisher
 
 
-def validate_request_payload(request_data: Dict[str, Any]) -> Tuple[bool, str, Optional[TrainingRequest]]:
+def validate_request_payload(request_data: Dict[str, Any]) -> Tuple[bool, str, Optional[Any]]:
     """
     Validate the incoming training request.
     
@@ -66,6 +67,9 @@ def validate_request_payload(request_data: Dict[str, Any]) -> Tuple[bool, str, O
         Tuple of (is_valid, error_message, parsed_request)
     """
     try:
+        # Import TrainingRequest here to avoid heavy ML config dependencies during module import
+        from api.v1.schemas.training import TrainingRequest
+        
         # Parse into TrainingRequest model for validation
         training_request = TrainingRequest(**request_data)
         
