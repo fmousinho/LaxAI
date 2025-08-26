@@ -18,7 +18,8 @@ except RuntimeError:
     pass
 
 # Import API routers
-from api.v1.endpoints.train import router as train_router
+
+from api.v1.endpoints.cloud import router as cloud_router
 
 # Configure logging
 logging.basicConfig(
@@ -91,6 +92,12 @@ def create_app() -> FastAPI:
         train_router,
         prefix="/api/v1",
         tags=["training"]
+    )
+    
+    app.include_router(
+        cloud_router,
+        prefix="/api/v1",
+        tags=["cloud"]
     )
 
     return app

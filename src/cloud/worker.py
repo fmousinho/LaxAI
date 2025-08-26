@@ -36,10 +36,13 @@ except ImportError:
 
 # Import our custom modules
 try:
-    # When deployed, modules should be at the same level
-    from firestore_client import get_firestore_client, JobStatus
-    from training_service import train_model, get_training_config
-    from training import TrainingRequest
+    # Import cloud modules (same directory in deployment)
+    from cloud.firestore_client import get_firestore_client, JobStatus
+    
+    # Import training modules from the main application
+    from services.training_service import validate_training_params, _run_training_task
+    from api.v1.schemas.training import TrainingRequest
+        
 except ImportError as e:
     logger.error(f"Failed to import local modules: {e}")
     # For deployment, these should be available
@@ -49,7 +52,7 @@ except ImportError as e:
 PROJECT_ID = os.getenv('GOOGLE_CLOUD_PROJECT')
 SUBSCRIPTION_NAME = os.getenv('TRAINING_JOBS_SUBSCRIPTION', 'training-jobs-sub')
 FIRESTORE_ENABLED = os.getenv('FIRESTORE_ENABLED', 'true').lower() == 'true'
-WORKER_TIMEOUT = int(os.getenv('WORKER_TIMEOUT', '25200'))  # 7 hours in seconds
+WORKER_TIMEOUT = int(os.getenv('WORKER_TIMEOUT', '36000'))  # 10 hours in seconds
 MAX_CONCURRENT_JOBS = int(os.getenv('MAX_CONCURRENT_JOBS', '1'))  # GPU constraint
 
 # Global state
@@ -167,7 +170,7 @@ def execute_training_job(task_id: str, job_data: Dict[str, Any]) -> bool:
             
             # Temporary simulation for demonstration
             logger.info("Simulating training execution...")
-            total_epochs = training_request.training_params.get("epochs", 10)
+            total_epochs = getattr(training_request, 'training_params', {}).get("epochs", 10) if training_request.training_params else 10
             
             for epoch in range(1, total_epochs + 1):
                 if _shutdown_requested:
@@ -317,15 +320,21 @@ def run_worker():
     if not subscriber:
         logger.error("Pub/Sub subscriber not available")
         return
-    
+
     subscription_path = subscriber.subscription_path(PROJECT_ID, SUBSCRIPTION_NAME)
-    
+
     # Flow control settings for GPU constraints
-    flow_control = pubsub_v1.types.FlowControl(max_messages=MAX_CONCURRENT_JOBS)
-    
-    logger.info(f"Listening for messages on {subscription_path}")
-    
+    if pubsub_v1:
+        flow_control = pubsub_v1.types.FlowControl(max_messages=MAX_CONCURRENT_JOBS)
+    else:
+        logger.error("Pub/Sub library not available")
+        return    logger.info(f"Listening for messages on {subscription_path}")
+
     # Use ThreadPoolExecutor for concurrent message processing
+    if not ThreadPoolExecutor:
+        logger.error("ThreadPoolExecutor not available")
+        return
+        
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JOBS) as executor:
         try:
             # Pull messages with flow control

@@ -9,6 +9,9 @@ substitutions:
   _DEPLOY_TO_CLOUD_RUN: "true"
   _CPU_LIMIT: "1000m"
   _MEMORY_LIMIT: "1Gi"
+  _REGISTRY_BASE: "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo"
+  _DOCKERFILE: "docker/thin_api/Dockerfile"
+  _SERVICE_ACCOUNT: "googlebatch@$PROJECT_ID.iam.gserviceaccount.com"
 
 steps:
   - id: "build-and-tag-image"
@@ -16,9 +19,9 @@ steps:
     args:
       - "build"
       - "-f"
-      - "docker/local/Dockerfile"
+      - "${_DOCKERFILE}"
       - "-t"
-      - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:latest"
+      - "${_REGISTRY_BASE}/${_IMAGE}:latest"
       - "--build-arg"
       - "REQS=${_REQS}"
       - "--build-arg"
@@ -29,7 +32,7 @@ steps:
     name: "gcr.io/cloud-builders/docker"
     args:
       - "push"
-      - "us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:latest"
+      - "${_REGISTRY_BASE}/${_IMAGE}:latest"
 
   - id: "deploy-to-cloud-run"
     name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
@@ -40,7 +43,7 @@ steps:
         if [[ "${_DEPLOY_TO_CLOUD_RUN}" == "true" ]]; then
           echo "Deploying to Cloud Run: ${_CLOUD_RUN_SERVICE} (${_CLOUD_RUN_REGION})"
           gcloud run deploy "${_CLOUD_RUN_SERVICE}" \
-            --image="us-central1-docker.pkg.dev/$PROJECT_ID/laxai-repo/${_IMAGE}:latest" \
+            --image="${_REGISTRY_BASE}/${_IMAGE}:latest" \
             --region="${_CLOUD_RUN_REGION}" \
             --platform=managed \
             --allow-unauthenticated \
@@ -49,7 +52,7 @@ steps:
             --memory="${_MEMORY_LIMIT}" \
             --concurrency=10 \
             --max-instances=3 \
-            --service-account="googlebatch@$PROJECT_ID.iam.gserviceaccount.com"
+            --service-account="${_SERVICE_ACCOUNT}"
         else
           echo "Skipping Cloud Run deployment because _DEPLOY_TO_CLOUD_RUN != true"
         fi

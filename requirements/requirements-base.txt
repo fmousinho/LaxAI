@@ -118,10 +118,12 @@ google-auth==2.40.3
     #   google-cloud-storage
 google-cloud-core==2.4.3
     # via
-    #   -r requirements/requirements-base.txt
     #   google-cloud-storage
+google-cloud-firestore>=2.13.0
+    # via -r requirements/requirements-base.txt (cloud integration)
+google-cloud-pubsub>=2.18.0
+    # via -r requirements/requirements-base.txt (cloud integration)
 google-cloud-secret-manager==2.24.0
-    # via -r requirements/requirements-base.txt
 google-cloud-storage==3.3.0
     # via -r requirements/requirements-base.txt
 google-crc32c==1.7.1
