@@ -25,15 +25,9 @@ except ImportError:
     cloud_logging = None
 
 # Import our custom modules
-try:
-    # When deployed, modules should be at the same level
-    from firestore_client import get_firestore_client, JobStatus
-    from training_service import validate_training_params
-    from training import TrainingRequest
-except ImportError as e:
-    logger.error(f"Failed to import local modules: {e}")
-    # For deployment, these should be available
-    raise
+from cloud.firestore_client import get_firestore_client, JobStatus
+from services.training_service import validate_training_params
+from api.v1.schemas.training import TrainingRequest
 
 # Environment variables
 PROJECT_ID = os.getenv('GOOGLE_CLOUD_PROJECT')

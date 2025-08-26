@@ -13,11 +13,19 @@ from typing import Any, Dict, Optional, Tuple
 from fastapi import BackgroundTasks
 
 from utils.env_secrets import setup_environment_secrets
-setup_environment_secrets()
 
+# Try to setup environment secrets, but don't fail if unavailable
+try:
+    setup_environment_secrets()
+except (ValueError, ImportError) as e:
+    # In cloud environments, secrets might not be available during import
+    # They should be loaded when actually needed
+    import logging
+    logging.getLogger(__name__).warning(f"Could not setup environment secrets during import: {e}")
 
-from scripts.train_all import train as train_function
-from common.pipeline import get_active_pipelines, stop_pipeline
+# Import training dependencies only when needed to avoid heavy ML deps in cloud functions
+# from scripts.train_all import train as train_function
+# from common.pipeline import get_active_pipelines, stop_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +134,9 @@ async def _run_training_task(task_id: str, kwargs: Dict[str, Any]):
 	endpoint but lives in the service where it can be unit-tested.
 	"""
 	try:
+		# Import training function here to avoid heavy ML dependencies during module import
+		from scripts.train_all import train as train_function
+		
 		TRAINING_JOBS[task_id]["status"] = "running"
 		TRAINING_JOBS[task_id]["progress"]["status"] = "initializing"
 		TRAINING_JOBS[task_id]["progress"]["message"] = "Starting training pipeline..."
@@ -250,6 +261,9 @@ def cancel_job(task_id: str) -> bool:
 
 	pipeline_name = job.get("pipeline_name")
 	if pipeline_name:
+		# Import here to avoid heavy ML dependencies during module import
+		from common.pipeline import stop_pipeline
+		
 		stopped = stop_pipeline(pipeline_name)
 		if stopped:
 			job["status"] = "cancelling"

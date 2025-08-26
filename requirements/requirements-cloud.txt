@@ -19,5 +19,6 @@ google-cloud-logging>=3.8.0
 # General utilities
 python-dateutil>=2.8.2
 pydantic>=2.5.0
+toml>=0.10.2
 
 

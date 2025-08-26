@@ -3,7 +3,12 @@ import logging
 import requests
 from typing import Dict, Any
 from dotenv import load_dotenv
-from IPython import get_ipython
+
+try:
+    from IPython import get_ipython
+except ImportError:
+    # IPython not available (e.g., in cloud environments)
+    get_ipython = None
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +190,8 @@ def load_secrets(config: Dict[str, Any]):
 def is_running_in_colab():
     """Check if code is running in Google Colab."""
     try:
+        if get_ipython is None:
+            return False
         in_colab = 'google.colab' in str(get_ipython())
         logger.info(f"Running in Google Colab: {in_colab}")
         return in_colab
