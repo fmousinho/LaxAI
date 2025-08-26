@@ -1,18 +1,14 @@
-# Cloud Build configuration for LaxAI Training Worker
-# Builds GPU-enabled Docker image for Cloud Run Jobs
+############################################################################
+#                                                                          #
+#              SIMPLIFIED BUILDER FOR API WORKER LAYERS                    #
+#                                                                          #
+############################################################################
 
-substitutions:
-  # Build-time and deployment substitutions
-  _IMAGE: "laxai-worker"
-  _REQS: "requirements-gpu.txt"        # Worker needs GPU requirements for training
-  _WORKER_SERVICE: "laxai-worker"
-  _CLOUD_RUN_REGION: "us-central1"
-  _DEPLOY_TO_CLOUD_RUN: "true"       # Set to "true" to auto-deploy worker jobs
-  _WORKER_TIMEOUT: "36000"          # Worker timeout in seconds (10 hours)
-  _SERVICE_ACCOUNT: "googlebatch@${PROJECT_ID}.iam.gserviceaccount.com"
+# This Cloud Build file builds a Docker image, pushes it to Artifact
+# Registry, and deploys it to a GPU-based Cloud Run Job.
 
 steps:
-  # Build the GPU training worker image
+  # Build the training worker image
   - id: "build-worker-image"
     name: "gcr.io/cloud-builders/docker"
     args:
@@ -20,9 +16,9 @@ steps:
       - "-f"
       - "docker/worker/Dockerfile.worker"
       - "-t"
-      - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/${_IMAGE}:latest"
+      - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/laxai-worker:latest"
       - "--build-arg"
-      - "REQS=${_REQS}"
+      - "REQS=requirements-gpu.txt"
       - "--build-arg"
       - "GOOGLE_CLOUD_PROJECT=${PROJECT_ID}"
       - "."
@@ -32,7 +28,7 @@ steps:
     name: "gcr.io/cloud-builders/docker"
     args:
       - "push"
-      - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/${_IMAGE}:latest"
+      - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/laxai-worker:latest"
 
   # Setup Pub/Sub infrastructure
   - id: "setup-pubsub"
@@ -54,37 +50,34 @@ steps:
         
         echo "Pub/Sub setup complete"
 
-  # Deploy Cloud Run Job (optional)
+  # Deploy Cloud Run Job
   - id: "deploy-cloud-run-job"
     name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     entrypoint: "bash"
     args:
       - "-c"
       - |
-        if [[ "${_DEPLOY_TO_CLOUD_RUN}" == "true" ]]; then
-          echo "Deploying Cloud Run Job: ${_WORKER_SERVICE}"
-          
-          # Generate job configuration
-          cat > cloud-run-job.yaml << EOF
+        # Generate job configuration
+        cat > cloud-run-job.yaml << EOF
         apiVersion: run.googleapis.com/v1
         kind: Job
         metadata:
-          name: ${_WORKER_SERVICE}
+          name: laxai-worker
           labels:
-            cloud.googleapis.com/location: ${_CLOUD_RUN_REGION}
+            cloud.googleapis.com/location: us-central1
         spec:
           template:
             spec:
               taskCount: 1
               parallelism: 1
-              taskTimeoutSeconds: ${_WORKER_TIMEOUT}
+              taskTimeoutSeconds: 36000
               template:
                 spec:
                   restartPolicy: Never
-                  serviceAccountName: "${_SERVICE_ACCOUNT}"
+                  serviceAccountName: "googlebatch@${PROJECT_ID}.iam.gserviceaccount.com"
                   containers:
                   - name: training-worker
-                    image: us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/${_IMAGE}:latest
+                    image: us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/laxai-worker:latest
                     env:
                     - name: GOOGLE_CLOUD_PROJECT
                       value: "${PROJECT_ID}"
@@ -93,7 +86,7 @@ steps:
                     - name: FIRESTORE_ENABLED
                       value: "true"
                     - name: WORKER_TIMEOUT
-                      value: "${_WORKER_TIMEOUT}"
+                      value: "36000"
                     - name: MAX_CONCURRENT_JOBS
                       value: "1"
                     resources:
@@ -106,21 +99,17 @@ steps:
                         memory: "8Gi"
                         nvidia.com/gpu: "1"
         EOF
-          
-          # Deploy the job
-          gcloud run jobs replace cloud-run-job.yaml --region=${_CLOUD_RUN_REGION}
-          
-          echo "Cloud Run Job deployed successfully"
-        else
-          echo "Skipping Cloud Run Job deployment because _DEPLOY_TO_CLOUD_RUN != true"
-          echo "To deploy manually, run: ./scripts/deploy-worker.sh"
-        fi
+        
+        # Deploy the job
+        gcloud run jobs replace cloud-run-job.yaml --region=us-central1
+        
+        echo "Cloud Run Job deployed successfully"
 
 images:
-  - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/${_IMAGE}:latest"
+  - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/laxai-worker:latest"
 
 options:
   logging: CLOUD_LOGGING_ONLY
-  machineType: 'E2_HIGHCPU_8'
+  machineType: 'G2_STANDARD_8'
 
-timeout: "1800s"
+timeout: "3600s"

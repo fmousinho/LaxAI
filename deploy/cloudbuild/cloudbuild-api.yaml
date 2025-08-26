@@ -1,22 +1,11 @@
 ############################################################################
 #                                                                          #
-#                       BUILDER FOR API LAYERS                             #
+#                    SIMPLIFIED BUILDER FOR API LAYERS                     #
 #                                                                          #
 ############################################################################
 
-
-# Cloud Build configuration for LaxAI
-# Builds Docker image, pushes to Artifact Registry and deploys to Cloud Run.
-
-substitutions:
-  _IMAGE: "laxai-api"
-  _REQS: "requirements-cloud.txt"
-  _CLOUD_RUN_SERVICE: "laxai-api"
-  _CLOUD_RUN_REGION: "us-central1"
-  _DEPLOY_TO_CLOUD_RUN: "true"
-  _REGISTRY_BASE: "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo"
-  _DOCKERFILE: "docker/thin_api/Dockerfile"
-  _SERVICE_ACCOUNT: "googlebatch@${PROJECT_ID}.iam.gserviceaccount.com"
+# This Cloud Build file builds a Docker image, pushes it to Artifact
+# Registry, and deploys it to a CPU-based Cloud Run service.
 
 steps:
   - id: "build-and-tag-image"
@@ -24,11 +13,11 @@ steps:
     args:
       - "build"
       - "-f"
-      - "${_DOCKERFILE}"
+      - "docker/thin_api/Dockerfile"
       - "-t"
-      - "${_REGISTRY_BASE}/${_IMAGE}:latest"
+      - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/laxai-api:latest"
       - "--build-arg"
-      - "REQS=${_REQS}"
+      - "REQS=requirements-cloud.txt"
       - "--build-arg"
       - "GOOGLE_CLOUD_PROJECT=${PROJECT_ID}"
       - "."
@@ -37,70 +26,28 @@ steps:
     name: "gcr.io/cloud-builders/docker"
     args:
       - "push"
-      - "${_REGISTRY_BASE}/${_IMAGE}:latest"
-
-  - id: "create-cloud-run-service-yaml"
-    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
-    entrypoint: "bash"
-    args:
-      - "-c"
-      - |
-        # Creates a YAML file for Cloud Run deployment from the provided settings.
-        cat <<EOF > cloudrun-service.yaml
-        apiVersion: serving.knative.dev/v1
-        kind: Service
-        metadata:
-          name: ${_CLOUD_RUN_SERVICE}
-          labels:
-            cloud.googleapis.com/location: ${_CLOUD_RUN_REGION}
-        spec:
-          template:
-            metadata:
-              annotations:
-                autoscaling.knative.dev/maxScale: '3'
-                run.googleapis.com/startup-cpu-boost: 'true'
-            spec:
-              containerConcurrency: 10
-              timeoutSeconds: 300
-              serviceAccountName: ${_SERVICE_ACCOUNT}
-              containers:
-              - image: ${_REGISTRY_BASE}/${_IMAGE}:latest
-                ports:
-                - name: http1
-                  containerPort: 8000
-                resources:
-                  limits:
-                    cpu: 1000m
-                    memory: 512Mi
-                startupProbe:
-                  timeoutSeconds: 240
-                  periodSeconds: 240
-                  failureThreshold: 1
-                  tcpSocket:
-                    port: 8000
-        EOF
+      - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/laxai-api:latest"
 
   - id: "deploy-to-cloud-run"
     name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
-    entrypoint: "bash"
+    entrypoint: "gcloud"
     args:
-      - "-c"
-      - |
-        # Uses the generated YAML file for a complete and consistent deployment.
-        if [[ "${_DEPLOY_TO_CLOUD_RUN}" == "true" ]]; then
-          echo "Deploying to Cloud Run: ${_CLOUD_RUN_SERVICE} (${_CLOUD_RUN_REGION})"
-          gcloud run services replace cloudrun-service.yaml \
-            --region="${_CLOUD_RUN_REGION}" \
-            --quiet
-        else
-          echo "Skipping Cloud Run deployment because _DEPLOY_TO_CLOUD_RUN != true"
-        fi
+      - "run"
+      - "deploy"
+      - "laxai-api"
+      - "--image=us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/laxai-api:latest"
+      - "--region=us-central1"
+      - "--cpu=1"
+      - "--memory=512Mi"
+      - "--max-instances=3"
+      - "--timeout=300s"
+      - "--concurrency=10"
+      - "--service-account=googlebatch@${PROJECT_ID}.iam.gserviceaccount.com"
+      - "--no-allow-unauthenticated"
+      - "--quiet"
 
 images:
-  - "${_REGISTRY_BASE}/${_IMAGE}:latest"
-
-availableSecrets:
-  secretManager: []
+  - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/laxai-api:latest"
 
 options:
   logging: CLOUD_LOGGING_ONLY
