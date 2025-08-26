@@ -15,12 +15,19 @@ ARG TORCH_CPU_ONLY=false
 # Allow customizing the CPU wheel index if needed
 ARG TORCH_CPU_INDEX="https://download.pytorch.org/whl/cpu/torch_stable.html"
 
+# Build arg to select which requirements file to use (path relative to repo root).
+# Default uses the GPU requirements file but can be overridden at build time.
+ARG REQUIREMENTS_FILE=requirements/requirements-gpu.txt
+
 ARG BASE_PYTHON_IMAGE=pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 
 # Builder: create wheels for requirements
 FROM ${BASE_PYTHON_IMAGE} AS builder
 ARG TORCH_CPU_ONLY
 ARG TORCH_CPU_INDEX
+
+# Re-declare so this ARG is available in the builder stage
+ARG REQUIREMENTS_FILE
 
 # Install build tools
 RUN set -eux \
@@ -46,24 +53,25 @@ COPY requirements/ ./requirements/
 RUN --mount=type=cache,target=/root/.cache/pip set -eux \
   && python -m pip install --upgrade pip wheel setuptools \
   && mkdir -p /wheels /tmp/reqsdir \
-  && if [ -f requirements/requirements-cpu.txt ]; then \
+  && REQ_BASENAME="$(basename \"$REQUIREMENTS_FILE\")" \
+  && if [ -f "requirements/$REQ_BASENAME" ]; then \
       # Copy requirement files so '-r' resolves correctly inside the temp dir
       cp requirements/*.txt /tmp/reqsdir/; \
       REQ_DIR=/tmp/reqsdir; \
     else \
-      echo "ERROR: requirements/requirements-cpu.txt not found" >&2; \
+      echo "ERROR: requirements/$REQ_BASENAME not found" >&2; \
       exit 1; \
     fi \
   # Build wheels for all requirements. If TORCH_CPU_ONLY is true, point pip
   # to the PyTorch CPU wheel index so a CPU-only torch wheel is selected.
   && if [ "$TORCH_CPU_ONLY" = "true" ]; then \
        echo "Building wheels using CPU PyTorch index: $TORCH_CPU_INDEX"; \
-       (cd "$REQ_DIR" && python -m pip wheel -r "requirements-cpu.txt" --wheel-dir /wheels --find-links "$TORCH_CPU_INDEX"); \
+       (cd "$REQ_DIR" && python -m pip wheel -r "$REQ_BASENAME" --wheel-dir /wheels --find-links "$TORCH_CPU_INDEX"); \
      else \
        echo "Building wheels without forcing CPU PyTorch index"; \
-       (cd "$REQ_DIR" && python -m pip wheel -r "requirements-cpu.txt" --wheel-dir /wheels); \
+       (cd "$REQ_DIR" && python -m pip wheel -r "$REQ_BASENAME" --wheel-dir /wheels); \
      fi \
-  && echo "Building wheels from: $REQ_DIR/requirements-cpu.txt" \
+  && echo "Building wheels from: $REQ_DIR/$REQ_BASENAME" \
   && ls -lah /wheels || true \
   && rm -rf /tmp/* /var/tmp/*
 
@@ -71,6 +79,9 @@ RUN --mount=type=cache,target=/root/.cache/pip set -eux \
 FROM ${BASE_PYTHON_IMAGE} AS runtime
 ARG TORCH_CPU_ONLY
 ARG TORCH_CPU_INDEX
+
+# Make REQUIREMENTS_FILE available in the runtime stage as well
+ARG REQUIREMENTS_FILE
 
 WORKDIR /app
 
@@ -92,16 +103,17 @@ RUN --mount=type=cache,target=/root/.cache/pip set -eux \
   libglib2.0-0 \
   && rm -rf /var/lib/apt/lists/* \
   && python -m pip install --upgrade pip setuptools wheel \
-  && if [ -f /tmp/requirements/requirements-cpu.txt ]; then \
+  && REQ_BASENAME="$(basename \"$REQUIREMENTS_FILE\")" \
+  && if [ -f /tmp/requirements/"$REQ_BASENAME" ]; then \
        if [ "$TORCH_CPU_ONLY" = "true" ]; then \
          echo "Installing runtime requirements using CPU PyTorch index: $TORCH_CPU_INDEX"; \
-         python -m pip install --find-links "$TORCH_CPU_INDEX" -r /tmp/requirements/requirements-cpu.txt; \
+         python -m pip install --find-links "$TORCH_CPU_INDEX" -r /tmp/requirements/"$REQ_BASENAME"; \
        else \
          echo "Installing runtime requirements without forcing CPU PyTorch index"; \
-         python -m pip install -r /tmp/requirements/requirements-cpu.txt; \
+         python -m pip install -r /tmp/requirements/"$REQ_BASENAME"; \
        fi; \
      else \
-       echo "No requirements-cpu.txt found in /tmp/requirements; skipping runtime install"; \
+       echo "No $REQ_BASENAME found in /tmp/requirements; skipping runtime install"; \
      fi \
   && rm -rf /tmp/requirements
 
