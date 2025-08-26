@@ -1,5 +1,13 @@
+############################################################################
+#                                                                          #
+#                       BUILDER FOR API LAYERS                             #
+#                                                                          #
+############################################################################
+
+
 # Cloud Build configuration for LaxAI
 # Builds Docker image, pushes to Artifact Registry and deploys to Cloud Run.
+
 
 substitutions:
   _IMAGE: "laxai"
