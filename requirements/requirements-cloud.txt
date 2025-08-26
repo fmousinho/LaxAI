@@ -22,5 +22,6 @@ pydantic>=2.5.0
 toml>=0.10.2
 
 python-json-logger>=2.0.0
+google-cloud-secret-manager==2.24.0
 
 
