@@ -1,51 +1,54 @@
-# Exclude common unnecessary and large files from Cloud Build uploads
-# Follow same semantics as .gitignore
 
-# VCS
+# .gcloudignore - minimal, deduplicated ignore rules to keep Cloud Build context small
+# Patterns follow .gitignore semantics
+
+# Version control
 .git
 .gitignore
 
-# Python virtualenvs and caches
-.venv
+# Python virtualenvs
+.venv/
 venv/
+
+# Python build/artifact caches
 __pycache__/
+**/__pycache__/**
 *.pyc
 *.pyo
 *.pyd
-*.egg-info/
-/dist/
 
-# Data, artifacts, models
-artifacts/
-data/
-models/
-model.pth
+# Distribution/build outputs
+dist/
+build/
+*.egg-info/
+
+# Large ML artifacts and data (should live in GCS/Artifact Registry)
+artifacts/**
+data/**
+models/**
+
+# Large model files
 *.pth
 *.pt
+*.ckpt
+*.h5
 
-# Training outputs / logs
-evaluation_results/
-wandb/
+# Experiment outputs / logs
+wandb/**
+evaluation_results/**
 *.log
 
-# OS files
-.DS_Store
+# Notebooks
+notebooks/**
+.ipynb_checkpoints/**
 
-# Notebook checkpoints
-.ipynb_checkpoints/
+# Pip / wheel caches
+.wheels/**
+wheels/**
+.cache/**
+~/.cache/pip
 
-# Docker / build outputs
-build/
-
-# Avoid uploading large local caches
-/root/.cache/
-**/__pycache__/
-
-# Keep deploy/cloudbuild/cloudbuild.yaml and Dockerfile present
-# (do not ignore deploy/cloudbuild/cloudbuild.yaml or Dockerfile)
-
-# Recommended additional ignores
-# Local environment files and secrets
+# Local env & secrets
 .env
 .env.*
 **/credentials.json
@@ -53,18 +56,12 @@ token.json
 tools/token.json
 tools/credentials.json
 
-# Testing and cache dirs
+# Testing and tooling caches
 .pytest_cache/
 .mypy_cache/
 .tox/
 .coverage
 coverage.xml
-
-# pip / wheel caches and local wheels
-.wheels/
-wheels/
-.cache/
-~/.cache/pip
 
 # IDE/editor
 .vscode/
@@ -80,3 +77,7 @@ wheels/
 *.a
 *.dll
 *.dylib
+
+# Keep important deploy configs in repo (do not ignore deploy/cloudbuild/* or docker/*)
+# (This is a note for maintainers; explicit exclude rules are not added here.)
+
