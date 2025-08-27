@@ -5,6 +5,8 @@
 ARG BASE_IMAGE=pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 ARG DEPS_IMAGE=fmousinho/laxai-deps:latest
 ARG GOOGLE_CLOUD_PROJECT=""
+ARG ENTRY_POINT="python src/cloud/worker.py"
+
 
 # Use the same dependency approach as main Dockerfile
 FROM ${DEPS_IMAGE} AS deps
@@ -17,6 +19,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
+ENV ENTRY_POINT=${ENTRY_POINT}
 ENV TRAINING_JOBS_SUBSCRIPTION="training-jobs-sub"
 ENV FIRESTORE_ENABLED="true"
 ENV WORKER_TIMEOUT="3600"
@@ -65,4 +68,4 @@ RUN pip install -e .
 RUN mkdir -p /tmp/models /tmp/artifacts
 
 # Set the entrypoint
-CMD ["python", "src/cloud/worker.py"]
+CMD ["sh", "-c", "exec $ENTRY_POINT"]
