@@ -418,10 +418,10 @@ class ParameterRegistry:
                 config_path="training_config.default_workers"
             ),
             ParameterDefinition(
-                name="validation_split",
+                name="train_ratio",
                 type=ParameterType.FLOAT,
-                description="Percentage of dataset samples to be used for validation",
-                config_path="training_config.validation_split"
+                description="Percentage of dataset samples to be used for training (versus validation)",
+                config_path="training_config.train_ratio"
             ),
             ParameterDefinition(
                 name="wandb_project",

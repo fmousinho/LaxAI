@@ -3,7 +3,7 @@ import logging
 import tempfile
 from datetime import datetime
 from functools import wraps
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Any, Optional, List, Callable, Tuple
 import torch
 import re
 
@@ -181,6 +181,95 @@ class WandbLogger:
         logger.info(f"   Tags: {all_tags}")
         
         return True
+
+    def _robust_load_state_dict(self, model: torch.nn.Module, state_dict: Dict[str, torch.Tensor], device: str = "cpu") -> Tuple[bool, list, list, Optional[str]]:
+        """
+        Robustly load a state_dict into `model`.
+
+        Tries in order:
+         - initialize lazy heads if checkpoint contains backbone._head keys
+         - strict load
+         - lenient load (strict=False)
+         - filtered load (keep only keys that exist in model)
+
+        Returns (success, unexpected_keys, missing_keys, error_message)
+        """
+        try:
+            sd_keys = set(state_dict.keys())
+        except Exception:
+            sd_keys = set()
+
+        # Attempt to initialize lazy head if checkpoint contains its keys
+        try:
+            model_backbone = getattr(model, 'backbone', None)
+        except Exception:
+            model_backbone = None
+
+        if any(k.startswith('backbone._head') for k in sd_keys) and model_backbone is not None and getattr(model_backbone, '_head', None) is None:
+            logger.info("Checkpoint contains backbone._head keys; attempting to initialize head before loading state_dict")
+            try:
+                if hasattr(model, 'ensure_head_initialized'):
+                    # prefer model API
+                    try:
+                        device_str = str(next(model.parameters()).device)
+                    except Exception:
+                        device_str = device
+                    model.ensure_head_initialized(device=device_str)
+                else:
+                    dev = None
+                    try:
+                        dev = next(model.parameters()).device
+                    except Exception:
+                        dev = torch.device(device)
+                    model.to(dev)
+                    model.eval()
+                    with torch.no_grad():
+                        dummy = torch.zeros((1, 3, 224, 224), device=dev)
+                        model(dummy)
+            except Exception as e:
+                logger.warning(f"Could not initialize model head before loading state_dict: {e}")
+
+        model_state = model.state_dict()
+
+        # Try strict load first
+        try:
+            model.load_state_dict(state_dict)
+            try:
+                model.to(device)
+            except Exception:
+                pass
+            return True, [], [], None
+        except RuntimeError as e_strict:
+            logger.warning(f"Strict state_dict load failed: {e_strict}")
+
+        # Try lenient load
+        try:
+            model.load_state_dict(state_dict, strict=False)
+            try:
+                model.to(device)
+            except Exception:
+                pass
+            sd_keys = set(state_dict.keys())
+            unexpected = [k for k in sd_keys if k not in model_state]
+            missing = [k for k in model_state.keys() if k not in sd_keys]
+            return True, unexpected, missing, None
+        except Exception as e_lenient:
+            logger.warning(f"Lenient state_dict load failed: {e_lenient}")
+
+        # Final attempt: filter keys to only those present in the model
+        try:
+            filtered = {k: v for k, v in state_dict.items() if k in model_state}
+            model.load_state_dict(filtered)
+            try:
+                model.to(device)
+            except Exception:
+                pass
+            missing = [k for k in model_state.keys() if k not in filtered]
+            return True, [], missing, None
+        except Exception as e_final:
+            err = f"Failed to load state_dict after all attempts: {e_final}"
+            logger.error(err)
+            return False, [], [], err
     
 
     @requires_wandb_initialized
@@ -331,42 +420,17 @@ class WandbLogger:
                 except Exception as e:
                     logger.warning(f"Could not initialize model head before loading: {e}")
 
-            # Simple fast attempt: try strict load first to detect perfect matches
-            try:
-                model.load_state_dict(state_dict)
-                model.to(device)
-                logger.info(f"✓ Successfully loaded model from wandb registry (strict): {collection_name}:{alias}")
-                return model
-            except RuntimeError as e:
-                logger.warning(f"Strict state_dict load failed: {e}")
-
-            # Attempt non-strict load (will ignore unexpected/missing keys)
-            try:
-                model.load_state_dict(state_dict, strict=False)
-                model.to(device)
-                # Report unexpected/missing keys for visibility
-                sd_keys = set(state_dict.keys())
-                unexpected = [k for k in sd_keys if k not in model_state]
-                missing = [k for k in model_state.keys() if k not in sd_keys]
+            # Use centralized robust loader to handle lazy heads and mismatched keys
+            success, unexpected, missing, err = self._robust_load_state_dict(model, state_dict, device=device)
+            if success:
                 if unexpected:
                     logger.warning(f"State dict contained unexpected keys (they were ignored): {unexpected[:10]}{('...' if len(unexpected)>10 else '')}")
                 if missing:
                     logger.info(f"State dict is missing keys (these were left at defaults): {missing[:10]}{('...' if len(missing)>10 else '')}")
-
-                logger.info(f"✓ Successfully loaded model from wandb registry (lenient): {collection_name}:{alias}")
+                logger.info(f"✓ Successfully loaded model from wandb registry: {collection_name}:{alias}")
                 return model
-            except Exception as e:
-                logger.warning(f"Lenient state_dict load failed: {e}")
-
-            # As a last resort, filter state_dict to keys that exist in the model and try strict load
-            try:
-                filtered = {k: v for k, v in state_dict.items() if k in model_state}
-                model.load_state_dict(filtered)
-                model.to(device)
-                logger.info(f"✓ Successfully loaded filtered model state from wandb registry: {collection_name}:{alias}")
-                return model
-            except Exception as e:
-                logger.error(f"Failed to load model after filtering state_dict: {e}")
+            else:
+                logger.error(f"Failed to load model from registry: {err}")
                 return None
         else:
             logger.warning(f"Model file not found in wandb artifact: {model_path}")
@@ -688,18 +752,73 @@ class WandbLogger:
             return 1
         
         try:
-            # Load model state
-            model.load_state_dict(checkpoint_data['model_state_dict'])
-            
-            # Load optimizer state
-            optimizer.load_state_dict(checkpoint_data['optimizer_state_dict'])
-            
+            # Prepare state_dict (checkpoint may be a dict containing model_state_dict)
+            if isinstance(checkpoint_data, dict) and 'model_state_dict' in checkpoint_data:
+                state_dict = checkpoint_data['model_state_dict']
+            else:
+                state_dict = checkpoint_data
+
+            # Defensive: ensure lazy-created backbone head exists if checkpoint contains its keys
+            try:
+                sd_keys = set(state_dict.keys())
+            except Exception:
+                sd_keys = set()
+
+            try:
+                model_backbone = getattr(model, 'backbone', None)
+            except Exception:
+                model_backbone = None
+
+            # If checkpoint has backbone._head.* keys but model's backbone hasn't created _head yet,
+            # attempt to initialize it via model API or a dummy forward so load_state_dict succeeds.
+            if any(k.startswith('backbone._head') for k in sd_keys) and model_backbone is not None and getattr(model_backbone, '_head', None) is None:
+                logger.info("Checkpoint appears to contain backbone._head keys; attempting to initialize model head before loading checkpoint")
+                try:
+                    if hasattr(model, 'ensure_head_initialized'):
+                        # Prefer model-provided convenience method
+                        try:
+                            device_str = str(next(model.parameters()).device)
+                        except Exception:
+                            device_str = 'cpu'
+                        model.ensure_head_initialized(device=device_str)
+                    else:
+                        # Fallback: run a conservative dummy forward on CPU/device of model
+                        try:
+                            dev = next(model.parameters()).device
+                        except Exception:
+                            dev = torch.device('cpu')
+                        model.to(dev)
+                        model.eval()
+                        with torch.no_grad():
+                            dummy = torch.zeros((1, 3, 224, 224), device=dev)
+                            model(dummy)
+                except Exception as e:
+                    logger.warning(f"Could not initialize model head before loading checkpoint: {e}")
+
+            model_state = model.state_dict()
+
+            # Use centralized robust loader to handle lazy heads and mismatched keys
+            success, unexpected, missing, err = self._robust_load_state_dict(model, state_dict)
+            if not success:
+                logger.error(f"Failed to load model state from checkpoint: {err}")
+                return 1
+            if unexpected:
+                logger.warning(f"State dict contained unexpected keys (they were ignored): {unexpected[:10]}{('...' if len(unexpected)>10 else '')}")
+            if missing:
+                logger.info(f"State dict is missing keys (these were left at defaults): {missing[:10]}{('...' if len(missing)>10 else '')}")
+
+            # Load optimizer state if present
+            try:
+                if isinstance(checkpoint_data, dict) and 'optimizer_state_dict' in checkpoint_data:
+                    optimizer.load_state_dict(checkpoint_data['optimizer_state_dict'])
+            except Exception as e:
+                logger.warning(f"Failed to load optimizer state from checkpoint: {e}")
+
             # Get starting epoch
-            start_epoch = checkpoint_data.get('epoch', 0) + 1
-            
+            start_epoch = checkpoint_data.get('epoch', 0) + 1 if isinstance(checkpoint_data, dict) else 1
             logger.info(f"Resumed training from epoch {start_epoch}")
             return start_epoch
-            
+
         except Exception as e:
             logger.error(f"Failed to resume from checkpoint: {e}")
             return 1
