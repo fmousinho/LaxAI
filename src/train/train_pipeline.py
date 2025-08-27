@@ -16,7 +16,6 @@ from config.all_config import training_config, model_config, wandb_config
 from train.wandb_logger import wandb_logger
 
 
-
 logger = logging.getLogger(__name__)
 
 

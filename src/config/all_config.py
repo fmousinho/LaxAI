@@ -94,6 +94,7 @@ class TrainingConfig:
 class EvaluatorConfig:
     """Configuration for model evaluation parameters."""
     threshold: float = 0.7  # Starting similarity threshold for evaluation (adjusted during evaluation)
+    number_of_workers: int = 8 if sys.platform != "darwin" else 0  # Number of workers for DataLoader
 
 
 @dataclass
