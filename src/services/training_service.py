@@ -40,7 +40,7 @@ def validate_training_params(payload) -> None:
 	"""
 	try:
 		# Import the dynamic TrainingConfig here to avoid circular imports
-		from src.api.v1.schemas.training import TrainingConfig
+		from api.v1.schemas.training import TrainingConfig
 	except Exception as e:
 		# If the dynamic schema cannot be imported, raise a clear error
 		raise RuntimeError(f"Failed to load TrainingConfig for validation: {e}")
