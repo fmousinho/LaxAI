@@ -7,6 +7,9 @@ from typing import Dict, Any, Optional, List, Callable
 import torch
 import re
 
+from utils.env_secrets import setup_environment_secrets
+setup_environment_secrets()
+
 from config.all_config import wandb_config
 
 logger = logging.getLogger(__name__)
