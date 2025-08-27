@@ -7,6 +7,10 @@
 # This Cloud Build file builds a Docker image, pushes it to Artifact
 # Registry, and deploys it to a GPU-based Cloud Run Job.
 
+substitutions:
+  _GOOGLE_CLOUD_PROJECT: "laxai-466119"
+  _SERVICE_ACCOUNT: "googlebatch@${_GOOGLE_CLOUD_PROJECT}.iam.gserviceaccount.com"
+
 steps:
   # Build the training worker image
   - id: "build-worker-image"
@@ -16,11 +20,11 @@ steps:
       - "-f"
       - "docker/worker/Dockerfile.worker"
       - "-t"
-      - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/laxai-worker:latest"
+      - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-worker:latest"
       - "--build-arg"
       - "REQS=requirements-gpu.txt"
       - "--build-arg"
-      - "GOOGLE_CLOUD_PROJECT=${PROJECT_ID}"
+      - "GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT}"
       - "."
 
   # Push the worker image
@@ -28,7 +32,7 @@ steps:
     name: "gcr.io/cloud-builders/docker"
     args:
       - "push"
-      - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/laxai-worker:latest"
+      - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-worker:latest"
 
   # Setup Pub/Sub infrastructure
   - id: "setup-pubsub"
@@ -74,13 +78,13 @@ steps:
               template:
                 spec:
                   restartPolicy: Never
-                  serviceAccountName: "googlebatch@${PROJECT_ID}.iam.gserviceaccount.com"
+                  serviceAccountName: "${_SERVICE_ACCOUNT}"
                   containers:
                   - name: training-worker
-                    image: us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/laxai-worker:latest
+                    image: us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-worker:latest
                     env:
                     - name: GOOGLE_CLOUD_PROJECT
-                      value: "${PROJECT_ID}"
+                      value: "${_GOOGLE_CLOUD_PROJECT}"
                     - name: TRAINING_JOBS_SUBSCRIPTION
                       value: "training-jobs-sub"
                     - name: FIRESTORE_ENABLED
@@ -106,7 +110,7 @@ steps:
         echo "Cloud Run Job deployed successfully"
 
 images:
-  - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/laxai-worker:latest"
+  - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-worker:latest"
 
 options:
   logging: CLOUD_LOGGING_ONLY

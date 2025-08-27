@@ -9,6 +9,7 @@
 
 substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"
+  _SERVICE_ACCOUNT: "googlebatch@${_GOOGLE_CLOUD_PROJECT}.iam.gserviceaccount.com"
 
 steps:
   - id: "build-and-tag-image"
@@ -45,7 +46,7 @@ steps:
       - "--max-instances=3"
       - "--timeout=300s"
       - "--concurrency=10"
-      - "--service-account=googlebatch@${_GOOGLE_CLOUD_PROJECT}.iam.gserviceaccount.com"
+      - "--service-account=${_SERVICE_ACCOUNT}"
       - "--set-env-vars=GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT}"
       - "--no-allow-unauthenticated"
       - "--quiet"
