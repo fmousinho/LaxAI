@@ -25,7 +25,7 @@ except RuntimeError:
 
 # Import API routers
 
-from api.v1.endpoints.cloud import router as cloud_router
+from api.v1.endpoints.train import router as cloud_router
 
 logger = logging.getLogger(__name__)
 

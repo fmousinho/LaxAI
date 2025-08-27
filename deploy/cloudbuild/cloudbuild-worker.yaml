@@ -74,9 +74,9 @@ steps:
             spec:
               taskCount: 1
               parallelism: 1
-              taskTimeoutSeconds: 36000
               template:
                 spec:
+                  taskTimeoutSeconds: 36000
                   restartPolicy: Never
                   serviceAccountName: "${_SERVICE_ACCOUNT}"
                   containers:

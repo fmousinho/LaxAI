@@ -156,15 +156,14 @@ def execute_training_job(task_id: str, job_data: Dict[str, Any]) -> bool:
         # For now, simulate the training call - you'll need to modify your train_model function
         # to accept and use the progress_callback
         try:
-            # This is where you'd call your actual training function
-            # result = train_model(
-            #     tenant_id=training_request.tenant_id,
-            #     training_params=training_request.training_params,
-            #     model_params=training_request.model_params,
-            #     custom_name=training_request.custom_name,
-            #     wandb_tags=training_request.wandb_tags,
-            #     progress_callback=progress_callback
-            # )
+            result = train_model(
+                tenant_id=training_request.tenant_id,
+                training_params=training_request.training_params,
+                model_params=training_request.model_params,
+                custom_name=training_request.custom_name,
+                wandb_tags=training_request.wandb_tags,
+                progress_callback=progress_callback
+            )
             
             # Temporary simulation for demonstration
             logger.info("Simulating training execution...")
