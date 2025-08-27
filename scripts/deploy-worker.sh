@@ -145,8 +145,8 @@ spec:
     spec:
       template:
         spec:
-          restartPolicy: Never
-          taskTimeoutSeconds: 36000  # 10 hours
+          restartPolicy: "Never"
+          timeout: "36000s"  # 10 hours
           serviceAccountName: $SERVICE_ACCOUNT_EMAIL
           containers:
           - name: training-worker

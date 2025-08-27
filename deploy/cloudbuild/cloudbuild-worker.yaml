@@ -76,8 +76,8 @@ steps:
               parallelism: 1
               template:
                 spec:
-                  taskTimeoutSeconds: 36000
-                  restartPolicy: Never
+                  timeout: "36000s"
+                  restartPolicy: "Never"
                   serviceAccountName: "${_SERVICE_ACCOUNT}"
                   containers:
                   - name: training-worker

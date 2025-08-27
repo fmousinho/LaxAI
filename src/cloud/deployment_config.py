@@ -21,7 +21,7 @@ CLOUD_RUN_JOB_CONFIG = {
                 "template": {
                     "spec": {
                         "restartPolicy": "Never",
-                        "taskTimeoutSeconds": 25200,  # 7 hours
+                        "timeout": "25200s",  # 7 hours
                         "containers": [{
                             "name": "training-worker",
                             "image": "gcr.io/{PROJECT_ID}/laxai-worker:latest",

@@ -4,6 +4,7 @@
 
 ARG BASE_IMAGE=pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 ARG DEPS_IMAGE=fmousinho/laxai-deps:latest
+ARG GOOGLE_CLOUD_PROJECT=""
 
 # Use the same dependency approach as main Dockerfile
 FROM ${DEPS_IMAGE} AS deps
@@ -15,7 +16,7 @@ FROM ${BASE_IMAGE}
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
-ENV GOOGLE_CLOUD_PROJECT=""
+ENV GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
 ENV TRAINING_JOBS_SUBSCRIPTION="training-jobs-sub"
 ENV FIRESTORE_ENABLED="true"
 ENV WORKER_TIMEOUT="3600"
@@ -49,10 +50,6 @@ RUN if [ -d /wheels ] && [ "$(ls -A /wheels)" ]; then \
             echo "/wheels not present or empty, installing from PyPI"; \
             pip install --no-cache-dir -r requirements/${REQS}; \
         fi
-
-# Install cloud-specific dependencies
-COPY requirements/requirements-cloud.txt requirements-cloud.txt
-RUN pip install --no-cache-dir -r requirements-cloud.txt
 
 # Copy source code
 COPY documentation /app/documentation
