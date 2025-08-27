@@ -255,9 +255,12 @@ def verify_gcp_credentials():
             logger.info("Using GCLOUD_PROJECT as fallback for project ID.")
             os.environ['GOOGLE_CLOUD_PROJECT'] = project_id # set for consistency
         else:
-            raise ValueError(
+            # Don't raise during import/runtime init. Failures to use GCP APIs will
+            # surface later when those APIs are invoked. Log a warning instead so
+            # containers won't crash on startup if the env var isn't provided.
+            logger.warning(
                 "Required environment variable 'GOOGLE_CLOUD_PROJECT' not found."
-                " Please set it or ensure your environment provides it."
+                " Some GCP features (Secret Manager, Firestore) may not work without it."
             )
     
     logger.info(f"Google Cloud project ID: {os.environ.get('GOOGLE_CLOUD_PROJECT')}")

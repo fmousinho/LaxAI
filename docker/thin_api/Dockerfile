@@ -1,8 +1,8 @@
 # Allow selecting the runtime base image (used by the runtime stage below)
 # We will use a more robust Python base image since we need to install dependencies
 ARG BASE_IMAGE=python:3.12-slim
-# The ARG REQS is correctly defined, we just need to ensure the COPY command works with it.
 ARG REQS=requirements/requirements-cloud.txt
+ARG GOOGLE_CLOUD_PROJECT
 
 # Builder: compile wheels and build the project
 FROM ${BASE_IMAGE} AS builder
@@ -30,9 +30,11 @@ RUN python -m pip install --upgrade pip build wheel setuptools \
 # Runtime stage: This is the modified stage.
 # It now installs all dependencies from requirements directly.
 FROM ${BASE_IMAGE} AS runtime
+ARG GOOGLE_CLOUD_PROJECT
 ENV PYTHONDONTWRITEBYTECODE=1 \
         PYTHONUNBUFFERED=1 \
         PYTHONPATH=/app/src
+ENV GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
 
 WORKDIR /app
 

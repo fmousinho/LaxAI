@@ -7,6 +7,9 @@
 # This Cloud Build file builds a Docker image, pushes it to Artifact
 # Registry, and deploys it to a CPU-based Cloud Run service.
 
+substitutions:
+  _GOOGLE_CLOUD_PROJECT: "laxai-466119"
+
 steps:
   - id: "build-and-tag-image"
     name: "gcr.io/cloud-builders/docker"
@@ -15,18 +18,18 @@ steps:
       - "-f"
       - "docker/thin_api/Dockerfile"
       - "-t"
-      - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/laxai-api:latest"
+      - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-api:latest"
       - "--build-arg"
       - "REQS=requirements-cloud.txt"
       - "--build-arg"
-      - "GOOGLE_CLOUD_PROJECT=${PROJECT_ID}"
+      - "GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT}"
       - "."
 
   - id: "push-latest-image"
     name: "gcr.io/cloud-builders/docker"
     args:
       - "push"
-      - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/laxai-api:latest"
+      - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-api:latest"
 
   - id: "deploy-to-cloud-run"
     name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
@@ -35,21 +38,23 @@ steps:
       - "run"
       - "deploy"
       - "laxai-api"
-      - "--image=us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/laxai-api:latest"
+      - "--image=us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-api:latest"
       - "--region=us-central1"
       - "--cpu=1"
       - "--memory=512Mi"
       - "--max-instances=3"
       - "--timeout=300s"
       - "--concurrency=10"
-      - "--service-account=googlebatch@${PROJECT_ID}.iam.gserviceaccount.com"
+      - "--service-account=googlebatch@${_GOOGLE_CLOUD_PROJECT}.iam.gserviceaccount.com"
+      - "--set-env-vars=GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT}"
       - "--no-allow-unauthenticated"
       - "--quiet"
 
 images:
-  - "us-central1-docker.pkg.dev/${PROJECT_ID}/laxai-repo/laxai-api:latest"
+  - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-api:latest"
 
 options:
   logging: CLOUD_LOGGING_ONLY
 
 timeout: "3600s"
+
