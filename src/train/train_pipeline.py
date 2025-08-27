@@ -5,8 +5,6 @@ import traceback
 from typing import Any, Dict, List, Optional, Callable
 
 
-from train.wandb_logger import wandb_logger
-
 from common.pipeline_step import  StepStatus
 from common.google_storage import  get_storage, GCSPaths
 from common.pipeline import Pipeline, PipelineStatus
@@ -15,6 +13,7 @@ from train.training import Training
 from train.evaluator import ModelEvaluator
 from config.transforms import get_transforms
 from config.all_config import training_config, model_config, wandb_config
+from train.wandb_logger import wandb_logger
 
 
 

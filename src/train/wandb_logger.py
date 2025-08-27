@@ -11,13 +11,10 @@ from config.all_config import wandb_config
 
 logger = logging.getLogger(__name__)
 
-# Try to import wandb, handle gracefully if not available
-try:
-    import wandb
-    WANDB_AVAILABLE = True
-except ImportError:
-    WANDB_AVAILABLE = False
-    logger.warning("wandb not available. Training will continue without wandb logging.")
+# Try to import wandb, handle gracefully if not available:
+import wandb
+WANDB_AVAILABLE = True
+
 
 CHECKPOINT_NAME = "checkpoint"
 

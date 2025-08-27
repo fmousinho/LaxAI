@@ -501,7 +501,7 @@ urllib3==2.5.0
     #   sentry-sdk
 uvicorn==0.35.0
     # via -r requirements/requirements-base.txt
-wandb==0.21.1
+wandb>=0.21.1
     # via -r requirements/requirements-base.txt
 wcwidth==0.2.13
     # via
