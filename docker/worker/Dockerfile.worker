@@ -55,6 +55,8 @@ COPY requirements/requirements-cloud.txt requirements-cloud.txt
 RUN pip install --no-cache-dir -r requirements-cloud.txt
 
 # Copy source code
+COPY documentation /app/documentation
+COPY config.toml /app/
 COPY src/ src/
 COPY pyproject.toml .
 COPY README.md .

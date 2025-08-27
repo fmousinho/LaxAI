@@ -1,6 +1,13 @@
 # Cloud Training Job Dependencies
 # Core Google Cloud dependencies for the training job orchestration system
 
+# API runtime dependencies (also declared in pyproject.toml). Add here so
+# builds that install from requirements/ get the API packages too.
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+python-dotenv>=1.0.0
+
 # Firestore for job state management
 google-cloud-firestore>=2.13.0
 
