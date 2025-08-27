@@ -42,16 +42,29 @@ steps:
       - "-c"
       - |
         echo "Setting up Pub/Sub infrastructure..."
-        
+
         # Create topic if it doesn't exist
-        gcloud pubsub topics create training-jobs || echo "Topic may already exist"
-        
+        if gcloud pubsub topics describe training-jobs --project=${_GOOGLE_CLOUD_PROJECT} >/dev/null 2>&1; then
+          echo "Topic 'training-jobs' already exists"
+        else
+          echo "Creating topic 'training-jobs'"
+          gcloud pubsub topics create training-jobs --project=${_GOOGLE_CLOUD_PROJECT} || \
+            echo "Failed to create topic 'training-jobs' (may already exist or permission denied)"
+        fi
+
         # Create subscription if it doesn't exist
-        gcloud pubsub subscriptions create training-jobs-sub \
-          --topic=training-jobs \
-          --ack-deadline=600 \
-          --message-retention-duration=7d || echo "Subscription may already exist"
-        
+        if gcloud pubsub subscriptions describe training-jobs-sub --project=${_GOOGLE_CLOUD_PROJECT} >/dev/null 2>&1; then
+          echo "Subscription 'training-jobs-sub' already exists"
+        else
+          echo "Creating subscription 'training-jobs-sub'"
+          gcloud pubsub subscriptions create training-jobs-sub \
+            --topic=training-jobs \
+            --ack-deadline=600 \
+            --message-retention-duration=7d \
+            --project=${_GOOGLE_CLOUD_PROJECT} || \
+            echo "Failed to create subscription 'training-jobs-sub' (may already exist or permission denied)"
+        fi
+
         echo "Pub/Sub setup complete"
 
   # Deploy Cloud Run Job
