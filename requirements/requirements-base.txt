@@ -11,7 +11,6 @@
 
 # Prefer the PyTorch CPU wheel index when installing the CPU bundle
 # (keeps compatibility when installing torch in CPU-only build contexts)
--f https://download.pytorch.org/whl/cpu/torch_stable.html
 
 # Pin the CPU torch build here so the CPU requirements file can simply
 # reference this file. Change or remove if you want a different torch
