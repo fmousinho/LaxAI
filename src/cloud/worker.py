@@ -17,22 +17,20 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 import base64
 
+import config.logging_config
+
+from utils.env_secrets import setup_environment_secrets
+setup_environment_secrets()
+
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+
 logger = logging.getLogger(__name__)
 
-try:
-    from google.cloud import pubsub_v1
-    from google.cloud import logging as cloud_logging
-    from concurrent.futures import ThreadPoolExecutor
-except ImportError:
-    logger.warning("Google Cloud libraries not available - running in local mode")
-    pubsub_v1 = None
-    cloud_logging = None
-    ThreadPoolExecutor = None
+
+from google.cloud import pubsub_v1
+from google.cloud import logging as cloud_logging
+from concurrent.futures import ThreadPoolExecutor
+
 
 # Import our custom modules
 try:
