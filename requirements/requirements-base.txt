@@ -464,7 +464,7 @@ traitlets==5.14.3
     #   matplotlib-inline
 # Use the bleeding-edge transformers from GitHub main to support newer model types (dinov3)
 # Git installs can't be wheeled, so this is being installed directly in Dockerfile.worker
-# transformers[torch] @ git+https://github.com/huggingface/transformers.git@main
+ transformers[torch] @ git+https://github.com/huggingface/transformers.git@main
     # via
     #   -r requirements/requirements-base.txt
     #   peft

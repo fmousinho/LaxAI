@@ -41,7 +41,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install project requirements directly (use the chosen requirements file)
 RUN python -m pip install --upgrade pip \
- && python -m pip install --no-cache-dir "transformers[torch] @ git+https://github.com/huggingface/transformers.git@main" \
  && python -m pip install --no-cache-dir -r requirements/${REQS}
 
 # Copy source code
