@@ -40,6 +40,25 @@ def create_model_config_model():
 TrainingConfig = create_training_config_model()
 ModelConfig = create_model_config_model()
 
+def create_eval_config_model():
+    """Dynamically create EvalConfig model from parameter registry"""
+    try:
+        from config.parameter_registry import parameter_registry
+        fields = parameter_registry.generate_pydantic_fields_for_eval()
+        model = create_model(
+            'EvalConfig',
+            __doc__="Evaluation configuration parameters.",
+            **fields
+        )
+        return model
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create eval configuration from parameter registry: {str(e)}"
+        )
+
+EvalConfig = create_eval_config_model()
+
 class TrainingRequest(BaseModel):
     """Request schema for training endpoint"""
     tenant_id: str = Field(default="", description="Tenant identifier")
@@ -56,6 +75,7 @@ class TrainingRequest(BaseModel):
     # renders them in the UI and request bodies are validated into model objects.
     training_params: Optional['TrainingConfig'] = None
     model_params: Optional['ModelConfig'] = None
+    eval_params: Optional['EvalConfig'] = None
 
 class TrainingResponse(BaseModel):
     """Response schema for training endpoint"""

@@ -94,6 +94,17 @@ def create_app() -> FastAPI:
         tags=["cloud"]
     )
 
+    # Generate and persist OpenAPI schema for CI/inspection
+    try:
+        openapi_schema = app.openapi()
+        import json, os
+        os.makedirs('artifacts', exist_ok=True)
+        with open('artifacts/openapi.json', 'w') as f:
+            json.dump(openapi_schema, f)
+    except Exception:
+        # Non-fatal: OpenAPI generation may fail if routers import optional deps.
+        logger.debug('Could not generate OpenAPI schema at startup; continuing without persisting it')
+
     return app
 
 

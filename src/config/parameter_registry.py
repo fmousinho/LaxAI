@@ -94,6 +94,10 @@ class ParameterRegistry:
     def generate_pydantic_fields_for_model(self) -> Dict[str, Any]:
         """Generate Pydantic field definitions for model parameters only"""
         return self._generate_pydantic_fields_for_params(self.model_parameters.values())
+
+    def generate_pydantic_fields_for_eval(self) -> Dict[str, Any]:
+        """Generate Pydantic field definitions for evaluation parameters only"""
+        return self._generate_pydantic_fields_for_params(self.eval_parameters.values())
     
     def get_config_value(self, param_name: str) -> Any:
         """Get the default value from config for a parameter"""
