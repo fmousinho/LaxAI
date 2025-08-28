@@ -151,7 +151,7 @@ huggingface-hub==0.34.4
     #   timm
     #   tokenizers
     #   transformers
-idna==3.10
+idna==3.7
     # via
     #   anyio
     #   requests
