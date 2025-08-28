@@ -8,6 +8,12 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from collections import defaultdict
 import json
 
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+
 from train.dataset import LacrossePlayerDataset
 from config.all_config import wandb_config, evaluator_config
 from config.transforms import get_transforms
@@ -63,20 +69,41 @@ class ModelEvaluator:
         logger.info("Creating embeddings")
         embs, labels, image_paths  = self._generate_embeddings(dataset)
 
-        sims, dists, labels_eq = self._compute_pairwise_batches(
-            embs,
-            labels,
-            batch_size=4096, 
-            compute_distances=True
-        )
+        # Decide whether to compute full pairwise arrays (may be huge) or
+        # stream statistics/samples for large datasets. Streaming avoids
+        # concatenating large tensors (O(N^2)) which can blow up RAM.
+        n = embs.shape[0]
+        pairwise_threshold = getattr(evaluator_config, 'batched_ranking_threshold', 5000)
+        use_batched = n > pairwise_threshold
 
-        # Distance-based evaluation
-        logger.info("Computing distance-based metrics...")
-        distance_metrics = self._evaluate_distances(sims, dists, labels_eq)
+        if use_batched:
+            logger.info(f"Dataset large (n={n}), computing pairwise metrics in streaming mode to save memory (threshold={pairwise_threshold})")
+            # Streaming computation: exact averages for distances/similarities,
+            # approximate classification scores via reservoir sampling capped by
+            # `pairwise_sample_cap` to bound memory usage during threshold search.
+            sample_cap = getattr(evaluator_config, 'pairwise_sample_cap', 1000000)
+            distance_metrics, classification_metrics = self._stream_pairwise_metrics(
+                embs, labels, batch_size=getattr(evaluator_config, 'pairwise_batch_size', 4096),
+                sample_cap=sample_cap
+            )
+            sims = None
+            dists = None
+            labels_eq = None
+        else:
+            sims, dists, labels_eq = self._compute_pairwise_batches(
+                embs,
+                labels,
+                batch_size=getattr(evaluator_config, 'pairwise_batch_size', 4096),
+                compute_distances=True
+            )
 
-        # Classification evaluation
-        logger.info("Computing classification metrics...")
-        classification_metrics = self._evaluate_classification(sims, labels_eq)
+            # Distance-based evaluation
+            logger.info("Computing distance-based metrics...")
+            distance_metrics = self._evaluate_distances(sims, dists, labels_eq)
+
+            # Classification evaluation
+            logger.info("Computing classification metrics...")
+            classification_metrics = self._evaluate_classification(sims, labels_eq)
 
         # Decide whether to build a full NxN similarity matrix or use batched ranking
         n = embs.shape[0]
@@ -128,20 +155,19 @@ class ModelEvaluator:
         return results 
     
 
-    def _generate_embeddings(self, dataset: LacrossePlayerDataset, batch_size: int = 64) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+    def _generate_embeddings(self, dataset: LacrossePlayerDataset, batch_size: int = 32) -> Tuple[np.ndarray, np.ndarray, List[str]]:
         """
         Generate embeddings for all images in the dataset in batches.
 
         Args:
             dataset: LacrossePlayerDataset
-            batch_size: batch size for embedding generation
+            batch_size: batch size for embedding generation (reduced default for memory safety)
 
         Returns:
             embeddings: Numpy array of embeddings
             labels: Numpy array of corresponding player labels
-            image_paths: List of image identifiers
+            image_paths: List of image identifiers.
         """
-        import torchvision.transforms as T
         from torch.utils.data import DataLoader
 
         logger.info(f"Generating embeddings for {len(dataset)} samples in batches of {batch_size}...")
@@ -163,6 +189,11 @@ class ModelEvaluator:
 
         with torch.no_grad():
             for batch_idx, batch in enumerate(loader):
+                # Check for cancellation every batch
+                if self.stop_callback and self.stop_callback():
+                    logger.info(f"Embedding generation cancelled at batch {batch_idx}")
+                    break
+
                 # Dataset returns could vary depending on your format
                 if len(batch) == 4:  
                     images, _, _, labels = batch
@@ -175,13 +206,35 @@ class ModelEvaluator:
                 # Forward pass
                 embeddings = self.model(images)  # already normalized
 
-                # Move to CPU numpy
-                all_embeddings.append(embeddings.cpu().numpy())
+                # Move to CPU numpy and explicitly delete GPU tensors
+                emb_cpu = embeddings.cpu().numpy()
+                all_embeddings.append(emb_cpu)
                 all_labels.extend([str(l.item()) if torch.is_tensor(l) else str(l) for l in labels])
                 all_paths.extend([f"image_{batch_idx * batch_size + i}" for i in range(len(labels))])
 
-                if batch_idx % 10 == 0:
-                    logger.info(f"Processed {batch_idx * batch_size}/{len(dataset)} images")
+                # Clear GPU memory after each batch
+                del images, embeddings
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+                # Log progress every batch for large datasets
+                processed = batch_idx * batch_size + len(labels)
+                
+                # Get memory usage
+                memory_info = ""
+                if PSUTIL_AVAILABLE:
+                    # RAM usage
+                    process = psutil.Process()
+                    ram_mb = process.memory_info().rss / 1024 / 1024
+                    memory_info = f" | RAM: {ram_mb:.1f}MB"
+                
+                # GPU memory if available
+                if torch.cuda.is_available():
+                    gpu_mb = torch.cuda.memory_allocated() / 1024 / 1024
+                    gpu_reserved_mb = torch.cuda.memory_reserved() / 1024 / 1024
+                    memory_info += f" | GPU: {gpu_mb:.1f}MB allocated, {gpu_reserved_mb:.1f}MB reserved"
+                
+                logger.info(f"Processed {processed}/{len(dataset)} images (batch {batch_idx + 1}){memory_info}")
 
         # Stack results
         embeddings_array = np.vstack(all_embeddings)
@@ -243,6 +296,126 @@ class ModelEvaluator:
         dists = torch.cat(dists_list) if compute_distances else None
 
         return sims, dists, labels_eq
+
+
+    def _stream_pairwise_metrics(self, embeddings: np.ndarray, labels: np.ndarray, batch_size: int = 4096, sample_cap: int = 1000000) -> Tuple[Dict[str, float], Dict[str, float]]:
+        """
+        Stream pairwise similarity/distance statistics and collect a bounded
+        random sample of (score, label) pairs for classification threshold tuning.
+
+        Returns (distance_metrics, classification_metrics)
+        """
+        device = self.device
+
+        X = torch.tensor(embeddings, dtype=torch.float32, device=device)
+        y = torch.tensor(labels, device=device)
+        X_norm = torch.nn.functional.normalize(X, dim=1)
+        n = X.shape[0]
+
+        # Reservoir for sampled (score, is_same) entries to perform threshold search
+        reservoir_scores = []  # list of floats
+        reservoir_labels = []  # list of ints (0/1)
+        reserve_k = int(sample_cap)
+        seen = 0
+
+        # Welford-style online mean for distances/sims for same/different pairs
+        stats = {
+            'same': {'count': 0, 'mean_sim': 0.0, 'mean_dist': 0.0},
+            'diff': {'count': 0, 'mean_sim': 0.0, 'mean_dist': 0.0}
+        }
+
+        for i in range(0, n, batch_size):
+            xi = X[i:i+batch_size]
+            xi_norm = X_norm[i:i+batch_size]
+            yi = y[i:i+batch_size]
+
+            # Compare xi against all subsequent blocks to avoid duplicate pairs
+            for j in range(i+1, n, batch_size):
+                xj = X[j:j+batch_size]
+                xj_norm = X_norm[j:j+batch_size]
+                yj = y[j:j+batch_size]
+
+                sims = torch.mm(xi_norm, xj_norm.T)  # [Bi, Bj]
+                dists = torch.cdist(xi, xj, p=2)
+
+                # flatten and move to cpu for sampling/stats accumulation
+                sims_f = sims.flatten().cpu().numpy()
+                dists_f = dists.flatten().cpu().numpy()
+
+                # labels equality
+                eq = (yi[:, None] == yj[None, :]).flatten().cpu().numpy()
+
+                # Update online means
+                for s_val, d_val, is_same in zip(sims_f, dists_f, eq):
+                    key = 'same' if is_same else 'diff'
+                    st = stats[key]
+                    st['count'] += 1
+                    # update running mean for sim
+                    delta_sim = s_val - st['mean_sim']
+                    st['mean_sim'] += delta_sim / st['count']
+                    # update running mean for dist
+                    delta_dist = d_val - st['mean_dist']
+                    st['mean_dist'] += delta_dist / st['count']
+
+                # Reservoir sampling for classification threshold search
+                for s_val, is_same in zip(sims_f, eq):
+                    seen += 1
+                    if len(reservoir_scores) < reserve_k:
+                        reservoir_scores.append(float(s_val))
+                        reservoir_labels.append(int(is_same))
+                    else:
+                        # replace with decreasing probability
+                        import random
+                        r = random.randrange(seen)
+                        if r < reserve_k:
+                            reservoir_scores[r] = float(s_val)
+                            reservoir_labels[r] = int(is_same)
+
+        # Build numpy arrays for threshold search
+        if reservoir_scores:
+            import numpy as _np
+            scores_np = _np.array(reservoir_scores)
+            labels_np = _np.array(reservoir_labels)
+        else:
+            scores_np = _np.array([])
+            labels_np = _np.array([])
+
+        # Derive classification metrics via threshold search on the sampled pairs
+        if scores_np.size > 0 and labels_np.size > 0 and labels_np.sum() > 0:
+            best_thresh, best_f1 = self._find_optimal_threshold(labels_np, scores_np)
+            y_pred = (scores_np > best_thresh).astype(int)
+            from sklearn.metrics import precision_recall_fscore_support, accuracy_score, roc_auc_score
+            acc = float(accuracy_score(labels_np, y_pred))
+            prec, rec, f1, _ = precision_recall_fscore_support(labels_np, y_pred, average='binary', zero_division=0)
+            try:
+                auc = float(roc_auc_score(labels_np, scores_np))
+            except Exception:
+                auc = 0.0
+        else:
+            best_thresh, best_f1 = float(self.threshold), 0.0
+            acc = prec = rec = f1 = auc = 0.0
+
+        distance_metrics = {
+            "avg_distance_same_player": float(stats['same']['mean_dist']) if stats['same']['count'] > 0 else float('nan'),
+            "avg_distance_different_player": float(stats['diff']['mean_dist']) if stats['diff']['count'] > 0 else float('nan'),
+            "avg_similarity_same_player": float(stats['same']['mean_sim']) if stats['same']['count'] > 0 else float('nan'),
+            "avg_similarity_different_player": float(stats['diff']['mean_sim']) if stats['diff']['count'] > 0 else float('nan'),
+            "distance_separation": float(stats['diff']['mean_dist'] - stats['same']['mean_dist']) if stats['same']['count'] > 0 and stats['diff']['count'] > 0 else float('nan'),
+            "similarity_separation": float(stats['same']['mean_sim'] - stats['diff']['mean_sim']) if stats['same']['count'] > 0 and stats['diff']['count'] > 0 else float('nan'),
+            "same_player_pairs_count": int(stats['same']['count']),
+            "different_player_pairs_count": int(stats['diff']['count']),
+        }
+
+        classification_metrics = {
+            "accuracy": float(acc),
+            "precision": float(prec),
+            "recall": float(rec),
+            "f1_score": float(f1),
+            "roc_auc": float(auc),
+            "threshold_used": float(best_thresh),
+        }
+
+        return distance_metrics, classification_metrics
 
 
     def _evaluate_distances(self, sims, dists, labels_eq) -> Dict[str, float]:
