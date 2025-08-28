@@ -526,3 +526,17 @@ class ParameterRegistry:
 
 # Global instance
 parameter_registry = ParameterRegistry()
+
+# Sanity-check: ensure registry implements expected registration methods.
+# This will raise a clear AttributeError early if the object was replaced or
+# incorrectly instantiated in a deployed image (helps catch stale/faulty builds).
+required_methods = [
+    'register',
+    'register_training_param',
+    'register_model_param',
+    'register_eval_param',
+    'generate_pydantic_fields_for_eval'
+]
+missing = [m for m in required_methods if not hasattr(parameter_registry, m)]
+if missing:
+    raise RuntimeError(f"ParameterRegistry missing required methods: {missing}. Did a previous fallback or partial initialization run in this environment?")
