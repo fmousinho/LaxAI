@@ -70,7 +70,7 @@ class TrackerConfig:
 @dataclass
 class TrainingConfig:
     """Configuration for training parameters."""
-    batch_size: int = 64
+    batch_size: int = 128
     learning_rate: float = 1e-3
     lr_scheduler_patience: int = 3
     lr_scheduler_threshold: float = 1e-4

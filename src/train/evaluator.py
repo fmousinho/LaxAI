@@ -62,29 +62,55 @@ class ModelEvaluator:
         
         logger.info("Creating embeddings")
         embs, labels, image_paths  = self._generate_embeddings(dataset)
-        
+
         sims, dists, labels_eq = self._compute_pairwise_batches(
             embs,
             labels,
             batch_size=4096, 
             compute_distances=True
         )
-        
-        # Generate embeddings for validation set
-        logger.info("Generating embeddings for validation set...")
-        embeddings, labels, image_paths = self._generate_embeddings(dataset)
-        
+
         # Distance-based evaluation
         logger.info("Computing distance-based metrics...")
         distance_metrics = self._evaluate_distances(sims, dists, labels_eq)
-        
+
         # Classification evaluation
         logger.info("Computing classification metrics...")
         classification_metrics = self._evaluate_classification(sims, labels_eq)
-        
+
+        # Decide whether to build a full NxN similarity matrix or use batched ranking
+        n = embs.shape[0]
+        threshold = getattr(evaluator_config, 'batched_ranking_threshold', 5000)
+        use_batched = n > threshold
+
+        sims_matrix = None
+        if use_batched:
+            logger.info(f"Dataset large (n={n}), using batched ranking (threshold={threshold})")
+        else:
+            logger.info("Building full similarity matrix for ranking/recall...")
+            device = self.device
+            X = torch.tensor(embs, dtype=torch.float32, device=device)
+            X_norm = torch.nn.functional.normalize(X, dim=1)
+            sims_matrix = torch.mm(X_norm, X_norm.T)
+
         # Ranking evaluation
         logger.info("Computing ranking metrics...")
-        ranking_metrics = self._evaluate_ranking(embeddings, labels)
+        ranking_metrics = self._evaluate_ranking(sims_matrix if sims_matrix is not None else embs,
+                                                  labels,
+                                                  use_batched=use_batched,
+                                                  chunk_size=getattr(evaluator_config, 'ranking_chunk_size', 1024))
+
+        # Compute recall@k metrics and merge
+        try:
+            recall_metrics = self.compute_recall_at_k(sims_matrix=sims_matrix if sims_matrix is not None else None,
+                                                       labels=labels,
+                                                       ks=(1, 5, 10),
+                                                       use_batched=use_batched,
+                                                       chunk_size=getattr(evaluator_config, 'ranking_chunk_size', 1024))
+            ranking_metrics.update(recall_metrics)
+        except Exception as e:
+            logger.warning(f"Failed to compute recall@k metrics: {e}")
+       
         
         
         # Aggregate results
@@ -177,7 +203,7 @@ class ModelEvaluator:
         """
         Compute pairwise cosine similarities and (optionally) Euclidean distances in batches on GPU.
         Returns:
-            sims: torch.Tensor, shape [N_pairs]
+            sims: torch.Tensor, shape [N_pairs] with cosine similarities
             dists: torch.Tensor or None
             labels_eq: torch.BoolTensor, shape [N_pairs]
         """
@@ -269,33 +295,87 @@ class ModelEvaluator:
             "threshold_used": float(best_thresh),
         }
     
-    def _evaluate_ranking(self, embeddings: np.ndarray, labels: np.ndarray, batch_size: int = 4096) -> Dict[str, float]:
+    def _evaluate_ranking(self, sims_matrix, labels: np.ndarray, batch_size: int = 4096, use_batched: bool = True, chunk_size: int = 1024) -> Dict[str, float]:
         """
-        Compute mean Average Precision (mAP) for retrieval.
-        Uses batched cosine similarities on GPU.
+        Compute mean Average Precision (mAP) for retrieval using a precomputed similarity matrix.
+
+        Args:
+            sims_matrix: torch.Tensor or numpy array of shape [N, N] with pairwise similarities
+            labels: numpy array of labels
         """
         device = self.device
-        X = torch.tensor(embeddings, dtype=torch.float32, device=device)
-        y = torch.tensor(labels, device=device)
-        X_norm = torch.nn.functional.normalize(X, dim=1)
 
-        n = X.shape[0]
+        # Accept either a full square similarity matrix [N,N] or raw embeddings [N,D].
+        # If embeddings are provided, compute the full similarity matrix once.
+        if not isinstance(sims_matrix, torch.Tensor):
+            arr = np.asarray(sims_matrix)
+            if arr.ndim != 2:
+                raise ValueError("sims_matrix/embeddings must be a 2D array")
+
+            # Square matrix -> treat as similarity matrix; otherwise treat as embeddings
+            if arr.shape[0] == arr.shape[1]:
+                sims = torch.tensor(arr, dtype=torch.float32, device=device)
+            else:
+                X = torch.tensor(arr, dtype=torch.float32, device=device)
+                X_norm = torch.nn.functional.normalize(X, dim=1)
+                sims = torch.mm(X_norm, X_norm.T)
+        else:
+            t = sims_matrix
+            if t.dim() == 2 and t.size(0) == t.size(1):
+                sims = t.to(device)
+            else:
+                X = t.to(device)
+                X_norm = torch.nn.functional.normalize(X, dim=1)
+                sims = torch.mm(X_norm, X_norm.T)
+
+        y = torch.tensor(labels, device=device)
+
+        n = sims.shape[0]
         ap_list = []
 
-        for i in range(n):
-            anchor = X_norm[i:i+1]  # [1, d]
-            sims = torch.mm(anchor, X_norm.T).squeeze(0)  # [n]
-            sims[i] = -1e9  # mask self
+        if not use_batched:
+            for i in range(n):
+                row = sims[i].clone()
+                row[i] = -1e9  # mask self
 
-            # Sort by similarity
-            sorted_idx = torch.argsort(sims, descending=True)
-            sorted_labels = y[sorted_idx].cpu().numpy()
+                # Sort by similarity
+                sorted_idx = torch.argsort(row, descending=True)
+                sorted_labels = y[sorted_idx].cpu().numpy()
 
-            true_labels = y[i].cpu().item()
-            relevant = (sorted_labels == true_labels).astype(int)
+                true_label = y[i].cpu().item()
+                relevant = (sorted_labels == true_label).astype(int)
 
-            ap = self._compute_average_precision(relevant)
-            ap_list.append(ap)
+                ap = self._compute_average_precision(relevant)
+                ap_list.append(ap)
+        else:
+            # Batched per-anchor computation: avoid storing NxN. Process anchors in chunks.
+            device = self.device
+            # If sims is actually an embeddings matrix (non-square), compute X_norm once
+            if sims.dim() == 2 and sims.size(0) != sims.size(1):
+                X = sims
+                X_norm = torch.nn.functional.normalize(X.to(device), dim=1)
+            else:
+                # sims is square similarity matrix but we still batch to reduce memory peaks
+                # We'll compute each anchor's similarity by reading the row in chunks
+                X_norm = None
+
+            for start in range(0, n, chunk_size):
+                end = min(start + chunk_size, n)
+                for i in range(start, end):
+                    if X_norm is not None:
+                        row = torch.mm(X_norm[i:i+1], X_norm.T).squeeze(0)
+                    else:
+                        row = sims[i].clone()
+
+                    row[i] = -1e9
+                    sorted_idx = torch.argsort(row, descending=True)
+                    sorted_labels = y[sorted_idx].cpu().numpy()
+
+                    true_label = y[i].cpu().item()
+                    relevant = (sorted_labels == true_label).astype(int)
+
+                    ap = self._compute_average_precision(relevant)
+                    ap_list.append(ap)
 
         mAP = float(np.mean(ap_list)) if ap_list else 0.0
         return {"mean_average_precision": mAP}
@@ -309,6 +389,105 @@ class ModelEvaluator:
 
         precisions = [(i+1) / (rank+1) for i, rank in enumerate(hits)]
         return float(np.mean(precisions))
+
+
+    def compute_recall_at_k(self, embeddings: Optional[np.ndarray] = None, labels: Optional[np.ndarray] = None, ks: Tuple[int, ...] = (1,5,10), sims_matrix: Optional[Any] = None, use_batched: bool = False, chunk_size: int = 1024) -> Dict[str, float]:
+        """
+        Compute recall@k for the provided embeddings and labels.
+
+        Args:
+            embeddings: numpy array of shape [N, D]
+            labels: numpy array of shape [N]
+            ks: tuple of k values to compute
+
+        Returns:
+            Dict with keys 'rank_{k}_accuracy' for each k
+        """
+        # If a precomputed similarity matrix is provided, use it; otherwise build from embeddings
+        device = self.device
+
+        if sims_matrix is None:
+            if embeddings is None or labels is None:
+                raise ValueError("Either sims_matrix or embeddings+labels must be provided")
+
+            if embeddings.shape[0] == 0:
+                return {f'rank_{k}_accuracy': 0.0 for k in ks}
+
+            X = torch.tensor(embeddings, dtype=torch.float32, device=device)
+            X_norm = torch.nn.functional.normalize(X, dim=1)
+            sims = torch.mm(X_norm, X_norm.T)
+            y = np.array(labels)
+        else:
+            # accept numpy or torch similarity matrix
+            if isinstance(sims_matrix, torch.Tensor):
+                sims = sims_matrix.to(device)
+            else:
+                sims = torch.tensor(sims_matrix, dtype=torch.float32, device=device)
+            y = np.array(labels)
+
+
+        n = sims.shape[0]
+        recalls = {k: 0 for k in ks}
+
+        if not use_batched:
+            for i in range(n):
+                row = sims[i].clone()
+                row[i] = -1e9
+
+                kmax = max(ks)
+                k = min(kmax, n)
+                topk = torch.topk(row, k=k).indices.cpu().numpy()
+                ranked = y[topk]
+
+                for kk in ks:
+                    kk_use = min(kk, k)
+                    if y[i] in ranked[:kk_use]:
+                        recalls[kk] += 1
+        else:
+            # Batched mode: compute similarities per-anchor in chunks to avoid NxN memory
+            device = self.device
+            # If sims is embedding matrix, use normalized embeddings
+            if sims.dim() == 2 and sims.size(0) != sims.size(1):
+                X_norm = torch.nn.functional.normalize(sims.to(device), dim=1)
+                for start in range(0, n, chunk_size):
+                    end = min(start + chunk_size, n)
+                    anchors = X_norm[start:end]  # [B, D]
+                    sims_chunk = torch.mm(anchors, X_norm.T)  # [B, N]
+                    sims_chunk[:, start + torch.arange(end - start)] = -1e9
+                    sims_chunk = sims_chunk.cpu()
+
+                    for bi in range(end - start):
+                        row = sims_chunk[bi]
+                        kmax = max(ks)
+                        k = min(kmax, n)
+                        topk = torch.topk(row, k=k).indices.numpy()
+                        ranked = y[topk]
+                        idx = start + bi
+                        for kk in ks:
+                            kk_use = min(kk, k)
+                            if y[idx] in ranked[:kk_use]:
+                                recalls[kk] += 1
+            else:
+                # sims is a precomputed square matrix; iterate anchors in chunks
+                sims_cpu = sims.cpu()
+                for start in range(0, n, chunk_size):
+                    end = min(start + chunk_size, n)
+                    chunk = sims_cpu[start:end]  # [B, N]
+                    for bi in range(end - start):
+                        row = chunk[bi].clone()
+                        row[start + bi] = -1e9
+                        kmax = max(ks)
+                        k = min(kmax, n)
+                        topk = torch.topk(row, k=k).indices.numpy()
+                        ranked = y[topk]
+                        idx = start + bi
+                        for kk in ks:
+                            kk_use = min(kk, k)
+                            if y[idx] in ranked[:kk_use]:
+                                recalls[kk] += 1
+
+        denom = float(n) if n > 0 else 1.0
+        return {f'rank_{k}_accuracy': recalls[k] / denom for k in ks}
 
 
     
@@ -365,6 +544,7 @@ class ModelEvaluator:
         wandb_logger.log_metrics(wandb_metrics)
         logger.info("Evaluation results logged to wandb")
     
+
     def _save_results(self, results: Dict[str, Any], save_dir: str = "evaluation_results") -> None:
         """
         Save detailed evaluation results to disk.

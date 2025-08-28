@@ -70,3 +70,53 @@ def test_compute_average_precision_and_ranking():
     rank_metrics = evalr._evaluate_ranking(embeddings, labels)
     # For the symmetric clusters above, mean average precision is expected (observed 0.75)
     assert rank_metrics["mean_average_precision"] == pytest.approx(0.75, rel=1e-6)
+
+    # Check recall@k computed from embeddings
+    recall_metrics = evalr.compute_recall_at_k(embeddings=embeddings, labels=labels, ks=(1, 5, 10))
+    assert recall_metrics['rank_1_accuracy'] == pytest.approx(1.0, rel=1e-6)
+    assert recall_metrics['rank_5_accuracy'] == pytest.approx(1.0, rel=1e-6)
+    assert recall_metrics['rank_10_accuracy'] == pytest.approx(1.0, rel=1e-6)
+
+    # Also check recall when passing a precomputed similarity matrix
+    X = torch.tensor(embeddings, dtype=torch.float32)
+    Xn = torch.nn.functional.normalize(X, dim=1)
+    sims_np = (Xn @ Xn.T).numpy()
+    recall_metrics2 = evalr.compute_recall_at_k(sims_matrix=sims_np, labels=labels, ks=(1,5,10))
+    assert recall_metrics2['rank_1_accuracy'] == pytest.approx(1.0, rel=1e-6)
+
+
+def test_batched_ranking_mode():
+    """Ensure batched ranking and recall paths match non-batched for a small dataset."""
+    evalr = make_dummy_evaluator()
+
+    embeddings = np.array([
+        [1.0, 0.0],
+        [0.9, 0.1],
+        [0.0, 1.0],
+        [0.1, 0.9],
+    ], dtype=np.float32)
+
+    labels = np.array([0, 0, 1, 1], dtype=np.int64)
+
+    # Non-batched
+    rank_nb = evalr._evaluate_ranking(embeddings, labels, use_batched=False)
+    recall_nb = evalr.compute_recall_at_k(embeddings=embeddings, labels=labels, ks=(1,5,10), use_batched=False)
+
+    # Batched with small chunk size to force chunking
+    rank_b = evalr._evaluate_ranking(embeddings, labels, use_batched=True, chunk_size=2)
+    recall_b = evalr.compute_recall_at_k(embeddings=embeddings, labels=labels, ks=(1,5,10), use_batched=True, chunk_size=2)
+
+    assert rank_b['mean_average_precision'] == pytest.approx(rank_nb['mean_average_precision'], rel=1e-6)
+    assert recall_b['rank_1_accuracy'] == pytest.approx(recall_nb['rank_1_accuracy'], rel=1e-6)
+    assert recall_b['rank_5_accuracy'] == pytest.approx(recall_nb['rank_5_accuracy'], rel=1e-6)
+    assert recall_b['rank_10_accuracy'] == pytest.approx(recall_nb['rank_10_accuracy'], rel=1e-6)
+
+    # Also test batched mode when passing a precomputed similarity matrix
+    import torch
+    X = torch.tensor(embeddings, dtype=torch.float32)
+    Xn = torch.nn.functional.normalize(X, dim=1)
+    sims_np = (Xn @ Xn.T).numpy()
+
+    recall_pre_nb = evalr.compute_recall_at_k(sims_matrix=sims_np, labels=labels, ks=(1,5,10), use_batched=False)
+    recall_pre_b = evalr.compute_recall_at_k(sims_matrix=sims_np, labels=labels, ks=(1,5,10), use_batched=True, chunk_size=2)
+    assert recall_pre_b['rank_1_accuracy'] == pytest.approx(recall_pre_nb['rank_1_accuracy'], rel=1e-6)

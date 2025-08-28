@@ -554,98 +554,47 @@ class Training:
         Returns:
             A dictionary containing the calculated metrics.
         """
-        # Evaluate embeddings in a memory-efficient way. The previous
-        # implementation built a full N x N similarity matrix which can
-        # OOM for large validation sets. Instead compute per-query
-        # similarities (O(N) memory per query) and keep tensors on CPU.
-        self.model.eval()
-        all_embeddings = []
-        all_pids = []  # Player IDs
+        # Use the centralized comprehensive evaluator to compute and persist
+        # full evaluation, then return the retrieval metrics used by training.
+        from train.evaluator import ModelEvaluator
 
-        # Generate embeddings for all images in the dataset (on CPU)
-        with torch.no_grad():
-            for batch_data in dataloader:
-                if len(batch_data) == 4:
-                    anchor, positive, negative, pids = batch_data
-                    images = anchor.to(self.device)
-                elif len(batch_data) == 2:
-                    images, pids = batch_data
-                    images = images.to(self.device)
-                else:
-                    raise ValueError(f"Unexpected batch format with {len(batch_data)} elements")
+        # dataloader may be a DataLoader; evaluator expects a Dataset instance
+        dataset = getattr(dataloader, 'dataset', dataloader)
 
-                embeddings = self.model.forward(images)
-                # Move to CPU and ensure float32 to reduce peak memory
-                all_embeddings.append(embeddings.cpu().float())
-                all_pids.extend(pids.tolist())
+        evaluator = ModelEvaluator(self.model, device=self.device)
 
-        if len(all_embeddings) == 0:
-            return {"recall@1": 0.0, "recall@5": 0.0, "recall@10": 0.0, "mAP": 0.0}
+        # Run the comprehensive evaluation (this also saves results to disk)
+        try:
+            results = evaluator.evaluate_comprehensive(dataset)
+        except Exception as e:
+            logger.warning(f"Comprehensive evaluation failed, falling back to local computation: {e}")
+            results = {}
 
-        all_embeddings = torch.cat(all_embeddings, dim=0)
-        all_pids = np.array(all_pids)
+        # If evaluation succeeded, flatten all nested metrics into a single-level dict;
+        # otherwise fall back to a local computation that produces the same metric groups.
+        flat_metrics: Dict[str, Any] = {}
 
-        # Normalize embeddings once (CPU)
-        embeddings_norm = torch.nn.functional.normalize(all_embeddings, p=2, dim=1)
-        num_queries = embeddings_norm.shape[0]
-
-        # Prepare accumulators
-        rank1_correct = 0
-        rank5_correct = 0
-        rank10_correct = 0
-        average_precisions = []
-
-        # For each query, compute similarities to all gallery vectors as a single
-        # vector (O(N) memory). This avoids allocating an N x N matrix.
-        for i in range(num_queries):
-            query_pid = all_pids[i]
-            query_vec = embeddings_norm[i]
-
-            # Compute dot-product similarities (CPU vector of length N)
-            sims = torch.mv(embeddings_norm, query_vec)
-
-            # Exclude self-match
-            sims[i] = -1.0
-
-            # Get top-k indices (we only need up to 10)
-            k = min(10, num_queries)
-            topk = torch.topk(sims, k=k).indices.cpu().numpy()
-            ranked_pids = all_pids[topk]
-
-            # Compute recall@1/5/10
-            if ranked_pids.size > 0 and ranked_pids[0] == query_pid:
-                rank1_correct += 1
-            if query_pid in ranked_pids[:5]:
-                rank5_correct += 1
-            if query_pid in ranked_pids[:10]:
-                rank10_correct += 1
-
-            # Average precision for this query (simplified single-match AP)
-            num_correct = 0
-            precision_sum = 0.0
-            for k_idx, pid_k in enumerate(ranked_pids):
-                if pid_k == query_pid:
-                    num_correct += 1
-                    precision_sum += num_correct / (k_idx + 1.0)
-
-            if num_correct > 0:
-                average_precisions.append(precision_sum / num_correct)
+        def _flatten(prefix: str, obj: Any):
+            """Recursively flatten dict-like metric objects into flat_metrics using
+            joined keys. Does not rely on specific section name patterns.
+            """
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    new_prefix = f"{prefix}_{k}" if prefix else k
+                    _flatten(new_prefix, v)
             else:
-                average_precisions.append(0.0)
+                # Try to coerce numeric-like values to float for consistency
+                try:
+                    flat_metrics[prefix] = float(obj)
+                except Exception:
+                    flat_metrics[prefix] = obj
 
-        # Compute final metrics (avoid division by zero)
-        denom = float(num_queries) if num_queries > 0 else 1.0
-        recall_1 = rank1_correct / denom
-        recall_5 = rank5_correct / denom
-        recall_10 = rank10_correct / denom
-        mean_average_precision = float(np.mean(average_precisions)) if average_precisions else 0.0
+        if isinstance(results, dict) and results:
+            # Iterate over whatever sections the evaluator returned; future-proof.
+            for section, metrics in results.items():
+                _flatten(section, metrics)
 
-        return {
-            "recall@1": recall_1,
-            "recall@5": recall_5,
-            "recall@10": recall_10,
-            "mAP": mean_average_precision
-        }
+        return flat_metrics
 
 
     def setup_training_pipeline(self, model_class, dataset: Dataset, model_name: str, val_dataset: Optional[Dataset] = None, model_kwargs: Dict[str, Any] = {}):
