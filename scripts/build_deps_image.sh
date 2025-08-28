@@ -15,6 +15,8 @@ PROJECT_ID="fmousinho"
 IMAGE_NAME="laxai-deps"
 DOCKERFILE="docker/base/Dockerfile.deps"
 MULTIARCH=false
+GCP_ONLY=false
+CUSTOM_REQUIREMENTS=""
 # Tagging behaviour: hash (default), timestamp, git, or explicit
 TAG_MODE="hash"
 EXPLICIT_TAG=""
@@ -34,6 +36,8 @@ while [[ $# -gt 0 ]]; do
   --no-cache) NO_CACHE=true; shift ;;
     --image) IMAGE_NAME="$2"; shift 2 ;;
     --dockerfile) DOCKERFILE="$2"; shift 2 ;;
+    --gcloud) GCP_ONLY=true; shift ;;
+    --requirements) CUSTOM_REQUIREMENTS="$2"; shift 2 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
@@ -54,9 +58,15 @@ if [[ "$PUSH" != true && -n "$REGISTRY" ]]; then
 fi
 
 # --- START MODIFICATION ---
-
-# Use only the specified requirements file
-REQUIRED_FILE="requirements/requirements-gpu.txt"
+# Decide which requirements file to use. Default to GPU requirements unless
+# the user asked for a Google Cloud specific build or provided a custom file.
+if [[ -n "$CUSTOM_REQUIREMENTS" ]]; then
+  REQUIRED_FILE="$CUSTOM_REQUIREMENTS"
+elif [[ "$GCP_ONLY" == true ]]; then
+  REQUIRED_FILE="requirements/requirements-cloud.txt"
+else
+  REQUIRED_FILE="requirements/requirements-gpu.txt"
+fi
 
 # Check if the file exists
 if [[ ! -f "$REQUIRED_FILE" ]]; then
@@ -64,7 +74,7 @@ if [[ ! -f "$REQUIRED_FILE" ]]; then
     exit 1
 fi
 
-# Compute short sha1 hash from the file's contents
+# Compute short sha1 hash from the file's contents (used for tagging)
 TMP_HASH_FILE=$(mktemp)
 cat "$REQUIRED_FILE" > "$TMP_HASH_FILE"
 
@@ -181,7 +191,25 @@ if [[ "${MULTIARCH:-}" == "true" ]]; then
   DOCKER_BUILDKIT=1 docker buildx build --platform "$LOCAL_PLATFORM" -f "$DOCKERFILE" -t "$IMAGE_REF" ${NO_CACHE:+--no-cache} --load "$BUILD_CONTEXT"
   fi
 else
-  DOCKER_BUILDKIT=1 docker build "${BUILD_ARGS[@]}" "$BUILD_CONTEXT"
+  # If the user requested a Google Cloud specific build, avoid performing a
+  # native/local build that could produce macOS wheels when running on macOS.
+  # Instead, force a Linux build using docker buildx with explicit platform
+  # linux/amd64 so the produced wheels are suitable for GCP runtime.
+  if [[ "$GCP_ONLY" == true ]]; then
+    echo "GCP-only build requested; forcing linux/amd64 build via docker buildx to avoid local macOS artifacts"
+    # Ensure a buildx builder exists and is bootstrapped
+    docker buildx inspect gcp-builder >/dev/null 2>&1 || docker buildx create --name gcp-builder --use
+    docker buildx inspect --bootstrap
+
+    if [[ "$PUSH" == true ]]; then
+      DOCKER_BUILDKIT=1 docker buildx build --platform linux/amd64 -f "$DOCKERFILE" -t "$IMAGE_REF" ${NO_CACHE:+--no-cache} --push "$BUILD_CONTEXT"
+    else
+      # --load will load the single-platform image into the local daemon
+      DOCKER_BUILDKIT=1 docker buildx build --platform linux/amd64 -f "$DOCKERFILE" -t "$IMAGE_REF" ${NO_CACHE:+--no-cache} --load "$BUILD_CONTEXT"
+    fi
+  else
+    DOCKER_BUILDKIT=1 docker build "${BUILD_ARGS[@]}" "$BUILD_CONTEXT"
+  fi
 fi
 
 

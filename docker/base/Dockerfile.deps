@@ -20,8 +20,7 @@ COPY requirements/ requirements/
 
 # Prebuild wheels into /wheels
 RUN mkdir -p /wheels \
-    && pip wheel --no-cache-dir --wheel-dir=/wheels -r requirements/requirements-cpu.txt \
-    && pip wheel --no-cache-dir --wheel-dir=/wheels -r requirements/requirements-gpu.txt
+    && pip wheel --no-cache-dir --wheel-dir=/wheels -r requirements/requirements-gpu.txt -c requirements/constraints-base-skip.txt
 
 # Validate wheels directory is non-empty
 RUN test -d /wheels && test "$(ls -A /wheels)" || (echo "❌ No wheels were built!" && exit 1)

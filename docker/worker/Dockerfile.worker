@@ -3,11 +3,9 @@
 # Aligned with existing LaxAI Dockerfile patterns
 
 ARG BASE_IMAGE=pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
-ARG DEPS_IMAGE=fmousinho/laxai-deps:latest
 ARG GOOGLE_CLOUD_PROJECT=""
 ARG ENTRY_POINT="python src/cloud/worker.py"
 
-FROM ${DEPS_IMAGE} AS deps
 
 FROM ${BASE_IMAGE}
 
@@ -24,8 +22,7 @@ ENV MAX_CONCURRENT_JOBS="1"
 
 WORKDIR /app
 
-# Copy prebuilt wheels and requirements
-COPY --from=deps /wheels /wheels
+# Copy requirements files and install directly in this image
 ARG REQS=requirements-gpu.txt
 COPY requirements/ requirements/
 
@@ -42,17 +39,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Strict: only install from /wheels, fail if not present
-RUN test -d /wheels && test "$(ls -A /wheels)" \
-    && pip install --no-cache-dir --find-links /wheels -r requirements/${REQS}
+# Install project requirements directly (use the chosen requirements file)
+RUN python -m pip install --upgrade pip \
+ && python -m pip install --no-cache-dir "transformers[torch] @ git+https://github.com/huggingface/transformers.git@main" \
+ && python -m pip install --no-cache-dir -r requirements/${REQS}
 
 # Copy source code
 COPY documentation /app/documentation
 COPY config.toml /app/
 COPY pyproject.toml .
 COPY README.md .
-COPY src/config/gcs_structure.yaml /app/src/config/gcs_structure.yaml
+COPY src/ app/src/
 
+RUN python -m pip install --no-cache-dir . --no-deps
 
 RUN mkdir -p /tmp/models /tmp/artifacts
 
