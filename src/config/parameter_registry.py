@@ -112,6 +112,10 @@ class ParameterRegistry:
             from config.all_config import training_config as config_obj
         elif config_path_parts[0] == "model_config":
             from config.all_config import model_config as config_obj
+        elif config_path_parts[0] == "evaluator_config":
+            from config.all_config import evaluator_config as config_obj
+        elif config_path_parts[0] == "wandb_config":
+            from config.all_config import wandb_config as config_obj
         else:
             raise ValueError(f"Unknown config object: {config_path_parts[0]}")
         
@@ -438,7 +442,7 @@ class ParameterRegistry:
                 name="wandb_project",
                 type=ParameterType.STR,
                 description="WandB project name",
-                config_path="training_config.wandb_project"
+                config_path="wandb_config.project"
             )
         ]
         
@@ -484,7 +488,7 @@ class ParameterRegistry:
                 name="model_class",
                 type=ParameterType.STR,
                 description="The name of the model class",
-                config_path="model_config.model_class"
+                config_path="model_config.model_class_str"
             )
         ]
 
@@ -493,19 +497,19 @@ class ParameterRegistry:
                 name="number_of_workers",
                 type=ParameterType.INT,
                 description="Number of workers for DataLoader",
-                config_path="model_config.number_of_workers"
+                config_path="evaluator_config.number_of_workers"
             ),
             ParameterDefinition(
                 name="emb_batch_size",
                 type=ParameterType.INT,
                 description="Batch size for embedding generation",
-                config_path="model_config.emb_batch_size"
+                config_path="evaluator_config.emb_batch_size"
             ),
             ParameterDefinition(
                 name="prefetch_factor",
                 type=ParameterType.INT,
                 description="Number of batches to prefetch for DataLoader",
-                config_path="model_config.prefetch_factor"
+                config_path="evaluator_config.prefetch_factor"
             )
         ]
 
