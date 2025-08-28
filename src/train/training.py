@@ -396,8 +396,15 @@ class Training:
                 # environments where CUDA availability may differ between
                 # processes.
                 self.model.to(self.device)
+                # Ensure optimizer state tensors live on the same device as
+                # model parameters. Optimizer state (exp_avg, exp_avg_sq, etc.)
+                # may be created while parameters were on CPU and then the
+                # model moved to GPU; moving the optimizer state avoids the
+                # "Expected all tensors to be on the same device" runtime
+                # error during optimizer.step.
+                self._move_optimizer_state_to_device(self.device)
             except Exception:
-                logger.warning("Failed to move model to device; proceeding and will attempt again if needed")
+                logger.warning("Failed to move model or optimizer state to device; proceeding and will attempt again if needed")
 
             self.model.train()
             running_loss = 0.0
@@ -665,6 +672,17 @@ class Training:
             
             if start_epoch > 1:
                 logger.info(f"✅ Resumed training from checkpoint at epoch {start_epoch}")
+                # Ensure model and optimizer state are on the configured device
+                try:
+                    self.model.to(self.device)
+                    # Move optimizer state tensors (if any) to device to avoid
+                    # runtime errors during optimizer.step caused by mixed devices.
+                    try:
+                        self._move_optimizer_state_to_device(self.device)
+                    except Exception:
+                        logger.debug("Could not move optimizer state to device after resuming checkpoint")
+                except Exception as e:
+                    logger.warning(f"Failed to move resumed model to device {self.device}: {e}")
                 # Check if training is already completed
                 remaining_epochs = max(0, self.num_epochs - (start_epoch - 1))
                 if remaining_epochs == 0:
@@ -751,3 +769,24 @@ class Training:
             'lr_scheduler_factor': self.lr_scheduler_factor,
             'device': str(self.device),
         }
+
+    def _move_optimizer_state_to_device(self, device: torch.device):
+        """Move all optimizer state tensors to the target device.
+
+        Some optimizers allocate state tensors (exp_avg, exp_avg_sq) on creation.
+        If the model was created on CPU and later moved to GPU, these state
+        tensors remain on CPU and will cause runtime errors during optimizer.step.
+        This helper moves them to the desired device.
+        """
+        if self.optimizer is None:
+            return
+        try:
+            for param_group in self.optimizer.param_groups:
+                for p in param_group.get('params', []):
+                    if p in self.optimizer.state:
+                        state = self.optimizer.state[p]
+                        for k, v in list(state.items()):
+                            if isinstance(v, torch.Tensor):
+                                state[k] = v.to(device)
+        except Exception:
+            logger.debug("Failed to move some optimizer state tensors to device; they may be created lazily later")
