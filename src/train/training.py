@@ -385,6 +385,20 @@ class Training:
             # ========================================================================
             # Training Phase
             # ========================================================================
+            # Ensure the model is on the configured device before any inputs are
+            # moved there. Some models (lazy heads, registry-loaded models, or
+            # inadvertent CPU-only loads) may not have all parameters on the
+            # expected device which causes errors like:
+            # "Input type (torch.cuda.FloatTensor) and weight type (torch.FloatTensor) should be the same"
+            try:
+                # Move model to device unconditionally to be safe. This is cheap
+                # relative to training and avoids subtle mismatches in cloud
+                # environments where CUDA availability may differ between
+                # processes.
+                self.model.to(self.device)
+            except Exception:
+                logger.warning("Failed to move model to device; proceeding and will attempt again if needed")
+
             self.model.train()
             running_loss = 0.0
             ttl_batches = len(self.dataloader)
