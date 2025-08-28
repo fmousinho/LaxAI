@@ -258,7 +258,7 @@ pi-heif==1.1.0
     # via
     #   -r requirements/requirements-base.txt
     #   roboflow
-pillow==11.0.0
+pillow==11.1.0
     # via
     #   -r requirements/requirements-base.txt
     #   matplotlib
