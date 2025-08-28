@@ -39,9 +39,20 @@ COPY --from=deps /wheels /wheels
 ARG REQS=requirements-gpu.txt
 COPY requirements/ requirements/
 
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-pip \
     git \
+    wget \
+    curl \
+    unzip \
+    libglib2.0-0 \
+    libsm6 \
+    libxrender1 \
+    libxext6 \
+    libgl1 \
     && rm -rf /var/lib/apt/lists/*
+
 
 RUN if [ -d /wheels ] && [ "$(ls -A /wheels)" ]; then \
             echo "Using local wheel cache at /wheels"; \
@@ -58,8 +69,8 @@ COPY src/ src/
 COPY pyproject.toml .
 COPY README.md .
 
-# Install the package in development mode
-RUN pip install -e .
+RUN python -m pip install --no-cache-dir /tmp/wheels/*.whl; \
+    rm -rf /tmp/wheels
 
 # Create directory for model outputs
 RUN mkdir -p /tmp/models /tmp/artifacts

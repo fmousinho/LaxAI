@@ -8,22 +8,15 @@ FROM ${BASE_PYTHON_IMAGE} AS builder
 ARG REQUIREMENTS_FILE
 
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3-pip \
-    git \
-    wget \
-    curl \
-    unzip \
-    libglib2.0-0 \
-    libsm6 \
-    libxrender1 \
-    libxext6 \
-    libgl1 \
-    && rm -rf /var/lib/apt/lists/*
-
 # Copy the whole requirements directory so '-r' references work
 WORKDIR /src
 COPY requirements/ ./requirements/
+
+
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    && rm -rf /var/lib/apt/lists/*
 
 # Build wheels for the selected requirements file
 RUN --mount=type=cache,target=/root/.cache/pip set -eux \
