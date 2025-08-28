@@ -48,6 +48,8 @@ class ParameterRegistry:
         self.parameters: Dict[str, ParameterDefinition] = {}
         self.training_parameters: Dict[str, ParameterDefinition] = {}
         self.model_parameters: Dict[str, ParameterDefinition] = {}
+        # Container for evaluation-specific parameters (populated by register_eval_param)
+        self.eval_parameters: Dict[str, ParameterDefinition] = {}
         self._register_default_parameters()
     
     def register(self, param: ParameterDefinition):
@@ -63,7 +65,12 @@ class ParameterRegistry:
         """Register a model parameter"""
         self.parameters[param.name] = param
         self.model_parameters[param.name] = param
-    
+
+    def register_eval_param(self, param: ParameterDefinition):
+        """Register an evaluation parameter"""
+        self.parameters[param.name] = param
+        self.eval_parameters[param.name] = param
+
     def get_training_parameters(self) -> Dict[str, ParameterDefinition]:
         """Get only training parameters"""
         return self.training_parameters.copy()
