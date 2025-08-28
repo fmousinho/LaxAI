@@ -7,11 +7,8 @@ ARG DEPS_IMAGE=fmousinho/laxai-deps:latest
 ARG GOOGLE_CLOUD_PROJECT=""
 ARG ENTRY_POINT="python src/cloud/worker.py"
 
-
-# Use the same dependency approach as main Dockerfile
 FROM ${DEPS_IMAGE} AS deps
 
-# Main worker image with GPU support
 FROM ${BASE_IMAGE}
 
 # Set environment variables
@@ -25,20 +22,12 @@ ENV FIRESTORE_ENABLED="true"
 ENV WORKER_TIMEOUT="3600"
 ENV MAX_CONCURRENT_JOBS="1"
 
-
-# Set working directory
 WORKDIR /app
 
-# Copy wheels from deps image (if available). Include the directory so
-# downstream builds can rely on /wheels being present in the deps image.
-# NOTE: some older deps images may not expose /wheels at runtime. Keep a
-# defensive fallback during pip install so builds still work.
+# Copy prebuilt wheels and requirements
 COPY --from=deps /wheels /wheels
-
-# Copy requirements and install (prefer /wheels if present at runtime)
 ARG REQS=requirements-gpu.txt
 COPY requirements/ requirements/
-
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
@@ -53,35 +42,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
-
-RUN if [ -d /wheels ] && [ "$(ls -A /wheels)" ]; then \
-            echo "Using local wheel cache at /wheels"; \
-            pip install --no-cache-dir --find-links /wheels -r requirements/${REQS}; \
-        else \
-            echo "/wheels not present or empty, installing from PyPI"; \
-            pip install --no-cache-dir -r requirements/${REQS}; \
-        fi
+# Strict: only install from /wheels, fail if not present
+RUN test -d /wheels && test "$(ls -A /wheels)" \
+    && pip install --no-cache-dir --find-links /wheels -r requirements/${REQS}
 
 # Copy source code
 COPY documentation /app/documentation
 COPY config.toml /app/
-COPY src/ src/
 COPY pyproject.toml .
 COPY README.md .
+COPY src/config/gcs_structure.yaml /app/src/config/gcs_structure.yaml
 
-# Install any wheels that may have been copied into /tmp/wheels by the deps image.
-# Guard the pip invocation so the build doesn't fail when the directory is missing
-# or empty (wildcard would otherwise be passed literally or cause pip errors).
-RUN if [ -d /tmp/wheels ] && [ "$(ls -A /tmp/wheels 2>/dev/null)" ]; then \
-        echo "Installing wheels from /tmp/wheels"; \
-        python -m pip install --no-cache-dir /tmp/wheels/*.whl; \
-    else \
-        echo "/tmp/wheels not present or empty; skipping wheel install"; \
-    fi; \
-    rm -rf /tmp/wheels
 
-# Create directory for model outputs
 RUN mkdir -p /tmp/models /tmp/artifacts
 
-# Set the entrypoint
 CMD ["sh", "-c", "exec $ENTRY_POINT"]

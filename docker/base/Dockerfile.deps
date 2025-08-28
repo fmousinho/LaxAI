@@ -1,57 +1,31 @@
-# syntax=docker/dockerfile:1.4
-# Minimal dependency image: build wheels for a chosen requirements file
+# Base deps image that builds wheels for GPU worker + other services
 
-ARG REQUIREMENTS_FILE=requirements/requirements-gpu.txt
-ARG BASE_PYTHON_IMAGE=pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
+ARG BASE_IMAGE=python:3.12-slim
+FROM ${BASE_IMAGE} as builder
 
-FROM ${BASE_PYTHON_IMAGE} AS builder
-ARG REQUIREMENTS_FILE
+WORKDIR /build
 
-
-# Copy the whole requirements directory so '-r' references work
-WORKDIR /src
-COPY requirements/ ./requirements/
-
+# Install build essentials
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    g++ \
     git \
+    wget \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Build wheels for the selected requirements file
-RUN --mount=type=cache,target=/root/.cache/pip set -eux \
-  && python -m pip install --upgrade pip wheel setuptools \
-  && mkdir -p /wheels /tmp/reqsdir \
-  && REQ_BASENAME="$(basename "$REQUIREMENTS_FILE")" \
-  && if [ -f "requirements/$REQ_BASENAME" ]; then \
-       cp requirements/*.txt /tmp/reqsdir/; \
-       (cd /tmp/reqsdir && python -m pip wheel -r "$REQ_BASENAME" --wheel-dir /wheels); \
-     else \
-       echo "ERROR: requirements/$REQ_BASENAME not found" >&2; exit 1; \
-     fi \
-  && ls -lah /wheels || true
+# Copy all requirements
+COPY requirements/ requirements/
 
-FROM ${BASE_PYTHON_IMAGE} AS runtime
-ARG REQUIREMENTS_FILE
-WORKDIR /app
+# Prebuild wheels into /wheels
+RUN mkdir -p /wheels \
+    && pip wheel --no-cache-dir --wheel-dir=/wheels -r requirements/requirements-cpu.txt \
+    && pip wheel --no-cache-dir --wheel-dir=/wheels -r requirements/requirements-gpu.txt
 
-# Copy built wheels and requirements
+# Validate wheels directory is non-empty
+RUN test -d /wheels && test "$(ls -A /wheels)" || (echo "❌ No wheels were built!" && exit 1)
+
+# Final stage: deps image with only wheels
+FROM scratch as deps
 COPY --from=builder /wheels /wheels
-COPY --from=builder /tmp/reqsdir /tmp/requirements
-
-RUN --mount=type=cache,target=/root/.cache/pip set -eux \
-  && apt-get update \
-  && apt-get install -y -o APT::Install-Recommends=false --no-install-recommends ca-certificates git libgl1-mesa-glx libglib2.0-0 \
-  && rm -rf /var/lib/apt/lists/* \
-  && python -m pip install --upgrade pip setuptools wheel \
-  && REQ_BASENAME="$(basename "$REQUIREMENTS_FILE")" \
-  && if [ -f /tmp/requirements/"$REQ_BASENAME" ]; then \
-       python -m pip install --no-deps --find-links /wheels -r /tmp/requirements/"$REQ_BASENAME"; \
-     else \
-       echo "No $REQ_BASENAME found in /tmp/requirements; skipping runtime install"; \
-     fi \
-  && rm -rf /tmp/requirements
-
-LABEL org.opencontainers.image.title="laxai-deps" \
-      org.opencontainers.image.description="Minimal dependency-only image for LaxAI" \
-      org.opencontainers.image.licenses=MIT
-
-CMD ["python","-c","print('Deps image ready')"]
