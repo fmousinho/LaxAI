@@ -6,9 +6,23 @@ ARG BASE_PYTHON_IMAGE=pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 
 FROM ${BASE_PYTHON_IMAGE} AS builder
 ARG REQUIREMENTS_FILE
-WORKDIR /src
+
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-pip \
+    git \
+    wget \
+    curl \
+    unzip \
+    libglib2.0-0 \
+    libsm6 \
+    libxrender1 \
+    libxext6 \
+    libgl1 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy the whole requirements directory so '-r' references work
+WORKDIR /src
 COPY requirements/ ./requirements/
 
 # Build wheels for the selected requirements file
