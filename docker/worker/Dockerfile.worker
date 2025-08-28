@@ -49,7 +49,8 @@ COPY documentation /app/documentation
 COPY config.toml /app/
 COPY pyproject.toml .
 COPY README.md .
-COPY src/ app/src/
+# Copy source into /app/src so pip can find the package when building from /app
+COPY src/ src/
 
 RUN python -m pip install --no-cache-dir . --no-deps
 
