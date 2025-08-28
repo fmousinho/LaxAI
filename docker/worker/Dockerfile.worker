@@ -69,7 +69,15 @@ COPY src/ src/
 COPY pyproject.toml .
 COPY README.md .
 
-RUN python -m pip install --no-cache-dir /tmp/wheels/*.whl; \
+# Install any wheels that may have been copied into /tmp/wheels by the deps image.
+# Guard the pip invocation so the build doesn't fail when the directory is missing
+# or empty (wildcard would otherwise be passed literally or cause pip errors).
+RUN if [ -d /tmp/wheels ] && [ "$(ls -A /tmp/wheels 2>/dev/null)" ]; then \
+        echo "Installing wheels from /tmp/wheels"; \
+        python -m pip install --no-cache-dir /tmp/wheels/*.whl; \
+    else \
+        echo "/tmp/wheels not present or empty; skipping wheel install"; \
+    fi; \
     rm -rf /tmp/wheels
 
 # Create directory for model outputs
