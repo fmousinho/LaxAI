@@ -358,7 +358,7 @@ class TrainPipeline(Pipeline):
             
             # Run comprehensive evaluation
             logger.info("Running comprehensive evaluation suite...")
-            evaluation_results = evaluator.evaluate_comprehensive(validation_dataset)
+            evaluation_results = evaluator.evaluate_comprehensive(validation_dataset, **self.training_kwargs)
             
             # Generate human-readable report
             evaluation_report = evaluator.generate_evaluation_report(evaluation_results)

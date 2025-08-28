@@ -39,7 +39,8 @@ def train(tenant_id: str,
           training_kwargs: Optional[dict] = None,
           model_kwargs: Optional[dict] = None,
           pipeline_name: Optional[str] = "default",
-          n_datasets_to_use: Optional[int] = None):
+          n_datasets_to_use: Optional[int] = None,
+          eval_kwargs: Optional[dict] = None):
     """
     Main function to orchestrate the data prep and training workflows.
 
@@ -53,6 +54,7 @@ def train(tenant_id: str,
         training_kwargs: Dictionary of training parameters to pass to TrainPipeline.
         model_kwargs: Dictionary of model parameters to pass to model constructor.
         pipeline_name: Unique name for the pipeline (used for cancellation).
+        eval_kwargs: Dictionary of evaluation parameters to pass to evaluation pipeline.
     """
     if wandb_tags is None:
         wandb_tags = []
@@ -60,7 +62,9 @@ def train(tenant_id: str,
         training_kwargs = {}
     if model_kwargs is None:
         model_kwargs = {}
-        
+    if eval_kwargs is None:
+        eval_kwargs = {}
+
     logger.info(f"--- Starting End-to-End Workflow for Tenant: {tenant_id} ---")
     logger.info(f"Training configuration: {training_kwargs}")
     logger.info(f"Model configuration: {model_kwargs}")
@@ -68,7 +72,7 @@ def train(tenant_id: str,
     # 1. Find all videos in the raw directory
     try:
         # Combine training_kwargs and model_kwargs for TrainPipeline
-        all_kwargs = {**training_kwargs, **model_kwargs}
+        all_kwargs = {**training_kwargs, **model_kwargs, **eval_kwargs}
 
         # Prevent duplicate pipeline_name if callers included it in
         # training_kwargs (tests sometimes pass pipeline_name there).

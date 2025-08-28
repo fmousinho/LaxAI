@@ -73,6 +73,9 @@ class Training:
         
         logger.info(f"Training configured with multithreading={'enabled' if enable_multithreading else 'disabled'}, workers={self.num_workers}")
 
+        # Store kwargs for later use (e.g., passing eval_kwargs to evaluation)
+        self.kwargs = kwargs
+
         # Initialize all registered parameters using the centralized registry
         for param_name in parameter_registry.parameters:
             param_def = parameter_registry.parameters[param_name]
@@ -586,7 +589,7 @@ class Training:
 
         # Run the comprehensive evaluation (this also saves results to disk)
         try:
-            results = evaluator.evaluate_comprehensive(dataset)
+            results = evaluator.evaluate_comprehensive(dataset, **self.kwargs)
         except Exception as e:
             logger.warning(f"Comprehensive evaluation failed, falling back to local computation: {e}")
             results = {}

@@ -94,8 +94,9 @@ class TrainingConfig:
 class EvaluatorConfig:
     """Configuration for model evaluation parameters."""
     threshold: float = 0.7  # Starting similarity threshold for evaluation (adjusted during evaluation)
-    number_of_workers: int = 8 if sys.platform != "darwin" else 0  # Number of workers for DataLoader
-
+    number_of_workers: int = 0 if sys.platform != "darwin" else 0  # Number of workers for DataLoader
+    emb_batch_size: int = 32  # Batch size for embedding generation
+    prefetch_factor: int = 2  # Number of batches to prefetch for DataLoader
 
 @dataclass
 class DetectionConfig:

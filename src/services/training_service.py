@@ -119,6 +119,22 @@ def _convert_request_to_kwargs(request) -> Dict[str, Any]:
 			model_dict = {"value": mp}
 		kwargs["model_kwargs"] = model_dict
 
+	mp = getattr(request, 'eval_params', None)
+	if mp is not None:
+		if hasattr(mp, 'eval_dump'):
+			model_dict = mp.model_dump(exclude_none=True)
+		elif isinstance(mp, dict):
+			model_dict = mp
+		elif isinstance(mp, str):
+			try:
+				import json
+				model_dict = json.loads(mp)
+			except Exception:
+				model_dict = {"raw": mp}
+		else:
+			model_dict = {"value": mp}
+		kwargs["eval_kwargs"] = model_dict
+
 	# If callers accidentally included `n_datasets_to_use` inside the dynamic
 	# training kwargs, promote it to the top-level `n_datasets_to_use` unless a
 	# top-level value was explicitly provided. This prevents conflicting

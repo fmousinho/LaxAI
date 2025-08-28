@@ -476,7 +476,28 @@ class ParameterRegistry:
                 config_path="model_config.model_class"
             )
         ]
-        
+
+        eval_params = [
+            ParameterDefinition(
+                name="number_of_workers",
+                type=ParameterType.INT,
+                description="Number of workers for DataLoader",
+                config_path="model_config.number_of_workers"
+            ),
+            ParameterDefinition(
+                name="emb_batch_size",
+                type=ParameterType.INT,
+                description="Batch size for embedding generation",
+                config_path="model_config.emb_batch_size"
+            ),
+            ParameterDefinition(
+                name="prefetch_factor",
+                type=ParameterType.INT,
+                description="Number of batches to prefetch for DataLoader",
+                config_path="model_config.prefetch_factor"
+            )
+        ]
+
         # Register training parameters
         for param in training_params:
             self.register_training_param(param)
@@ -484,6 +505,9 @@ class ParameterRegistry:
         # Register model parameters
         for param in model_params:
             self.register_model_param(param)
+
+        for param in eval_params:
+            self.register_eval_param(param)
 
 # Global instance
 parameter_registry = ParameterRegistry()

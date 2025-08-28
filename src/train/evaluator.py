@@ -50,7 +50,7 @@ class ModelEvaluator:
         self.model.eval()
         self.stop_callback = stop_callback
 
-    def evaluate_comprehensive(self, dataset) -> Dict[str, Any]:
+    def evaluate_comprehensive(self, dataset, **eval_kwargs) -> Dict[str, Any]:
         """
         Run comprehensive evaluation including all metrics.
         
@@ -67,7 +67,7 @@ class ModelEvaluator:
             raise ValueError("dataset is required for evaluation")
         
         logger.info("Creating embeddings")
-        embs, labels, image_paths  = self._generate_embeddings(dataset)
+        embs, labels, image_paths  = self._generate_embeddings(dataset, **eval_kwargs)
 
         # Decide whether to compute full pairwise arrays (may be huge) or
         # stream statistics/samples for large datasets. Streaming avoids
@@ -155,7 +155,7 @@ class ModelEvaluator:
         return results 
     
 
-    def _generate_embeddings(self, dataset: LacrossePlayerDataset, batch_size: int = 32) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+    def _generate_embeddings(self, dataset: LacrossePlayerDataset, **eval_kwargs) -> Tuple[np.ndarray, np.ndarray, List[str]]:
         """
         Generate embeddings for all images in the dataset in batches.
 
@@ -170,7 +170,13 @@ class ModelEvaluator:
         """
         from torch.utils.data import DataLoader
 
+        batch_size = eval_kwargs.get("batch_size", evaluator_config.emb_batch_size)
+        num_workers = eval_kwargs.get("num_workers", evaluator_config.number_of_workers)
+        prefetch_factor = eval_kwargs.get("prefetch_factor", evaluator_config.prefetch_factor)
+
         logger.info(f"Generating embeddings for {len(dataset)} samples in batches of {batch_size}...")
+
+        logger.info(f"Using DataLoader with batch_size={batch_size}, num_workers={num_workers}, prefetch_factor={prefetch_factor}")
 
         # Ensure eval mode and no gradients
         self.model.eval()
@@ -179,12 +185,14 @@ class ModelEvaluator:
         all_paths = []
 
         # Wrap dataset in DataLoader for batching
+        # Use minimal workers and no pin_memory to reduce CPU memory usage
         loader = DataLoader(
             dataset,
             batch_size=batch_size,
             shuffle=False,
-            num_workers=evaluator_config.number_of_workers,       
-            pin_memory=True      # improves GPU transfer speed
+            num_workers=num_workers,       # Single-threaded to prevent memory explosion
+            pin_memory=False,    # Disable to save CPU memory
+            prefetch_factor=prefetch_factor
         )
 
         with torch.no_grad():
