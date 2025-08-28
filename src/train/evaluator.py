@@ -184,6 +184,10 @@ class ModelEvaluator:
         all_labels = []
         all_paths = []
 
+        if num_workers == 0:
+            prefetch_factor = None  # prefetch_factor should only be used with multiple workers
+
+
         # Wrap dataset in DataLoader for batching
         # Use minimal workers and no pin_memory to reduce CPU memory usage
         loader = DataLoader(
