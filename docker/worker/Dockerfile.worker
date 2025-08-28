@@ -38,6 +38,11 @@ COPY --from=deps /wheels /wheels
 # Copy requirements and install (prefer /wheels if present at runtime)
 ARG REQS=requirements-gpu.txt
 COPY requirements/ requirements/
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN if [ -d /wheels ] && [ "$(ls -A /wheels)" ]; then \
             echo "Using local wheel cache at /wheels"; \
             pip install --no-cache-dir --find-links /wheels -r requirements/${REQS}; \
