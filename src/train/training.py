@@ -225,12 +225,16 @@ class Training:
                   If 'val', uses shuffle=False.
             
         """
-        # Configure DataLoader settings
+        # Configure DataLoader settings for optimal speed
+
+        prefetch_factor = self.kwargs.get('prefetch_factor', training_config.prefetch_factor) if self.num_workers > 0 else None
+
         dataloader_kwargs = {
             'num_workers': self.num_workers,
-            'pin_memory': torch.cuda.is_available(),
+            'pin_memory': torch.cuda.is_available() and self.num_workers > 0,  # Only pin memory with workers
             'persistent_workers': self.num_workers > 0,
-            'prefetch_factor': 2 if self.num_workers > 0 else None
+            'prefetch_factor': prefetch_factor,  # Increased prefetch for speed
+            'drop_last': True if type == 'train' else False  # Drop incomplete batches for consistent timing
         }
         
         # Add batch size and dataset-specific options
@@ -319,6 +323,12 @@ class Training:
                 min_lr=self.lr_scheduler_min_lr
             )
 
+            # Ensure optimizer state tensors are on the same device as model
+            try:
+                self._move_optimizer_state_to_device(self.device)
+            except Exception:
+                logger.debug("Could not move optimizer state to device during setup; will attempt later if needed")
+
             logger.info(f"Training model initialized with device: {self.device}")
             logger.info(f"Batch size: {self.batch_size}")
             logger.info(f"Number of epochs: {self.num_epochs}")
@@ -379,36 +389,20 @@ class Training:
         
 
         for epoch in range(start_epoch - 1, self.num_epochs):
-            
             # Check for cancellation before starting epoch
             if stop_callback and stop_callback():
                 logger.info(f"Training cancelled by stop_callback at epoch {epoch + 1}")
                 raise InterruptedError("Training cancelled by external request")
-            
+
             # ========================================================================
             # Training Phase
             # ========================================================================
-            # Ensure the model is on the configured device before any inputs are
-            # moved there. Some models (lazy heads, registry-loaded models, or
-            # inadvertent CPU-only loads) may not have all parameters on the
-            # expected device which causes errors like:
-            # "Input type (torch.cuda.FloatTensor) and weight type (torch.FloatTensor) should be the same"
-            try:
-                # Move model to device unconditionally to be safe. This is cheap
-                # relative to training and avoids subtle mismatches in cloud
-                # environments where CUDA availability may differ between
-                # processes.
-                self.model.to(self.device)
-                # Ensure optimizer state tensors live on the same device as
-                # model parameters. Optimizer state (exp_avg, exp_avg_sq, etc.)
-                # may be created while parameters were on CPU and then the
-                # model moved to GPU; moving the optimizer state avoids the
-                # "Expected all tensors to be on the same device" runtime
-                # error during optimizer.step.
-                self._move_optimizer_state_to_device(self.device)
-            except Exception:
-                logger.warning("Failed to move model or optimizer state to device; proceeding and will attempt again if needed")
-
+            # Model and optimizer should already be placed on the correct device
+            # during setup_model (or after checkpoint resumption). Repeatedly
+            # calling .to(device) each epoch can unintentionally create new
+            # parameter tensors and leave old tensors referenced by the
+            # optimizer state, causing cumulative memory growth. Avoid moving
+            # them here.
             self.model.train()
             running_loss = 0.0
             ttl_batches = len(self.dataloader)
@@ -424,26 +418,40 @@ class Training:
                 
             for i, (anchor, positive, negative, _) in enumerate(self.dataloader):
 
-                # Check for cancellation every few batches
+                # Check for cancellation
                 if stop_callback and stop_callback():
                     logger.info(f"Training cancelled by stop_callback at epoch {epoch + 1}, batch {i + 1}")
                     raise InterruptedError("Training cancelled by external request")
 
+                # Log progress
                 if (i + 1) % BATCHES_PER_LOG_MSG == 0:
                     logger.info(f"Training Batch {i+1}/{ttl_batches}")
 
-                anchor = anchor.to(self.device)
-                positive = positive.to(self.device)
-                negative = negative.to(self.device)
+                # Move tensors to device with non_blocking for async transfer
+                anchor = anchor.to(self.device, non_blocking=True)
+                positive = positive.to(self.device, non_blocking=True)
+                negative = negative.to(self.device, non_blocking=True)
 
+                # Clear gradients
                 self.optimizer.zero_grad()
+                
+                # Forward pass
                 emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative)  # pyright: ignore[reportCallIssue]
                 loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
 
+                # Backward and optimizer step
                 loss.backward()
                 self.optimizer.step()
 
+                # Extract scalar immediately and clear GPU tensors to free memory
                 running_loss += loss.item()
+                
+                # Explicitly delete tensors to help free GPU memory faster
+                del anchor, positive, negative, emb_anchor, emb_positive, emb_negative, loss
+                
+                # Clear GPU cache periodically
+                if torch.cuda.is_available() and (i + 1) % 50 == 0:
+                    torch.cuda.empty_cache()
 
             # Calculate and log training loss
             epoch_train_loss = running_loss / ttl_batches if ttl_batches > 0 else 0.0

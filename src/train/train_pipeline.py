@@ -282,13 +282,6 @@ class TrainPipeline(Pipeline):
 
             training_info = training.get_training_info()
             
-            # Validate that the trained model is actually a PyTorch model
-            import torch.nn
-            if not isinstance(trained_model, torch.nn.Module):
-                error_msg = f"Training returned invalid model type {type(trained_model)}: {trained_model}"
-                logger.error(error_msg)
-                return {"status": StepStatus.ERROR.value, "error": error_msg}
-            
             logger.info("✅ Model training completed successfully")
             logger.info(f"   Training device: {training_info['device']}")
             logger.info(f"   Model type: {type(trained_model)}")
