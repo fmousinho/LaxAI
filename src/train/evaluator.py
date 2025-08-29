@@ -49,6 +49,18 @@ class ModelEvaluator:
         self.threshold = threshold
         self.model.eval()
         self.stop_callback = stop_callback
+        
+        # Ensure model is on the correct device
+        current_device = next(self.model.parameters()).device if list(self.model.parameters()) else torch.device('cpu')
+        if str(current_device) != str(device):
+            logger.info(f"Moving evaluation model from {current_device} to {device}")
+            self.model = self.model.to(device)
+        
+        # Log memory usage after model setup
+        if PSUTIL_AVAILABLE:
+            process = psutil.Process()
+            memory_mb = process.memory_info().rss / 1024 / 1024
+            logger.info(f"Model loaded for evaluation - Memory: {memory_mb:.1f}MB")
 
     def evaluate_comprehensive(self, dataset, **eval_kwargs) -> Dict[str, Any]:
         """
@@ -870,3 +882,25 @@ class ModelEvaluator:
         report.append("\n" + "=" * 60)
         
         return "\n".join(report)
+    
+    def cleanup(self):
+        """
+        Clean up evaluation resources to free memory.
+        
+        Call this method after evaluation is complete to prevent memory leaks.
+        """
+        logger.info("Cleaning up evaluation resources")
+        
+        # Clear model reference
+        if hasattr(self, 'model'):
+            # Move model to CPU to free GPU memory
+            if torch.cuda.is_available() and str(self.model.device).startswith('cuda'):
+                self.model = self.model.cpu()
+                torch.cuda.empty_cache()
+            self.model = None
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+        
+        logger.info("Evaluation cleanup completed")

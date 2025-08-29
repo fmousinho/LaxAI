@@ -6,9 +6,14 @@ from src.train.evaluator import ModelEvaluator
 
 
 def make_dummy_evaluator():
-    # simple dummy model; not used by the tests that call internal methods directly
-    model = torch.nn.Identity()
+    # Create a simple model that has a device attribute
+    model = torch.nn.Sequential(
+        torch.nn.Linear(2, 2),
+        torch.nn.Identity()
+    )
     device = torch.device("cpu")
+    # Move model to device to ensure it has device attribute
+    model = model.to(device)
     return ModelEvaluator(model=model, device=device)
 
 

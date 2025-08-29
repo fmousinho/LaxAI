@@ -37,14 +37,14 @@ class ModelConfig:
     """Configuration for model dimensions and architecture."""
     input_height: int = 120
     input_width: int = 80
-    embedding_dim: int = 512  
+    embedding_dim: int = 384  
     dropout_rate: float = 0.2
     resnet_conv_kernel_size: int = 3
     resnet_conv_stride: int = 1
     resnet_conv_padding: int = 1
     resnet_conv_bias: bool = False  # Whether to use bias in the first conv
     enable_grass_mask: bool = False  
-    model_class_module: str = "train.siamesenet"  # Module where the model class is defined
+    model_class_module: str = "train.siamesenet_dino"  # Module where the model class is defined
     model_class_str: str = "SiameseNet"  # Name of the model class
 
     # ImageNet normalization values (for pretrained ResNet backbone)

@@ -1,7 +1,7 @@
 import os
+import gc
 import torch
 import logging
-import gc
 from typing import Optional, Any, Dict, Callable
 from torch.utils.data import DataLoader, Dataset
 import torch.nn as nn
@@ -9,12 +9,13 @@ import numpy as np
 from config.all_config import model_config, training_config, wandb_config
 from train.wandb_logger import wandb_logger
 from utils.gpu_memory import clear_gpu_memory, log_gpu_memory_stats, GPUMemoryContext
+from utils.cpu_memory import CPUMemoryMonitor, clear_cpu_memory, cpu_memory_context, log_comprehensive_memory_stats
+from utils.evaluation_memory import log_evaluation_memory_usage
 
 logger = logging.getLogger(__name__)
 
 EPOCHS_PER_VAL = 10
 BATCHES_PER_LOG_MSG = 10
-
 
 class Training:
     """
@@ -34,9 +35,9 @@ class Training:
     lr_scheduler_min_lr: float
     lr_scheduler_factor: float
     force_pretraining: bool
-    train_workers: int
+    num_workers: int
     prefetch_factor: int
-    dataloader_workers: int
+    default_workers: int
     margin_decay_rate: float
     margin_change_threshold: float
     early_stopping_patience: Optional[int]
@@ -76,11 +77,11 @@ class Training:
         if enable_multithreading:
             # Use default PyTorch multiprocessing with safe number of workers
             import multiprocessing as mp
-            self.train_workers = num_workers if num_workers is not None else min(mp.cpu_count(), 8)
+            self.num_workers = num_workers if num_workers is not None else min(mp.cpu_count(), 8)
         else:
-            self.train_workers = 0
+            self.num_workers = 0
         
-        logger.info(f"Training configured with multithreading={'enabled' if enable_multithreading else 'disabled'}, workers={self.train_workers}")
+        logger.info(f"Training configured with multithreading={'enabled' if enable_multithreading else 'disabled'}, workers={self.num_workers}")
 
         # Store kwargs for later use (e.g., passing eval_kwargs to evaluation)
         self.kwargs = kwargs
@@ -116,6 +117,7 @@ class Training:
         self.loss_fn: Optional[nn.Module] = None
         self.dataloader = None
         self.val_dataloader = None
+        self.cpu_monitor = CPUMemoryMonitor()
 
 
     def _load_model_from_wandb(self, model_class, model_name: str, alias: Optional[str], **kwargs):
@@ -236,12 +238,12 @@ class Training:
         """
         # Configure DataLoader settings for optimal speed
 
-        prefetch_factor = self.kwargs.get('prefetch_factor', training_config.prefetch_factor) if self.train_workers > 0 else None
+        prefetch_factor = self.kwargs.get('prefetch_factor', training_config.prefetch_factor) if self.num_workers > 0 else None
 
         dataloader_kwargs = {
-            'num_workers': self.train_workers,
-            'pin_memory': torch.cuda.is_available() and self.train_workers > 0,  # Only pin memory with workers
-            'persistent_workers': self.train_workers > 0,
+            'num_workers': self.num_workers,
+            'pin_memory': torch.cuda.is_available() and self.num_workers > 0,  # Only pin memory with workers
+            'persistent_workers': self.num_workers > 0,
             'prefetch_factor': prefetch_factor,  # Increased prefetch for speed
             'drop_last': True if type == 'train' else False  # Drop incomplete batches for consistent timing
         }
@@ -401,6 +403,7 @@ class Training:
         
         try:
             log_gpu_memory_stats("Training start")
+            self.cpu_monitor.log_memory_stats("Training start")
             
             for epoch in range(start_epoch - 1, self.num_epochs):
                 # Check for cancellation before starting epoch
@@ -409,6 +412,7 @@ class Training:
                     raise InterruptedError("Training cancelled by external request")
 
                 log_gpu_memory_stats(f"Epoch {epoch + 1} start")
+                self.cpu_monitor.log_memory_stats(f"Epoch {epoch + 1} start")
 
                 # ========================================================================
                 # Training Phase
@@ -422,10 +426,6 @@ class Training:
                 self.model.train()
                 running_loss = 0.0
                 ttl_batches = len(self.dataloader)
-                
-                # Debug logging for batch size verification
-                logger.info(f"Training setup: batch_size={self.batch_size}, dataset_size={len(self.dataloader.dataset) if hasattr(self.dataloader.dataset, '__len__') else 'unknown'}, ttl_batches={ttl_batches}")
-                logger.info(f"Expected batches calculation: {len(self.dataloader.dataset) // self.batch_size if hasattr(self.dataloader.dataset, '__len__') else 'unknown'} (with drop_last=True)")
 
                 # Update margin if decay rate is active (use actual epoch number)
                 new_margin = self.margin * (margin_decay_rate ** epoch)
@@ -472,9 +472,20 @@ class Training:
                     # Clear GPU cache periodically
                     if torch.cuda.is_available() and (i + 1) % 50 == 0:
                         torch.cuda.empty_cache()
+                        
+                    # Clear CPU memory periodically to prevent accumulation
+                    if (i + 1) % 100 == 0:
+                        clear_cpu_memory()
+                        self.cpu_monitor.log_memory_stats(f"Epoch {epoch + 1} Batch {i + 1}")
 
                 # Calculate and log training loss
                 epoch_train_loss = running_loss / ttl_batches if ttl_batches > 0 else 0.0
+                
+                # Memory cleanup after training phase
+                clear_cpu_memory()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                self.cpu_monitor.log_memory_stats(f"Epoch {epoch + 1} training complete")
 
                 # ========================================================================
                 # Validation Phase (if dataloader is provided)
@@ -493,10 +504,6 @@ class Training:
                     # 1. Calculate Validation Loss
                     running_val_loss = 0.0
                     ttl_batches = len(val_dataloader)
-                    
-                    # Debug logging for validation batch size verification
-                    logger.info(f"Validation setup: batch_size={self.batch_size}, val_dataset_size={len(val_dataloader.dataset) if hasattr(val_dataloader.dataset, '__len__') else 'unknown'}, val_ttl_batches={ttl_batches}")
-                    
                     with torch.no_grad(): # No need to compute gradients
                         for j, (anchor, positive, negative, _) in enumerate(val_dataloader):
                             anchor = anchor.to(self.device)
@@ -515,6 +522,12 @@ class Training:
 
                     # 2. Calculate Retrieval Metrics
                     reid_metrics = self._evaluate_reid_metrics(val_dataloader)
+                    
+                    # Memory cleanup after validation
+                    clear_cpu_memory()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    self.cpu_monitor.log_memory_stats(f"Epoch {epoch + 1} validation complete")
 
                 # ========================================================================
                 # Log and check for early stopping
@@ -595,8 +608,8 @@ class Training:
         except (RuntimeError, torch.cuda.OutOfMemoryError) as e:
             logger.error(f"Training failed with error: {e}")
             
-            # Clean up GPU memory on failure
-            logger.info("Cleaning up GPU memory after training failure...")
+            # Clean up both GPU and CPU memory on failure
+            logger.info("Cleaning up GPU and CPU memory after training failure...")
             
             # Clear all variables that might hold GPU tensors
             if 'anchor' in locals():
@@ -616,6 +629,8 @@ class Training:
             
             # Force cleanup
             clear_gpu_memory()
+            clear_cpu_memory(force=True)
+            self.cpu_monitor.log_memory_stats("After failure cleanup")
             
             # Re-raise the exception
             raise
@@ -628,7 +643,9 @@ class Training:
                 logger.error("CUDA Out of Memory Error detected!")
                 log_gpu_memory_stats("Before OOM cleanup")
                 clear_gpu_memory(force=True)
+                clear_cpu_memory(force=True)
                 log_gpu_memory_stats("After OOM cleanup")
+                self.cpu_monitor.log_memory_stats("After OOM cleanup")
                 logger.error("Suggestions to resolve OOM:")
                 logger.error("1. Reduce batch_size in your configuration")
                 logger.error("2. Use gradient accumulation to simulate larger batches")
@@ -636,9 +653,19 @@ class Training:
                 logger.error("4. Use a smaller model architecture")
             else:
                 clear_gpu_memory()
+                clear_cpu_memory()
             raise
 
         logger.info("Training completed successfully")
+        log_comprehensive_memory_stats("Training completion")
+        
+        # Optional: Move model to CPU to save GPU memory if evaluation will be on CPU
+        # Uncomment the following lines if you want to conserve GPU memory:
+        # if self.device.type == 'cuda' and torch.cuda.is_available():
+        #     logger.info("Moving trained model to CPU to conserve GPU memory")
+        #     self.model = self.model.cpu()
+        #     torch.cuda.empty_cache()
+        
         return self.model
 
 
@@ -663,14 +690,22 @@ class Training:
         # dataloader may be a DataLoader; evaluator expects a Dataset instance
         dataset = getattr(dataloader, 'dataset', dataloader)
 
+        # Create evaluator with memory management
         evaluator = ModelEvaluator(self.model, device=self.device)
 
-        # Run the comprehensive evaluation (this also saves results to disk)
+        # Log memory before evaluation
+        log_evaluation_memory_usage("Before validation evaluation", evaluator)
+
         try:
+            # Run the comprehensive evaluation (this also saves results to disk)
             results = evaluator.evaluate_comprehensive(dataset, **self.kwargs)
         except Exception as e:
             logger.warning(f"Comprehensive evaluation failed, falling back to local computation: {e}")
             results = {}
+        finally:
+            # Always cleanup evaluator to prevent memory leaks
+            evaluator.cleanup()
+            log_evaluation_memory_usage("After validation evaluation cleanup")
 
         # If evaluation succeeded, flatten all nested metrics into a single-level dict;
         # otherwise fall back to a local computation that produces the same metric groups.
@@ -871,3 +906,56 @@ class Training:
                                 state[k] = v.to(device)
         except Exception:
             logger.debug("Failed to move some optimizer state tensors to device; they may be created lazily later")
+
+    def cleanup_model(self):
+        """
+        Clean up the model and associated resources to free memory.
+        
+        This method should be called after evaluation is complete to prevent
+        memory leaks from accumulated model references.
+        """
+        if hasattr(self, 'model') and self.model is not None:
+            logger.info("Cleaning up training model and resources")
+            
+            # Clear model from GPU memory
+            if torch.cuda.is_available():
+                self.model = self.model.cpu()
+                torch.cuda.empty_cache()
+            
+            # Clear optimizer state
+            if hasattr(self, 'optimizer') and self.optimizer is not None:
+                # Clear optimizer state dict which can hold significant memory
+                self.optimizer.state.clear()
+                self.optimizer.param_groups.clear()
+            
+            # Clear loss function
+            if hasattr(self, 'loss_fn'):
+                self.loss_fn = None
+            
+            # Clear dataloaders
+            if hasattr(self, 'dataloader'):
+                self.dataloader = None
+            if hasattr(self, 'val_dataloader'):
+                self.val_dataloader = None
+            
+            # Force garbage collection
+            clear_cpu_memory()
+            
+            logger.info("Model cleanup completed")
+        
+    def get_model_for_evaluation(self):
+        """
+        Get the trained model for evaluation with memory management.
+        
+        Returns:
+            The trained model, moved to appropriate device for evaluation
+        """
+        if not hasattr(self, 'model') or self.model is None:
+            raise RuntimeError("No trained model available. Call train() first.")
+        
+        # Ensure model is on the correct device for evaluation
+        if str(self.model.device) != str(self.device):
+            logger.info(f"Moving model from {self.model.device} to {self.device} for evaluation")
+            self.model = self.model.to(self.device)
+        
+        return self.model
