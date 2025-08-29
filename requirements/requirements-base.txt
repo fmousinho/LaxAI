@@ -440,7 +440,7 @@ timm==1.0.19
     #   -r requirements/requirements-base.txt
     #   open-clip-torch
     #   rfdetr
-tokenizers==0.23
+tokenizers==0.22
     # via
     #   -r requirements/requirements-base.txt
     #   transformers
