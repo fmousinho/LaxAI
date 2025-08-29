@@ -1,6 +1,7 @@
 import os
 import torch
 import logging
+import gc
 from typing import Optional, Any, Dict, Callable
 from torch.utils.data import DataLoader, Dataset
 import torch.nn as nn
@@ -14,35 +15,6 @@ logger = logging.getLogger(__name__)
 EPOCHS_PER_VAL = 10
 BATCHES_PER_LOG_MSG = 10
 
-
-def clear_gpu_memory():
-    """
-    Clear GPU memory at program start or after crashes.
-    This helps recover from OOM situations where memory wasn't properly freed.
-    """
-    if torch.cuda.is_available():
-        logger.info("Clearing GPU memory...")
-        
-        # Clear Python garbage collection
-        gc.collect()
-        
-        # Clear PyTorch CUDA cache
-        torch.cuda.empty_cache()
-        
-        # Force synchronization to ensure operations complete
-        torch.cuda.synchronize()
-        
-        # Get memory info
-        allocated = torch.cuda.memory_allocated() / 1024**3  # Convert to GB
-        reserved = torch.cuda.memory_reserved() / 1024**3    # Convert to GB
-        
-        logger.info(f"GPU memory after cleanup - Allocated: {allocated:.2f}GB, Reserved: {reserved:.2f}GB")
-        
-        if allocated > 0.1:  # If more than 100MB still allocated
-            logger.warning(f"Warning: {allocated:.2f}GB still allocated after cleanup. "
-                          "This may indicate tensors from previous runs are still in memory.")
-    else:
-        logger.info("CUDA not available, skipping GPU memory cleanup")
 
 class Training:
     """
