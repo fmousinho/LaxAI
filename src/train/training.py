@@ -614,6 +614,16 @@ class Training:
                             raise
                         logger.warning(f"Failed to save checkpoint for epoch {epoch + 1}: {e}")
 
+                # Periodic monitoring of WandB resources (don't terminate processes)
+                if wandb_config.enabled:
+                    try:
+                        # Monitor WandB processes periodically
+                        process_count = wandb_logger._monitor_wandb_processes()
+                        if process_count > 3:  # Log if we have many processes
+                            logger.info(f"WandB has {process_count} background processes running - this is normal for long training sessions")
+                    except Exception as e:
+                        logger.debug(f"Failed to monitor WandB processes: {e}")
+
         except (RuntimeError, torch.cuda.OutOfMemoryError) as e:
             logger.error(f"Training failed with error: {e}")
             

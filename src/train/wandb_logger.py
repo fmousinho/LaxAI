@@ -6,6 +6,9 @@ from functools import wraps
 from typing import Dict, Any, Optional, List, Callable, Tuple
 import torch
 import re
+import psutil
+import signal
+import time
 
 from utils.env_secrets import setup_environment_secrets
 setup_environment_secrets()
@@ -87,6 +90,7 @@ class WandbLogger:
         # Use Any to avoid static analyzer complaints about wandb runtime types
         self.run: Any = None
         self.initialized = False
+        self.wandb_processes = []  # Track WandB background processes
 
         if not WANDB_AVAILABLE:
             self.enabled = False
@@ -121,26 +125,118 @@ class WandbLogger:
         safe_name = self._sanitize_artifact_name(artifact_name)
         return f"{wandb_config.team}/{wandb_config.project}/{safe_name}:{version}"
 
-    def _sanitize_artifact_name(self, name: Optional[str]) -> str:
+    def _monitor_wandb_processes(self) -> int:
         """
-        Sanitize artifact/model/checkpoint names so they only contain
-        allowed characters for wandb artifact names: alphanumeric, dash,
-        underscore and dot.
+        Monitor and return the count of WandB-related background processes.
+        
+        Returns:
+            Number of WandB background processes found
+        """
+        try:
+            current_process = psutil.Process()
+            all_processes = []
+            
+            # Get all child processes
+            try:
+                all_processes = current_process.children(recursive=True)
+            except psutil.NoSuchProcess:
+                pass
+            
+            # Also check all processes for wandb-related ones
+            wandb_procs = []
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                try:
+                    if proc.info['name'] and 'wandb' in proc.info['name'].lower():
+                        wandb_procs.append(proc)
+                    elif proc.info['cmdline'] and any('wandb' in str(cmd).lower() for cmd in proc.info['cmdline']):
+                        wandb_procs.append(proc)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            
+            # Update our tracking list
+            self.wandb_processes = [p for p in wandb_procs if p.is_running()]
+            
+            process_count = len(self.wandb_processes)
+            if process_count > 0:
+                logger.debug(f"Found {process_count} WandB background processes")
+            
+            return process_count
+            
+        except Exception as e:
+            logger.debug(f"Failed to monitor WandB processes: {e}")
+            return 0
 
-        Any disallowed character is replaced with an underscore. If the
-        resulting name is empty, return a safe default.
+    def _cleanup_wandb_processes(self, force: bool = False) -> int:
         """
-        if not name:
-            return "artifact"
-        # Replace any sequence of invalid chars with a single underscore
-        safe = re.sub(r'[^A-Za-z0-9._-]+', '_', str(name))
-        # Trim leading/trailing underscores or dots
-        safe = safe.strip('_.-')
-        if not safe:
-            return "artifact"
-        if safe != name:
-            logger.info(f"Sanitized artifact name '{name}' -> '{safe}'")
-        return safe
+        Monitor WandB processes for issues but DO NOT terminate them.
+        WandB processes should run for the entire training session.
+
+        Args:
+            force: If True, would terminate processes (but we never do this for WandB)
+
+        Returns:
+            Number of problematic processes found (but not terminated)
+        """
+        try:
+            process_count = self._monitor_wandb_processes()
+            if process_count == 0:
+                return 0
+
+            problematic_count = 0
+
+            for proc in self.wandb_processes[:]:  # Copy list to avoid modification during iteration
+                try:
+                    # Only check for truly problematic processes (zombies)
+                    # We DO NOT terminate WandB processes as they need to run for the entire session
+                    if proc.status() == psutil.STATUS_ZOMBIE:
+                        logger.warning(f"Found zombie WandB process {proc.pid} ({proc.name()}) - this should be cleaned up by WandB")
+                        problematic_count += 1
+                    elif self._is_process_old(proc):
+                        logger.debug(f"WandB process {proc.pid} has been running for a while - this is normal")
+
+                except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                    logger.debug(f"Could not check WandB process {proc.pid}: {e}")
+                    # Remove from our list if process no longer exists
+                    try:
+                        self.wandb_processes.remove(proc)
+                    except ValueError:
+                        pass
+                except Exception as e:
+                    logger.debug(f"Error checking WandB process {proc.pid}: {e}")
+
+            if problematic_count > 0:
+                logger.warning(f"Found {problematic_count} problematic WandB processes (zombies) - these should be handled by WandB's cleanup")
+
+            return problematic_count
+
+        except Exception as e:
+            logger.debug(f"Failed to monitor WandB processes: {e}")
+            return 0
+
+    def periodic_cleanup(self) -> int:
+        """
+        Perform periodic cleanup of WandB resources and processes.
+        This should be called periodically during training to prevent accumulation.
+        
+        Returns:
+            Number of processes cleaned up
+        """
+        if not self.enabled:
+            return 0
+            
+        try:
+            # Clean up WandB background processes
+            cleaned = self._cleanup_wandb_processes(force=False)
+            
+            # Force garbage collection
+            import gc
+            gc.collect()
+            
+            return cleaned
+            
+        except Exception as e:
+            logger.debug(f"Failed to perform periodic cleanup: {e}")
+            return 0
     
     @requires_wandb_enabled
     @safe_wandb_operation(default_return=False)
@@ -294,7 +390,16 @@ class WandbLogger:
             metrics: Dictionary of metrics to log
             step: Optional step number
         """
+        # Monitor WandB processes before logging
+        process_count_before = self._monitor_wandb_processes()
+        
         self.run.log(metrics, step=step)
+        
+        # Monitor WandB processes after logging (don't terminate them)
+        if process_count_before > 3:  # Only log if we had many processes
+            current_count = self._monitor_wandb_processes()
+            if current_count > process_count_before:
+                logger.debug(f"WandB spawned additional processes during metrics logging: {current_count} total")
     
     @requires_wandb_initialized
     @safe_wandb_operation()
@@ -302,6 +407,14 @@ class WandbLogger:
         """Finish the current wandb run."""
         if hasattr(self, 'run') and self.run:
             self.run.finish()
+
+        # Monitor WandB processes before finishing (don't terminate them)
+        logger.info("Monitoring WandB background processes before finish...")
+        problematic_processes = self._cleanup_wandb_processes(force=False)  # Just monitor, don't terminate
+        if problematic_processes > 0:
+            logger.warning(f"Found {problematic_processes} problematic WandB processes - WandB should handle cleanup")
+        else:
+            logger.info("WandB processes appear healthy")
 
         # Clean up WandB API object to prevent memory accumulation
         if hasattr(self, 'wandb_api') and self.wandb_api:
@@ -644,6 +757,9 @@ class WandbLogger:
         # Monitor memory before checkpoint saving
         process = psutil.Process(os.getpid())
         memory_before = process.memory_info().rss / 1024 / 1024  # MB
+        
+        # Monitor WandB processes before checkpoint saving
+        wandb_process_count_before = self._monitor_wandb_processes()
 
         # Create temporary checkpoint file
         with tempfile.NamedTemporaryFile(suffix=f'_epoch_{epoch}.pth', delete=False) as tmp_file:
@@ -697,6 +813,11 @@ class WandbLogger:
         if abs(memory_delta) > 50:  # Log if memory change is significant (>50MB)
             logger.warning(f"Checkpoint save memory change: {memory_delta:.1f}MB (before: {memory_before:.1f}MB, after: {memory_after:.1f}MB)")
 
+        # Monitor WandB processes after checkpoint operations (don't terminate them)
+        wandb_process_count_after = self._monitor_wandb_processes()
+        if wandb_process_count_after > wandb_process_count_before + 2:  # If we gained 2+ processes
+            logger.info(f"WandB spawned {wandb_process_count_after - wandb_process_count_before} additional processes during checkpoint save - this is normal for artifact uploads")
+
         logger.info(f"Saved model checkpoint to wandb for epoch {epoch}")
         # Clean up previous checkpoint artifacts (keep only latest) using sanitized name
         try:
@@ -721,6 +842,9 @@ class WandbLogger:
         # Monitor memory before cleanup
         process = psutil.Process(os.getpid())
         memory_before = process.memory_info().rss / 1024 / 1024  # MB
+        
+        # Monitor WandB processes before cleanup
+        wandb_process_count_before = self._monitor_wandb_processes()
             
         # List all versions of this artifact
         try:
@@ -757,6 +881,13 @@ class WandbLogger:
 
         except Exception as e:
             logger.warning(f"Failed to access checkpoint artifacts: {e}")
+        
+        # Clean up any WandB processes that may have been spawned during cleanup
+        wandb_process_count_after = self._monitor_wandb_processes()
+        if wandb_process_count_after > wandb_process_count_before + 1:
+            cleaned = self._cleanup_wandb_processes(force=False)
+            if cleaned > 0:
+                logger.debug(f"Cleaned up {cleaned} WandB processes after checkpoint cleanup")
 
     @requires_wandb_enabled
     @safe_wandb_operation()
@@ -938,6 +1069,28 @@ class WandbLogger:
         }
         
         self.run.log(metrics)
+
+    def _sanitize_artifact_name(self, name: Optional[str]) -> str:
+        """
+        Sanitize artifact/model/checkpoint names so they only contain
+        allowed characters for wandb artifact names: alphanumeric, dash,
+        underscore and dot.
+
+        Any disallowed character is replaced with an underscore. If the
+        resulting name is empty, return a safe default.
+        """
+        if not name:
+            return "artifact"
+        # Replace any sequence of invalid chars with a single underscore
+        safe = re.sub(r'[^A-Za-z0-9._-]+', '_', str(name))
+        # Trim leading/trailing underscores or dots
+        safe = safe.strip('_.-')
+        if not safe:
+            return "artifact"
+        if safe != name:
+            logger.info(f"Sanitized artifact name '{name}' -> '{safe}'")
+        return safe
+
 
 wandb_logger = WandbLogger()
             
