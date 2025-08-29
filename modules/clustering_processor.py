@@ -256,7 +256,7 @@ class ClusteringProcessor:
             inference_dataset,
             batch_size=self.batch_size,
             shuffle=False,
-            num_workers=clustering_config.num_workers
+            num_workers=clustering_config.clustering_workers
         )
         
         # Load the trained model

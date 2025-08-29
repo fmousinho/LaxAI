@@ -182,7 +182,7 @@ class DataPrepPipeline(Pipeline):
         self.video_capture = None
         self.train_ratio = training_config.train_ratio
         self.delete_process_folder = delete_process_folder
-        self.default_workers = training_config.default_workers
+        self.dataloader_workers = training_config.dataloader_workers
         
         # Import transform_config to get the background removal setting
         from config.all_config import transform_config
@@ -333,7 +333,7 @@ class DataPrepPipeline(Pipeline):
             ```
         
         Note:
-            The method uses self.default_workers to limit concurrency and prevent
+            The method uses self.dataloader_workers to limit concurrency and prevent
             overwhelming the storage service.
         """
         if not tasks:
@@ -342,7 +342,7 @@ class DataPrepPipeline(Pipeline):
         logger.info(f"Starting parallel {operation_func.__name__} of {len(tasks)} items{' for ' + context_info if context_info else ''}")
         failed_operations = []
         
-        with ThreadPoolExecutor(max_workers=self.default_workers) as executor:
+        with ThreadPoolExecutor(max_workers=self.dataloader_workers) as executor:
             # Submit tasks using the provided function
             # For upload: operation_func(*task) - blob_name, data  
             # For move: operation_func(*task) - source, destination

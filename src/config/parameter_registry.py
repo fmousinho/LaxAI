@@ -403,10 +403,10 @@ class ParameterRegistry:
                 config_path="training_config.min_images_per_player"
             ),
             ParameterDefinition(
-                name="num_workers",
+                name="train_workers",
                 type=ParameterType.INT,
-                description="Number of workers used by PyTorch",
-                config_path="training_config.num_workers"
+                description="Number of workers used by PyTorch for training",
+                config_path="training_config.train_workers"
             ),
             ParameterDefinition(
                 name="prefetch_factor",
@@ -427,10 +427,10 @@ class ParameterRegistry:
                 config_path="training_config.margin_change_threshold"
             ),
             ParameterDefinition(
-                name="default_workers",
+                name="dataloader_workers",
                 type=ParameterType.INT,
-                description="Default workers used by data loader",
-                config_path="training_config.default_workers"
+                description="Number of workers used for file uploads and dataloader",
+                config_path="training_config.dataloader_workers"
             ),
             ParameterDefinition(
                 name="train_ratio",

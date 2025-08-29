@@ -34,9 +34,9 @@ class Training:
     lr_scheduler_min_lr: float
     lr_scheduler_factor: float
     force_pretraining: bool
-    num_workers: int
+    train_workers: int
     prefetch_factor: int
-    default_workers: int
+    dataloader_workers: int
     margin_decay_rate: float
     margin_change_threshold: float
     early_stopping_patience: Optional[int]
@@ -76,11 +76,11 @@ class Training:
         if enable_multithreading:
             # Use default PyTorch multiprocessing with safe number of workers
             import multiprocessing as mp
-            self.num_workers = num_workers if num_workers is not None else min(mp.cpu_count(), 8)
+            self.train_workers = num_workers if num_workers is not None else min(mp.cpu_count(), 8)
         else:
-            self.num_workers = 0
+            self.train_workers = 0
         
-        logger.info(f"Training configured with multithreading={'enabled' if enable_multithreading else 'disabled'}, workers={self.num_workers}")
+        logger.info(f"Training configured with multithreading={'enabled' if enable_multithreading else 'disabled'}, workers={self.train_workers}")
 
         # Store kwargs for later use (e.g., passing eval_kwargs to evaluation)
         self.kwargs = kwargs
@@ -236,12 +236,12 @@ class Training:
         """
         # Configure DataLoader settings for optimal speed
 
-        prefetch_factor = self.kwargs.get('prefetch_factor', training_config.prefetch_factor) if self.num_workers > 0 else None
+        prefetch_factor = self.kwargs.get('prefetch_factor', training_config.prefetch_factor) if self.train_workers > 0 else None
 
         dataloader_kwargs = {
-            'num_workers': self.num_workers,
-            'pin_memory': torch.cuda.is_available() and self.num_workers > 0,  # Only pin memory with workers
-            'persistent_workers': self.num_workers > 0,
+            'num_workers': self.train_workers,
+            'pin_memory': torch.cuda.is_available() and self.train_workers > 0,  # Only pin memory with workers
+            'persistent_workers': self.train_workers > 0,
             'prefetch_factor': prefetch_factor,  # Increased prefetch for speed
             'drop_last': True if type == 'train' else False  # Drop incomplete batches for consistent timing
         }

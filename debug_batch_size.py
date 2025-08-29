@@ -122,7 +122,7 @@ def simulate_google_cloud_environment():
 
                     print(f"  DataLoader batch_size: {dataloader_kwargs['batch_size']}")
                     print(f"  DataLoader pin_memory: {dataloader_kwargs['pin_memory']}")
-                    print(f"  DataLoader num_workers: {dataloader_kwargs['num_workers']}")
+                    print(f"  DataLoader train_workers: {dataloader_kwargs['num_workers']}")
 
                     # Calculate expected ttl_batches
                     expected_ttl_batches = 10023 // dataloader_kwargs['batch_size']

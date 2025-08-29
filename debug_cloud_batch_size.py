@@ -141,7 +141,7 @@ def debug_cloud_batch_size():
 
             # Log detailed dataloader info
             logger.info("DataLoader details:")
-            logger.info(f"  - num_workers: {training.dataloader.num_workers}")
+            logger.info(f"  - train_workers: {training.dataloader.num_workers}")
             logger.info(f"  - pin_memory: {training.dataloader.pin_memory}")
             logger.info(f"  - drop_last: True (for train)")
             logger.info(f"  - shuffle: True (for train)")

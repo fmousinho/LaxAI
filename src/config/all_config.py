@@ -86,7 +86,9 @@ class TrainingConfig:
     margin_decay_rate: float = 0.98  # Decay rate for margin
     margin_change_threshold: float = 0.01  # Minimum change in margin to trigger update
     num_workers: int = 8 if sys.platform != "darwin" else 0  # Used by PyTorch
-    default_workers: int = 8  # Used for file uploads and dataloader
+    train_workers: int = 8 if sys.platform != "darwin" else 0  # Used by PyTorch for training
+    dataloader_workers: int = 8  # Used for file uploads and dataloader
+    dataloader_workers: int = 8  # Used for file uploads and dataloader
     prefetch_factor: int = 2  # Number of batches to prefetch for DataLoader
     n_datasets_to_use: Optional[int] = None  # Number of datasets to use for training (None = use all)
     # GPU memory management settings
@@ -124,7 +126,7 @@ class DetectionConfig:
 class ClusteringConfig:
     """Configuration for clustering parameters."""
     batch_size: int = 128
-    num_workers: int = 4 if sys.platform != "darwin" else 0  
+    clustering_workers: int = 4 if sys.platform != "darwin" else 0  
     dbscan_eps: float = 0.1
     dbscan_min_samples: int = 5
     # Target cluster range for adaptive search

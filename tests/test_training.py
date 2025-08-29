@@ -92,7 +92,7 @@ def test_training_runs_and_triggers_evaluation(monkeypatch):
     t.scheduler_threshold = 0.01
     t.lr_scheduler_min_lr = 1e-6
     t.force_pretraining = True
-    t.num_workers = 0
+    t.train_workers = 0
     t.margin_decay_rate = 1.0
     t.margin_change_threshold = 1e-6
 
