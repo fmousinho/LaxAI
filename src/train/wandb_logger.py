@@ -383,8 +383,23 @@ class WandbLogger:
         logger.info(f"Model path: {model_path}")
         
         if os.path.exists(model_path):
-            # Initialize model and load weights with robust handling for mismatched keys
-            model = model_class(**kwargs)
+            # Read artifact metadata to get saved model configuration
+            saved_config = {}
+            try:
+                if hasattr(model_artifact, 'metadata') and model_artifact.metadata:
+                    model_config_meta = model_artifact.metadata.get('model_config', {})
+                    if 'embedding_dim' in model_config_meta:
+                        saved_config['embedding_dim'] = model_config_meta['embedding_dim']
+                        logger.info(f"Found saved embedding_dim in metadata: {saved_config['embedding_dim']}")
+            except Exception as e:
+                logger.debug(f"Could not read artifact metadata: {e}")
+
+            # Merge saved config with provided kwargs (saved config takes precedence for critical params)
+            merged_kwargs = dict(kwargs)
+            merged_kwargs.update(saved_config)
+            
+            # Initialize model with merged configuration
+            model = model_class(**merged_kwargs)
 
             # Load raw checkpoint (may be a state_dict or a full checkpoint dict)
             raw = torch.load(model_path, map_location=device)

@@ -343,6 +343,12 @@ class ParameterRegistry:
                 config_path="training_config.batch_size"
             ),
             ParameterDefinition(
+                name="num_workers",
+                type=ParameterType.INT,
+                description="Number of DataLoader workers for parallel data loading",
+                config_path="training_config.num_workers"
+            ),
+            ParameterDefinition(
                 name="learning_rate",
                 type=ParameterType.FLOAT, 
                 description="Learning rate for optimizer",
@@ -403,12 +409,6 @@ class ParameterRegistry:
                 config_path="training_config.min_images_per_player"
             ),
             ParameterDefinition(
-                name="train_workers",
-                type=ParameterType.INT,
-                description="Number of workers used by PyTorch for training",
-                config_path="training_config.train_workers"
-            ),
-            ParameterDefinition(
                 name="prefetch_factor",
                 type=ParameterType.INT,
                 description="Prefetch factor for data loading",
@@ -425,12 +425,6 @@ class ParameterRegistry:
                 type=ParameterType.FLOAT,
                 description="Minimum change in margin to trigger an update",
                 config_path="training_config.margin_change_threshold"
-            ),
-            ParameterDefinition(
-                name="dataloader_workers",
-                type=ParameterType.INT,
-                description="Number of workers used for file uploads and dataloader",
-                config_path="training_config.dataloader_workers"
             ),
             ParameterDefinition(
                 name="train_ratio",

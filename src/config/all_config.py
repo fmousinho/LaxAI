@@ -71,6 +71,7 @@ class TrackerConfig:
 class TrainingConfig:
     """Configuration for training parameters."""
     batch_size: int = 128
+    num_workers: int = 8 if sys.platform != "darwin" else 0  # Number of DataLoader workers
     learning_rate: float = 1e-3
     lr_scheduler_patience: int = 3
     lr_scheduler_threshold: float = 1e-4
@@ -85,10 +86,6 @@ class TrainingConfig:
     early_stopping_patience: Optional[int] = 10  # Number of epochs to wait before early stopping (None = disabled)
     margin_decay_rate: float = 0.98  # Decay rate for margin
     margin_change_threshold: float = 0.01  # Minimum change in margin to trigger update
-    num_workers: int = 8 if sys.platform != "darwin" else 0  # Used by PyTorch
-    train_workers: int = 8 if sys.platform != "darwin" else 0  # Used by PyTorch for training
-    dataloader_workers: int = 8  # Used for file uploads and dataloader
-    dataloader_workers: int = 8  # Used for file uploads and dataloader
     prefetch_factor: int = 2  # Number of batches to prefetch for DataLoader
     n_datasets_to_use: Optional[int] = None  # Number of datasets to use for training (None = use all)
     # GPU memory management settings

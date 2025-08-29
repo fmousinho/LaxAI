@@ -27,6 +27,7 @@ class Training:
     # Type annotations for dynamically assigned attributes
     num_epochs: int
     batch_size: int
+    num_workers: int
     learning_rate: float
     margin: float
     weight_decay: float
@@ -37,7 +38,6 @@ class Training:
     force_pretraining: bool
     num_workers: int
     prefetch_factor: int
-    default_workers: int
     margin_decay_rate: float
     margin_change_threshold: float
     early_stopping_patience: Optional[int]
@@ -74,7 +74,13 @@ class Training:
 
         # Configure threading settings
         self.enable_multithreading = enable_multithreading
-        if enable_multithreading:
+        
+        # Allow API override of num_workers via kwargs
+        api_num_workers = kwargs.get('num_workers')
+        if api_num_workers is not None:
+            self.num_workers = api_num_workers
+            logger.info(f"Using num_workers from API: {self.num_workers}")
+        elif enable_multithreading:
             # Use default PyTorch multiprocessing with safe number of workers
             import multiprocessing as mp
             self.num_workers = num_workers if num_workers is not None else min(mp.cpu_count(), 8)
@@ -90,6 +96,9 @@ class Training:
         for param_name in parameter_registry.parameters:
             param_def = parameter_registry.parameters[param_name]
             if param_def.config_path.startswith("training_config"):
+                # Skip num_workers since it's already handled above
+                if param_name == 'num_workers':
+                    continue
                 try:
                     value = parameter_registry.get_kwarg_or_config(param_name, kwargs)
                     setattr(self, param_name, value)
@@ -136,7 +145,7 @@ class Training:
             # Use the centralized wandb model loading
         
             registry_kwargs = {
-                'model_class': lambda: model_class(),
+                'model_class': lambda **kwargs: model_class(**kwargs),
                 'collection_name': model_name,
                 'device': str(self.device)
             }

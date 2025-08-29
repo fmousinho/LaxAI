@@ -40,3 +40,5 @@ dist/
 
 # Log files
 *.log
+.coverage
+.gitignore
