@@ -300,9 +300,20 @@ class WandbLogger:
     @safe_wandb_operation()
     def finish(self) -> None:
         """Finish the current wandb run."""
-        self.run.finish()
-        logger.info("Wandb run finished")
+        if hasattr(self, 'run') and self.run:
+            self.run.finish()
+
+        # Clean up WandB API object to prevent memory accumulation
+        if hasattr(self, 'wandb_api') and self.wandb_api:
+            del self.wandb_api
+            self.wandb_api = None
+
+        # Force garbage collection
+        import gc
+        gc.collect()
+
         self.initialized = False
+        logger.info("Wandb run finished and resources cleaned up")
 
     @requires_wandb_initialized
     @safe_wandb_operation()
@@ -627,6 +638,13 @@ class WandbLogger:
         Returns:
             Path to saved checkpoint artifact, or None if failed
         """
+        import psutil
+        import os
+
+        # Monitor memory before checkpoint saving
+        process = psutil.Process(os.getpid())
+        memory_before = process.memory_info().rss / 1024 / 1024  # MB
+
         # Create temporary checkpoint file
         with tempfile.NamedTemporaryFile(suffix=f'_epoch_{epoch}.pth', delete=False) as tmp_file:
             checkpoint_data = {
@@ -661,10 +679,24 @@ class WandbLogger:
         
         # Log artifact to wandb (this automatically versions it)
         self.run.log_artifact(artifact)
-        
+
+        # Explicitly clean up artifact object to prevent memory accumulation
+        del artifact
+
         # Clean up temporary file
         os.unlink(checkpoint_path)
-        
+
+        # Force garbage collection after artifact operations
+        import gc
+        gc.collect()
+
+        # Monitor memory after checkpoint saving
+        memory_after = process.memory_info().rss / 1024 / 1024  # MB
+        memory_delta = memory_after - memory_before
+
+        if abs(memory_delta) > 50:  # Log if memory change is significant (>50MB)
+            logger.warning(f"Checkpoint save memory change: {memory_delta:.1f}MB (before: {memory_before:.1f}MB, after: {memory_after:.1f}MB)")
+
         logger.info(f"Saved model checkpoint to wandb for epoch {epoch}")
         # Clean up previous checkpoint artifacts (keep only latest) using sanitized name
         try:
@@ -683,6 +715,12 @@ class WandbLogger:
             artifact_name: Name of the artifact to clean up
             keep_latest: Number of latest versions to keep (default: 1)
         """
+        import psutil
+        import os
+
+        # Monitor memory before cleanup
+        process = psutil.Process(os.getpid())
+        memory_before = process.memory_info().rss / 1024 / 1024  # MB
             
         # List all versions of this artifact
         try:
@@ -691,20 +729,32 @@ class WandbLogger:
                 "model_checkpoint",
                 f"{self.run.entity}/{self.run.project}/{artifact_name}"
             ))
-            
+
             # Sort by version (latest first) and skip the ones we want to keep
             if len(artifact_versions) <= keep_latest:
                 return
-                
+
             versions_to_delete = artifact_versions[keep_latest:]
-            
+
             for version in versions_to_delete:
                 try:
                     version.delete()
                     logger.info(f"Deleted old checkpoint artifact: {version.name}")
                 except Exception as e:
                     logger.warning(f"Failed to delete old checkpoint {version.name}: {e}")
-                    
+
+            # Explicitly clean up artifact versions list to prevent memory accumulation
+            del artifact_versions, versions_to_delete
+            import gc
+            gc.collect()
+
+            # Monitor memory after cleanup
+            memory_after = process.memory_info().rss / 1024 / 1024  # MB
+            memory_delta = memory_after - memory_before
+
+            if abs(memory_delta) > 20:  # Log if memory change is significant (>20MB)
+                logger.warning(f"Checkpoint cleanup memory change: {memory_delta:.1f}MB (before: {memory_before:.1f}MB, after: {memory_after:.1f}MB)")
+
         except Exception as e:
             logger.warning(f"Failed to access checkpoint artifacts: {e}")
 
