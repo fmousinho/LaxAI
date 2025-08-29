@@ -102,6 +102,7 @@ def _convert_request_to_kwargs(request) -> Dict[str, Any]:
 		else:
 			training_dict = {"value": tp}
 		kwargs["training_kwargs"] = training_dict
+		logger.info(f"TrainingService: Converted training_params to training_kwargs: {training_dict}")
 
 	mp = getattr(request, 'model_params', None)
 	if mp is not None:
@@ -158,6 +159,10 @@ async def _run_training_task(task_id: str, kwargs: Dict[str, Any]):
 		TRAINING_JOBS[task_id]["progress"]["message"] = "Starting training pipeline..."
 
 		logger.info(f"Starting training task {task_id} with kwargs: {kwargs}")
+		
+		# Log training_kwargs specifically for batch_size tracking
+		if 'training_kwargs' in kwargs and 'batch_size' in kwargs['training_kwargs']:
+			logger.info(f"TrainingService: Starting training with batch_size={kwargs['training_kwargs']['batch_size']}")
 
 		TRAINING_JOBS[task_id]["progress"]["status"] = "running"
 		TRAINING_JOBS[task_id]["progress"]["message"] = "Training in progress..."

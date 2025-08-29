@@ -422,6 +422,10 @@ class Training:
                 self.model.train()
                 running_loss = 0.0
                 ttl_batches = len(self.dataloader)
+                
+                # Debug logging for batch size verification
+                logger.info(f"Training setup: batch_size={self.batch_size}, dataset_size={len(self.dataloader.dataset) if hasattr(self.dataloader.dataset, '__len__') else 'unknown'}, ttl_batches={ttl_batches}")
+                logger.info(f"Expected batches calculation: {len(self.dataloader.dataset) // self.batch_size if hasattr(self.dataloader.dataset, '__len__') else 'unknown'} (with drop_last=True)")
 
                 # Update margin if decay rate is active (use actual epoch number)
                 new_margin = self.margin * (margin_decay_rate ** epoch)
@@ -489,6 +493,10 @@ class Training:
                     # 1. Calculate Validation Loss
                     running_val_loss = 0.0
                     ttl_batches = len(val_dataloader)
+                    
+                    # Debug logging for validation batch size verification
+                    logger.info(f"Validation setup: batch_size={self.batch_size}, val_dataset_size={len(val_dataloader.dataset) if hasattr(val_dataloader.dataset, '__len__') else 'unknown'}, val_ttl_batches={ttl_batches}")
+                    
                     with torch.no_grad(): # No need to compute gradients
                         for j, (anchor, positive, negative, _) in enumerate(val_dataloader):
                             anchor = anchor.to(self.device)
