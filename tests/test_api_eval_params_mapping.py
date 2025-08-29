@@ -5,7 +5,7 @@ from types import SimpleNamespace
 def test_convert_request_to_kwargs_maps_eval_params():
     """Ensure the service converts request.eval_params into eval_kwargs in the kwargs dict."""
     sys.path.append('src')
-    from services.training_service import _convert_request_to_kwargs
+    from src.services.training_service import _convert_request_to_kwargs
 
     req = SimpleNamespace(
         tenant_id='tenant1',

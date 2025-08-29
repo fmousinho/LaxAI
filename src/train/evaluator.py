@@ -221,7 +221,23 @@ class ModelEvaluator:
                 # Move to CPU numpy and explicitly delete GPU tensors
                 emb_cpu = embeddings.cpu().numpy()
                 all_embeddings.append(emb_cpu)
-                all_labels.extend([str(l.item()) if torch.is_tensor(l) else str(l) for l in labels])
+                
+                # Keep labels as numeric values for evaluation
+                numeric_labels = []
+                for l in labels:
+                    if torch.is_tensor(l):
+                        numeric_labels.append(l.item())
+                    elif isinstance(l, (int, float)):
+                        numeric_labels.append(l)
+                    else:
+                        # Try to convert string to numeric if possible
+                        try:
+                            numeric_labels.append(float(l))
+                        except (ValueError, TypeError):
+                            # If conversion fails, use hash of string as numeric ID
+                            numeric_labels.append(hash(str(l)) % 1000000)
+                
+                all_labels.extend(numeric_labels)
                 all_paths.extend([f"image_{batch_idx * batch_size + i}" for i in range(len(labels))])
 
                 # Clear GPU memory after each batch
@@ -276,7 +292,28 @@ class ModelEvaluator:
         device = self.device
 
         X = torch.tensor(embeddings, dtype=torch.float32, device=device)
-        y = torch.tensor(labels, device=device)
+        
+        # Ensure labels are numeric and convert to tensor
+        if isinstance(labels, np.ndarray):
+            if labels.dtype.kind in ['U', 'S']:  # Unicode or byte string
+                # Convert string labels to numeric IDs
+                unique_labels = np.unique(labels)
+                label_to_id = {label: i for i, label in enumerate(unique_labels)}
+                numeric_labels = np.array([label_to_id[label] for label in labels])
+            else:
+                numeric_labels = labels.astype(np.int64)
+        elif isinstance(labels, list):
+            if all(isinstance(l, str) for l in labels):
+                # Convert string labels to numeric IDs
+                unique_labels = list(set(labels))
+                label_to_id = {label: i for i, label in enumerate(unique_labels)}
+                numeric_labels = np.array([label_to_id[label] for label in labels])
+            else:
+                numeric_labels = np.array(labels, dtype=np.int64)
+        else:
+            numeric_labels = np.array(labels, dtype=np.int64)
+            
+        y = torch.tensor(numeric_labels, dtype=torch.long, device=device)
 
         X_norm = torch.nn.functional.normalize(X, dim=1)
         n = X.shape[0]
@@ -320,7 +357,28 @@ class ModelEvaluator:
         device = self.device
 
         X = torch.tensor(embeddings, dtype=torch.float32, device=device)
-        y = torch.tensor(labels, device=device)
+        
+        # Ensure labels are numeric and convert to tensor
+        if isinstance(labels, np.ndarray):
+            if labels.dtype.kind in ['U', 'S']:  # Unicode or byte string
+                # Convert string labels to numeric IDs
+                unique_labels = np.unique(labels)
+                label_to_id = {label: i for i, label in enumerate(unique_labels)}
+                numeric_labels = np.array([label_to_id[label] for label in labels])
+            else:
+                numeric_labels = labels.astype(np.int64)
+        elif isinstance(labels, list):
+            if all(isinstance(l, str) for l in labels):
+                # Convert string labels to numeric IDs
+                unique_labels = list(set(labels))
+                label_to_id = {label: i for i, label in enumerate(unique_labels)}
+                numeric_labels = np.array([label_to_id[label] for label in labels])
+            else:
+                numeric_labels = np.array(labels, dtype=np.int64)
+        else:
+            numeric_labels = np.array(labels, dtype=np.int64)
+            
+        y = torch.tensor(numeric_labels, dtype=torch.long, device=device)
         X_norm = torch.nn.functional.normalize(X, dim=1)
         n = X.shape[0]
 
@@ -513,7 +571,27 @@ class ModelEvaluator:
                 X_norm = torch.nn.functional.normalize(X, dim=1)
                 sims = torch.mm(X_norm, X_norm.T)
 
-        y = torch.tensor(labels, device=device)
+        # Ensure labels are numeric and convert to tensor
+        if isinstance(labels, np.ndarray):
+            if labels.dtype.kind in ['U', 'S']:  # Unicode or byte string
+                # Convert string labels to numeric IDs
+                unique_labels = np.unique(labels)
+                label_to_id = {label: i for i, label in enumerate(unique_labels)}
+                numeric_labels = np.array([label_to_id[label] for label in labels])
+            else:
+                numeric_labels = labels.astype(np.int64)
+        elif isinstance(labels, list):
+            if all(isinstance(l, str) for l in labels):
+                # Convert string labels to numeric IDs
+                unique_labels = list(set(labels))
+                label_to_id = {label: i for i, label in enumerate(unique_labels)}
+                numeric_labels = np.array([label_to_id[label] for label in labels])
+            else:
+                numeric_labels = np.array(labels, dtype=np.int64)
+        else:
+            numeric_labels = np.array(labels, dtype=np.int64)
+            
+        y = torch.tensor(numeric_labels, dtype=torch.long, device=device)
 
         n = sims.shape[0]
         ap_list = []

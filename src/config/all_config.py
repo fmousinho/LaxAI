@@ -89,6 +89,9 @@ class TrainingConfig:
     default_workers: int = 8  # Used for file uploads and dataloader
     prefetch_factor: int = 2  # Number of batches to prefetch for DataLoader
     n_datasets_to_use: Optional[int] = None  # Number of datasets to use for training (None = use all)
+    # GPU memory management settings
+    clear_memory_on_start: bool = True  # Clear GPU memory when training starts
+    aggressive_memory_cleanup: bool = True  # Enable aggressive memory cleanup on errors
 
 @dataclass
 class EvaluatorConfig:

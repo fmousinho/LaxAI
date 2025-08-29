@@ -7,11 +7,42 @@ import torch.nn as nn
 import numpy as np
 from config.all_config import model_config, training_config, wandb_config
 from train.wandb_logger import wandb_logger
+from utils.gpu_memory import clear_gpu_memory, log_gpu_memory_stats, GPUMemoryContext
 
 logger = logging.getLogger(__name__)
 
 EPOCHS_PER_VAL = 10
 BATCHES_PER_LOG_MSG = 10
+
+
+def clear_gpu_memory():
+    """
+    Clear GPU memory at program start or after crashes.
+    This helps recover from OOM situations where memory wasn't properly freed.
+    """
+    if torch.cuda.is_available():
+        logger.info("Clearing GPU memory...")
+        
+        # Clear Python garbage collection
+        gc.collect()
+        
+        # Clear PyTorch CUDA cache
+        torch.cuda.empty_cache()
+        
+        # Force synchronization to ensure operations complete
+        torch.cuda.synchronize()
+        
+        # Get memory info
+        allocated = torch.cuda.memory_allocated() / 1024**3  # Convert to GB
+        reserved = torch.cuda.memory_reserved() / 1024**3    # Convert to GB
+        
+        logger.info(f"GPU memory after cleanup - Allocated: {allocated:.2f}GB, Reserved: {reserved:.2f}GB")
+        
+        if allocated > 0.1:  # If more than 100MB still allocated
+            logger.warning(f"Warning: {allocated:.2f}GB still allocated after cleanup. "
+                          "This may indicate tensors from previous runs are still in memory.")
+    else:
+        logger.info("CUDA not available, skipping GPU memory cleanup")
 
 class Training:
     """
@@ -46,6 +77,7 @@ class Training:
                 device: Any = None,
                 enable_multithreading: bool = True,
                 num_workers: Optional[int] = None,
+                clear_memory_on_start: bool = True,
                 **kwargs):
         """
         Initialize the training class with hyperparameters.
@@ -54,6 +86,7 @@ class Training:
             device: Device to run the model on (CPU, GPU, or MPS)
             enable_multithreading: Whether to enable multithreading for data loading
             num_workers: Number of DataLoader workers (auto-detected if None)
+            clear_memory_on_start: Whether to clear GPU memory on initialization
             **kwargs: Training parameters (see parameter_registry for complete list)
         
         All hyperparameters are defined in config.parameter_registry and will be
@@ -61,6 +94,10 @@ class Training:
         kwargs and training_config, a ValueError will be raised.
         """
         from config.parameter_registry import parameter_registry
+
+        # Clear GPU memory at start to recover from previous crashes
+        if clear_memory_on_start:
+            clear_gpu_memory()
 
         # Configure threading settings
         self.enable_multithreading = enable_multithreading
@@ -305,6 +342,8 @@ class Training:
                 self.model = model_class(**kwargs)
 
             self.model.to(self.device)
+            log_gpu_memory_stats("After moving model to device")
+            
             # Setup training components
             self.loss_fn = nn.TripletMarginLoss(margin=self.margin, p=2)
             self.optimizer = torch.optim.Adam(
@@ -312,6 +351,7 @@ class Training:
                 lr=self.learning_rate, 
                 weight_decay=self.weight_decay
             )
+            log_gpu_memory_stats("After creating optimizer")
             # Scheduler uses its own patience/threshold for LR adjustment only
         
             self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -387,186 +427,236 @@ class Training:
         self.loss_fn = nn.TripletMarginLoss(margin=current_margin, p=2)
         val_dataloader = self.val_dataloader
         
-
-        for epoch in range(start_epoch - 1, self.num_epochs):
-            # Check for cancellation before starting epoch
-            if stop_callback and stop_callback():
-                logger.info(f"Training cancelled by stop_callback at epoch {epoch + 1}")
-                raise InterruptedError("Training cancelled by external request")
-
-            # ========================================================================
-            # Training Phase
-            # ========================================================================
-            # Model and optimizer should already be placed on the correct device
-            # during setup_model (or after checkpoint resumption). Repeatedly
-            # calling .to(device) each epoch can unintentionally create new
-            # parameter tensors and leave old tensors referenced by the
-            # optimizer state, causing cumulative memory growth. Avoid moving
-            # them here.
-            self.model.train()
-            running_loss = 0.0
-            ttl_batches = len(self.dataloader)
-
-            # Update margin if decay rate is active (use actual epoch number)
-            new_margin = self.margin * (margin_decay_rate ** epoch)
-            if abs(new_margin - current_margin) > margin_change_threshold:
-                current_margin = new_margin
-                self.loss_fn = nn.TripletMarginLoss(margin=current_margin, p=2)
-                logger.info(f"Margin updated for epoch {epoch+1}: {current_margin:.4f}")
-            else:
-                logger.debug(f"Margin unchanged for epoch {epoch+1}: {current_margin:.4f}")
-                
-            for i, (anchor, positive, negative, _) in enumerate(self.dataloader):
-
-                # Check for cancellation
+        try:
+            log_gpu_memory_stats("Training start")
+            
+            for epoch in range(start_epoch - 1, self.num_epochs):
+                # Check for cancellation before starting epoch
                 if stop_callback and stop_callback():
-                    logger.info(f"Training cancelled by stop_callback at epoch {epoch + 1}, batch {i + 1}")
+                    logger.info(f"Training cancelled by stop_callback at epoch {epoch + 1}")
                     raise InterruptedError("Training cancelled by external request")
 
-                # Log progress
-                if (i + 1) % BATCHES_PER_LOG_MSG == 0:
-                    logger.info(f"Training Batch {i+1}/{ttl_batches}")
+                log_gpu_memory_stats(f"Epoch {epoch + 1} start")
 
-                # Move tensors to device with non_blocking for async transfer
-                anchor = anchor.to(self.device, non_blocking=True)
-                positive = positive.to(self.device, non_blocking=True)
-                negative = negative.to(self.device, non_blocking=True)
+                # ========================================================================
+                # Training Phase
+                # ========================================================================
+                # Model and optimizer should already be placed on the correct device
+                # during setup_model (or after checkpoint resumption). Repeatedly
+                # calling .to(device) each epoch can unintentionally create new
+                # parameter tensors and leave old tensors referenced by the
+                # optimizer state, causing cumulative memory growth. Avoid moving
+                # them here.
+                self.model.train()
+                running_loss = 0.0
+                ttl_batches = len(self.dataloader)
 
-                # Clear gradients
-                self.optimizer.zero_grad()
-                
-                # Forward pass
-                emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative)  # pyright: ignore[reportCallIssue]
-                loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
-
-                # Backward and optimizer step
-                loss.backward()
-                self.optimizer.step()
-
-                # Extract scalar immediately and clear GPU tensors to free memory
-                running_loss += loss.item()
-                
-                # Explicitly delete tensors to help free GPU memory faster
-                del anchor, positive, negative, emb_anchor, emb_positive, emb_negative, loss
-                
-                # Clear GPU cache periodically
-                if torch.cuda.is_available() and (i + 1) % 50 == 0:
-                    torch.cuda.empty_cache()
-
-            # Calculate and log training loss
-            epoch_train_loss = running_loss / ttl_batches if ttl_batches > 0 else 0.0
-
-            # ========================================================================
-            # Validation Phase (if dataloader is provided)
-            # ========================================================================
-            epoch_val_loss = None
-            reid_metrics = {}
-
-            # Check for cancellation before validation
-            if stop_callback and stop_callback():
-                logger.info(f"Training cancelled by stop_callback before validation at epoch {epoch + 1}")
-                raise InterruptedError("Training cancelled by external request")
-
-            if val_dataloader and (epoch + 1) % EPOCHS_PER_VAL == 0:
-                self.model.eval()  # Set model to evaluation mode
-                
-                # 1. Calculate Validation Loss
-                running_val_loss = 0.0
-                ttl_batches = len(val_dataloader)
-                with torch.no_grad(): # No need to compute gradients
-                    for j, (anchor, positive, negative, _) in enumerate(val_dataloader):
-                        anchor = anchor.to(self.device)
-                        positive = positive.to(self.device)
-                        negative = negative.to(self.device)
-                        
-                        emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative) # pyright: ignore[reportCallIssue]
-                        loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
-                        
-                        running_val_loss += loss.item()
-
-                        if (j + 1) % BATCHES_PER_LOG_MSG == 0:
-                            logger.info(f"Validation Batch {j+1}/{ttl_batches}")
-
-                epoch_val_loss = running_val_loss / ttl_batches if ttl_batches > 0 else 0.0
-
-                # 2. Calculate Retrieval Metrics
-                reid_metrics = self._evaluate_reid_metrics(val_dataloader)
-
-            # ========================================================================
-            # Log and check for early stopping
-            # ========================================================================
-            logger.info(f"=== Epoch {epoch+1}/{self.num_epochs} Summary ===")
-            logger.info(f"Training Loss: {epoch_train_loss:.4f}")
-            
-            # Use validation loss for monitoring if available, otherwise fall back to training loss
-            monitoring_loss = epoch_train_loss
-            if epoch_val_loss is not None:
-                logger.info(f"Validation Loss: {epoch_val_loss:.4f}")
-                monitoring_loss = epoch_val_loss
-                for key, val in reid_metrics.items():
-                    logger.info(f"  - {key}: {val:.4f}")
-
-            logger.info(f"Margin used: {current_margin:.4f}")
-            
-            # Log epoch metrics to wandb
-            if wandb_config.enabled:
-                metrics = {
-                    "train_loss": epoch_train_loss,
-                    "margin": current_margin,
-                    "current_lr": self.optimizer.param_groups[0]['lr']
-                }
-                if epoch_val_loss is not None:
-                    metrics["val_loss"] = epoch_val_loss
-                    metrics.update(reid_metrics) # Add re-id metrics to the log
-                
-              
-                wandb_logger.log_metrics(metrics)
-
-            # Early stopping based on patience (now using the monitoring_loss)
-            if early_stopping_patience is not None:
-                if monitoring_loss < best_monitoring_loss:
-                    best_monitoring_loss = monitoring_loss
-                    patience_counter = 0
-                    logger.debug(f"New best loss: {best_monitoring_loss:.4f}")
+                # Update margin if decay rate is active (use actual epoch number)
+                new_margin = self.margin * (margin_decay_rate ** epoch)
+                if abs(new_margin - current_margin) > margin_change_threshold:
+                    current_margin = new_margin
+                    self.loss_fn = nn.TripletMarginLoss(margin=current_margin, p=2)
+                    logger.info(f"Margin updated for epoch {epoch+1}: {current_margin:.4f}")
                 else:
-                    patience_counter += 1
-                    logger.debug(f"Patience counter: {patience_counter}/{early_stopping_patience}")
+                    logger.debug(f"Margin unchanged for epoch {epoch+1}: {current_margin:.4f}")
+                    
+                for i, (anchor, positive, negative, _) in enumerate(self.dataloader):
 
-                if patience_counter >= early_stopping_patience:
-                    logger.info(f"Early stopping triggered due to patience ({patience_counter} epochs without improvement)")
-                    break
+                    # Check for cancellation
+                    if stop_callback and stop_callback():
+                        logger.info(f"Training cancelled by stop_callback at epoch {epoch + 1}, batch {i + 1}")
+                        raise InterruptedError("Training cancelled by external request")
 
-            # Step the learning rate scheduler (now using the monitoring_loss)
-            if hasattr(self, 'lr_scheduler') and self.lr_scheduler is not None:
-                self.lr_scheduler.step(monitoring_loss)
-                current_lr = self.optimizer.param_groups[0]['lr']
-                logger.info(f"Learning rate after scheduler step: {current_lr:.6f}")
+                    # Log progress
+                    if (i + 1) % BATCHES_PER_LOG_MSG == 0:
+                        logger.info(f"Training Batch {i+1}/{ttl_batches}")
 
-            # Save checkpoint at the end of each epoch
-            if wandb_config.enabled and self.optimizer is not None:
-                try:
-                    model_config_dict = {
-                        "margin": self.margin,
-                        "learning_rate": self.learning_rate,
-                        "batch_size": self.batch_size,
-                        "weight_decay": self.weight_decay
+                    # Move tensors to device with non_blocking for async transfer
+                    anchor = anchor.to(self.device, non_blocking=True)
+                    positive = positive.to(self.device, non_blocking=True)
+                    negative = negative.to(self.device, non_blocking=True)
+
+                    # Clear gradients
+                    self.optimizer.zero_grad()
+                    
+                    # Forward pass
+                    emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative)  # pyright: ignore[reportCallIssue]
+                    loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
+
+                    # Backward and optimizer step
+                    loss.backward()
+                    self.optimizer.step()
+
+                    # Extract scalar immediately and clear GPU tensors to free memory
+                    running_loss += loss.item()
+                    
+                    # Explicitly delete tensors to help free GPU memory faster
+                    del anchor, positive, negative, emb_anchor, emb_positive, emb_negative, loss
+                    
+                    # Clear GPU cache periodically
+                    if torch.cuda.is_available() and (i + 1) % 50 == 0:
+                        torch.cuda.empty_cache()
+
+                # Calculate and log training loss
+                epoch_train_loss = running_loss / ttl_batches if ttl_batches > 0 else 0.0
+
+                # ========================================================================
+                # Validation Phase (if dataloader is provided)
+                # ========================================================================
+                epoch_val_loss = None
+                reid_metrics = {}
+
+                # Check for cancellation before validation
+                if stop_callback and stop_callback():
+                    logger.info(f"Training cancelled by stop_callback before validation at epoch {epoch + 1}")
+                    raise InterruptedError("Training cancelled by external request")
+
+                if val_dataloader and (epoch + 1) % EPOCHS_PER_VAL == 0:
+                    self.model.eval()  # Set model to evaluation mode
+                    
+                    # 1. Calculate Validation Loss
+                    running_val_loss = 0.0
+                    ttl_batches = len(val_dataloader)
+                    with torch.no_grad(): # No need to compute gradients
+                        for j, (anchor, positive, negative, _) in enumerate(val_dataloader):
+                            anchor = anchor.to(self.device)
+                            positive = positive.to(self.device)
+                            negative = negative.to(self.device)
+                            
+                            emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative) # pyright: ignore[reportCallIssue]
+                            loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
+                            
+                            running_val_loss += loss.item()
+
+                            if (j + 1) % BATCHES_PER_LOG_MSG == 0:
+                                logger.info(f"Validation Batch {j+1}/{ttl_batches}")
+
+                    epoch_val_loss = running_val_loss / ttl_batches if ttl_batches > 0 else 0.0
+
+                    # 2. Calculate Retrieval Metrics
+                    reid_metrics = self._evaluate_reid_metrics(val_dataloader)
+
+                # ========================================================================
+                # Log and check for early stopping
+                # ========================================================================
+                logger.info(f"=== Epoch {epoch+1}/{self.num_epochs} Summary ===")
+                logger.info(f"Training Loss: {epoch_train_loss:.4f}")
+                
+                # Use validation loss for monitoring if available, otherwise fall back to training loss
+                monitoring_loss = epoch_train_loss
+                if epoch_val_loss is not None:
+                    logger.info(f"Validation Loss: {epoch_val_loss:.4f}")
+                    monitoring_loss = epoch_val_loss
+                    for key, val in reid_metrics.items():
+                        logger.info(f"  - {key}: {val:.4f}")
+
+                logger.info(f"Margin used: {current_margin:.4f}")
+                
+                # Log epoch metrics to wandb
+                if wandb_config.enabled:
+                    metrics = {
+                        "train_loss": epoch_train_loss,
+                        "margin": current_margin,
+                        "current_lr": self.optimizer.param_groups[0]['lr']
                     }
+                    if epoch_val_loss is not None:
+                        metrics["val_loss"] = epoch_val_loss
+                        metrics.update(reid_metrics) # Add re-id metrics to the log
                     
-                    wandb_logger.save_checkpoint(
-                        epoch=epoch + 1,  # Save 1-indexed epoch number
-                        model_state_dict=self.model.state_dict(),
-                        optimizer_state_dict=self.optimizer.state_dict(),
-                        loss=monitoring_loss,
-                        model_name=type(self.model).__name__,
-                        model_config=model_config_dict
-                    )
-                    logger.debug(f"Checkpoint saved for epoch {epoch + 1}")
-                    
-                except Exception as e:
-                    if getattr(wandb_config, 'enabled', False):
-                        logger.error(f"Failed to save checkpoint for epoch {epoch + 1} while wandb is enabled: {e}")
-                        raise
-                    logger.warning(f"Failed to save checkpoint for epoch {epoch + 1}: {e}")
+                  
+                    wandb_logger.log_metrics(metrics)
+
+                # Early stopping based on patience (now using the monitoring_loss)
+                if early_stopping_patience is not None:
+                    if monitoring_loss < best_monitoring_loss:
+                        best_monitoring_loss = monitoring_loss
+                        patience_counter = 0
+                        logger.debug(f"New best loss: {best_monitoring_loss:.4f}")
+                    else:
+                        patience_counter += 1
+                        logger.debug(f"Patience counter: {patience_counter}/{early_stopping_patience}")
+
+                    if patience_counter >= early_stopping_patience:
+                        logger.info(f"Early stopping triggered due to patience ({patience_counter} epochs without improvement)")
+                        break
+
+                # Step the learning rate scheduler (now using the monitoring_loss)
+                if hasattr(self, 'lr_scheduler') and self.lr_scheduler is not None:
+                    self.lr_scheduler.step(monitoring_loss)
+                    current_lr = self.optimizer.param_groups[0]['lr']
+                    logger.info(f"Learning rate after scheduler step: {current_lr:.6f}")
+
+                # Save checkpoint at the end of each epoch
+                if wandb_config.enabled and self.optimizer is not None:
+                    try:
+                        model_config_dict = {
+                            "margin": self.margin,
+                            "learning_rate": self.learning_rate,
+                            "batch_size": self.batch_size,
+                            "weight_decay": self.weight_decay
+                        }
+                        
+                        wandb_logger.save_checkpoint(
+                            epoch=epoch + 1,  # Save 1-indexed epoch number
+                            model_state_dict=self.model.state_dict(),
+                            optimizer_state_dict=self.optimizer.state_dict(),
+                            loss=monitoring_loss,
+                            model_name=type(self.model).__name__,
+                            model_config=model_config_dict
+                        )
+                        logger.debug(f"Checkpoint saved for epoch {epoch + 1}")
+                        
+                    except Exception as e:
+                        if getattr(wandb_config, 'enabled', False):
+                            logger.error(f"Failed to save checkpoint for epoch {epoch + 1} while wandb is enabled: {e}")
+                            raise
+                        logger.warning(f"Failed to save checkpoint for epoch {epoch + 1}: {e}")
+
+        except (RuntimeError, torch.cuda.OutOfMemoryError) as e:
+            logger.error(f"Training failed with error: {e}")
+            
+            # Clean up GPU memory on failure
+            logger.info("Cleaning up GPU memory after training failure...")
+            
+            # Clear all variables that might hold GPU tensors
+            if 'anchor' in locals():
+                del anchor
+            if 'positive' in locals():
+                del positive
+            if 'negative' in locals():
+                del negative
+            if 'emb_anchor' in locals():
+                del emb_anchor
+            if 'emb_positive' in locals():
+                del emb_positive
+            if 'emb_negative' in locals():
+                del emb_negative
+            if 'loss' in locals():
+                del loss
+            
+            # Force cleanup
+            clear_gpu_memory()
+            
+            # Re-raise the exception
+            raise
+            
+        except Exception as e:
+            logger.error(f"Training failed with unexpected error: {e}")
+            
+            # Check if this is a CUDA OOM error and provide specific guidance
+            if "out of memory" in str(e).lower() or "cuda out of memory" in str(e).lower():
+                logger.error("CUDA Out of Memory Error detected!")
+                log_gpu_memory_stats("Before OOM cleanup")
+                clear_gpu_memory(force=True)
+                log_gpu_memory_stats("After OOM cleanup")
+                logger.error("Suggestions to resolve OOM:")
+                logger.error("1. Reduce batch_size in your configuration")
+                logger.error("2. Use gradient accumulation to simulate larger batches")
+                logger.error("3. Consider mixed precision training (fp16)")
+                logger.error("4. Use a smaller model architecture")
+            else:
+                clear_gpu_memory()
+            raise
 
         logger.info("Training completed successfully")
         return self.model
