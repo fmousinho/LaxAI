@@ -44,9 +44,9 @@ def requires_wandb_initialized(func: Callable) -> Callable:
     def wrapper(self, *args, **kwargs):
         if not self.enabled or not self.initialized or self.run is None:
             msg = f"Wandb logging is not enabled or initialized for {func.__name__}"
-            logger.error(msg)
-            # Strict behavior: fail fast when wandb is not initialized
-            raise RuntimeError(msg)
+            logger.debug(msg)
+            # Non-strict behavior: allow finish/other calls to be no-ops when wandb isn't initialized
+            return None
         return func(self, *args, **kwargs)
     return wrapper
 
@@ -726,8 +726,8 @@ class WandbLogger:
     @requires_wandb_initialized
     @safe_wandb_operation()
     def save_checkpoint(self, epoch: int, model_state_dict: Dict[str, Any], 
-                   optimizer_state_dict: Dict[str, Any], loss: float, 
-                   model_name: str, model_config: Optional[Dict[str, Any]] = None) -> Optional[str]:
+                   optimizer_state_dict: Dict[str, Any], loss: float = None, 
+                   model_name: str = "model", model_config: Optional[Dict[str, Any]] = None, **kwargs) -> Optional[str]:
         """
         Save model checkpoint to wandb and clean up previous versions.
         
@@ -753,6 +753,10 @@ class WandbLogger:
         process = psutil.Process()
         memory_before = process.memory_info().rss / 1024 / 1024  # MB
         
+        # Accept either `loss` or legacy `current_loss` kwarg
+        if loss is None:
+            loss = kwargs.get('current_loss', None)
+
         # Create temporary checkpoint file - MEMORY EFFICIENT VERSION
         with tempfile.NamedTemporaryFile(suffix=f'_epoch_{epoch}.pth', delete=False) as tmp_file:
             checkpoint_path = tmp_file.name
@@ -799,19 +803,32 @@ class WandbLogger:
         
         # Add checkpoint file to artifact
         artifact.add_file(checkpoint_path, name=f"checkpoint_epoch_{epoch}.pth")
-        
+
         # Log artifact to wandb (this automatically versions it)
-        self.run.log_artifact(artifact)
+        try:
+            self.run.log_artifact(artifact)
+        except Exception:
+            # Ensure we always clean up local resources even on failure
+            logger.warning(f"Failed to execute log_artifact for checkpoint {safe_artifact_name}")
+            # Re-raise so the safe_wandb_operation wrapper can decide how to propagate
+            raise
+        finally:
+            # Explicitly clean up artifact object to prevent memory accumulation
+            try:
+                del artifact
+            except Exception:
+                pass
 
-        # Explicitly clean up artifact object to prevent memory accumulation
-        del artifact
+            # Clean up temporary file if it still exists
+            try:
+                if os.path.exists(checkpoint_path):
+                    os.unlink(checkpoint_path)
+            except Exception as e:
+                logger.debug(f"Failed to remove temp checkpoint file {checkpoint_path}: {e}")
 
-        # Clean up temporary file
-        os.unlink(checkpoint_path)
-
-        # Force garbage collection after artifact operations
-        import gc
-        gc.collect()
+            # Force garbage collection after artifact operations
+            import gc
+            gc.collect()
 
         # Monitor WandB processes after checkpoint operations (don't terminate them)
         wandb_process_count_after = self._monitor_wandb_processes()
@@ -837,14 +854,22 @@ class WandbLogger:
             keep_latest: Number of latest versions to keep (default: 1)
         """
         try:
-            # Use the newer `artifacts` API instead of deprecated `artifact_versions`
-            artifact_versions = list(self.wandb_api.artifacts(
-                "model_checkpoint",
-                f"{self.run.entity}/{self.run.project}/{artifact_name}"
-            ))
+            # Use the same artifact_type -> collection -> artifacts() pattern as
+            # used in `_cleanup_old_model_versions` to list checkpoint artifacts.
+            collection_name = artifact_name
+            logger.debug(f"Searching for checkpoint artifacts in project={wandb_config.project}, collection={collection_name}")
 
-            # Sort by version (latest first) and skip the ones we want to keep
+            artifact_type_api = self.wandb_api.artifact_type("model_checkpoint", project=wandb_config.project)
+            artifact_collection = artifact_type_api.collection(collection_name)
+            artifact_versions = list(artifact_collection.artifacts())
+
+            logger.debug(f"Found {len(artifact_versions)} checkpoint artifacts for {artifact_name}")
+
+            # Sort by creation time (newest first)
+            artifact_versions.sort(key=lambda x: x.created_at, reverse=True)
+
             if len(artifact_versions) <= keep_latest:
+                logger.debug(f"Only {len(artifact_versions)} versions exist, no cleanup needed for {artifact_name}")
                 return
 
             versions_to_delete = artifact_versions[keep_latest:]
@@ -852,10 +877,11 @@ class WandbLogger:
             deleted_count = 0
             for version in versions_to_delete:
                 try:
+                    logger.debug(f"Deleting artifact version: {version.name} (created: {version.created_at})")
                     version.delete()
                     deleted_count += 1
                 except Exception as e:
-                    logger.debug(f"Failed to delete old checkpoint {version.name}: {e}")
+                    logger.error(f"Failed to delete old checkpoint {getattr(version, 'name', '<unknown>')}: {e}")
 
             if deleted_count > 0:
                 logger.info(f"Cleaned up {deleted_count} old checkpoint artifacts for {artifact_name}")
@@ -866,7 +892,9 @@ class WandbLogger:
             gc.collect()
 
         except Exception as e:
+            # Bubble up errors so callers can see when cleanup genuinely failed.
             logger.error(f"Failed to cleanup checkpoints for {artifact_name}: {e}")
+            raise
 
 
     @requires_wandb_enabled

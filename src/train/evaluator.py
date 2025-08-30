@@ -81,6 +81,24 @@ class ModelEvaluator:
         logger.info("Creating embeddings")
         embs, labels, image_paths  = self._generate_embeddings(dataset, **eval_kwargs)
 
+        # Defensive: if no embeddings were generated (empty dataset or
+        # mocked dataset returning zero samples), return an empty results
+        # dict rather than proceeding and hitting concatenation/shape ops.
+        if embs is None or (hasattr(embs, 'shape') and embs.shape[0] == 0):
+            logger.warning("No embeddings generated for dataset; skipping metric computations and returning empty results")
+            empty_results = {
+                'distance_metrics': {},
+                'classification_metrics': {},
+                'ranking_metrics': {},
+            }
+            # Save results as-is (no-op if backend expects files)
+            try:
+                self._save_results(empty_results)
+            except Exception:
+                logger.debug("_save_results failed for empty results; continuing")
+            logger.info("✅ Comprehensive evaluation completed (empty dataset)")
+            return empty_results
+
         # Decide whether to compute full pairwise arrays (may be huge) or
         # stream statistics/samples for large datasets. Streaming avoids
         # concatenating large tensors (O(N^2)) which can blow up RAM.
@@ -134,37 +152,40 @@ class ModelEvaluator:
 
         # Ranking evaluation
         logger.info("Computing ranking metrics...")
-        ranking_metrics = self._evaluate_ranking(sims_matrix if sims_matrix is not None else embs,
-                                                  labels,
-                                                  use_batched=use_batched,
-                                                  chunk_size=getattr(evaluator_config, 'ranking_chunk_size', 1024))
+        ranking_metrics = self._evaluate_ranking(
+            sims_matrix if sims_matrix is not None else embs,
+            labels,
+            use_batched=use_batched,
+            chunk_size=getattr(evaluator_config, 'ranking_chunk_size', 1024)
+        )
 
         # Compute recall@k metrics and merge
         try:
-            recall_metrics = self.compute_recall_at_k(sims_matrix=sims_matrix if sims_matrix is not None else None,
-                                                       labels=labels,
-                                                       ks=(1, 5, 10),
-                                                       use_batched=use_batched,
-                                                       chunk_size=getattr(evaluator_config, 'ranking_chunk_size', 1024))
+            recall_metrics = self.compute_recall_at_k(
+                sims_matrix=sims_matrix if sims_matrix is not None else None,
+                labels=labels,
+                ks=(1, 5, 10),
+                use_batched=use_batched,
+                chunk_size=getattr(evaluator_config, 'ranking_chunk_size', 1024)
+            )
             ranking_metrics.update(recall_metrics)
         except Exception as e:
             logger.warning(f"Failed to compute recall@k metrics: {e}")
-       
-        
-        
+
         # Aggregate results
         results = {
             'distance_metrics': distance_metrics,
             'classification_metrics': classification_metrics,
             'ranking_metrics': ranking_metrics,
         }
-        
-        
+
         # Save detailed results
         self._save_results(results)
-        
+
         logger.info("✅ Comprehensive evaluation completed")
-        return results 
+        return results
+
+
     
 
     def _generate_embeddings(self, dataset: LacrossePlayerDataset, **eval_kwargs) -> Tuple[np.ndarray, np.ndarray, List[str]]:
@@ -276,14 +297,29 @@ class ModelEvaluator:
                 
                 logger.info(f"Processed {processed}/{len(dataset)} images (batch {batch_idx + 1}){memory_info}")
 
-        # Stack results
+        # Stack results; if no batches were processed return empty arrays
+        if not all_embeddings:
+            # No samples processed; return empty structures (shape (0, 0) for
+            # embeddings so downstream short-circuit in evaluate_comprehensive
+            # can detect zero rows).
+            embeddings_array = np.empty((0, 0), dtype=np.float32)
+            labels_array = np.array([], dtype=np.int64)
+            logger.info("No embeddings were produced by the DataLoader (0 samples)")
+            return embeddings_array, labels_array, all_paths
+
         embeddings_array = np.vstack(all_embeddings)
         labels_array = np.array(all_labels)
 
         logger.info(f"Generated {embeddings_array.shape[0]} embeddings for {len(set(labels_array))} unique players")
-        logger.info(f"Embeddings shape: {embeddings_array.shape}, mean={embeddings_array.mean():.4f}")
+        # Protect mean() call when there are zero elements
+        if embeddings_array.size > 0:
+            logger.info(f"Embeddings shape: {embeddings_array.shape}, mean={embeddings_array.mean():.4f}")
+        else:
+            logger.info(f"Embeddings shape: {embeddings_array.shape}")
 
         return embeddings_array, labels_array, all_paths
+
+
     
 
     def _compute_pairwise_batches(
@@ -904,3 +940,7 @@ class ModelEvaluator:
         gc.collect()
         
         logger.info("Evaluation cleanup completed")
+
+
+# Backwards-compatible alias: some tests and callers expect `Evaluator`
+Evaluator = ModelEvaluator
