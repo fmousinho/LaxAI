@@ -264,7 +264,7 @@ class WandbLogger:
             "name": run_name or wandb_config.run_name,
             "tags": all_tags,
             "config": config,
-            "reinit": "finish_previous"
+            "reinit": "return_previous"
         }
         # Initialize wandb run
         self.run = wandb.init(**run_params)
