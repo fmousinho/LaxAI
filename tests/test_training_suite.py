@@ -366,3 +366,104 @@ def test_convert_request_to_kwargs_includes_top_level_n_datasets():
     assert "n_datasets_to_use" in kwargs
     assert kwargs["n_datasets_to_use"] == 5
     assert "training_kwargs" not in kwargs
+
+
+def test_train_all_memory_stability_with_single_dataset():
+    """Test that train_all script maintains memory stability with n_datasets_to_use=1."""
+    import psutil
+    import gc
+    from datetime import datetime
+
+    # Ensure secrets for memory monitoring test
+    env_secrets.setup_environment_secrets()
+
+    # Setup memory monitoring
+    process = psutil.Process()
+    gc.collect()
+    initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+
+    print(f"Initial memory: {initial_memory:.1f}MB")
+
+    # Record memory before training
+    memory_measurements = []
+    memory_measurements.append({
+        'timestamp': datetime.now(),
+        'memory_mb': initial_memory,
+        'label': 'before_training'
+    })
+
+    from scripts import train_all
+
+    # Run training with memory monitoring parameters
+    results = train_all.train(
+        tenant_id="tenant1",
+        verbose=False,
+        save_intermediate=False,
+        custom_name="memory_stability_test",
+        resume_from_checkpoint=False,
+        wandb_tags=["memory_test"],
+        training_kwargs={
+            "num_epochs": 2,  # Exactly 2 epochs to match our validation test
+            "batch_size": 8,
+            "num_workers": 0,  # No multiprocessing for cleaner memory monitoring
+        },
+        model_kwargs={},
+        n_datasets_to_use=1,  # Single dataset mode
+    )
+
+    # Record memory after training
+    gc.collect()
+    final_memory = process.memory_info().rss / 1024 / 1024  # MB
+    memory_measurements.append({
+        'timestamp': datetime.now(),
+        'memory_mb': final_memory,
+        'label': 'after_training'
+    })
+
+    memory_delta = final_memory - initial_memory
+
+    print(f"Final memory: {final_memory:.1f}MB")
+    print(f"Memory delta: {memory_delta:+.1f}MB")
+    print(f"Memory measurements: {memory_measurements}")
+
+    # Verify training completed successfully
+    assert isinstance(results, dict)
+    assert results.get("status") == "completed"
+    assert results.get("steps_completed", 0) == 3  # All pipeline steps
+
+    # Verify memory stability (should be similar to our terminal test results)
+    assert abs(memory_delta) <= 150, f"Memory delta too large: {memory_delta:+.1f}MB (should be ≤ ±150MB)"
+    assert final_memory >= initial_memory * 0.8, f"Memory decreased too much: {memory_delta:+.1f}MB"
+
+    # Ensure no catastrophic memory issues
+    assert final_memory < initial_memory + 200, f"Memory increase too large: {memory_delta:+.1f}MB"
+
+    print("✅ Memory stability test passed!")
+
+
+def test_train_all_memory_monitoring_during_epochs():
+    """Test memory monitoring specifically during training epochs."""
+    import psutil
+    import gc
+    from unittest.mock import patch
+
+    # Ensure secrets
+    env_secrets.setup_environment_secrets()
+
+    from scripts import train_all
+
+    # Mock the training to add memory monitoring points
+    original_train = train_all.train
+
+    memory_log = []
+
+    def monitored_train(*args, **kwargs):
+        # Add memory monitoring to the training process
+        process = psutil.Process()
+
+        # This is a simplified monitoring approach for the test
+        # In real implementation, memory monitoring is built into the training classes
+        result = original_train(*args, **kwargs)
+
+        # Log final memory state
+        gc.collect()

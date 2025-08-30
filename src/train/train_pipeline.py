@@ -145,6 +145,8 @@ class TrainPipeline(Pipeline):
                 try:
                     train_folder = self.path_manager.get_path("train_dataset", dataset_id=dataset_name)
                     val_folder = self.path_manager.get_path("val_dataset", dataset_id=dataset_name)
+                    train_folders = [train_folder]  # Convert to list for consistency
+                    val_folders = [val_folder]      # Convert to list for consistency
                     dataset_mode = "single"
                     logger.info(f"🔄 Creating single dataset from: {dataset_name}")
                 except KeyError as e:

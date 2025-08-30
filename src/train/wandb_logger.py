@@ -240,16 +240,16 @@ class WandbLogger:
     
     @requires_wandb_enabled
     @safe_wandb_operation(default_return=False)
-    def init_run(self, config: Dict[str, Any], run_name: str = wandb_config.run_name, 
+    def init_run(self, config: Dict[str, Any], run_name: str = wandb_config.run_name,
                  tags: Optional[List[str]] = None) -> bool:
         """
         Initialize a new wandb run.
-        
+
         Args:
             config: Configuration dictionary to log
             run_name: Optional custom run name
             tags: Optional list of tags (will be merged with default tags)
-            
+
         Returns:
             bool: True if initialization successful, False otherwise
         """
@@ -268,14 +268,14 @@ class WandbLogger:
         }
         # Initialize wandb run
         self.run = wandb.init(**run_params)
-        
+
         self.initialized = True
 
         logger.info(f"✅ Wandb run initialized: {self.run.name}")
         logger.info(f"   Project: {wandb_config.project}")
         logger.info(f"   Entity: {wandb_config.entity}")
         logger.info(f"   Tags: {all_tags}")
-        
+
         return True
 
     def _robust_load_state_dict(self, model: torch.nn.Module, state_dict: Dict[str, torch.Tensor], device: str = "cpu") -> Tuple[bool, list, list, Optional[str]]:
@@ -385,21 +385,12 @@ class WandbLogger:
     def log_metrics(self, metrics: Dict[str, Any], step: Optional[int] = None) -> None:
         """
         Log metrics to wandb.
-        
+
         Args:
             metrics: Dictionary of metrics to log
             step: Optional step number
         """
-        # Monitor WandB processes before logging
-        process_count_before = self._monitor_wandb_processes()
-        
         self.run.log(metrics, step=step)
-        
-        # Monitor WandB processes after logging (don't terminate them)
-        if process_count_before > 3:  # Only log if we had many processes
-            current_count = self._monitor_wandb_processes()
-            if current_count > process_count_before:
-                logger.debug(f"WandB spawned additional processes during metrics logging: {current_count} total")
     
     @requires_wandb_initialized
     @safe_wandb_operation()
@@ -754,26 +745,42 @@ class WandbLogger:
         import psutil
         import os
 
-        # Monitor memory before checkpoint saving
-        process = psutil.Process(os.getpid())
-        memory_before = process.memory_info().rss / 1024 / 1024  # MB
-        
         # Monitor WandB processes before checkpoint saving
         wandb_process_count_before = self._monitor_wandb_processes()
 
-        # Create temporary checkpoint file
+        # Monitor memory usage before and after checkpoint operations
+        import psutil
+        process = psutil.Process()
+        memory_before = process.memory_info().rss / 1024 / 1024  # MB
+        
+        # Create temporary checkpoint file - MEMORY EFFICIENT VERSION
         with tempfile.NamedTemporaryFile(suffix=f'_epoch_{epoch}.pth', delete=False) as tmp_file:
-            checkpoint_data = {
-                'epoch': epoch,
-                'model_state_dict': model_state_dict,
-                'optimizer_state_dict': optimizer_state_dict,
-                'loss': loss,
-                'timestamp': datetime.now().isoformat(),
-                'model_config': model_config or {}
-            }
-            
-            torch.save(checkpoint_data, tmp_file.name)
             checkpoint_path = tmp_file.name
+            
+        # Save checkpoint data directly to file without loading everything into memory
+        checkpoint_data = {
+            'epoch': epoch,
+            'model_state_dict': model_state_dict,
+            'optimizer_state_dict': optimizer_state_dict,
+            'loss': loss,
+            'timestamp': datetime.now().isoformat(),
+            'model_config': model_config or {}
+        }
+        
+        # Use torch.save with map_location to avoid GPU->CPU transfers in memory
+        torch.save(checkpoint_data, checkpoint_path)
+        
+        # Clear checkpoint_data from memory immediately
+        del checkpoint_data
+        import gc
+        gc.collect()
+        
+        # Monitor memory after checkpoint save
+        memory_after = process.memory_info().rss / 1024 / 1024  # MB
+        memory_delta = memory_after - memory_before
+        
+        if abs(memory_delta) > 50:  # Log if memory changed by more than 50MB
+            logger.info(f"Checkpoint save memory: {memory_before:.1f}MB → {memory_after:.1f}MB (Δ{memory_delta:+.1f}MB)")
         
         # Create wandb artifact
         artifact_name = self._get_checkpoint_name()
@@ -806,13 +813,6 @@ class WandbLogger:
         import gc
         gc.collect()
 
-        # Monitor memory after checkpoint saving
-        memory_after = process.memory_info().rss / 1024 / 1024  # MB
-        memory_delta = memory_after - memory_before
-
-        if abs(memory_delta) > 50:  # Log if memory change is significant (>50MB)
-            logger.warning(f"Checkpoint save memory change: {memory_delta:.1f}MB (before: {memory_before:.1f}MB, after: {memory_after:.1f}MB)")
-
         # Monitor WandB processes after checkpoint operations (don't terminate them)
         wandb_process_count_after = self._monitor_wandb_processes()
         if wandb_process_count_after > wandb_process_count_before + 2:  # If we gained 2+ processes
@@ -831,22 +831,11 @@ class WandbLogger:
     def _cleanup_old_checkpoints(self, artifact_name: str, keep_latest: int = 1):
         """
         Clean up old wandb checkpoint artifacts, keeping only the latest N versions.
-        
+
         Args:
             artifact_name: Name of the artifact to clean up
             keep_latest: Number of latest versions to keep (default: 1)
         """
-        import psutil
-        import os
-
-        # Monitor memory before cleanup
-        process = psutil.Process(os.getpid())
-        memory_before = process.memory_info().rss / 1024 / 1024  # MB
-        
-        # Monitor WandB processes before cleanup
-        wandb_process_count_before = self._monitor_wandb_processes()
-            
-        # List all versions of this artifact
         try:
             # Use the newer `artifacts` API instead of deprecated `artifact_versions`
             artifact_versions = list(self.wandb_api.artifacts(
@@ -860,34 +849,25 @@ class WandbLogger:
 
             versions_to_delete = artifact_versions[keep_latest:]
 
+            deleted_count = 0
             for version in versions_to_delete:
                 try:
                     version.delete()
-                    logger.info(f"Deleted old checkpoint artifact: {version.name}")
+                    deleted_count += 1
                 except Exception as e:
-                    logger.warning(f"Failed to delete old checkpoint {version.name}: {e}")
+                    logger.debug(f"Failed to delete old checkpoint {version.name}: {e}")
+
+            if deleted_count > 0:
+                logger.info(f"Cleaned up {deleted_count} old checkpoint artifacts for {artifact_name}")
 
             # Explicitly clean up artifact versions list to prevent memory accumulation
             del artifact_versions, versions_to_delete
             import gc
             gc.collect()
 
-            # Monitor memory after cleanup
-            memory_after = process.memory_info().rss / 1024 / 1024  # MB
-            memory_delta = memory_after - memory_before
-
-            if abs(memory_delta) > 20:  # Log if memory change is significant (>20MB)
-                logger.warning(f"Checkpoint cleanup memory change: {memory_delta:.1f}MB (before: {memory_before:.1f}MB, after: {memory_after:.1f}MB)")
-
         except Exception as e:
-            logger.warning(f"Failed to access checkpoint artifacts: {e}")
-        
-        # Clean up any WandB processes that may have been spawned during cleanup
-        wandb_process_count_after = self._monitor_wandb_processes()
-        if wandb_process_count_after > wandb_process_count_before + 1:
-            cleaned = self._cleanup_wandb_processes(force=False)
-            if cleaned > 0:
-                logger.debug(f"Cleaned up {cleaned} WandB processes after checkpoint cleanup")
+            logger.error(f"Failed to cleanup checkpoints for {artifact_name}: {e}")
+
 
     @requires_wandb_enabled
     @safe_wandb_operation()

@@ -591,6 +591,12 @@ class Training:
                 # Save checkpoint at the end of each epoch
                 if wandb_config.enabled and self.optimizer is not None:
                     try:
+                        # Monitor memory before checkpoint save
+                        import psutil
+                        process = psutil.Process()
+                        memory_before_checkpoint = process.memory_info().rss / 1024 / 1024  # MB
+                        logger.debug(f"Memory before checkpoint save: {memory_before_checkpoint:.1f}MB")
+                        
                         model_config_dict = {
                             "margin": self.margin,
                             "learning_rate": self.learning_rate,
@@ -607,6 +613,12 @@ class Training:
                             model_config=model_config_dict
                         )
                         logger.debug(f"Checkpoint saved for epoch {epoch + 1}")
+                        
+                        # Monitor memory after checkpoint save
+                        memory_after_checkpoint = process.memory_info().rss / 1024 / 1024  # MB
+                        checkpoint_memory_delta = memory_after_checkpoint - memory_before_checkpoint
+                        if abs(checkpoint_memory_delta) > 100:  # Log significant memory changes
+                            logger.info(f"Checkpoint memory usage: {memory_before_checkpoint:.1f}MB → {memory_after_checkpoint:.1f}MB (Δ{checkpoint_memory_delta:+.1f}MB)")
                         
                     except Exception as e:
                         if getattr(wandb_config, 'enabled', False):
@@ -713,6 +725,11 @@ class Training:
         evaluator = ModelEvaluator(self.model, device=self.device)
 
         # Log memory before evaluation
+        import psutil
+        process = psutil.Process()
+        memory_before_eval = process.memory_info().rss / 1024 / 1024  # MB
+        logger.debug(f"Memory before evaluation: {memory_before_eval:.1f}MB")
+        
         log_evaluation_memory_usage("Before validation evaluation", evaluator)
 
         try:
@@ -724,6 +741,13 @@ class Training:
         finally:
             # Always cleanup evaluator to prevent memory leaks
             evaluator.cleanup()
+            
+            # Monitor memory after evaluation
+            memory_after_eval = process.memory_info().rss / 1024 / 1024  # MB
+            eval_memory_delta = memory_after_eval - memory_before_eval
+            if abs(eval_memory_delta) > 50:  # Log significant memory changes
+                logger.info(f"Evaluation memory usage: {memory_before_eval:.1f}MB → {memory_after_eval:.1f}MB (Δ{eval_memory_delta:+.1f}MB)")
+            
             log_evaluation_memory_usage("After validation evaluation cleanup")
 
         # If evaluation succeeded, flatten all nested metrics into a single-level dict;
