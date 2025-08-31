@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 EPOCHS_PER_VAL = 10
 BATCHES_PER_LOG_MSG = 10
+THRESHOLD_FOR_DATALOADER_RESTART = 90.0
 
 class Training:
     """
@@ -127,6 +128,7 @@ class Training:
         self.dataloader = None
         self.val_dataloader = None
         self.cpu_monitor = CPUMemoryMonitor()
+        self.last_worker_restart_epoch = -1  # Track last worker restart to prevent too frequent restarts
 
 
     def _load_model_from_wandb(self, model_class, model_name: str, alias: Optional[str], **kwargs):
@@ -420,6 +422,32 @@ class Training:
                     logger.info(f"Training cancelled by stop_callback at epoch {epoch + 1}")
                     raise InterruptedError("Training cancelled by external request")
 
+                # Memory-based worker restart to prevent accumulation
+                if self.num_workers > 0 and epoch > 0:
+                    current_memory = self.cpu_monitor._get_current_memory()
+                    memory_percent = current_memory["percent"]
+                    
+                    # Restart if memory utilization exceeds 90% and we haven't restarted recently (at least 1 epoch ago)
+                    if memory_percent > THRESHOLD_FOR_DATALOADER_RESTART and (epoch - self.last_worker_restart_epoch) >= 1:
+                        logger.info(f"Restarting DataLoader workers at epoch {epoch + 1} - CPU memory utilization: {memory_percent:.1f}%")
+                        
+                        # Log memory before restart
+                        memory_before = current_memory["rss_mb"]
+                        logger.info(f"Memory before worker restart: {memory_before:.1f}MB ({memory_percent:.1f}%)")
+                        
+                        self._restart_dataloader_workers()
+                        self.last_worker_restart_epoch = epoch  # Update last restart epoch
+                        
+                        # Log memory after restart
+                        memory_after = self.cpu_monitor._get_current_memory()["rss_mb"]
+                        memory_after_percent = self.cpu_monitor._get_current_memory()["percent"]
+                        memory_delta = memory_after - memory_before
+                        logger.info(f"Memory after worker restart: {memory_after:.1f}MB ({memory_after_percent:.1f}%) (Δ{memory_delta:+.1f}MB)")
+                    elif memory_percent > 90.0:
+                        logger.debug(f"CPU memory utilization: {memory_percent:.1f}% - restart skipped (too recent)")
+                    else:
+                        logger.debug(f"CPU memory utilization: {memory_percent:.1f}% - no restart needed")
+                
                 log_gpu_memory_stats(f"Epoch {epoch + 1} start")
                 self.cpu_monitor.log_memory_stats(f"Epoch {epoch + 1} start")
 
@@ -478,14 +506,14 @@ class Training:
                     # Explicitly delete tensors to help free GPU memory faster
                     del anchor, positive, negative, emb_anchor, emb_positive, emb_negative, loss
                     
-                    # Clear GPU cache periodically
-                    if torch.cuda.is_available() and (i + 1) % 50 == 0:
-                        torch.cuda.empty_cache()
+                    # # Clear GPU cache periodically
+                    # if torch.cuda.is_available() and (i + 1) % 50 == 0:
+                    #     torch.cuda.empty_cache()
                         
-                    # Clear CPU memory periodically to prevent accumulation
-                    if (i + 1) % 100 == 0:
-                        clear_cpu_memory()
-                        self.cpu_monitor.log_memory_stats(f"Epoch {epoch + 1} Batch {i + 1}")
+                    # # Clear CPU memory periodically to prevent accumulation
+                    # if (i + 1) % 100 == 0:
+                    #     clear_cpu_memory()
+                    #     self.cpu_monitor.log_memory_stats(f"Epoch {epoch + 1} Batch {i + 1}")
 
                 # Calculate and log training loss
                 epoch_train_loss = running_loss / ttl_batches if ttl_batches > 0 else 0.0
@@ -1002,3 +1030,48 @@ class Training:
             self.model = self.model.to(self.device)
         
         return self.model
+
+    def _restart_dataloader_workers(self):
+        """
+        Restart DataLoader workers when CPU memory utilization exceeds threshold.
+        
+        This method terminates existing workers and recreates the DataLoader
+        with fresh workers, clearing any accumulated state. Called automatically
+        when CPU memory utilization exceeds 90%.
+        """
+        try:
+            # Store original dataset references
+            train_dataset = self.dataloader.dataset if self.dataloader else None
+            val_dataset = self.val_dataloader.dataset if self.val_dataloader else None
+            
+            # Clean up existing workers
+            if self.dataloader and hasattr(self.dataloader, '_iterator'):
+                if hasattr(self.dataloader._iterator, '_workers'):
+                    for worker in self.dataloader._iterator._workers:
+                        if worker.is_alive():
+                            worker.terminate()
+                            worker.join(timeout=1.0)
+            
+            if self.val_dataloader and hasattr(self.val_dataloader, '_iterator'):
+                if hasattr(self.val_dataloader._iterator, '_workers'):
+                    for worker in self.val_dataloader._iterator._workers:
+                        if worker.is_alive():
+                            worker.terminate()
+                            worker.join(timeout=1.0)
+            
+            # Force garbage collection to clean up worker references
+            import gc
+            gc.collect()
+            
+            # Recreate DataLoaders with fresh workers
+            if train_dataset:
+                self.setup_dataloader(train_dataset, type='train')
+                logger.info("Training DataLoader workers restarted")
+            
+            if val_dataset:
+                self.setup_dataloader(val_dataset, type='val')
+                logger.info("Validation DataLoader workers restarted")
+                
+        except Exception as e:
+            logger.warning(f"Failed to restart DataLoader workers: {e}")
+            # Continue training even if worker restart fails
