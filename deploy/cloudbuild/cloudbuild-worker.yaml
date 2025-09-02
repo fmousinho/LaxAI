@@ -5,11 +5,20 @@
 ############################################################################
 
 # This Cloud Build file builds a Docker image, pushes it to Artifact
-# Registry, and deploys it to a GPU-based Cloud Run Job.
+# Registry, and optionally deploys it to a GPU-based Cloud Run Job.
+#
+# Usage:
+#   Full deployment (default): gcloud builds submit --config=cloudbuild-worker.yaml
+#   Short deployment (build only): gcloud builds submit --config=cloudbuild-worker.yaml --substitutions=_DEPLOY_MODE=short
+#
+# The DEPLOY_MODE substitution controls deployment behavior:
+#   - "full": Build image, setup Pub/Sub, and deploy Cloud Run Job
+#   - "short": Build and push image only (skip Pub/Sub setup and deployment)
 
 substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"
   _SERVICE_ACCOUNT: "googlebatch@${_GOOGLE_CLOUD_PROJECT}.iam.gserviceaccount.com"
+  _DEPLOY_MODE: "short"  # Can be "full" or "short"
 
 steps:
   # Build the training worker image
@@ -38,6 +47,9 @@ steps:
   - id: "setup-pubsub"
     name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     entrypoint: "bash"
+    when:
+      condition: |
+        variables.get('DEPLOY_MODE') == 'full'
     args:
       - "-c"
       - |
@@ -71,6 +83,9 @@ steps:
   - id: "deploy-cloud-run-job"
     name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     entrypoint: "bash"
+    when:
+      condition: |
+        variables.get('DEPLOY_MODE') == 'full'
     args:
       - "-c"
       - |
