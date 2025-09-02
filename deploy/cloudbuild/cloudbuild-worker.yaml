@@ -18,7 +18,7 @@
 substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"
   _SERVICE_ACCOUNT: "googlebatch@${_GOOGLE_CLOUD_PROJECT}.iam.gserviceaccount.com"
-  _DEPLOY_MODE: "short"  # Can be "full" or "short"
+  _DEPLOY_MODE: "full"  # Can be "full" or "short"
 
 steps:
   # Build the training worker image
@@ -47,9 +47,8 @@ steps:
   - id: "setup-pubsub"
     name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     entrypoint: "bash"
-    when:
-      condition: |
-        variables.get('DEPLOY_MODE') == 'full'
+    condition: |
+      variables.get('DEPLOY_MODE') == 'full'
     args:
       - "-c"
       - |
@@ -83,9 +82,8 @@ steps:
   - id: "deploy-cloud-run-job"
     name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     entrypoint: "bash"
-    when:
-      condition: |
-        variables.get('DEPLOY_MODE') == 'full'
+    condition: |
+      variables.get('DEPLOY_MODE') == 'full'
     args:
       - "-c"
       - |
