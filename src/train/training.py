@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 EPOCHS_PER_VAL = 10
 BATCHES_PER_LOG_MSG = 10
 THRESHOLD_FOR_DATALOADER_RESTART = 90.0
+EPOCHS_PER_VAL = 0
 
 class Training:
     """
@@ -519,10 +520,10 @@ class Training:
                 epoch_train_loss = running_loss / ttl_batches if ttl_batches > 0 else 0.0
                 
                 # Memory cleanup after training phase
-                clear_cpu_memory()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                self.cpu_monitor.log_memory_stats(f"Epoch {epoch + 1} training complete")
+                # clear_cpu_memory()
+                # if torch.cuda.is_available():
+                #     torch.cuda.empty_cache()
+                # self.cpu_monitor.log_memory_stats(f"Epoch {epoch + 1} training complete")
 
                 # ========================================================================
                 # Validation Phase (if dataloader is provided)
@@ -535,7 +536,7 @@ class Training:
                     logger.info(f"Training cancelled by stop_callback before validation at epoch {epoch + 1}")
                     raise InterruptedError("Training cancelled by external request")
 
-                if val_dataloader and (epoch + 1) % EPOCHS_PER_VAL == 0:
+                if EPOCHS_PER_VAL > 0 and val_dataloader and (epoch + 1) % EPOCHS_PER_VAL == 0:
                     self.model.eval()  # Set model to evaluation mode
                     
                     # 1. Calculate Validation Loss
