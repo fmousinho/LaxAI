@@ -113,6 +113,21 @@ class TrainPipeline(Pipeline):
             }
 
             wandb_logger.init_run(config=config, run_name=f"{custom_name}", tags=wandb_run_tags)
+        # On macOS / some CI environments torch DataLoader uses 'spawn' by default
+        # which can fail when tests run code that starts worker processes from
+        # imported modules. Prefer 'fork' where available for compatibility.
+        try:
+            import multiprocessing as mp
+            if os.name == 'posix' and 'darwin' in os.uname().sysname.lower():
+                try:
+                    mp.set_start_method('fork')
+                    logger.debug("Set multiprocessing start method to 'fork' for macOS compatibility")
+                except RuntimeError:
+                    # start method already set; ignore
+                    pass
+        except Exception:
+            # If we can't set it, continue; tests will handle num_workers=0 fallback
+            logger.debug("Could not set multiprocessing start method; continuing")
         try:
             if not dataset_name:
                 return {"status": PipelineStatus.ERROR.value, "error": "No dataset name provided"}

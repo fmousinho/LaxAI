@@ -784,11 +784,40 @@ class WandbLogger:
         if loss is None:
             loss = kwargs.get('current_loss', None)
 
+        # Normalize legacy / positional argument usage.
+        # Some older tests/callers pass state_dicts positionally (model, optimizer)
+        # or pass loss/model_name in place of later params. Detect common
+        # misbindings and normalize into the explicit variables below.
+        try:
+            # If `model` is actually a state_dict (dict) instead of an nn.Module
+            if model is not None and not hasattr(model, 'state_dict') and isinstance(model, dict):
+                model_state_dict = model
+                model = None
+
+            # If `optimizer` is actually an optimizer state dict
+            if optimizer is not None and not hasattr(optimizer, 'state_dict') and isinstance(optimizer, dict):
+                optimizer_state_dict = optimizer
+                optimizer = None
+
+            # If model_state_dict was accidentally given as a numeric loss (legacy positional),
+            # shift it into `loss` and clear the dict variable.
+            if model_state_dict is not None and isinstance(model_state_dict, (int, float)):
+                loss = float(model_state_dict)
+                model_state_dict = None
+
+            # If optimizer_state_dict is a string it's likely the legacy `model_name` positional arg
+            if optimizer_state_dict is not None and isinstance(optimizer_state_dict, str):
+                model_name = optimizer_state_dict
+                optimizer_state_dict = None
+        except Exception:
+            # Be defensive: if normalization fails, continue and let later validations raise
+            pass
+
         # Create state dictionaries efficiently with immediate scope management
         if model_state_dict is None and model is not None:
             # Create model state dict in limited scope
             model_state_dict = model.state_dict()
-            
+
         if optimizer_state_dict is None and optimizer is not None:
             # Create optimizer state dict in limited scope  
             optimizer_state_dict = optimizer.state_dict()
@@ -804,28 +833,30 @@ class WandbLogger:
             checkpoint_path = tmp_file.name
             
         try:
-            # Save checkpoint data directly to file without loading everything into memory
-            checkpoint_data = {
+            # Save checkpoint data directly to file without creating intermediate dict
+            # This avoids holding 2x the tensor memory (original + dict copy)
+            torch.save({
                 'epoch': epoch,
                 'model_state_dict': model_state_dict,
                 'optimizer_state_dict': optimizer_state_dict,
                 'loss': loss,
                 'timestamp': datetime.now().isoformat(),
                 'model_config': model_config or {}
-            }
-            
-            # Use torch.save with map_location to avoid GPU->CPU transfers in memory
-            torch.save(checkpoint_data, checkpoint_path)
+            }, checkpoint_path)
             
         finally:
-            # Clear checkpoint_data and state dicts from memory immediately
-            if 'checkpoint_data' in locals():
-                del checkpoint_data
-            # Clear state dicts if we created them (not if they were passed in)
-            if model is not None and 'model_state_dict' in locals():
-                del model_state_dict
-            if optimizer is not None and 'optimizer_state_dict' in locals():
-                del optimizer_state_dict
+            # Clear state dicts from memory immediately after torch.save
+            # Clear any state dict locals to avoid holding large tensors in scope
+            if 'model_state_dict' in locals():
+                try:
+                    del model_state_dict
+                except Exception:
+                    pass
+            if 'optimizer_state_dict' in locals():
+                try:
+                    del optimizer_state_dict
+                except Exception:
+                    pass
             import gc
             gc.collect()
         
@@ -927,7 +958,34 @@ class WandbLogger:
             deleted_count = 0
             for version in versions_to_delete:
                 try:
-                    logger.debug(f"Deleting artifact version: {version.name} (created: {version.created_at})")
+                    logger.debug(f"Preparing to delete artifact version: {getattr(version, 'name', '<unknown>')} (created: {getattr(version, 'created_at', '<unknown>')})")
+
+                    # If the version has aliases (for example `latest`), remove them first
+                    try:
+                        aliases = getattr(version, 'aliases', None)
+                        if aliases:
+                            logger.debug(f"Removing aliases {aliases} from version {getattr(version, 'name', '<unknown>')}")
+                            remove_fn = getattr(version, 'remove', None)
+                            # Some wandb SDK versions expose `remove(alias)`; try to call it for each alias.
+                            if callable(remove_fn):
+                                for a in list(aliases):
+                                    try:
+                                        remove_fn(a)
+                                        logger.debug(f"Removed alias '{a}' from version {getattr(version, 'name', '<unknown>')}")
+                                    except Exception as e:
+                                        logger.debug(f"Failed to remove alias '{a}' via version.remove(): {e}")
+                            else:
+                                # Fallback: try to clear the aliases attribute if writable
+                                try:
+                                    version.aliases = []
+                                    logger.debug(f"Cleared aliases on version object for {getattr(version, 'name', '<unknown>')}")
+                                except Exception:
+                                    logger.debug("No supported alias-removal API available on this wandb SDK; proceeding to delete and letting server handle conflicts")
+                    except Exception as e:
+                        logger.debug(f"Error while attempting to remove aliases: {e}")
+
+                    # Now attempt deletion
+                    logger.debug(f"Deleting artifact version: {getattr(version, 'name', '<unknown>')}")
                     version.delete()
                     deleted_count += 1
                 except Exception as e:
@@ -935,6 +993,21 @@ class WandbLogger:
 
             if deleted_count > 0:
                 logger.info(f"Cleaned up {deleted_count} old checkpoint artifacts for {artifact_name}")
+
+            # If we couldn't delete any versions (for example due to server-side
+            # alias protection), and caller requested removing all versions
+            # (keep_latest == 0), attempt to remove the entire collection as a
+            # last-resort fallback. This is necessary because some wandb server
+            # configurations prevent deleting a version that still has an alias
+            # (e.g. 'latest'). Deleting the collection will remove all versions.
+            if deleted_count == 0 and keep_latest == 0:
+                try:
+                    logger.debug(f"Attempting to delete artifact collection {collection_name} as fallback (keep_latest=0)")
+                    # artifact_collection variable references the collection API object
+                    artifact_collection.delete()
+                    logger.info(f"Deleted artifact collection {collection_name} as fallback cleanup")
+                except Exception as e:
+                    logger.warning(f"Fallback collection delete failed for {collection_name}: {e}")
 
             # Explicitly clean up artifact versions list to prevent memory accumulation
             del artifact_versions, versions_to_delete
