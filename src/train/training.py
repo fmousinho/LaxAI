@@ -476,11 +476,6 @@ class Training:
                     
                 for i, (anchor, positive, negative, _) in enumerate(self.dataloader):
 
-                    # Check for cancellation
-                    if stop_callback and stop_callback():
-                        logger.info(f"Training cancelled by stop_callback at epoch {epoch + 1}, batch {i + 1}")
-                        raise InterruptedError("Training cancelled by external request")
-
                     # Log progress
                     if (i + 1) % BATCHES_PER_LOG_MSG == 0:
                         logger.info(f"Training Batch {i+1}/{ttl_batches}")
@@ -528,8 +523,7 @@ class Training:
                 # ========================================================================
                 # Validation Phase (if dataloader is provided)
                 # ========================================================================
-                epoch_val_loss = None
-                reid_metrics = {}
+               
 
                 # Check for cancellation before validation
                 if stop_callback and stop_callback():
@@ -537,6 +531,10 @@ class Training:
                     raise InterruptedError("Training cancelled by external request")
 
                 if EPOCHS_PER_VAL > 0 and val_dataloader and (epoch + 1) % EPOCHS_PER_VAL == 0:
+
+                    epoch_val_loss = None
+                    reid_metrics = {}   
+
                     self.model.eval()  # Set model to evaluation mode
                     
                     # 1. Calculate Validation Loss
@@ -633,14 +631,14 @@ class Training:
                             "weight_decay": self.weight_decay
                         }
                         
-                        wandb_logger.save_checkpoint(
-                            epoch=epoch + 1,  # Save 1-indexed epoch number
-                            model_state_dict=self.model.state_dict(),
-                            optimizer_state_dict=self.optimizer.state_dict(),
-                            loss=monitoring_loss,
-                            model_name=type(self.model).__name__,
-                            model_config=model_config_dict
-                        )
+                        # wandb_logger.save_checkpoint(
+                        #     epoch=epoch + 1,  # Save 1-indexed epoch number
+                        #     model_state_dict=self.model.state_dict(),
+                        #     optimizer_state_dict=self.optimizer.state_dict(),
+                        #     loss=monitoring_loss,
+                        #     model_name=type(self.model).__name__,
+                        #     model_config=model_config_dict
+                        # )
                         logger.debug(f"Checkpoint saved for epoch {epoch + 1}")
                         
                         # Monitor memory after checkpoint save
@@ -655,15 +653,6 @@ class Training:
                             raise
                         logger.warning(f"Failed to save checkpoint for epoch {epoch + 1}: {e}")
 
-                # Periodic monitoring of WandB resources (don't terminate processes)
-                if wandb_config.enabled:
-                    try:
-                        # Monitor WandB processes periodically
-                        process_count = wandb_logger._monitor_wandb_processes()
-                        if process_count > 3:  # Log if we have many processes
-                            logger.info(f"WandB has {process_count} background processes running - this is normal for long training sessions")
-                    except Exception as e:
-                        logger.debug(f"Failed to monitor WandB processes: {e}")
 
         except (RuntimeError, torch.cuda.OutOfMemoryError) as e:
             logger.error(f"Training failed with error: {e}")

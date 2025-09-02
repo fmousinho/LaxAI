@@ -123,6 +123,16 @@ def analyze_wandb_operations():
         if proc_info['cmdline']:
             logger.info(f"  Command: {' '.join(proc_info['cmdline'])}")
 
+    # Clean up artifacts created during diagnostic
+    logger.info("Cleaning up diagnostic artifacts...")
+    try:
+        # Clean up checkpoint artifacts
+        checkpoint_name = wandb_logger._sanitize_artifact_name(wandb_logger._get_checkpoint_name())
+        wandb_logger._cleanup_old_checkpoints(checkpoint_name, keep_latest=0)  # Remove all checkpoint versions
+        logger.info(f"Cleaned up checkpoint artifacts: {checkpoint_name}")
+    except Exception as e:
+        logger.warning(f"Failed to cleanup checkpoint artifacts: {e}")
+
     # Finish WandB
     logger.info("Finishing WandB...")
     wandb_logger.finish()

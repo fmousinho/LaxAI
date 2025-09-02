@@ -66,5 +66,19 @@ def test_wandb_online_checkpoint_and_registry():
         except Exception:
             pass
 
+    # Clean up WandB artifacts created during this test
+    try:
+        # Clean up checkpoint artifacts
+        if ckpt_artifact:
+            checkpoint_name = logger._sanitize_artifact_name(logger._get_checkpoint_name())
+            logger._cleanup_old_checkpoints(checkpoint_name, keep_latest=0)  # Remove all checkpoint versions
+        
+        # Clean up model artifacts
+        logger._cleanup_old_model_versions(collection_name, keep_latest=0)  # Remove all model versions
+        
+        logger.info(f"Cleaned up test artifacts: checkpoint={checkpoint_name}, model={collection_name}")
+    except Exception as e:
+        logger.warning(f"Failed to cleanup test artifacts: {e}")
+
     # Finish the run
     logger.finish()
