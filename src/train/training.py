@@ -632,14 +632,16 @@ class Training:
                             "weight_decay": self.weight_decay
                         }
                         
-                        # wandb_logger.save_checkpoint(
-                        #     epoch=epoch + 1,  # Save 1-indexed epoch number
-                        #     model_state_dict=self.model.state_dict(),
-                        #     optimizer_state_dict=self.optimizer.state_dict(),
-                        #     loss=monitoring_loss,
-                        #     model_name=type(self.model).__name__,
-                        #     model_config=model_config_dict
-                        # )
+                        # Memory-efficient checkpoint save: pass model/optimizer objects directly
+                        # instead of pre-computed state_dicts to avoid memory leaks
+                        wandb_logger.save_checkpoint(
+                            epoch=epoch + 1,  # Save 1-indexed epoch number
+                            model=self.model,
+                            optimizer=self.optimizer,
+                            loss=monitoring_loss,
+                            model_name=type(self.model).__name__,
+                            model_config=model_config_dict
+                        )
                         logger.debug(f"Checkpoint saved for epoch {epoch + 1}")
                         
                         # Monitor memory after checkpoint save

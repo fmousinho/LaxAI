@@ -78,7 +78,7 @@ class TrainingConfig:
     lr_scheduler_factor: float = 0.5  # Factor by which to reduce learning rate
     lr_scheduler_min_lr: float = 1e-7  # Minimum learning rate after reduction
     num_epochs: int = 50
-    margin: float = 0.3
+    margin: float = 0.2
     weight_decay: float = 1e-4  # L2 regularization weight decay
     train_ratio: float = 0.8
     min_images_per_player: int = 2

@@ -725,22 +725,30 @@ class WandbLogger:
 
     @requires_wandb_initialized
     @safe_wandb_operation()
-    def save_checkpoint(self, epoch: int, model_state_dict: Dict[str, Any], 
-                   optimizer_state_dict: Dict[str, Any], loss: float = None, 
+    def save_checkpoint(self, epoch: int, model: Optional[torch.nn.Module] = None, 
+                   optimizer: Optional[torch.optim.Optimizer] = None,
+                   model_state_dict: Optional[Dict[str, Any]] = None,
+                   optimizer_state_dict: Optional[Dict[str, Any]] = None,
+                   loss: Optional[float] = None, 
                    model_name: str = "model", model_config: Optional[Dict[str, Any]] = None, **kwargs) -> Optional[str]:
         """
         Save model checkpoint to wandb and clean up previous versions.
         
         Args:
             epoch: Current epoch number
-            model_state_dict: Model state dictionary
-            optimizer_state_dict: Optimizer state dictionary  
+            model: The model to save (alternative to model_state_dict)
+            optimizer: The optimizer to save (alternative to optimizer_state_dict)
+            model_state_dict: Pre-computed model state dictionary (discouraged for memory reasons)
+            optimizer_state_dict: Pre-computed optimizer state dictionary (discouraged for memory reasons)
             loss: Current loss value
             model_name: Name of the model for artifact naming
             model_config: Optional model configuration metadata
             
         Returns:
             Path to saved checkpoint artifact, or None if failed
+            
+        Note:
+            For optimal memory usage, pass model and optimizer objects directly instead of pre-computed state_dicts.
         """
         import psutil
         import os
@@ -757,27 +765,50 @@ class WandbLogger:
         if loss is None:
             loss = kwargs.get('current_loss', None)
 
+        # Create state dictionaries efficiently with immediate scope management
+        if model_state_dict is None and model is not None:
+            # Create model state dict in limited scope
+            model_state_dict = model.state_dict()
+            
+        if optimizer_state_dict is None and optimizer is not None:
+            # Create optimizer state dict in limited scope  
+            optimizer_state_dict = optimizer.state_dict()
+            
+        # Validate we have the required state
+        if model_state_dict is None:
+            raise ValueError("Either model or model_state_dict must be provided")
+        if optimizer_state_dict is None:
+            raise ValueError("Either optimizer or optimizer_state_dict must be provided")
+
         # Create temporary checkpoint file - MEMORY EFFICIENT VERSION
         with tempfile.NamedTemporaryFile(suffix=f'_epoch_{epoch}.pth', delete=False) as tmp_file:
             checkpoint_path = tmp_file.name
             
-        # Save checkpoint data directly to file without loading everything into memory
-        checkpoint_data = {
-            'epoch': epoch,
-            'model_state_dict': model_state_dict,
-            'optimizer_state_dict': optimizer_state_dict,
-            'loss': loss,
-            'timestamp': datetime.now().isoformat(),
-            'model_config': model_config or {}
-        }
-        
-        # Use torch.save with map_location to avoid GPU->CPU transfers in memory
-        torch.save(checkpoint_data, checkpoint_path)
-        
-        # Clear checkpoint_data from memory immediately
-        del checkpoint_data
-        import gc
-        gc.collect()
+        try:
+            # Save checkpoint data directly to file without loading everything into memory
+            checkpoint_data = {
+                'epoch': epoch,
+                'model_state_dict': model_state_dict,
+                'optimizer_state_dict': optimizer_state_dict,
+                'loss': loss,
+                'timestamp': datetime.now().isoformat(),
+                'model_config': model_config or {}
+            }
+            
+            # Use torch.save with map_location to avoid GPU->CPU transfers in memory
+            torch.save(checkpoint_data, checkpoint_path)
+            
+        finally:
+            # Clear checkpoint_data and state dicts from memory immediately
+            if 'checkpoint_data' in locals():
+                del checkpoint_data
+            # Clear state dicts if we created them (not if they were passed in)
+            if model is not None and 'model_state_dict' in locals():
+                del model_state_dict
+            if optimizer is not None and 'optimizer_state_dict' in locals():
+                del optimizer_state_dict
+            import gc
+            gc.collect()
         
         # Monitor memory after checkpoint save
         memory_after = process.memory_info().rss / 1024 / 1024  # MB

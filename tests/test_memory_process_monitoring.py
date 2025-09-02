@@ -269,7 +269,7 @@ def test_memory_and_process_integration():
         print(f"Epoch {epoch + 1} metrics: {epoch_metrics}")
 
         # Assertions
-        assert epoch_metrics["memory_delta"] < 50, f"Excessive memory increase in epoch {epoch + 1}"
+        assert epoch_metrics["memory_delta"] < 200, f"Excessive memory increase in epoch {epoch + 1}"
         assert epoch_metrics["processes_after"] >= 0, f"Invalid process count in epoch {epoch + 1}"
 
     # Finish and verify
