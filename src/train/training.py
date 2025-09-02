@@ -530,10 +530,11 @@ class Training:
                     logger.info(f"Training cancelled by stop_callback before validation at epoch {epoch + 1}")
                     raise InterruptedError("Training cancelled by external request")
 
-                if EPOCHS_PER_VAL > 0 and val_dataloader and (epoch + 1) % EPOCHS_PER_VAL == 0:
+                epoch_val_loss = None
+                reid_metrics = {} 
 
-                    epoch_val_loss = None
-                    reid_metrics = {}   
+
+                if EPOCHS_PER_VAL > 0 and val_dataloader and (epoch + 1) % EPOCHS_PER_VAL == 0:
 
                     self.model.eval()  # Set model to evaluation mode
                     
