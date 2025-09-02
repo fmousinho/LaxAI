@@ -101,6 +101,25 @@ class WandbLogger:
             self.enabled = False
             logger.warning("Failed to login to wandb, disabling wandb logging")
 
+    # --- Convenience logging proxies ---------------------------------
+    # Some tests and external callers call logger.info()/warning() on the
+    # WandbLogger instance. Provide thin proxy methods that forward to the
+    # module-level `logger` so those calls succeed and preserve message
+    # formatting semantics.
+    def info(self, msg: str, *args, **kwargs) -> None:
+        logger.info(msg, *args, **kwargs)
+
+    def warning(self, msg: str, *args, **kwargs) -> None:
+        logger.warning(msg, *args, **kwargs)
+
+    def error(self, msg: str, *args, **kwargs) -> None:
+        logger.error(msg, *args, **kwargs)
+
+    def debug(self, msg: str, *args, **kwargs) -> None:
+        logger.debug(msg, *args, **kwargs)
+
+    def exception(self, msg: str, *args, **kwargs) -> None:
+        logger.exception(msg, *args, **kwargs)
     def _get_api_key(self) -> Optional[str]:
         """Get and validate wandb API key."""
         # Ensure environment is properly loaded first

@@ -96,11 +96,20 @@ class TrainPipeline(Pipeline):
             Dictionary with pipeline results and statistics.
         """
         if wandb_config.enabled:
-
+            # Initialize WandB with comprehensive configuration for the entire pipeline
             config = {
                 "pipeline": "training_pipeline",
                 "custom_name": custom_name,
                 "resume_from_checkpoint": resume_from_checkpoint,
+                # Training parameters (will be available for both training and evaluation)
+                "learning_rate": self.training_kwargs.get('learning_rate', getattr(training_config, 'learning_rate', 0.001)),
+                "batch_size": self.training_kwargs.get('batch_size', getattr(training_config, 'batch_size', 32)),
+                "num_epochs": self.training_kwargs.get('num_epochs', getattr(training_config, 'num_epochs', 50)),
+                "margin": self.training_kwargs.get('margin', getattr(training_config, 'margin', 1.0)),
+                "weight_decay": self.training_kwargs.get('weight_decay', getattr(training_config, 'weight_decay', 0.0001)),
+                "num_workers": self.training_kwargs.get('num_workers', getattr(training_config, 'num_workers', 4)),
+                "model_class": self.model_class.__name__,
+                "dataset_name": dataset_name
             }
 
             wandb_logger.init_run(config=config, run_name=f"{custom_name}", tags=wandb_run_tags)

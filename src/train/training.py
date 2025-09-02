@@ -756,6 +756,15 @@ class Training:
         try:
             # Run the comprehensive evaluation (this also saves results to disk)
             results = evaluator.evaluate_comprehensive(dataset, **self.kwargs)
+            
+            # Log evaluation results to WandB if enabled and results available
+            if results and hasattr(evaluator, '_log_to_wandb'):
+                try:
+                    evaluator._log_to_wandb(results)
+                    logger.debug("Evaluation results logged to WandB")
+                except Exception as e:
+                    logger.debug(f"Failed to log evaluation results to WandB: {e}")
+                    
         except Exception as e:
             logger.warning(f"Comprehensive evaluation failed, falling back to local computation: {e}")
             results = {}
