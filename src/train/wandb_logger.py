@@ -769,7 +769,6 @@ class WandbLogger:
         Note:
             For optimal memory usage, pass model and optimizer objects directly instead of pre-computed state_dicts.
         """
-        import psutil
         import os
 
         # Monitor WandB processes before checkpoint saving

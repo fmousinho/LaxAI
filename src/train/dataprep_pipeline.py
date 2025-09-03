@@ -1,34 +1,41 @@
 """
 Data preparation pipeline for LaxAI project.
 
-This module provides a comprehensive pipeline for processing raw lacrosse video data into 
+This module provides a comprehensive pipeline for processing raw lacrosse video data into
 training-ready datasets. The pipeline handles video import, frame extraction, player detection,
 crop generation, data augmentation, and dataset organization for machine learning workflows.
 
 Key Features:
-    - Automated video processing with resolution validation
-    - Player detection using YOLO-based models
-    - Optional background removal with grass mask detection
-    - Image augmentation for robust training data
-    - Parallel processing for improved performance
-    - Structured GCS storage organization
-    - Train/validation dataset splitting
+    - Automated video processing with resolution validation (minimum 1920x1080)
+    - Player detection using YOLO-based models with configurable confidence thresholds
+    - Optional background removal with grass mask detection and color analysis
+    - Image augmentation for robust training data with configurable transforms
+    - Parallel processing for improved performance using ThreadPoolExecutor
+    - Structured GCS storage organization with tenant-specific paths
+    - Train/validation dataset splitting with configurable ratios
+    - Comprehensive error handling and progress tracking
+    - Memory-efficient processing with configurable batch sizes
 
 Example:
     ```python
-    from train.dataprep_pipeline import DataPrepPipeline
+    from src.train.dataprep_pipeline import DataPrepPipeline
     from config.all_config import detection_config
-    
-    # Initialize pipeline
+
+    # Initialize pipeline with background removal enabled
     pipeline = DataPrepPipeline(
         config=detection_config,
-        tenant_id="tenant1",
+        tenant_id="lacrosse_team_1",
         verbose=True,
-        enable_grass_mask=True
+        enable_grass_mask=True,
+        delete_process_folder=True
     )
-    
+
     # Process a video (relative GCS path, no gs:// prefix)
-    results = pipeline.run("raw_videos/game_footage.mp4")
+    results = pipeline.run("raw_videos/championship_game.mp4")
+
+    if results["status"] == "completed":
+        print(f"Successfully processed {results['video_guid']}")
+        print(f"Created datasets with {results['pipeline_summary']['total_train_samples']} training samples")
     ```
 """
 
@@ -68,62 +75,65 @@ class DataPrepPipeline(Pipeline):
     designed for scalability and robustness with parallel processing capabilities.
 
     **Pipeline Stages:**
-        1. **Video Import**: Move videos from raw directory to organized structure
-        2. **Frame Extraction**: Extract frames with sufficient quality for detection
-        3. **Grass Mask Calculation** (optional): Initialize background removal system
-        4. **Player Detection**: Detect players using YOLO-based models
-        5. **Crop Extraction**: Extract player bounding boxes as individual images
-        6. **Background Removal** (optional): Remove grass/field background from crops
-        7. **Data Augmentation**: Apply transformations to increase dataset diversity
-        8. **Dataset Creation**: Split into training and validation sets with proper organization
-
-    **Key Features:**
-        - Validates video resolution (minimum 1920x1080)
-        - Parallel processing for improved performance
-        - Optional grass mask background removal
-        - Structured GCS path organization
-        - Comprehensive error handling and logging
-        - Configurable train/validation splits
-        - Automatic cleanup of temporary files
+        1. **Video Import**: Move videos from tenant's raw directory to organized structure
+        2. **Frame Extraction**: Extract frames with sufficient quality for detection (equally spaced)
+        3. **Grass Mask Calculation** (optional): Initialize background removal system with color analysis
+        4. **Player Detection**: Detect players using YOLO-based models with confidence filtering
+        5. **Crop Extraction**: Extract player bounding boxes as individual images with structured naming
+        6. **Background Removal** (optional): Remove grass/field background from crops using mask detection
+        7. **Data Augmentation**: Apply configurable transforms to increase dataset diversity
+        8. **Dataset Creation**: Split into training and validation sets with proper GCS organization    **Key Features:**
+        - Validates video resolution (minimum 1920x1080) and frame count
+        - Parallel processing using ThreadPoolExecutor with configurable worker limits
+        - Optional grass mask background removal with statistical color analysis
+        - Structured GCS path organization with tenant-specific isolation
+        - Comprehensive error handling and logging with detailed progress tracking
+        - Memory-efficient processing with batch operations and cleanup
+        - Automatic cleanup of temporary processing files
+        - Resume capability for interrupted pipeline runs
 
     **Storage Organization:**
         ```
         tenant_id/
-        ├── imported_videos/{video_id}/
-        ├── extracted_frames/{video_id}/{frame_id}/
-        ├── crops/{video_id}/{frame_id}/
-        ├── augmented_crops/{video_id}/{frame_id}/{crop_id}/
+        ├── raw/{video_id}/
+        ├── imported_videos/{video_id}/{video_id}.mp4
+        ├── extracted_frames/{video_id}/{frame_id}/{frame_id}.jpg
+        ├── crops/{video_id}/{frame_id}/{crop_id}.jpg
+        ├── augmented_crops/{video_id}/{frame_id}/{orig_crop_id}/{aug_crop_id}.jpg
         └── datasets/{dataset_id}/train|val/{player_id}/
         ```
 
     Args:
-        config (DetectionConfig): Detection model configuration settings
-        tenant_id (str): Unique identifier for the tenant/organization
-        verbose (bool, optional): Enable detailed logging. Defaults to True.
-        save_intermediate (bool, optional): Save intermediate pipeline results. Defaults to True.
-        enable_grass_mask (bool, optional): Enable background removal functionality. 
-            If None, uses transform_config.enable_background_removal. Defaults to model_config.enable_grass_mask.
-        delete_process_folder (bool, optional): Clean up temporary processing files. Defaults to True.
-        **kwargs: Additional keyword arguments passed to parent Pipeline class.
+        config (dict): Configuration dictionary containing:
+            - 'gcs_bucket': GCS bucket name for data storage
+            - 'detection_model_path': Path to YOLO detection model
+            - 'min_resolution': Minimum video resolution (default: (1920, 1080))
+            - 'max_workers': Maximum parallel workers for processing (default: 4)
+            - 'batch_size': Batch size for frame processing (default: 32)
+            - 'augmentation_config': Dictionary with augmentation parameters
+            - 'tenant_id': Tenant identifier for multi-tenant isolation
+        logger (logging.Logger, optional): Logger instance for tracking operations
 
     Attributes:
-        config (DetectionConfig): Detection configuration object
-        tenant_id (str): Tenant identifier for storage organization
-        frames_per_video (int): Number of frames to extract per video
-        train_ratio (float): Ratio of data used for training (vs validation)
-        enable_grass_mask (bool): Whether background removal is enabled
-        detection_model (DetectionModel): Loaded YOLO detection model
-        background_mask_detector (BackgroundMaskDetector, optional): Background removal system
-        tenant_storage (GoogleStorageClient): GCS client for data operations
-        path_manager (GCSPaths): Structured path management system
+        config (DetectionConfig): Detection configuration object with model and processing parameters
+        tenant_id (str): Tenant identifier for storage organization and data isolation
+        frames_per_video (int): Number of frames to extract per video for processing
+        train_ratio (float): Ratio of data used for training (vs validation) in dataset splits
+        enable_grass_mask (bool): Whether background removal is enabled for crop processing
+        detection_model (DetectionModel): Loaded YOLO detection model instance for player detection
+        background_mask_detector (BackgroundMaskDetector, optional): Background removal system with statistical color analysis
+        tenant_storage (GoogleStorageClient): GCS client for tenant-specific operations and data management
+        path_manager (GCSPaths): Structured path management system for GCS organization and file naming
 
     Raises:
-        RuntimeError: If detection model fails to load (required for pipeline operation)
-        ValueError: If invalid configuration parameters are provided
+        RuntimeError: If detection model fails to load or GCS credentials are invalid
+        ValueError: If invalid configuration parameters are provided or video resolution is insufficient
+        FileNotFoundError: If specified video files or model files cannot be found
+        ConnectionError: If GCS operations fail due to network or authentication issues
 
     Example:
         ```python
-        from train.dataprep_pipeline import DataPrepPipeline
+        from src.train.dataprep_pipeline import DataPrepPipeline
         from config.all_config import detection_config
         
         # Initialize with background removal enabled
@@ -146,6 +156,7 @@ class DataPrepPipeline(Pipeline):
     Note:
         The pipeline requires a properly configured detection model and valid GCS credentials.
         Videos must meet minimum resolution requirements (1920x1080) for processing.
+        All processing is tenant-isolated for multi-tenant environments.
     """
 
     def __init__(self, 
@@ -160,21 +171,22 @@ class DataPrepPipeline(Pipeline):
         Initialize the data preparation pipeline.
         
         Sets up storage clients, detection models, and pipeline configuration.
-        Configures the processing steps based on grass mask settings.
+        Configures the processing steps based on grass mask settings and tenant isolation.
         
         Args:
-            config: Detection configuration object containing model settings
-            tenant_id: The tenant ID for data organization and access control
-            verbose: Enable detailed logging throughout the pipeline
-            save_intermediate: Save intermediate results for debugging and recovery
-            enable_grass_mask: Enable background removal functionality. If None, 
-                uses transform_config.enable_background_removal
-            delete_process_folder: Clean up temporary processing files after completion
+            config (DetectionConfig): Detection configuration object containing model settings,
+                GCS bucket information, and processing parameters
+            tenant_id (str): The tenant ID for data organization and access control in multi-tenant environments
+            verbose (bool): Enable detailed logging throughout the pipeline for monitoring progress
+            save_intermediate (bool): Save intermediate results for debugging and recovery capabilities
+            enable_grass_mask (bool): Enable background removal functionality using statistical color analysis.
+                If None, uses transform_config.enable_background_removal setting
+            delete_process_folder (bool): Clean up temporary processing files after completion to save storage
             **kwargs: Additional arguments passed to the parent Pipeline class
         
         Raises:
-            RuntimeError: If the detection model fails to load, which is required 
-                for the pipeline to function
+            RuntimeError: If the detection model fails to load, which is required for the pipeline to function
+            ValueError: If tenant_id is empty or config contains invalid parameters
         """
         self.config = config
         self.tenant_id = tenant_id
@@ -297,44 +309,25 @@ class DataPrepPipeline(Pipeline):
         Execute a list of operations in parallel using ThreadPoolExecutor.
         
         This method provides a generic interface for parallelizing storage operations
-        such as uploads, downloads, moves, and deletions. It handles error collection
-        and provides comprehensive logging of operation results.
+        such as uploads, downloads, moves, and deletions. It handles error collection,
+        provides comprehensive logging, and uses configurable worker limits.
         
         Args:
-            tasks: List of task parameters. Can be:
+            tasks (List[Tuple] | List[str]): List of task parameters. Can be:
                 - List of tuples for multi-parameter operations (e.g., (source, dest) for moves)
                 - List of strings for single-parameter operations (e.g., blob names for deletes)
             operation_func: Function to execute for each task. Should return bool indicating success.
                 Examples: self.tenant_storage.upload_from_bytes, self.tenant_storage.move_blob
-            context_info: Additional context information for logging (e.g., "video_123 crops")
+            context_info (str): Additional context information for logging (e.g., "video_123 crops")
             
         Returns:
-            Tuple containing:
+            Tuple[List, int]: Containing:
                 - List of failed operations (same format as input tasks)
                 - Integer count of successful operations
                 
-        Example:
-            ```python
-            # Upload multiple files
-            upload_tasks = [("blob1.jpg", image_data1), ("blob2.jpg", image_data2)]
-            failed, success_count = self._execute_parallel_operations(
-                upload_tasks, 
-                self.tenant_storage.upload_from_bytes,
-                "player crops for video_123"
-            )
-            
-            # Delete multiple files  
-            delete_tasks = ["blob1.jpg", "blob2.jpg"]
-            failed, success_count = self._execute_parallel_operations(
-                delete_tasks,
-                self.tenant_storage.delete_blob, 
-                "temporary files cleanup"
-            )
-            ```
-        
         Note:
-            The method uses self.dataloader_workers to limit concurrency and prevent
-            overwhelming the storage service.
+            Uses self.dataloader_workers to limit concurrency and prevent overwhelming
+            the storage service. Failed operations are logged but don't stop execution.
         """
         if not tasks:
             return [], 0
@@ -488,11 +481,24 @@ class DataPrepPipeline(Pipeline):
         """
         Import a single video from the provided path into organized video folder.
         
+        This method moves the raw video file from its original location to a structured
+        GCS path within the tenant's storage area. It generates a unique video ID and
+        organizes the file according to the configured path structure.
+        
         Args:
-            context: Pipeline context containing video_path
-            
+            context (Dict[str, Any]): Pipeline context containing:
+                - raw_video_path: The original GCS path of the video file
+                
         Returns:
-            Dictionary with imported video information
+            Dict[str, Any]: Updated context with import results:
+                - status: Step completion status
+                - video_guid: Generated unique identifier for the video
+                - video_folder: Structured GCS folder path for the video
+                - video_blob_name: Full GCS path to the imported video file
+                - error: Error message if import failed
+                
+        Raises:
+            RuntimeError: If the video file cannot be moved to the target location
         """
         raw_video_path = context.get("raw_video_path")
         if not raw_video_path:
@@ -531,13 +537,30 @@ class DataPrepPipeline(Pipeline):
     
     def _detect_players(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Run player detection on the extracted frames.
+        Run player detection on the extracted frames using YOLO-based model.
+        
+        This method processes each extracted frame through the detection model to identify
+        players. It handles batch processing, confidence filtering, and saves detection
+        results to structured GCS paths for later crop extraction.
         
         Args:
-            context: Pipeline context containing frames_data
-            
+            context (Dict[str, Any]): Pipeline context containing:
+                - frames_data: List of extracted frame images as numpy arrays
+                - frame_ids: List of frame identifiers corresponding to frames_data
+                - video_guid: Unique identifier for the video being processed
+                - video_folder: GCS folder path for the video
+                
         Returns:
-            Dictionary with detection results
+            Dict[str, Any]: Updated context with detection results:
+                - status: Step completion status
+                - detections_data: List of detection results for each frame
+                - total_detections: Total number of player detections found
+                - error: Error message if detection failed
+                
+        Note:
+            Detection results are saved to GCS in structured paths for use by
+            subsequent crop extraction steps. Empty detections are logged as warnings
+            but don't fail the pipeline.
         """
         frames_data = context.get("frames_data")
         frame_ids = context.get("frame_ids")
@@ -607,13 +630,32 @@ class DataPrepPipeline(Pipeline):
 
     def _extract_crops(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Extract and save player crops from detections.
+        Extract and save player crops from detections to GCS storage.
+        
+        This method processes detection results to extract individual player crops
+        from frames. It uses parallel processing to efficiently upload crops to
+        structured GCS paths for later processing stages.
         
         Args:
-            context: Pipeline context containing detection_result and frames_data
-            
+            context (Dict[str, Any]): Pipeline context containing:
+                - all_detections: List of detection results for each frame
+                - frames_data: List of extracted frame images as numpy arrays
+                - video_guid: Unique identifier for the video being processed
+                - frame_ids: List of frame identifiers
+                - frames_guids: List of frame GUIDs for path generation
+                
         Returns:
-            Dictionary with crop extraction results
+            Dict[str, Any]: Updated context with crop extraction results:
+                - status: Step completion status
+                - crops_by_frame: List of crop data organized by frame
+                - total_crops: Total number of crops extracted
+                - upload_tasks: List of GCS upload operations performed
+                - error: Error message if extraction failed
+                
+        Note:
+            Crops are saved with structured naming conventions and uploaded in
+            parallel for efficiency. Failed uploads are logged but don't stop
+            the pipeline.
         """
         all_detections = context.get("all_detections")
         frames_data = context.get("frames_data")
@@ -684,11 +726,25 @@ class DataPrepPipeline(Pipeline):
         Remove background from player crops using the initialized grass mask detector.
         Replaces the original crop with modified crop in memory. Does not upload to storage.
         
+        This method applies statistical color analysis to identify and remove grass/field
+        backgrounds from player crops. The background removal is performed in-memory
+        and modifies the crop data for subsequent processing stages.
+        
         Args:
-            context: Pipeline context containing crop extraction results
-            
+            context (Dict[str, Any]): Pipeline context containing:
+                - crops_by_frame: List of crop data organized by frame
+                - video_guid: Unique identifier for the video being processed
+                - grass_mask_initialized: Boolean indicating if detector is ready
+                
         Returns:
-            Dictionary with background removal results
+            Dict[str, Any]: Updated context with background removal results:
+                - status: Step completion status
+                - crops_wo_background: Number of crops processed
+                - error: Error message if background removal failed
+                
+        Note:
+            This step is conditionally executed based on enable_grass_mask configuration.
+            Background removal happens in-memory and doesn't create new files in storage.
         """
        
         if not self.enable_grass_mask:
@@ -731,11 +787,27 @@ class DataPrepPipeline(Pipeline):
         """
         Augment player crops for training and store them in structured GCS paths per frame.
         
+        This method applies configured augmentation transforms to each original crop
+        to increase dataset diversity. Augmented crops are saved with structured naming
+        and uploaded in parallel for efficiency.
+        
         Args:
-            context: Pipeline context containing crop processing results
-            
+            context (Dict[str, Any]): Pipeline context containing:
+                - video_guid: Unique identifier for the video being processed
+                - frames_guids: List of frame GUIDs for path generation
+                - crops_by_frame: List of crop data organized by frame
+                
         Returns:
-            Dictionary with augmentation results
+            Dict[str, Any]: Updated context with augmentation results:
+                - status: Step completion status
+                - crops_augmented: Boolean indicating if augmentation was performed
+                - n_augmented_crops: Total number of augmented crops created
+                - error: Error message if augmentation failed
+                
+        Note:
+            Each original crop generates multiple augmented versions based on the
+            configured augmentation pipeline. All augmented crops are uploaded
+            in parallel for efficiency.
         """
         video_guid = context.get("video_guid")
         frames_guid = context.get("frames_guids")
@@ -797,11 +869,27 @@ class DataPrepPipeline(Pipeline):
         Create training and validation datasets from processed crops.
         Each frame gets its own dataset with separate train/val splits.
         
+        This method organizes augmented crops into structured training and validation
+        datasets. It creates separate datasets for each frame, splits players randomly
+        based on the configured train_ratio, and moves crops to appropriate folders.
+        
         Args:
-            context: Pipeline context containing augmentation results
-            
+            context (Dict[str, Any]): Pipeline context containing:
+                - crops_augmented: Boolean indicating if crops were augmented
+                - frames_guids: List of frame GUIDs for processing
+                - video_guid: Unique identifier for the video being processed
+                
         Returns:
-            Dictionary with dataset creation results
+            Dict[str, Any]: Updated context with dataset creation results:
+                - status: Step completion status
+                - datasets_created: List of created dataset information
+                - total_train_samples: Total number of training samples across all datasets
+                - total_val_samples: Total number of validation samples across all datasets
+                - error: Error message if dataset creation failed
+                
+        Note:
+            Each frame generates its own dataset with independent train/val splits.
+            The train_ratio configuration determines the split proportions.
         """
         crops_augmented = context.get("crops_augmented", False)
         frames_guids = context.get("frames_guids")
@@ -943,12 +1031,28 @@ class DataPrepPipeline(Pipeline):
     def _extract_frames_for_detections(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Extract frames on which to run detections.
-
+        
+        This method extracts a configured number of frames from the video at equally
+        spaced intervals. Frames are saved to structured GCS paths and prepared for
+        the detection pipeline. Video resolution validation is performed before extraction.
+        
         Args:
-            context: Pipeline context containing loaded_video
-            
+            context (Dict[str, Any]): Pipeline context containing:
+                - video_blob_name: GCS path to the imported video file
+                - video_guid: Unique identifier for the video being processed
+                
         Returns:
-            Dictionary with extracted frames data
+            Dict[str, Any]: Updated context with frame extraction results:
+                - status: Step completion status
+                - frames_data: List of extracted frame images as numpy arrays
+                - video_guid: Unique identifier for the video
+                - frames_guids: List of unique identifiers for each extracted frame
+                - frame_ids: List of frame positions in the original video
+                - error: Error message if extraction failed
+                
+        Note:
+            Frames are extracted at equally spaced intervals based on frames_per_video
+            configuration. All frames are uploaded to GCS with structured naming.
         """
         video_blob_name = context.get("video_blob_name", None)
         video_guid = context.get("video_guid", None)
@@ -1036,11 +1140,25 @@ class DataPrepPipeline(Pipeline):
         """
         Initialize the grass mask detector using the extracted frames.
         
+        This method analyzes the extracted frames to identify background colors
+        and initialize the background removal system. It performs statistical
+        analysis of frame colors to create a mask for grass/field removal.
+        
         Args:
-            context: Pipeline context containing frames_data
-            
+            context (Dict[str, Any]): Pipeline context containing:
+                - frames_data: List of extracted frame images as numpy arrays
+                - video_guid: Unique identifier for the video being processed
+                
         Returns:
-            Dictionary with grass mask initialization results
+            Dict[str, Any]: Updated context with initialization results:
+                - status: Step completion status
+                - grass_mask_initialized: Boolean indicating successful initialization
+                - background_stats: Statistical information about detected background
+                - error: Error message if initialization failed
+                
+        Note:
+            This step is conditionally executed based on enable_grass_mask configuration.
+            Background statistics are logged for debugging and monitoring purposes.
         """
         # Check if grass mask is enabled
         if not self.enable_grass_mask:

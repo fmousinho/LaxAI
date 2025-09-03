@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 EPOCHS_PER_VAL = 10
 BATCHES_PER_LOG_MSG = 10
-THRESHOLD_FOR_DATALOADER_RESTART = 90.0
 EPOCHS_PER_VAL = 0
 
 class Training:
@@ -432,61 +431,6 @@ class Training:
                     logger.info(f"Training cancelled by stop_callback at epoch {epoch + 1}")
                     raise InterruptedError("Training cancelled by external request")
 
-                # Intelligent memory-based worker restart to prevent accumulation
-                if self.num_workers > 0 and epoch > 0:
-                    current_memory = self.cpu_monitor._get_current_memory()
-                    memory_percent = current_memory["percent"]
-                    
-                    # More intelligent restart logic with performance consideration
-                    should_restart = False
-                    restart_reason = ""
-                    
-                    # Critical threshold - always restart (OOM prevention)
-                    if memory_percent > 85 and (epoch - self.last_worker_restart_epoch) >= 1:
-                        should_restart = True
-                        restart_reason = f"critical memory threshold ({memory_percent:.1f}%)"
-                    
-                    # Moderate threshold - restart only if memory trend is increasing
-                    elif memory_percent > 75 and (epoch - self.last_worker_restart_epoch) >= 2:
-                        if hasattr(self, '_memory_trend') and len(self._memory_trend) >= 2:
-                            recent_increase = self._memory_trend[-1] - self._memory_trend[-2]
-                            if recent_increase > 2:  # Memory increasing by >2% per epoch
-                                should_restart = True
-                                restart_reason = f"memory trend increasing ({recent_increase:.1f}%/epoch, current: {memory_percent:.1f}%)"
-                    
-                    if should_restart:
-                        logger.info(f"Restarting DataLoader workers at epoch {epoch + 1} - {restart_reason}")
-                        
-                        # Log memory before restart
-                        memory_before = current_memory["rss_mb"]
-                        logger.info(f"Memory before worker restart: {memory_before:.1f}MB ({memory_percent:.1f}%)")
-                        
-                        # Performance-optimized restart
-                        restart_start_time = time.time()
-                        self._restart_dataloader_workers_optimized()
-                        restart_duration = time.time() - restart_start_time
-                        
-                        self.last_worker_restart_epoch = epoch  # Update last restart epoch
-                        
-                        # Log memory after restart
-                        memory_after = self.cpu_monitor._get_current_memory()["rss_mb"]
-                        memory_after_percent = self.cpu_monitor._get_current_memory()["percent"]
-                        memory_delta = memory_after - memory_before
-                        logger.info(f"Memory after worker restart: {memory_after:.1f}MB ({memory_after_percent:.1f}%) (Δ{memory_delta:+.1f}MB) in {restart_duration:.2f}s")
-                    else:
-                        # Track memory trend for intelligent restart decisions
-                        if not hasattr(self, '_memory_trend'):
-                            self._memory_trend = []
-                        self._memory_trend.append(memory_percent)
-                        # Keep only last 5 epochs for trend analysis
-                        if len(self._memory_trend) > 5:
-                            self._memory_trend = self._memory_trend[-5:]
-                        
-                        if memory_percent > 70:
-                            logger.debug(f"CPU memory utilization: {memory_percent:.1f}% - monitoring trend")
-                        else:
-                            logger.debug(f"CPU memory utilization: {memory_percent:.1f}% - no restart needed")
-                
                 # Periodic aggressive memory cleanup to prevent accumulation
                 if (epoch + 1) % 2 == 0:  # Every 2 epochs
                     try:
@@ -558,13 +502,8 @@ class Training:
                     
                     # Aggressive batch-level memory cleanup every 50 batches
                     if (i + 1) % 50 == 0:
-                        # Smart GPU cache clearing - use configurable threshold
-                        if torch.cuda.is_available():
-                            self._smart_gpu_cache_clear(force=False, context=f"batch_{i+1}")
-                        
-                        # Force gradient cleanup
-                        if self.optimizer is not None:
-                            self.optimizer.zero_grad(set_to_none=True)
+                        # Note: No need for additional zero_grad here as it's called at batch start
+                        pass
                     
                     # Memory monitoring for large batch intervals
                     if (i + 1) % 200 == 0:
@@ -754,10 +693,6 @@ class Training:
                     import gc
                     gc.collect()
                     
-                    # Clear GPU cache if available
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                        
                     # Log memory after cleanup
                     if epoch % 5 == 0:  # Log every 5 epochs to monitor trend
                         import psutil
