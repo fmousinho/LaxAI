@@ -13,7 +13,7 @@ from collections import defaultdict
 import json
 
 from common.detection import DetectionModel
-from track.tracker import AffineAwareByteTrack
+from src.common.tracker import AffineAwareByteTrack
 from config.all_config import detection_config
 
 logger = logging.getLogger(__name__)

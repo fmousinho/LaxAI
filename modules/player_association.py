@@ -19,7 +19,7 @@ from typing import Optional, List, Dict, Tuple
 from collections import Counter
 import numpy as np
 
-from src.track.tracker import TrackData
+from src.common.tracker import TrackData
 from modules.player import Player
 from modules.utils import l2_normalize_embedding
 from src.config.all_config import player_config, track_stitching_config, model_config

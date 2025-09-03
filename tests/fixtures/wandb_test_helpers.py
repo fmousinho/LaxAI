@@ -24,13 +24,27 @@ class WandbTestManager:
         
     def cleanup_all(self):
         """Clean up all tracked artifacts and runs."""
-        # Clean up artifacts
-        for artifact_name in self.created_artifacts:
-            try:
-                wandb_logger._cleanup_old_checkpoints(artifact_name, keep_latest=0)
-                time.sleep(0.5)  # Brief pause for propagation
-            except Exception as e:
-                print(f"Warning: Failed to cleanup artifact {artifact_name}: {e}")
+        # Clean up artifacts using the improved cleanup method
+        try:
+            if hasattr(wandb_logger, 'cleanup_test_artifacts'):
+                wandb_logger.cleanup_test_artifacts(force_cleanup_all=True)
+            else:
+                # Fallback to old method
+                for artifact_name in self.created_artifacts:
+                    try:
+                        wandb_logger._cleanup_old_checkpoints(artifact_name, keep_latest=0)
+                        time.sleep(0.5)  # Brief pause for propagation
+                    except Exception as e:
+                        print(f"Warning: Failed to cleanup artifact {artifact_name}: {e}")
+        except Exception as e:
+            print(f"Warning: Improved cleanup failed, using fallback: {e}")
+            # Fallback cleanup
+            for artifact_name in self.created_artifacts:
+                try:
+                    wandb_logger._cleanup_old_checkpoints(artifact_name, keep_latest=0)
+                    time.sleep(0.5)  # Brief pause for propagation
+                except Exception as e:
+                    print(f"Warning: Failed to cleanup artifact {artifact_name}: {e}")
                 
         # Clean up runs if needed (implement if required)
         for run_id in self.created_runs:
@@ -71,11 +85,14 @@ def fast_wandb_test(run_name_prefix: str = "test"):
     finally:
         # Always cleanup, even if test fails
         try:
+            # Use improved cleanup if available
+            if hasattr(wandb_logger, 'cleanup_test_artifacts'):
+                wandb_logger.cleanup_test_artifacts(force_cleanup_all=True)
             wandb_logger.finish()
         except Exception:
             pass
             
-        # Clean up any artifacts created during test
+        # Clean up any artifacts created during test (fallback)
         for artifact_name in artifact_names:
             try:
                 wandb_logger._cleanup_old_checkpoints(artifact_name, keep_latest=0)

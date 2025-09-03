@@ -35,7 +35,7 @@ from src.common import (
     get_storage,
 )
 from modules.player import Player
-from src.track.tracker import AffineAwareByteTrack, TrackData
+from src.common.tracker import AffineAwareByteTrack, TrackData
 from modules.clustering_processor import ClusteringProcessor
 from src.train import LacrossePlayerDataset, SiameseNet
 from modules.emb_processor import EmbeddingsProcessor
