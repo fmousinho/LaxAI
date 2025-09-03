@@ -45,7 +45,8 @@ class MemoryTracker:
             return
         
         final_delta = self.checkpoints[-1]['delta_mb']
-        assert abs(final_delta) < threshold_mb, \
+        # Only fail on memory increases (positive delta), memory decreases are good
+        assert final_delta < threshold_mb, \
             f"Potential memory leak detected: {final_delta:.1f}MB increase (threshold: {threshold_mb}MB)"
 
 

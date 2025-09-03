@@ -61,7 +61,9 @@ class TrainingErrorSimulator:
     @contextmanager
     def simulate_checkpoint_save_error():
         """Simulate checkpoint saving errors."""
-        with patch.object(WandbLogger, 'save_checkpoint') as mock_save:
+        # Import the specific instance to mock it properly
+        from train.wandb_logger import wandb_logger
+        with patch.object(wandb_logger, 'save_checkpoint') as mock_save:
             mock_save.side_effect = RuntimeError("Simulated checkpoint save error")
             yield mock_save
 

@@ -130,6 +130,15 @@ class Training:
         self.val_dataloader = None
         self.cpu_monitor = CPUMemoryMonitor()
         self.last_worker_restart_epoch = -1  # Track last worker restart to prevent too frequent restarts
+        
+        # Memory leak tracking
+        self.epoch_memory_baseline = None
+        self.memory_leak_threshold_mb = 100  # Alert if memory increases by more than 100MB per epoch
+        
+        # GPU cache management strategy
+        # For GPU-enabled Cloud Run, use conservative cache clearing to preserve performance
+        self.gpu_cache_threshold = kwargs.get('gpu_cache_threshold', 0.85)  # Clear cache when >85% GPU memory used
+        self.conservative_gpu_cache = kwargs.get('conservative_gpu_cache', True)  # Default to conservative for Cloud Run GPU
 
 
     def _load_model_from_wandb(self, model_class, model_name: str, alias: Optional[str], **kwargs):
@@ -423,31 +432,67 @@ class Training:
                     logger.info(f"Training cancelled by stop_callback at epoch {epoch + 1}")
                     raise InterruptedError("Training cancelled by external request")
 
-                # Memory-based worker restart to prevent accumulation
+                # Intelligent memory-based worker restart to prevent accumulation
                 if self.num_workers > 0 and epoch > 0:
                     current_memory = self.cpu_monitor._get_current_memory()
                     memory_percent = current_memory["percent"]
                     
-                    # Restart if memory utilization exceeds 90% and we haven't restarted recently (at least 1 epoch ago)
-                    if memory_percent > THRESHOLD_FOR_DATALOADER_RESTART and (epoch - self.last_worker_restart_epoch) >= 1:
-                        logger.info(f"Restarting DataLoader workers at epoch {epoch + 1} - CPU memory utilization: {memory_percent:.1f}%")
+                    # More intelligent restart logic with performance consideration
+                    should_restart = False
+                    restart_reason = ""
+                    
+                    # Critical threshold - always restart (OOM prevention)
+                    if memory_percent > 85 and (epoch - self.last_worker_restart_epoch) >= 1:
+                        should_restart = True
+                        restart_reason = f"critical memory threshold ({memory_percent:.1f}%)"
+                    
+                    # Moderate threshold - restart only if memory trend is increasing
+                    elif memory_percent > 75 and (epoch - self.last_worker_restart_epoch) >= 2:
+                        if hasattr(self, '_memory_trend') and len(self._memory_trend) >= 2:
+                            recent_increase = self._memory_trend[-1] - self._memory_trend[-2]
+                            if recent_increase > 2:  # Memory increasing by >2% per epoch
+                                should_restart = True
+                                restart_reason = f"memory trend increasing ({recent_increase:.1f}%/epoch, current: {memory_percent:.1f}%)"
+                    
+                    if should_restart:
+                        logger.info(f"Restarting DataLoader workers at epoch {epoch + 1} - {restart_reason}")
                         
                         # Log memory before restart
                         memory_before = current_memory["rss_mb"]
                         logger.info(f"Memory before worker restart: {memory_before:.1f}MB ({memory_percent:.1f}%)")
                         
-                        self._restart_dataloader_workers()
+                        # Performance-optimized restart
+                        restart_start_time = time.time()
+                        self._restart_dataloader_workers_optimized()
+                        restart_duration = time.time() - restart_start_time
+                        
                         self.last_worker_restart_epoch = epoch  # Update last restart epoch
                         
                         # Log memory after restart
                         memory_after = self.cpu_monitor._get_current_memory()["rss_mb"]
                         memory_after_percent = self.cpu_monitor._get_current_memory()["percent"]
                         memory_delta = memory_after - memory_before
-                        logger.info(f"Memory after worker restart: {memory_after:.1f}MB ({memory_after_percent:.1f}%) (Δ{memory_delta:+.1f}MB)")
-                    elif memory_percent > 90.0:
-                        logger.debug(f"CPU memory utilization: {memory_percent:.1f}% - restart skipped (too recent)")
+                        logger.info(f"Memory after worker restart: {memory_after:.1f}MB ({memory_after_percent:.1f}%) (Δ{memory_delta:+.1f}MB) in {restart_duration:.2f}s")
                     else:
-                        logger.debug(f"CPU memory utilization: {memory_percent:.1f}% - no restart needed")
+                        # Track memory trend for intelligent restart decisions
+                        if not hasattr(self, '_memory_trend'):
+                            self._memory_trend = []
+                        self._memory_trend.append(memory_percent)
+                        # Keep only last 5 epochs for trend analysis
+                        if len(self._memory_trend) > 5:
+                            self._memory_trend = self._memory_trend[-5:]
+                        
+                        if memory_percent > 70:
+                            logger.debug(f"CPU memory utilization: {memory_percent:.1f}% - monitoring trend")
+                        else:
+                            logger.debug(f"CPU memory utilization: {memory_percent:.1f}% - no restart needed")
+                
+                # Periodic aggressive memory cleanup to prevent accumulation
+                if (epoch + 1) % 2 == 0:  # Every 2 epochs
+                    try:
+                        self._aggressive_memory_cleanup(f"End of epoch {epoch + 1}")
+                    except Exception as cleanup_error:
+                        logger.debug(f"Aggressive memory cleanup warning: {cleanup_error}")
                 
                 log_gpu_memory_stats(f"Epoch {epoch + 1} start")
                 self.cpu_monitor.log_memory_stats(f"Epoch {epoch + 1} start")
@@ -497,19 +542,39 @@ class Training:
                     self.optimizer.step()
 
                     # Extract scalar immediately and clear GPU tensors to free memory
-                    running_loss += loss.item()
+                    loss_value = loss.item()
+                    running_loss += loss_value
                     
-                    # Explicitly delete tensors to help free GPU memory faster
+                    # Explicitly delete ALL tensors and intermediate results to prevent accumulation
                     del anchor, positive, negative, emb_anchor, emb_positive, emb_negative, loss
                     
-                    # # Clear GPU cache periodically
-                    # if torch.cuda.is_available() and (i + 1) % 50 == 0:
-                    #     torch.cuda.empty_cache()
+                    # Establish memory baseline after first few batches of first epoch
+                    # This accounts for model loading, optimizer state creation, and initial allocations
+                    if epoch == 0 and i == 4 and self.epoch_memory_baseline is None:  # After 5th batch of first epoch
+                        import psutil
+                        process = psutil.Process()
+                        self.epoch_memory_baseline = process.memory_info().rss / 1024 / 1024  # MB
+                        logger.info(f"Memory baseline established after first 5 batches: {self.epoch_memory_baseline:.1f}MB")
+                    
+                    # Aggressive batch-level memory cleanup every 50 batches
+                    if (i + 1) % 50 == 0:
+                        # Smart GPU cache clearing - use configurable threshold
+                        if torch.cuda.is_available():
+                            self._smart_gpu_cache_clear(force=False, context=f"batch_{i+1}")
                         
-                    # # Clear CPU memory periodically to prevent accumulation
-                    # if (i + 1) % 100 == 0:
-                    #     clear_cpu_memory()
-                    #     self.cpu_monitor.log_memory_stats(f"Epoch {epoch + 1} Batch {i + 1}")
+                        # Force gradient cleanup
+                        if self.optimizer is not None:
+                            self.optimizer.zero_grad(set_to_none=True)
+                    
+                    # Memory monitoring for large batch intervals
+                    if (i + 1) % 200 == 0:
+                        try:
+                            import psutil
+                            process = psutil.Process()
+                            current_memory = process.memory_info().rss / 1024 / 1024  # MB
+                            logger.debug(f"Epoch {epoch + 1}, Batch {i + 1}: Memory = {current_memory:.1f}MB")
+                        except Exception:
+                            pass
 
                 # Calculate and log training loss
                 epoch_train_loss = running_loss / ttl_batches if ttl_batches > 0 else 0.0
@@ -538,32 +603,41 @@ class Training:
 
                     self.model.eval()  # Set model to evaluation mode
                     
-                    # 1. Calculate Validation Loss
+                    # 1. Calculate Validation Loss with aggressive memory management
                     running_val_loss = 0.0
                     ttl_batches = len(val_dataloader)
                     with torch.no_grad(): # No need to compute gradients
                         for j, (anchor, positive, negative, _) in enumerate(val_dataloader):
-                            anchor = anchor.to(self.device)
-                            positive = positive.to(self.device)
-                            negative = negative.to(self.device)
+                            anchor = anchor.to(self.device, non_blocking=True)
+                            positive = positive.to(self.device, non_blocking=True)
+                            negative = negative.to(self.device, non_blocking=True)
                             
                             emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative) # pyright: ignore[reportCallIssue]
                             loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
                             
-                            running_val_loss += loss.item()
+                            # Extract scalar value immediately
+                            loss_value = loss.item()
+                            running_val_loss += loss_value
+
+                            # Explicit cleanup of validation tensors
+                            del anchor, positive, negative, emb_anchor, emb_positive, emb_negative, loss
 
                             if (j + 1) % BATCHES_PER_LOG_MSG == 0:
                                 logger.info(f"Validation Batch {j+1}/{ttl_batches}")
+                                
+                            # Periodic memory cleanup during validation
+                            if (j + 1) % 50 == 0:
+                                if torch.cuda.is_available():
+                                    # Use smart GPU cache clearing with conservative approach
+                                    self._smart_gpu_cache_clear(force=False, context=f"validation_batch_{j+1}")
 
                     epoch_val_loss = running_val_loss / ttl_batches if ttl_batches > 0 else 0.0
 
-                    # 2. Calculate Retrieval Metrics
+                    # 2. Calculate Retrieval Metrics with memory monitoring
                     reid_metrics = self._evaluate_reid_metrics(val_dataloader)
                     
-                    # Memory cleanup after validation
-                    clear_cpu_memory()
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
+                    # Aggressive memory cleanup after validation
+                    self._aggressive_memory_cleanup(f"After validation epoch {epoch + 1}")
                     self.cpu_monitor.log_memory_stats(f"Epoch {epoch + 1} validation complete")
 
                 # ========================================================================
@@ -582,19 +656,24 @@ class Training:
 
                 logger.info(f"Margin used: {current_margin:.4f}")
                 
-                # Log epoch metrics to wandb
+                # Log epoch metrics to wandb with memory management
                 if wandb_config.enabled:
+                    # Create metrics dict with explicit cleanup
                     metrics = {
-                        "train_loss": epoch_train_loss,
-                        "margin": current_margin,
-                        "current_lr": self.optimizer.param_groups[0]['lr']
+                        "train_loss": float(epoch_train_loss),  # Ensure scalar values
+                        "margin": float(current_margin),
+                        "current_lr": float(self.optimizer.param_groups[0]['lr'])
                     }
                     if epoch_val_loss is not None:
-                        metrics["val_loss"] = epoch_val_loss
-                        metrics.update(reid_metrics) # Add re-id metrics to the log
+                        metrics["val_loss"] = float(epoch_val_loss)
+                        # Add re-id metrics with explicit float conversion to prevent accumulation
+                        for k, v in reid_metrics.items():
+                            metrics[k] = float(v) if isinstance(v, (int, float)) else v
                     
-                  
                     wandb_logger.log_metrics(metrics)
+                    
+                    # Explicitly clear metrics dict to prevent accumulation
+                    del metrics
 
                 # Early stopping based on patience (now using the monitoring_loss)
                 if early_stopping_patience is not None:
@@ -616,20 +695,24 @@ class Training:
                     current_lr = self.optimizer.param_groups[0]['lr']
                     logger.info(f"Learning rate after scheduler step: {current_lr:.6f}")
 
-                # Save checkpoint at the end of each epoch
+                # Save checkpoint at the end of each epoch with aggressive memory management
                 if wandb_config.enabled and self.optimizer is not None:
                     try:
                         # Monitor memory before checkpoint save
                         import psutil
+                        import gc
                         process = psutil.Process()
                         memory_before_checkpoint = process.memory_info().rss / 1024 / 1024  # MB
                         logger.debug(f"Memory before checkpoint save: {memory_before_checkpoint:.1f}MB")
                         
+                        # Force garbage collection before checkpoint to clear accumulated state
+                        gc.collect()
+                        
                         model_config_dict = {
-                            "margin": self.margin,
-                            "learning_rate": self.learning_rate,
-                            "batch_size": self.batch_size,
-                            "weight_decay": self.weight_decay
+                            "margin": float(self.margin),
+                            "learning_rate": float(self.learning_rate),
+                            "batch_size": int(self.batch_size),
+                            "weight_decay": float(self.weight_decay)
                         }
                         
                         # Memory-efficient checkpoint save: pass model/optimizer objects directly
@@ -638,16 +721,20 @@ class Training:
                             epoch=epoch + 1,  # Save 1-indexed epoch number
                             model=self.model,
                             optimizer=self.optimizer,
-                            loss=monitoring_loss,
+                            loss=float(monitoring_loss),  # Ensure scalar value
                             model_name=type(self.model).__name__,
                             model_config=model_config_dict
                         )
                         logger.debug(f"Checkpoint saved for epoch {epoch + 1}")
                         
+                        # Explicit cleanup after checkpoint save
+                        del model_config_dict
+                        gc.collect()
+                        
                         # Monitor memory after checkpoint save
                         memory_after_checkpoint = process.memory_info().rss / 1024 / 1024  # MB
                         checkpoint_memory_delta = memory_after_checkpoint - memory_before_checkpoint
-                        if abs(checkpoint_memory_delta) > 100:  # Log significant memory changes
+                        if abs(checkpoint_memory_delta) > 50:  # Lowered threshold for better monitoring
                             logger.info(f"Checkpoint memory usage: {memory_before_checkpoint:.1f}MB → {memory_after_checkpoint:.1f}MB (Δ{checkpoint_memory_delta:+.1f}MB)")
                         
                     except Exception as e:
@@ -655,6 +742,71 @@ class Training:
                             logger.error(f"Failed to save checkpoint for epoch {epoch + 1} while wandb is enabled: {e}")
                             raise
                         logger.warning(f"Failed to save checkpoint for epoch {epoch + 1}: {e}")
+
+                # Aggressive end-of-epoch memory cleanup
+                try:
+                    # Clear reid_metrics dict explicitly
+                    if 'reid_metrics' in locals():
+                        reid_metrics.clear()
+                        del reid_metrics
+                    
+                    # Force garbage collection at end of each epoch
+                    import gc
+                    gc.collect()
+                    
+                    # Clear GPU cache if available
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        
+                    # Log memory after cleanup
+                    if epoch % 5 == 0:  # Log every 5 epochs to monitor trend
+                        import psutil
+                        process = psutil.Process()
+                        current_memory = process.memory_info().rss / 1024 / 1024  # MB
+                        logger.info(f"End of epoch {epoch + 1} memory usage: {current_memory:.1f}MB")
+                        
+                except Exception as cleanup_error:
+                    logger.debug(f"End-of-epoch cleanup warning: {cleanup_error}")
+
+                # Additional DataLoader iterator cleanup every few epochs to prevent accumulation
+                if (epoch + 1) % 3 == 0 and self.num_workers > 0:
+                    try:
+                        # Reset DataLoader iterators to prevent state accumulation
+                        if hasattr(self.dataloader, '_iterator') and self.dataloader._iterator:
+                            del self.dataloader._iterator
+                            self.dataloader._iterator = None
+                        if self.val_dataloader and hasattr(self.val_dataloader, '_iterator') and self.val_dataloader._iterator:
+                            del self.val_dataloader._iterator  
+                            self.val_dataloader._iterator = None
+                        logger.debug(f"DataLoader iterators reset at epoch {epoch + 1}")
+                    except Exception as iterator_error:
+                        logger.debug(f"DataLoader iterator cleanup warning: {iterator_error}")
+
+                # Memory leak detection and alerting
+                try:
+                    import psutil
+                    process = psutil.Process()
+                    current_memory = process.memory_info().rss / 1024 / 1024  # MB
+                    
+                    if self.epoch_memory_baseline is not None:
+                        memory_increase = current_memory - self.epoch_memory_baseline
+                        # Calculate per-epoch increase more accurately accounting for baseline epoch
+                        epochs_since_baseline = max(1, epoch + 1 - 0)  # epoch is 0-indexed, baseline set after epoch 0 starts
+                        memory_increase_per_epoch = memory_increase / epochs_since_baseline if epochs_since_baseline > 0 else 0
+                        
+                        # Log memory trend every epoch
+                        logger.info(f"Memory trend: Baseline={self.epoch_memory_baseline:.1f}MB, Current={current_memory:.1f}MB, Increase={memory_increase:.1f}MB ({memory_increase_per_epoch:.1f}MB/epoch)")
+                        
+                        # Alert if memory increase per epoch exceeds threshold
+                        if memory_increase_per_epoch > self.memory_leak_threshold_mb:
+                            logger.warning(f"⚠️  POTENTIAL MEMORY LEAK DETECTED: {memory_increase_per_epoch:.1f}MB increase per epoch (threshold: {self.memory_leak_threshold_mb}MB)")
+                            logger.warning("Consider: 1) Reducing validation frequency, 2) Disabling comprehensive evaluation, 3) Reducing batch size")
+                    else:
+                        # Baseline not yet established
+                        logger.debug(f"Memory monitoring: {current_memory:.1f}MB (baseline not yet established)")
+                        
+                except Exception as memory_check_error:
+                    logger.debug(f"Memory leak detection warning: {memory_check_error}")
 
 
         except (RuntimeError, torch.cuda.OutOfMemoryError) as e:
@@ -738,71 +890,96 @@ class Training:
         # Use the centralized comprehensive evaluator to compute and persist
         # full evaluation, then return the retrieval metrics used by training.
         from train.evaluator import ModelEvaluator
+        import gc
 
         # dataloader may be a DataLoader; evaluator expects a Dataset instance
         dataset = getattr(dataloader, 'dataset', dataloader)
 
         # Create evaluator with memory management
-        evaluator = ModelEvaluator(self.model, device=self.device)
-
-        # Log memory before evaluation
-        import psutil
-        process = psutil.Process()
-        memory_before_eval = process.memory_info().rss / 1024 / 1024  # MB
-        logger.debug(f"Memory before evaluation: {memory_before_eval:.1f}MB")
+        evaluator = None
+        results = {}
+        flat_metrics = {}
         
-        log_evaluation_memory_usage("Before validation evaluation", evaluator)
-
         try:
-            # Run the comprehensive evaluation (this also saves results to disk)
-            results = evaluator.evaluate_comprehensive(dataset, **self.kwargs)
+            evaluator = ModelEvaluator(self.model, device=self.device)
+
+            # Log memory before evaluation
+            import psutil
+            process = psutil.Process()
+            memory_before_eval = process.memory_info().rss / 1024 / 1024  # MB
+            logger.debug(f"Memory before evaluation: {memory_before_eval:.1f}MB")
             
-            # Log evaluation results to WandB if enabled and results available
-            if results and hasattr(evaluator, '_log_to_wandb'):
-                try:
-                    evaluator._log_to_wandb(results)
-                    logger.debug("Evaluation results logged to WandB")
-                except Exception as e:
-                    logger.debug(f"Failed to log evaluation results to WandB: {e}")
-                    
-        except Exception as e:
-            logger.warning(f"Comprehensive evaluation failed, falling back to local computation: {e}")
-            results = {}
+            log_evaluation_memory_usage("Before validation evaluation", evaluator)
+
+            try:
+                # Run the comprehensive evaluation (this also saves results to disk)
+                results = evaluator.evaluate_comprehensive(dataset, **self.kwargs)
+                
+                # Log evaluation results to WandB if enabled and results available
+                if results and hasattr(evaluator, '_log_to_wandb'):
+                    try:
+                        evaluator._log_to_wandb(results)
+                        logger.debug("Evaluation results logged to WandB")
+                    except Exception as e:
+                        logger.debug(f"Failed to log evaluation results to WandB: {e}")
+                        
+            except Exception as e:
+                logger.warning(f"Comprehensive evaluation failed, falling back to local computation: {e}")
+                results = {}
+
+            # If evaluation succeeded, flatten all nested metrics into a single-level dict;
+            # otherwise fall back to a local computation that produces the same metric groups.
+            def _flatten(prefix: str, obj: Any):
+                """Recursively flatten dict-like metric objects into flat_metrics using
+                joined keys. Does not rely on specific section name patterns.
+                """
+                if isinstance(obj, dict):
+                    for k, v in obj.items():
+                        new_prefix = f"{prefix}_{k}" if prefix else k
+                        _flatten(new_prefix, v)
+                else:
+                    # Try to coerce numeric-like values to float for consistency
+                    try:
+                        flat_metrics[prefix] = float(obj)
+                    except Exception:
+                        flat_metrics[prefix] = obj
+
+            if isinstance(results, dict) and results:
+                # Iterate over whatever sections the evaluator returned; future-proof.
+                for section, metrics in results.items():
+                    _flatten(section, metrics)
+
         finally:
             # Always cleanup evaluator to prevent memory leaks
-            evaluator.cleanup()
+            if evaluator is not None:
+                try:
+                    evaluator.cleanup()
+                except Exception as cleanup_error:
+                    logger.debug(f"Evaluator cleanup warning: {cleanup_error}")
+                finally:
+                    del evaluator
+            
+            # Explicit cleanup of evaluation variables
+            if 'results' in locals():
+                if hasattr(results, 'clear') and callable(results.clear):
+                    results.clear()
+                del results
+                
+            # Force garbage collection after evaluation
+            gc.collect()
             
             # Monitor memory after evaluation
-            memory_after_eval = process.memory_info().rss / 1024 / 1024  # MB
-            eval_memory_delta = memory_after_eval - memory_before_eval
-            if abs(eval_memory_delta) > 50:  # Log significant memory changes
-                logger.info(f"Evaluation memory usage: {memory_before_eval:.1f}MB → {memory_after_eval:.1f}MB (Δ{eval_memory_delta:+.1f}MB)")
+            try:
+                import psutil
+                process = psutil.Process()
+                memory_after_eval = process.memory_info().rss / 1024 / 1024  # MB
+                eval_memory_delta = memory_after_eval - memory_before_eval
+                if abs(eval_memory_delta) > 50:  # Log significant memory changes
+                    logger.info(f"Evaluation memory usage: {memory_before_eval:.1f}MB → {memory_after_eval:.1f}MB (Δ{eval_memory_delta:+.1f}MB)")
+            except Exception as memory_log_error:
+                logger.debug(f"Memory logging warning: {memory_log_error}")
             
             log_evaluation_memory_usage("After validation evaluation cleanup")
-
-        # If evaluation succeeded, flatten all nested metrics into a single-level dict;
-        # otherwise fall back to a local computation that produces the same metric groups.
-        flat_metrics: Dict[str, Any] = {}
-
-        def _flatten(prefix: str, obj: Any):
-            """Recursively flatten dict-like metric objects into flat_metrics using
-            joined keys. Does not rely on specific section name patterns.
-            """
-            if isinstance(obj, dict):
-                for k, v in obj.items():
-                    new_prefix = f"{prefix}_{k}" if prefix else k
-                    _flatten(new_prefix, v)
-            else:
-                # Try to coerce numeric-like values to float for consistency
-                try:
-                    flat_metrics[prefix] = float(obj)
-                except Exception:
-                    flat_metrics[prefix] = obj
-
-        if isinstance(results, dict) and results:
-            # Iterate over whatever sections the evaluator returned; future-proof.
-            for section, metrics in results.items():
-                _flatten(section, metrics)
 
         return flat_metrics
 
@@ -980,6 +1157,51 @@ class Training:
         except Exception:
             logger.debug("Failed to move some optimizer state tensors to device; they may be created lazily later")
 
+    def _smart_gpu_cache_clear(self, force: bool = False, context: str = ""):
+        """
+        Intelligently clear GPU cache only when necessary.
+        
+        Args:
+            force: If True, force cache clear regardless of memory usage
+            context: Context string for logging (e.g., "epoch_end", "aggressive_cleanup")
+        """
+        if not torch.cuda.is_available():
+            return  # No GPU, no cache to clear
+            
+        try:
+            if force:
+                torch.cuda.empty_cache()
+                if context:
+                    logger.debug(f"GPU cache force-cleared ({context})")
+                return
+                
+            # Check if cache clearing is needed based on memory utilization
+            if hasattr(torch.cuda, 'memory_reserved') and torch.cuda.memory_reserved() > 0:
+                memory_allocated = torch.cuda.memory_allocated()
+                memory_reserved = torch.cuda.memory_reserved()
+                gpu_utilization = memory_allocated / memory_reserved
+                
+                # Use configurable threshold (default 85% for GPU Cloud Run)
+                threshold = getattr(self, 'gpu_cache_threshold', 0.85)
+                
+                if gpu_utilization > threshold:
+                    torch.cuda.empty_cache()
+                    logger.debug(f"GPU cache cleared ({context}) - utilization: {gpu_utilization:.1%} > {threshold:.1%}")
+                else:
+                    logger.debug(f"GPU cache clear skipped ({context}) - utilization: {gpu_utilization:.1%} <= {threshold:.1%}")
+            else:
+                # No memory allocated yet, no need to clear
+                logger.debug(f"GPU cache clear skipped ({context}) - no memory allocated")
+                
+        except Exception as e:
+            # Conservative fallback for Cloud Run GPU: only clear on high memory conditions
+            if getattr(self, 'conservative_gpu_cache', True):
+                logger.debug(f"GPU cache clear skipped ({context}) - conservative mode, error: {e}")
+            else:
+                # Fallback: clear cache if memory queries fail and not in conservative mode
+                torch.cuda.empty_cache()
+                logger.debug(f"GPU cache cleared ({context}) - fallback due to error: {e}")
+
     def cleanup_model(self):
         """
         Clean up the model and associated resources to free memory.
@@ -990,10 +1212,11 @@ class Training:
         if hasattr(self, 'model') and self.model is not None:
             logger.info("Cleaning up training model and resources")
             
-            # Clear model from GPU memory
+            # Clear model from GPU memory with smart cache management
             if torch.cuda.is_available():
                 self.model = self.model.cpu()
-                torch.cuda.empty_cache()
+                # Use smart cache clearing instead of aggressive clearing
+                self._smart_gpu_cache_clear(force=True, context="model_cleanup")
             
             # Clear optimizer state
             if hasattr(self, 'optimizer') and self.optimizer is not None:
@@ -1032,6 +1255,150 @@ class Training:
             self.model = self.model.to(self.device)
         
         return self.model
+
+    def _aggressive_memory_cleanup(self, context: str = ""):
+        """
+        Perform aggressive memory cleanup to prevent accumulation across epochs.
+        
+        Args:
+            context: Context string for logging
+        """
+        try:
+            import gc
+            import psutil
+            
+            # Log memory before cleanup
+            process = psutil.Process()
+            memory_before = process.memory_info().rss / 1024 / 1024  # MB
+            
+            # Force garbage collection multiple times
+            for _ in range(3):
+                gc.collect()
+            
+            # Smart GPU cache clearing - force clear for aggressive cleanup
+            if torch.cuda.is_available():
+                self._smart_gpu_cache_clear(force=True, context=f"aggressive_cleanup_{context}")
+                
+            # Clear CPU memory
+            clear_cpu_memory(force=True)
+            
+            # Additional PyTorch internal cleanup
+            if hasattr(torch, '_C') and hasattr(torch._C, '_cuda_clearCaches'):
+                try:
+                    torch._C._cuda_clearCaches()
+                except Exception:
+                    pass
+            
+            # Log memory after cleanup
+            memory_after = process.memory_info().rss / 1024 / 1024  # MB
+            memory_delta = memory_after - memory_before
+            
+            if abs(memory_delta) > 10:  # Log if significant change
+                logger.info(f"Aggressive memory cleanup {context}: {memory_before:.1f}MB → {memory_after:.1f}MB (Δ{memory_delta:+.1f}MB)")
+            else:
+                logger.debug(f"Aggressive memory cleanup {context}: {memory_before:.1f}MB → {memory_after:.1f}MB (Δ{memory_delta:+.1f}MB)")
+                
+        except Exception as e:
+            logger.debug(f"Aggressive memory cleanup failed {context}: {e}")
+
+    def _restart_dataloader_workers_optimized(self):
+        """
+        Performance-optimized DataLoader worker restart.
+        
+        This method minimizes restart overhead by:
+        1. Using faster worker termination strategies
+        2. Avoiding unnecessary DataLoader recreation when possible
+        3. Preserving dataset state and caches
+        """
+        try:
+            import time
+            
+            # Store original dataset references and configurations
+            train_dataset = self.dataloader.dataset if self.dataloader else None
+            val_dataset = self.val_dataloader.dataset if self.val_dataloader else None
+            
+            # Store current DataLoader configurations to avoid recreation overhead
+            train_config = None
+            val_config = None
+            
+            if self.dataloader:
+                train_config = {
+                    'batch_size': self.dataloader.batch_size,
+                    'num_workers': self.dataloader.num_workers,
+                    'pin_memory': self.dataloader.pin_memory,
+                    'persistent_workers': getattr(self.dataloader, 'persistent_workers', False),
+                    'prefetch_factor': getattr(self.dataloader, 'prefetch_factor', 2),
+                    'drop_last': self.dataloader.drop_last,
+                    'shuffle': True  # Training dataloader always shuffles
+                }
+            
+            if self.val_dataloader:
+                val_config = {
+                    'batch_size': self.val_dataloader.batch_size,
+                    'num_workers': self.val_dataloader.num_workers,
+                    'pin_memory': self.val_dataloader.pin_memory,
+                    'persistent_workers': getattr(self.val_dataloader, 'persistent_workers', False),
+                    'prefetch_factor': getattr(self.val_dataloader, 'prefetch_factor', 2),
+                    'drop_last': self.val_dataloader.drop_last,
+                    'shuffle': False  # Validation dataloader doesn't shuffle
+                }
+            
+            # Fast worker cleanup - terminate workers without waiting too long
+            workers_terminated = 0
+            
+            if self.dataloader and hasattr(self.dataloader, '_iterator') and self.dataloader._iterator:
+                try:
+                    if hasattr(self.dataloader._iterator, '_workers'):
+                        for worker in self.dataloader._iterator._workers:
+                            if worker.is_alive():
+                                worker.terminate()
+                                workers_terminated += 1
+                        # Quick join with short timeout to avoid blocking
+                        for worker in self.dataloader._iterator._workers:
+                            if worker.is_alive():
+                                worker.join(timeout=0.5)  # Reduced timeout
+                    # Clear iterator reference
+                    self.dataloader._iterator = None
+                except Exception as e:
+                    logger.debug(f"Error during training DataLoader worker cleanup: {e}")
+            
+            if self.val_dataloader and hasattr(self.val_dataloader, '_iterator') and self.val_dataloader._iterator:
+                try:
+                    if hasattr(self.val_dataloader._iterator, '_workers'):
+                        for worker in self.val_dataloader._iterator._workers:
+                            if worker.is_alive():
+                                worker.terminate()
+                                workers_terminated += 1
+                        # Quick join with short timeout
+                        for worker in self.val_dataloader._iterator._workers:
+                            if worker.is_alive():
+                                worker.join(timeout=0.5)  # Reduced timeout
+                    # Clear iterator reference
+                    self.val_dataloader._iterator = None
+                except Exception as e:
+                    logger.debug(f"Error during validation DataLoader worker cleanup: {e}")
+            
+            # Force garbage collection to clean up worker references
+            import gc
+            gc.collect()
+            
+            # Recreate DataLoaders with preserved configurations (faster than setup_dataloader)
+            if train_dataset and train_config:
+                from torch.utils.data import DataLoader
+                self.dataloader = DataLoader(train_dataset, **train_config)
+                logger.debug("Training DataLoader recreated with preserved config")
+            
+            if val_dataset and val_config:
+                from torch.utils.data import DataLoader
+                self.val_dataloader = DataLoader(val_dataset, **val_config)
+                logger.debug("Validation DataLoader recreated with preserved config")
+            
+            logger.info(f"DataLoader workers restarted (terminated {workers_terminated} workers)")
+                
+        except Exception as e:
+            logger.warning(f"Optimized DataLoader worker restart failed, falling back to standard restart: {e}")
+            # Fallback to original method
+            self._restart_dataloader_workers()
 
     def _restart_dataloader_workers(self):
         """

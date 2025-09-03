@@ -165,7 +165,7 @@ class DetectionModel:
         Raises:
             NotImplementedError: If images is a torch.Tensor or list (not yet supported).
         """
-        if isinstance(images, (torch.Tensor, list)):
+        if isinstance(images, (torch.Tensor, list)) and sys.platform == "darwin":
             raise NotImplementedError(
                 "torch.Tensor and List inputs are not yet supported by the underlying RF-DETR model. "
                 "Please use a file path (str), PIL.Image, or np.ndarray."

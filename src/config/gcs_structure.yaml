@@ -16,3 +16,4 @@ gcs:
     train_player_folder: "datasets/{dataset_id}/train/{orig_crop_id}"
     val_player_folder: "datasets/{dataset_id}/val/{orig_crop_id}"
     run_data: "runs/{run_id}/"
+    unverified_tracks: "process/{video_id}/unverified_tracks/{track_id}/"
