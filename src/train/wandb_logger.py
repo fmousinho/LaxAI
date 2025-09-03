@@ -815,12 +815,13 @@ class WandbLogger:
 
         # Create state dictionaries efficiently with immediate scope management
         if model_state_dict is None and model is not None:
-            # Create model state dict in limited scope
-            model_state_dict = model.state_dict()
+            # Create model state dict in limited scope - create a copy to avoid holding model references
+            model_state_dict = {k: v.clone().detach() for k, v in model.state_dict().items()}
 
         if optimizer_state_dict is None and optimizer is not None:
-            # Create optimizer state dict in limited scope  
-            optimizer_state_dict = optimizer.state_dict()
+            # Create optimizer state dict in limited scope - deep copy to avoid optimizer references
+            import copy
+            optimizer_state_dict = copy.deepcopy(optimizer.state_dict())
             
         # Validate we have the required state
         if model_state_dict is None:
@@ -835,14 +836,18 @@ class WandbLogger:
         try:
             # Save checkpoint data directly to file without creating intermediate dict
             # This avoids holding 2x the tensor memory (original + dict copy)
-            torch.save({
+            checkpoint_data = {
                 'epoch': epoch,
                 'model_state_dict': model_state_dict,
                 'optimizer_state_dict': optimizer_state_dict,
                 'loss': loss,
                 'timestamp': datetime.now().isoformat(),
                 'model_config': model_config or {}
-            }, checkpoint_path)
+            }
+            torch.save(checkpoint_data, checkpoint_path)
+            
+            # Immediately clear the checkpoint_data dict to free memory
+            del checkpoint_data
             
         finally:
             # Clear state dicts from memory immediately after torch.save
@@ -857,8 +862,13 @@ class WandbLogger:
                     del optimizer_state_dict
                 except Exception:
                     pass
+            
+            # Force garbage collection to ensure tensor memory is released
             import gc
             gc.collect()
+            # Additional cleanup for PyTorch CUDA cache if available
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         
         # Monitor memory after checkpoint save
         memory_after = process.memory_info().rss / 1024 / 1024  # MB
@@ -882,12 +892,13 @@ class WandbLogger:
             }
         )
         
-        # Add checkpoint file to artifact
-        artifact.add_file(checkpoint_path, name=f"checkpoint_epoch_{epoch}.pth")
-
-        # Log artifact to wandb (this automatically versions it)
         try:
+            # Add checkpoint file to artifact
+            artifact.add_file(checkpoint_path, name=f"checkpoint_epoch_{epoch}.pth")
+
+            # Log artifact to wandb (this automatically versions it)
             self.run.log_artifact(artifact)
+            
         except Exception:
             # Ensure we always clean up local resources even on failure
             logger.warning(f"Failed to execute log_artifact for checkpoint {safe_artifact_name}")
@@ -910,6 +921,9 @@ class WandbLogger:
             # Force garbage collection after artifact operations
             import gc
             gc.collect()
+            # Clear CUDA cache if available to free GPU memory
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         # Monitor WandB processes after checkpoint operations (don't terminate them)
         wandb_process_count_after = self._monitor_wandb_processes()

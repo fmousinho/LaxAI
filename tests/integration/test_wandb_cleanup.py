@@ -4,6 +4,9 @@ from datetime import datetime, timedelta
 
 from train.wandb_logger import wandb_logger
 
+# Note: All WandB tests should use max 2 epochs and single dataset unless specifically required
+# See tests/test_config.py for test performance constraints
+
 
 class MockVersion:
     def __init__(self, name: str, version: int, created_at: datetime, aliases=None, metadata=None, delete_raises=False):

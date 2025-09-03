@@ -48,9 +48,55 @@ try:
             pass
 
     # Import here so tests get the repo's `src` on sys.path first
-    from utils.env_secrets import setup_environment_secrets
+    from src.utils.env_secrets import setup_environment_secrets
     setup_environment_secrets()
 except Exception:
     # Re-raise so failures are visible during collection. Tests that run in
     # environments without these secrets should set them before invoking pytest.
     raise
+
+
+# WandB test cleanup utilities
+import pytest
+import time
+from typing import List
+
+
+class WandbArtifactCleaner:
+    """Manages cleanup of WandB artifacts created during tests."""
+    
+    def __init__(self):
+        self.artifacts_to_cleanup: List[str] = []
+        
+    def track_artifact(self, artifact_name: str):
+        """Track an artifact name for cleanup after test."""
+        if artifact_name not in self.artifacts_to_cleanup:
+            self.artifacts_to_cleanup.append(artifact_name)
+            
+    def cleanup_all(self):
+        """Clean up all tracked artifacts."""
+        if not self.artifacts_to_cleanup:
+            return
+            
+        try:
+            from src.train.wandb_logger import wandb_logger
+            for artifact_name in self.artifacts_to_cleanup:
+                try:
+                    wandb_logger._cleanup_old_checkpoints(artifact_name, keep_latest=0)
+                    time.sleep(0.2)  # Brief pause for propagation
+                except Exception as e:
+                    print(f"Warning: Failed to cleanup artifact {artifact_name}: {e}")
+        except ImportError:
+            # If wandb_logger not available, skip cleanup
+            pass
+        finally:
+            self.artifacts_to_cleanup.clear()
+
+
+@pytest.fixture
+def wandb_artifact_cleaner():
+    """Pytest fixture for automatic WandB artifact cleanup."""
+    cleaner = WandbArtifactCleaner()
+    yield cleaner
+    # Cleanup happens after test completes (success or failure)
+    cleaner.cleanup_all()

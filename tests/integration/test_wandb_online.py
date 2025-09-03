@@ -5,6 +5,9 @@ import tempfile
 import pytest
 import torch
 
+# Note: All WandB tests should use max 2 epochs and single dataset unless specifically required
+# See tests/test_config.py for test performance constraints
+
 
 def load_wandb_logger_module():
     path = os.path.join('src', 'train', 'wandb_logger.py')
