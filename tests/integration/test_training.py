@@ -49,6 +49,11 @@ class DummyModel(torch.nn.Module):
     def forward_triplet(self, a, p, n):
         return self.encoder(a), self.encoder(p), self.encoder(n)
 
+    @property
+    def device(self):
+        """Return the device of the model's parameters."""
+        return next(self.parameters()).device
+
 
 def test_training_runs_and_triggers_evaluation(monkeypatch):
     # Arrange

@@ -96,6 +96,11 @@ class SimpleModel(nn.Module):
         emb_negative = self(negative)
         return emb_anchor, emb_positive, emb_negative
 
+    @property
+    def device(self):
+        """Return the device of the model's parameters."""
+        return next(self.parameters()).device
+
 def test_cpu_memory_monitoring():
     """Test CPU memory monitoring functionality."""
     logger.info("=== Testing CPU Memory Monitoring ===")

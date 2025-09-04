@@ -126,6 +126,11 @@ class Training:
         else:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
 
+        # Log initial device and memory state
+        logger.info(f"Training device: {self.device}")
+        if torch.cuda.is_available() and self.device.type == 'cuda':
+            log_gpu_memory_stats("Device initialization")
+
         self.model: nn.Module
         self.optimizer: Optional[torch.optim.Optimizer] = None
         self.loss_fn: Optional[nn.Module] = None
@@ -171,6 +176,11 @@ class Training:
             if loaded_model is not None:
                 self.model = loaded_model
                 logger.info(f"✓ Successfully loaded model from wandb registry: {model_name}:{alias}")
+                
+                # Log memory after model loading from WandB
+                if torch.cuda.is_available() and self.device.type == 'cuda':
+                    log_gpu_memory_stats("After WandB model load")
+                
                 return True
             else:
                 logger.info(f"Could not load model from wandb registry")
@@ -336,6 +346,10 @@ class Training:
             model_loaded = False
             # Prepare kwargs for model initialization
 
+            # Log memory before model operations
+            if torch.cuda.is_available() and self.device.type == 'cuda':
+                log_gpu_memory_stats("Before model setup")
+
             # Try to load from wandb registry first (unless forcing pretrained)
             if self.force_pretraining:
                 logger.info("Forcing fresh start with pre-trained weights")
@@ -346,7 +360,12 @@ class Training:
                 logger.info("No wandb model found, will use local weights or pre-trained backbone")
                 self.model = model_class(**kwargs)
 
-            self.model.to(self.device)
+            # Avoid unnecessary device movement to prevent temporary memory doubling
+            if str(self.model.device) != str(self.device):
+                logger.info(f"Moving model from {self.model.device} to {self.device}")
+                self.model.to(self.device)
+            else:
+                logger.debug(f"Model already on correct device: {self.device}")
             log_gpu_memory_stats("After moving model to device")
             
             # Enable backbone fine-tuning for DINOv3 models
@@ -434,6 +453,10 @@ class Training:
         # ========================================================================
         effective_epochs = self.num_epochs - (start_epoch - 1)
         logger.info(f"Starting training for {effective_epochs} epochs (from epoch {start_epoch} to {self.num_epochs})")
+        
+        # Log memory state at training start
+        if torch.cuda.is_available() and self.device.type == 'cuda':
+            log_gpu_memory_stats("Training start")
         
         # Early stopping configuration
         early_stopping_patience = getattr(training_config, 'early_stopping_patience', None)
@@ -524,7 +547,8 @@ class Training:
 
                     # Calculate training progress metrics
                     # These metrics help diagnose why loss might be staying near margin
-                    embedding_variance = calculate_embedding_variance(torch.cat([emb_anchor, emb_positive, emb_negative], dim=0))
+                    concatenated_embeddings = torch.cat([emb_anchor, emb_positive, emb_negative], dim=0)
+                    embedding_variance = calculate_embedding_variance(concatenated_embeddings)
                     distance_metrics = calculate_intra_inter_distances(emb_anchor, emb_positive, emb_negative)
                     mining_metrics = calculate_triplet_mining_efficiency(emb_anchor, emb_positive, emb_negative, current_margin)
 
@@ -554,6 +578,7 @@ class Training:
                     
                     # Explicitly delete ALL tensors and intermediate results to prevent accumulation
                     del anchor, positive, negative, emb_anchor, emb_positive, emb_negative, loss
+                    del concatenated_embeddings  # Clean up the concatenated tensor
                     
                     # Establish memory baseline after first few batches of first epoch
                     # This accounts for model loading, optimizer state creation, and initial allocations
@@ -565,18 +590,23 @@ class Training:
                     
                     # Aggressive batch-level memory cleanup every 50 batches
                     if (i + 1) % 50 == 0:
-                        # Note: No need for additional zero_grad here as it's called at batch start
-                        pass
-                    
-                    # Memory monitoring for large batch intervals
-                    if (i + 1) % 200 == 0:
-                        try:
-                            import psutil
-                            process = psutil.Process()
-                            current_memory = process.memory_info().rss / 1024 / 1024  # MB
-                            logger.debug(f"Epoch {epoch + 1}, Batch {i + 1}: Memory = {current_memory:.1f}MB")
-                        except Exception:
-                            pass
+                        # Force garbage collection to clear accumulated Python objects
+                        gc.collect()
+                        
+                        # Clear GPU cache if available and memory usage is high
+                        if torch.cuda.is_available() and self.device.type == 'cuda':
+                            # Use smart GPU cache clearing with conservative approach
+                            self._smart_gpu_cache_clear(force=False, context=f"batch_{i+1}")
+                        
+                        # Log memory state every 200 batches (every 4 cleanup cycles)
+                        if (i + 1) % 200 == 0:
+                            try:
+                                import psutil
+                                process = psutil.Process()
+                                current_memory = process.memory_info().rss / 1024 / 1024  # MB
+                                logger.debug(f"Epoch {epoch + 1}, Batch {i + 1}: Memory = {current_memory:.1f}MB (after cleanup)")
+                            except Exception:
+                                pass
 
                 # Calculate and log training loss
                 epoch_train_loss = running_loss / ttl_batches if ttl_batches > 0 else 0.0
@@ -646,7 +676,15 @@ class Training:
                     epoch_val_loss = running_val_loss / ttl_batches if ttl_batches > 0 else 0.0
 
                     # 2. Calculate Retrieval Metrics with memory monitoring
+                    if torch.cuda.is_available() and self.device.type == 'cuda':
+                        log_gpu_memory_stats("Before evaluation")
+                    self.cpu_monitor.log_memory_stats("Before evaluation")
+                    
                     reid_metrics = self._evaluate_reid_metrics(val_dataloader)
+                    
+                    if torch.cuda.is_available() and self.device.type == 'cuda':
+                        log_gpu_memory_stats("After evaluation")
+                    self.cpu_monitor.log_memory_stats("After evaluation")
                     
                     # Aggressive memory cleanup after validation
                     self._aggressive_memory_cleanup(f"After validation epoch {epoch + 1}")
@@ -665,6 +703,11 @@ class Training:
                     monitoring_loss = epoch_val_loss
                     for key, val in reid_metrics.items():
                         logger.info(f"  - {key}: {val:.4f}")
+
+                # Clear evaluation metrics to prevent memory accumulation
+                # Don't delete reid_metrics here as it's still needed for WandB logging
+                if 'reid_metrics' in locals():
+                    reid_metrics.clear()
 
                 logger.info(f"Margin used: {current_margin:.4f}")
 
@@ -707,6 +750,10 @@ class Training:
                     
                     # Explicitly clear metrics dict to prevent accumulation
                     del metrics
+
+                    # Now it's safe to delete reid_metrics after WandB logging is complete
+                    if 'reid_metrics' in locals():
+                        del reid_metrics
 
                 # Early stopping based on patience (now using the monitoring_loss)
                 if early_stopping_patience is not None:
@@ -1010,6 +1057,13 @@ class Training:
             
             log_evaluation_memory_usage("After validation evaluation cleanup")
 
+        # Additional cleanup of local variables
+        try:
+            del dataset, evaluator
+            gc.collect()
+        except NameError:
+            pass
+
         return flat_metrics
 
 
@@ -1033,6 +1087,10 @@ class Training:
         if val_dataset is not None:
             logger.info("Setting up validation data...")
             self.setup_dataloader(val_dataset, type='val')
+
+        # Log memory after data setup, before model setup
+        if torch.cuda.is_available() and self.device.type == 'cuda':
+            log_gpu_memory_stats("After data setup")
 
         # Setup model
         logger.info("Setting up model...")
@@ -1069,7 +1127,12 @@ class Training:
                 logger.info(f"✅ Resumed training from checkpoint at epoch {start_epoch}")
                 # Ensure model and optimizer state are on the configured device
                 try:
-                    self.model.to(self.device)
+                    # Avoid unnecessary device movement to prevent temporary memory doubling
+                    if str(self.model.device) != str(self.device):
+                        logger.info(f"Moving model from {self.model.device} to {self.device} after checkpoint resumption")
+                        self.model.to(self.device)
+                    else:
+                        logger.debug(f"Model already on correct device after checkpoint resumption: {self.device}")
                     # Move optimizer state tensors (if any) to device to avoid
                     # runtime errors during optimizer.step caused by mixed devices.
                     try:

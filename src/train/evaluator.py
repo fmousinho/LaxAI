@@ -183,6 +183,23 @@ class ModelEvaluator:
         self._save_results(results)
 
         logger.info("✅ Comprehensive evaluation completed")
+        
+        # Clear large data structures to free memory
+        try:
+            del embs, labels, image_paths
+            if 'sims' in locals() and sims is not None:
+                del sims
+            if 'dists' in locals() and dists is not None:
+                del dists
+            if 'labels_eq' in locals() and labels_eq is not None:
+                del labels_eq
+            if 'sims_matrix' in locals() and sims_matrix is not None:
+                del sims_matrix
+            import gc
+            gc.collect()
+        except Exception as cleanup_error:
+            logger.debug(f"Evaluation data cleanup warning: {cleanup_error}")
+        
         return results
 
 
@@ -208,6 +225,12 @@ class ModelEvaluator:
         prefetch_factor = eval_kwargs.get("prefetch_factor", evaluator_config.prefetch_factor)
 
         logger.info(f"Generating embeddings for {len(dataset)} samples in batches of {batch_size}...")
+
+        # Log initial memory state
+        if PSUTIL_AVAILABLE:
+            process = psutil.Process()
+            initial_memory = process.memory_info().rss / 1024 / 1024
+            logger.info(f"Memory before embedding generation: {initial_memory:.1f}MB")
 
         logger.info(f"Using DataLoader with batch_size={batch_size}, num_workers={num_workers}, prefetch_factor={prefetch_factor}")
 
@@ -316,6 +339,13 @@ class ModelEvaluator:
             logger.info(f"Embeddings shape: {embeddings_array.shape}, mean={embeddings_array.mean():.4f}")
         else:
             logger.info(f"Embeddings shape: {embeddings_array.shape}")
+
+        # Log final memory state
+        if PSUTIL_AVAILABLE:
+            process = psutil.Process()
+            final_memory = process.memory_info().rss / 1024 / 1024
+            memory_delta = final_memory - initial_memory
+            logger.info(f"Memory after embedding generation: {final_memory:.1f}MB (Δ{memory_delta:+.1f}MB)")
 
         return embeddings_array, labels_array, all_paths
 
@@ -934,6 +964,10 @@ class ModelEvaluator:
                 self.model = self.model.cpu()
                 torch.cuda.empty_cache()
             self.model = None
+        
+        # Clear any cached embeddings or large data structures
+        if hasattr(self, '_embedding_cache'):
+            self._embedding_cache.clear()
         
         # Force garbage collection
         import gc

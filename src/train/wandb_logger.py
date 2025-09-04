@@ -133,6 +133,10 @@ class WandbLogger:
         # Single worker thread pool for async operations (preserves ordering)
         self._executor: Optional[ThreadPoolExecutor] = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wandb-async")
         self._pending_futures: List[Future] = []
+        
+        # Memory management for long training runs
+        self._checkpoint_count = 0
+        self._memory_cleanup_interval = getattr(wandb_config, 'memory_cleanup_interval', 5)  # Configurable cleanup interval
 
     # --- Convenience logging proxies ---------------------------------
     # Some tests and external callers call logger.info()/warning() on the
@@ -602,11 +606,13 @@ class WandbLogger:
         # Get appropriate checkpoint name
         checkpoint_name = self._get_artifact_name("checkpoint")
         
-        # Create temp file for checkpoint
+        # Create temp file for checkpoint (ensure it's properly closed)
         with tempfile.NamedTemporaryFile(suffix=f'_epoch_{epoch}.pth', delete=False) as tmp_file:
             checkpoint_path = tmp_file.name
-
-        # Save checkpoint data
+            # Close the file handle immediately to free resources
+            tmp_file.close()
+            
+        # Save checkpoint data with memory optimization
         checkpoint_data = {
             'epoch': epoch,
             'model_state_dict': model_state_dict,
@@ -615,8 +621,14 @@ class WandbLogger:
             'timestamp': datetime.now().isoformat(),
             'model_config': model_config or {}
         }
-        torch.save(checkpoint_data, checkpoint_path)
-
+        
+        # Use torch.save with pickle protocol for better memory efficiency
+        torch.save(checkpoint_data, checkpoint_path, pickle_protocol=4)
+        
+        # Clear references to large objects to help GC
+        del checkpoint_data
+        gc.collect()
+        
         # Schedule async upload and cleanup
         if self._executor:
             future = self._executor.submit(
@@ -628,7 +640,20 @@ class WandbLogger:
             )
             self._pending_futures.append(future)
             
-            # Clean up completed futures
+            # Clean up completed futures more aggressively
+            completed_futures = [f for f in self._pending_futures if f.done()]
+            for future in completed_futures:
+                try:
+                    # Get result to ensure any exceptions are raised
+                    future.result(timeout=0.1)
+                except Exception as e:
+                    logger.debug(f"Async operation completed with error: {e}")
+                finally:
+                    # Remove from list
+                    if future in self._pending_futures:
+                        self._pending_futures.remove(future)
+            
+            # Keep only non-completed futures
             self._pending_futures = [f for f in self._pending_futures if not f.done()]
             
             logger.info(f"Scheduled async checkpoint upload for epoch {epoch}")
@@ -638,6 +663,7 @@ class WandbLogger:
             self._upload_checkpoint_and_cleanup(checkpoint_path, checkpoint_name, epoch, loss)
             return f"{checkpoint_name}:latest"
 
+    @monitor_memory
     def _upload_checkpoint_and_cleanup(self, checkpoint_path: str, checkpoint_name: str, epoch: int, loss: Optional[float]) -> None:
         """Upload checkpoint and clean up old versions."""
         try:
@@ -668,6 +694,12 @@ class WandbLogger:
             # Clean up old checkpoints (keep only latest)
             self._cleanup_artifacts_by_type(checkpoint_name, "model_checkpoint", keep_latest=self.checkpoint_retention_count)
             
+            # Periodic aggressive cleanup for long training runs
+            self._checkpoint_count += 1
+            if self._checkpoint_count % self._memory_cleanup_interval == 0:
+                logger.info(f"🧹 Periodic memory cleanup after {self._checkpoint_count} checkpoints")
+                self._force_memory_cleanup()
+            
         except Exception as e:
             logger.error(f"Failed to upload checkpoint: {e}")
         finally:
@@ -677,6 +709,17 @@ class WandbLogger:
                     os.unlink(checkpoint_path)
             except Exception:
                 pass
+            
+            # Clear references to help GC
+            try:
+                del artifact
+            except NameError:
+                pass
+            try:
+                del logged_artifact
+            except NameError:
+                pass
+            
             gc.collect()
 
     @monitor_memory
@@ -971,7 +1014,20 @@ class WandbLogger:
     def _cleanup_artifacts_by_type(self, collection_name: str, artifact_type: str, keep_latest: int) -> None:
         """Clean up old artifacts of a specific type, keeping only the latest N versions."""
         try:
-            artifact_collection = self.wandb_api.artifact_type(artifact_type, project=wandb_config.project).collection(collection_name)
+            # Add null check for wandb_api
+            if self.wandb_api is None:
+                logger.warning(f"WandB API not available, skipping cleanup of {artifact_type} artifacts for {collection_name}")
+                return
+
+            artifact_type_obj = self.wandb_api.artifact_type(artifact_type, project=wandb_config.project)
+            if artifact_type_obj is None:
+                logger.warning(f"Could not get artifact type '{artifact_type}' from WandB API, skipping cleanup for {collection_name}")
+                return
+
+            artifact_collection = artifact_type_obj.collection(collection_name)
+            if artifact_collection is None:
+                logger.debug(f"Collection '{collection_name}' not found, nothing to cleanup")
+                return
 
             # Fast path for deletion of all versions
             if keep_latest == 0:
@@ -984,36 +1040,40 @@ class WandbLogger:
 
             # Get all artifacts, sorted by creation time (newest first)
             artifacts = list(artifact_collection.artifacts())
+            logger.debug(f"Found {len(artifacts)} {artifact_type} artifacts in collection {collection_name}")
+
             if len(artifacts) <= keep_latest:
-                logger.debug(f"Only {len(artifacts)} versions exist for {collection_name}, no cleanup needed")
+                logger.debug(f"Only {len(artifacts)} versions exist for {collection_name}, keeping {keep_latest} - no cleanup needed")
                 return
 
             artifacts.sort(key=lambda x: x.created_at, reverse=True)
-            
+
             # Identify versions to delete (keep latest N)
             to_delete = artifacts[keep_latest:]
-            
-            # Skip versions marked as "do not delete"
+            logger.debug(f"Identified {len(to_delete)} {artifact_type} artifacts for potential deletion in {collection_name}")            # Skip versions marked as "do not delete"
             filtered_to_delete = []
             for artifact in to_delete:
                 do_not_delete = False
-                
+
                 # Check aliases
                 try:
                     if hasattr(artifact, 'aliases'):
-                        protected_aliases = getattr(wandb_config, 'model_tags_to_skip_deletion', ['production', 'stable'])
+                        # Use the config value with proper fallback to match all_config.py
+                        protected_aliases = getattr(wandb_config, 'model_tags_to_skip_deletion', ["do_not_delete"])
                         if any(alias in protected_aliases for alias in artifact.aliases):
                             do_not_delete = True
+                            logger.debug(f"Skipping deletion of {artifact.name} due to protected alias: {artifact.aliases}")
                 except Exception:
                     pass
-                
+
                 # Check metadata
                 try:
                     if artifact.metadata and artifact.metadata.get("do_not_delete", False):
                         do_not_delete = True
+                        logger.debug(f"Skipping deletion of {artifact.name} due to metadata protection")
                 except Exception:
                     pass
-                
+
                 if not do_not_delete:
                     filtered_to_delete.append(artifact)
 
@@ -1029,7 +1089,15 @@ class WandbLogger:
 
             if deleted_count > 0:
                 logger.info(f"🗑️  Cleaned up {deleted_count} old {artifact_type} artifacts for {collection_name}")
+            else:
+                logger.debug(f"No {artifact_type} artifacts were deleted for {collection_name} (all were protected or failed)")
 
+        except AttributeError as e:
+            if "'NoneType' object has no attribute" in str(e):
+                logger.error(f"WandB API returned None object during cleanup of {collection_name}: {e}")
+                logger.error("This usually indicates WandB API initialization issues or network connectivity problems")
+            else:
+                logger.error(f"Attribute error during artifact cleanup for {collection_name}: {e}")
         except Exception as e:
             logger.error(f"Failed to cleanup {artifact_type} artifacts for {collection_name}: {e}")
 
@@ -1086,6 +1154,39 @@ class WandbLogger:
         if safe != name:
             logger.debug(f"Sanitized artifact name: '{name}' -> '{safe}'")
         return safe
+
+    def _force_memory_cleanup(self) -> None:
+        """Force aggressive memory cleanup for large artifacts during long training runs."""
+        try:
+            # Clear any cached WandB data
+            if hasattr(self, 'wandb_api') and self.wandb_api:
+                # Force API cache cleanup if available
+                if hasattr(self.wandb_api, '_cache'):
+                    self.wandb_api._cache.clear()
+            
+            # Force garbage collection
+            gc.collect()
+            
+            # Clear any pending operations that might hold large objects
+            if self._pending_futures:
+                # Only keep futures that are still running, remove completed ones
+                self._pending_futures = [f for f in self._pending_futures if not f.done()]
+            
+            logger.debug("Forced memory cleanup completed")
+            
+        except Exception as e:
+            logger.debug(f"Memory cleanup failed (non-critical): {e}")
+
+    def force_cleanup_now(self) -> None:
+        """Manually trigger memory cleanup - can be called from training code."""
+        logger.info("🔧 Manual memory cleanup triggered")
+        self._force_memory_cleanup()
+        
+        # Also clean up any completed async operations
+        if self._pending_futures:
+            completed_count = len([f for f in self._pending_futures if f.done()])
+            if completed_count > 0:
+                logger.info(f"🧹 Cleaned up {completed_count} completed async operations")
 
     def _monitor_wandb_processes(self) -> int:
         """Monitor and count WandB-related processes for performance testing.
