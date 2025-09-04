@@ -17,9 +17,10 @@ from train.evaluator import (calculate_embedding_variance, calculate_intra_inter
 logger = logging.getLogger(__name__)
 
 # Constants
-EPOCHS_PER_VAL = 10
 BATCHES_PER_LOG_MSG = 10
 EPOCHS_PER_VAL = 0
+EPOCHS_PER_DATALOADER_RESTART = 10
+THRESHOLD_FOR_DATALOADER_RESTART = 90.0  # Memory usage percentage threshold
 
 
 class Training:
@@ -845,7 +846,7 @@ class Training:
                     logger.debug(f"End-of-epoch cleanup warning: {cleanup_error}")
 
                 # Additional DataLoader iterator cleanup every few epochs to prevent accumulation
-                if (epoch + 1) % 3 == 0 and self.num_workers > 0:
+                if (epoch + 1) % EPOCHS_PER_DATALOADER_RESTART == 0 and self.num_workers > 0:
                     try:
                         # Reset DataLoader iterators to prevent state accumulation
                         if hasattr(self.dataloader, '_iterator') and self.dataloader._iterator:

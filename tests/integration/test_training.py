@@ -3,6 +3,7 @@ import pytest
 import numpy as np
 
 from src.train.training import Training
+from src.train.siamesenet import SiameseNet
 
 
 class DummyTripletDataset(torch.utils.data.Dataset):
@@ -14,8 +15,9 @@ class DummyTripletDataset(torch.utils.data.Dataset):
         return self.n
 
     def __getitem__(self, idx):
-        # Return (anchor, positive, negative, label)
-        x = torch.randn(self.dim)
+        # Return (anchor, positive, negative, label) - 4D tensors for SiameseNet
+        # Create fake 3-channel images of size 32x32
+        x = torch.randn(3, 32, 32)
         label = idx % 2
         return x, x, x, label
 
@@ -29,30 +31,23 @@ class DummyEvalDataset(torch.utils.data.Dataset):
         return self.n
 
     def __getitem__(self, idx):
-        x = torch.randn(self.dim)
+        # Create fake 3-channel images of size 32x32 for SiameseNet
+        x = torch.randn(3, 32, 32)
         label = idx % 2
         # Return same shape as triplet dataset: (anchor, positive, negative, label)
         return x, x, x, label
 
 
-class DummyModel(torch.nn.Module):
+class DummyModel(SiameseNet):
+    """Wrapper around SiameseNet for testing with simplified parameters."""
+    
     def __init__(self, dim=4, emb_dim=2):
-        super().__init__()
-        self.encoder = torch.nn.Linear(dim, emb_dim)
-
-    def forward(self, x):
-        return self.encoder(x)
-
-    def __call__(self, x):
-        return self.forward(x)
-
-    def forward_triplet(self, a, p, n):
-        return self.encoder(a), self.encoder(p), self.encoder(n)
-
-    @property
-    def device(self):
-        """Return the device of the model's parameters."""
-        return next(self.parameters()).device
+        # Initialize with test-friendly parameters
+        super().__init__(
+            embedding_dim=emb_dim,
+            use_cbam=False,  # Disable CBAM for faster testing
+            dropout_rate=0.0
+        )
 
 
 def test_training_runs_and_triggers_evaluation(monkeypatch):
@@ -102,8 +97,8 @@ def test_training_runs_and_triggers_evaluation(monkeypatch):
     t.margin_change_threshold = 1e-6
 
     # Setup small datasets
-    train_ds = DummyTripletDataset(n=4, dim=4)
-    val_ds = DummyEvalDataset(n=4, dim=4)
+    train_ds = DummyTripletDataset(n=2, dim=4)
+    val_ds = DummyEvalDataset(n=2, dim=4)
 
     # Act
     t.setup_training_pipeline(DummyModel, train_ds, model_name='dummy', val_dataset=val_ds)

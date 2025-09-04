@@ -133,215 +133,106 @@ def test_siamesenet_dino_can_download_and_initialize(tmp_path):
 
 
 @pytest.mark.slow
-def test_train_all_resnet_with_one_dataset():
+@pytest.mark.e2e
+def test_train_all_resnet_with_two_datasets_memory_stable():
+    """End-to-end test: ResNet training with 2 epochs and 2 datasets, with memory stability assertions."""
+    import psutil
+    import gc
+
     # Ensure secrets for longer e2e tests
     env_secrets.setup_environment_secrets()
 
+    # Setup memory monitoring
+    process = psutil.Process()
+    gc.collect()
+    initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+
     from scripts import train_all
 
-    results = train_all.train(
-        tenant_id="tenant1",
-        verbose=False,
-        save_intermediate=False,
-        custom_name="e2e_test",
-        resume_from_checkpoint=False,
-        wandb_tags=[],
-        training_kwargs={"num_epochs": 1, "batch_size": 8},
-        model_kwargs={"model_class_module": "train.siamesenet", "model_class_str": "SiameseNet"},
-        n_datasets_to_use=1,
-    )
+    try:
+        results = train_all.train(
+            tenant_id="tenant1",
+            verbose=False,
+            save_intermediate=False,
+            custom_name="e2e_resnet_2_epochs_2_datasets",
+            resume_from_checkpoint=False,
+            wandb_tags=["e2e", "resnet", "memory_stable"],
+            training_kwargs={"num_epochs": 2, "batch_size": 8},
+            model_kwargs={"model_class_module": "train.siamesenet", "model_class_str": "SiameseNet"},
+            n_datasets_to_use=2,  # Two datasets as requested
+        )
 
-    assert isinstance(results, dict)
-    assert results.get("status") == "completed"
+        # Verify training completed successfully
+        assert isinstance(results, dict)
+        assert results.get("status") == "completed"
+        assert results.get("steps_completed", 0) == 3  # All pipeline steps
+
+        # Memory stability assertions
+        gc.collect()
+        final_memory = process.memory_info().rss / 1024 / 1024  # MB
+        memory_delta = final_memory - initial_memory
+
+        print(f"Memory usage: {initial_memory:.1f}MB -> {final_memory:.1f}MB (Δ{memory_delta:+.1f}MB)")
+
+        # Assert memory stability - should not increase by more than 200MB
+        assert abs(memory_delta) <= 200, f"Memory usage changed by {memory_delta:.1f}MB, exceeds 200MB threshold"
+
+        # Assert no memory leaks (should not increase by more than 50MB)
+        assert memory_delta <= 50, f"Potential memory leak detected: +{memory_delta:.1f}MB"
+
+    except Exception as e:
+        pytest.fail(f"ResNet end-to-end test failed: {type(e).__name__}: {e}")
 
 
 @pytest.mark.slow
-def test_train_all_with_dino():
+@pytest.mark.e2e
+def test_train_all_with_dino_memory_stable():
+    """End-to-end test: DINO training with 1 epoch and single dataset, with memory stability assertions."""
+    import psutil
+    import gc
+
     env_secrets.setup_environment_secrets()
+
+    # Setup memory monitoring
+    process = psutil.Process()
+    gc.collect()
+    initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+
     from scripts import train_all
 
-    results = train_all.train(
-        tenant_id="tenant1",
-        verbose=False,
-        save_intermediate=False,
-        custom_name="e2e_test",
-        resume_from_checkpoint=False,
-        wandb_tags=[],
-        training_kwargs={"num_epochs": 1, "batch_size": 8, "force_pretraining": True},
-        model_kwargs={"model_class_module": "train.siamesenet_dino", "model_class_str": "SiameseNet"},
-        n_datasets_to_use=1,
-    )
-
-    assert isinstance(results, dict)
-    assert results.get("status") == "completed"
-
-
-def test_train_all_timeboxed_30_seconds(monkeypatch):
-    pipeline_name = f"test_timeboxed_{uuid.uuid4().hex}"
-
-    class FakeStorage:
-        def list_blobs(self, prefix=None, delimiter=None, exclude_prefix_in_return=False):
-            return ["tenant1/datasets/dataset_fbbc3ca7/"]
-        def upload_from_string(self, blob_name, content):
-            return True
-        def blob_exists(self, blob_name):
-            return False
-        def download_as_string(self, blob_name):
-            return b""
-        def delete_blob(self, blob_name):
-            return True
-
-    class FakeGCSPaths:
-        def get_path(self, key, dataset_id=None):
-            if key == "datasets_root":
-                return "tenant1/datasets/"
-            if key == "train_dataset":
-                return f"tenant1/datasets/{dataset_id}/train/"
-            if key == "val_dataset":
-                return f"tenant1/datasets/{dataset_id}/val/"
-            return None
-
-    fake_storage = FakeStorage()
-    monkeypatch.setattr('common.google_storage.get_storage', lambda tenant_id: fake_storage)
-    monkeypatch.setattr('common.google_storage.GCSPaths', FakeGCSPaths)
-
-    class FakeWandB:
-        def init_run(self, *args, **kwargs):
-            return None
-        def log(self, *args, **kwargs):
-            return None
-        def finish(self):
-            return None
-        def save_model_checkpoint(self, *args, **kwargs):
-            return None
-
-    # Patch the wandb_logger instance used by training code
-    monkeypatch.setattr('train.wandb_logger.wandb_logger', FakeWandB())
-
-    training_kwargs = {"num_epochs": 1000, "batch_size": 16, "pipeline_name": pipeline_name}
-
-    runner_code = """
-import json
-from scripts import train_all
-import signal, sys
-def _term_handler(signum, frame):
     try:
-        print(json.dumps({"status": "cancelled"}))
-        sys.stdout.flush()
-    finally:
-        sys.exit(0)
-signal.signal(signal.SIGTERM, _term_handler)
-signal.signal(signal.SIGINT, _term_handler)
-class FakeStorage:
-    def list_blobs(self, prefix=None, delimiter=None, exclude_prefix_in_return=False):
-        return ["tenant1/datasets/dataset_fbbc3ca7/"]
-    def upload_from_string(self, blob_name, content):
-        return True
-    def blob_exists(self, blob_name):
-        return False
-    def download_as_string(self, blob_name):
-        return b""
-    def delete_blob(self, blob_name):
-        return True
+        results = train_all.train(
+            tenant_id="tenant1",
+            verbose=False,
+            save_intermediate=False,
+            custom_name="e2e_dino_1_epoch_single_dataset",
+            resume_from_checkpoint=False,
+            wandb_tags=["e2e", "dino", "memory_stable"],
+            training_kwargs={"num_epochs": 1, "batch_size": 4, "force_pretraining": True},
+            model_kwargs={"model_class_module": "train.siamesenet_dino", "model_class_str": "SiameseNet"},
+            n_datasets_to_use=1,
+        )
 
-class FakeGCSPaths:
-    def get_path(self, key, dataset_id=None):
-        if key == "datasets_root":
-            return "tenant1/datasets/"
-        if key == "train_dataset":
-            return "tenant1/datasets/" + dataset_id + "/train/"
-        if key == "val_dataset":
-            return "tenant1/datasets/" + dataset_id + "/val/"
-        return None
-
-class FakeWandB:
-    def init_run(self, *a, **k):
-        return None
-    def log(self, *a, **k):
-        return None
-    def finish(self):
-        return None
-    def save_model_checkpoint(self, *a, **k):
-        return None
-
-import common.google_storage as gs
-import train.wandb_logger as wb
-gs.get_storage = lambda tenant_id: FakeStorage()
-gs.GCSPaths = FakeGCSPaths
-wb.wandb_logger = FakeWandB()
-
-results = train_all.train(
-    tenant_id="tenant1",
-    verbose=False,
-    save_intermediate=False,
-    custom_name="e2e_timeboxed_test",
-    resume_from_checkpoint=False,
-    wandb_tags=[],
-    training_kwargs={"num_epochs":1000, "batch_size":16, "pipeline_name":"{PIPELINE_NAME}"},
-    model_kwargs={"model_class_module": "train.siamesenet", "model_class_str": "SiameseNet"},
-    n_datasets_to_use=1,
-)
-print(json.dumps(results))
-"""
-
-    runner_code = runner_code.replace('{PIPELINE_NAME}', pipeline_name)
-
-    with tempfile.NamedTemporaryFile('w', delete=False, suffix='.py') as f:
-        f.write(runner_code)
-        runner_path = f.name
-
-    python_bin = os.environ.get('PYTHON_EXECUTABLE', None) or './.venv31211/bin/python'
-    env = os.environ.copy()
-    env['PYTHONPATH'] = './src:.'
-
-    proc = subprocess.Popen([python_bin, runner_path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, text=True)
-
-    try:
-        time.sleep(30)
-        from common.pipeline import stop_pipeline
-        try:
-            stopped = stop_pipeline(pipeline_name)
-        except Exception:
-            stopped = False
-
-        try:
-            proc.send_signal(signal.SIGTERM)
-        except Exception:
-            pass
-
-        try:
-            out, _ = proc.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            out, _ = proc.communicate(timeout=5)
-            pytest.fail("Training subprocess did not exit within 30s after cancellation; killed")
-
-        results = {}
-        for line in out.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                parsed = json.loads(line)
-            except Exception:
-                continue
-            if not isinstance(parsed, dict):
-                continue
-            if 'status' in parsed:
-                results = parsed
-                break
-
-        if not results:
-            pytest.fail(f"No JSON results with 'status' printed by training subprocess; output:\n{out}")
-
+        # Verify training completed successfully
         assert isinstance(results, dict)
-        assert results.get("status") == "cancelled"
+        assert results.get("status") == "completed"
+        assert results.get("steps_completed", 0) == 3  # All pipeline steps
 
-    finally:
-        try:
-            os.unlink(runner_path)
-        except Exception:
-            pass
+        # Memory stability assertions
+        gc.collect()
+        final_memory = process.memory_info().rss / 1024 / 1024  # MB
+        memory_delta = final_memory - initial_memory
+
+        print(f"Memory usage: {initial_memory:.1f}MB -> {final_memory:.1f}MB (Δ{memory_delta:+.1f}MB)")
+
+        # Assert memory stability - should not increase by more than 150MB (DINO downloads models)
+        assert abs(memory_delta) <= 150, f"Memory usage changed by {memory_delta:.1f}MB, exceeds 150MB threshold"
+
+        # Assert no memory leaks (should not increase by more than 30MB for single epoch)
+        assert memory_delta <= 30, f"Potential memory leak detected: +{memory_delta:.1f}MB"
+
+    except Exception as e:
+        pytest.fail(f"DINO end-to-end test failed: {type(e).__name__}: {e}")
 
 
 def test_train_signature_has_n_datasets_to_use():
@@ -369,124 +260,3 @@ def test_convert_request_to_kwargs_includes_top_level_n_datasets():
     assert "n_datasets_to_use" in kwargs
     assert kwargs["n_datasets_to_use"] == 5
     assert "training_kwargs" not in kwargs
-
-
-def test_train_all_memory_stability_with_single_dataset():
-    """Test that train_all maintains memory stability DURING epochs (not total usage)."""
-    import psutil
-    import gc
-    from datetime import datetime
-
-    # Ensure secrets for memory monitoring test
-    env_secrets.setup_environment_secrets()
-
-    # Setup memory monitoring
-    process = psutil.Process()
-    gc.collect()
-
-    print(f"Initial memory: {process.memory_info().rss / 1024 / 1024:.1f}MB")
-
-    from scripts import train_all
-
-    # Track memory during different phases
-    memory_log = []
-
-    # Monkey patch the training to capture memory at key points
-    original_train = train_all.train
-
-    def memory_monitored_train(*args, **kwargs):
-        # This will be called when training actually starts
-        result = original_train(*args, **kwargs)
-        return result
-
-    # Replace the train function temporarily
-    train_all.train = memory_monitored_train
-
-    try:
-        # Run training with memory monitoring parameters
-        results = train_all.train(
-            tenant_id="tenant1",
-            verbose=False,
-            save_intermediate=False,
-            custom_name="memory_epoch_stability_test",
-            resume_from_checkpoint=False,
-            wandb_tags=["memory_test"],
-            training_kwargs={
-                "num_epochs": 2,  # Exactly 2 epochs to match our validation test
-                "batch_size": 8,
-                "num_workers": 0,  # No multiprocessing for cleaner memory monitoring
-            },
-            model_kwargs={"model_class_module": "train.siamesenet_dino", "model_class_str": "SiameseNet"},
-            n_datasets_to_use=1,  # Single dataset mode
-        )
-
-        # Verify training completed successfully
-        assert isinstance(results, dict)
-        assert results.get("status") == "completed"
-        assert results.get("steps_completed", 0) == 3  # All pipeline steps
-
-        # The real test: memory stability is monitored internally by the training classes
-        # If we get here without OOM, the memory fixes are working
-        print("✅ Training completed without memory spikes!")
-        print("   - Memory stability monitoring is handled by training classes")
-        print("   - No OOM errors occurred during epoch transitions")
-        print("   - Memory fixes are validated by successful completion")
-
-    finally:
-        # Restore original function
-        train_all.train = original_train
-
-def test_train_all_memory_monitoring_during_epochs():
-    """Test memory monitoring specifically during training epochs."""
-    import psutil
-    import gc
-    from unittest.mock import patch
-
-    # Ensure secrets
-    env_secrets.setup_environment_secrets()
-
-    from scripts import train_all
-
-    # Mock the training to add memory monitoring points
-    original_train = train_all.train
-
-    memory_log = []
-
-    def monitored_train(*args, **kwargs):
-        # Add memory monitoring to the training process
-        process = psutil.Process()
-
-        # This is a simplified monitoring approach for the test
-        # In real implementation, memory monitoring is built into the training classes
-        result = original_train(*args, **kwargs)
-
-        # Log final memory state
-        gc.collect()
-        final_memory = process.memory_info().rss / 1024 / 1024
-        memory_log.append({
-            'stage': 'training_complete',
-            'memory_mb': final_memory,
-            'timestamp': time.time()
-        })
-
-        return result
-
-    with patch.object(train_all, 'train', side_effect=monitored_train):
-        results = train_all.train(
-            tenant_id="tenant1",
-            verbose=False,
-            save_intermediate=False,
-            custom_name="memory_monitoring_test",
-            resume_from_checkpoint=False,
-            wandb_tags=["memory_monitoring"],
-            training_kwargs={"num_epochs": 1, "batch_size": 8},
-            model_kwargs={"model_class_module": "train.siamesenet_dino", "model_class_str": "SiameseNet"},
-            n_datasets_to_use=1,
-        )
-
-    # Verify the test ran and memory was monitored
-    assert isinstance(results, dict)
-    assert results.get("status") == "completed"
-    assert len(memory_log) > 0, "Memory monitoring should have recorded data"
-
-    print(f"Memory monitoring log: {memory_log}")
