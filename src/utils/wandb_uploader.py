@@ -25,7 +25,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from config.all_config import wandb_config, detection_config
-from src.common.google_storage import get_storage
+from common.google_storage import get_storage
 
 logger = logging.getLogger(__name__)
 

@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, Future
 import torch
 import re
 import psutil
-import signal
+import gc
 import time
 
 from utils.env_secrets import setup_environment_secrets
@@ -23,7 +23,27 @@ import wandb
 WANDB_AVAILABLE = True
 
 
-CHECKPOINT_NAME = "checkpoint"
+def monitor_memory(func: Callable) -> Callable:
+    """Decorator to monitor memory usage around external methods."""
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        # Skip monitoring for internal methods
+        if func.__name__.startswith('_'):
+            return func(self, *args, **kwargs)
+            
+        process = psutil.Process()
+        memory_before = process.memory_info().rss / 1024 / 1024
+        
+        try:
+            result = func(self, *args, **kwargs)
+            return result
+        finally:
+            memory_after = process.memory_info().rss / 1024 / 1024
+            memory_delta = memory_after - memory_before
+            
+            if abs(memory_delta) > 50:
+                logger.info(f"Memory usage for {func.__name__}: {memory_before:.1f}MB → {memory_after:.1f}MB (Δ{memory_delta:+.1f}MB)")
+    return wrapper
 
 
 def requires_wandb_enabled(func: Callable) -> Callable:
@@ -74,10 +94,16 @@ def safe_wandb_operation(default_return=None):
 
 
 class WandbLogger:
-
     """
-    Utility class for Weights & Biases logging integration.
-    Handles experiment tracking, metrics logging, and model artifacts.
+    Refactored Weights & Biases logging integration.
+    
+    Key features:
+    - Async by default for all heavy operations
+    - Smart naming: "checkpoint"/"test-checkpoint", "model"/"test-model"  
+    - Memory monitoring on all external methods
+    - Lightweight cleanup without downloading artifacts
+    - Configurable retention policies
+    - Automatic test artifact cleanup
     """
 
     def __init__(self, enabled: bool = wandb_config.enabled):
@@ -88,11 +114,13 @@ class WandbLogger:
             enabled: Override config setting for wandb logging
         """
         self.enabled = enabled
-        # Use Any to avoid static analyzer complaints about wandb runtime types
         self.run: Any = None
         self.initialized = False
-        self.wandb_processes = []  # Track WandB background processes
-
+        
+        # Configuration
+        self.model_retention_count = getattr(wandb_config, 'model_retention_count', 3)
+        self.checkpoint_retention_count = 1  # Always keep only latest checkpoint
+        
         if not WANDB_AVAILABLE:
             self.enabled = False
             logger.warning("wandb package not available, disabling wandb logging")
@@ -102,10 +130,9 @@ class WandbLogger:
             self.enabled = False
             logger.warning("Failed to login to wandb, disabling wandb logging")
 
-        # Thread pool for non-blocking artifact uploads / cleanup
-        # Single worker preserves ordering and avoids excess memory usage.
-        self._io_executor: Optional[ThreadPoolExecutor] = ThreadPoolExecutor(max_workers=1)
-        self._pending_checkpoint_futures: List[Future] = []
+        # Single worker thread pool for async operations (preserves ordering)
+        self._executor: Optional[ThreadPoolExecutor] = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wandb-async")
+        self._pending_futures: List[Future] = []
 
     # --- Convenience logging proxies ---------------------------------
     # Some tests and external callers call logger.info()/warning() on the
@@ -128,8 +155,6 @@ class WandbLogger:
         logger.exception(msg, *args, **kwargs)
     def _get_api_key(self) -> Optional[str]:
         """Get and validate wandb API key."""
-        # Ensure environment is properly loaded first
-        
         api_key = os.environ.get("WANDB_API_KEY")
         if not api_key:
             logger.error("WANDB_API_KEY environment variable not found")
@@ -150,49 +175,28 @@ class WandbLogger:
         safe_name = self._sanitize_artifact_name(artifact_name)
         return f"{wandb_config.team}/{wandb_config.project}/{safe_name}:{version}"
 
-    def _monitor_wandb_processes(self) -> int:
-        """
-        Monitor and return the count of WandB-related background processes.
+    def _is_test_run(self) -> bool:
+        """Check if current run is a test run."""
+        if not self.run or not hasattr(self.run, 'name'):
+            return False
         
-        Returns:
-            Number of WandB background processes found
-        """
-        try:
-            current_process = psutil.Process()
-            all_processes = []
-            
-            # Get all child processes
-            try:
-                all_processes = current_process.children(recursive=True)
-            except psutil.NoSuchProcess:
-                pass
-            
-            # Also check all processes for wandb-related ones
-            wandb_procs = []
-            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-                try:
-                    if proc.info['name'] and 'wandb' in proc.info['name'].lower():
-                        wandb_procs.append(proc)
-                    elif proc.info['cmdline'] and any('wandb' in str(cmd).lower() for cmd in proc.info['cmdline']):
-                        wandb_procs.append(proc)
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-            
-            # Update our tracking list
-            self.wandb_processes = [p for p in wandb_procs if p.is_running()]
-            
-            process_count = len(self.wandb_processes)
-            if process_count > 0:
-                logger.debug(f"Found {process_count} WandB background processes")
-            
-            return process_count
-            
-        except Exception as e:
-            logger.debug(f"Failed to monitor WandB processes: {e}")
-            return 0
+        run_name = self.run.name.lower()
+        test_indicators = ['test', 'wandb']
+        return any(indicator in run_name for indicator in test_indicators)
+    
+    def _get_artifact_name(self, base_name: str) -> str:
+        """Get artifact name with test prefix if this is a test run."""
+        if self._is_test_run():
+            return f"test-{base_name}"
+        return base_name
+    
+    def _get_checkpoint_name(self) -> str:
+        """Get the checkpoint artifact name (for backwards compatibility)."""
+        return self._get_artifact_name("checkpoint")
 
     
     
+    @monitor_memory
     @requires_wandb_enabled
     @safe_wandb_operation(default_return=False)
     def init_run(self, config: Dict[str, Any], run_name: str = wandb_config.run_name,
@@ -324,6 +328,7 @@ class WandbLogger:
             return False, [], [], err
     
 
+    @monitor_memory
     @requires_wandb_initialized
     @safe_wandb_operation()
     def log_summary(self, summary: Dict[str, Any]) -> None:
@@ -336,6 +341,7 @@ class WandbLogger:
         self.run.summary.update(summary)
         logger.info(f"Logged summary metrics: {list(summary.keys())}")
 
+    @monitor_memory
     @requires_wandb_initialized
     @safe_wandb_operation()
     def log_metrics(self, metrics: Dict[str, Any], step: Optional[int] = None) -> None:
@@ -348,182 +354,200 @@ class WandbLogger:
         """
         self.run.log(metrics, step=step)
     
+    @monitor_memory
     @requires_wandb_initialized
     @safe_wandb_operation()
     def finish(self) -> None:
-        """Finish the current wandb run."""
-        # Wait on any pending async checkpoint uploads before finishing
-        try:
-            if getattr(self, '_pending_checkpoint_futures', None):
-                for fut in list(self._pending_checkpoint_futures):
-                    try:
-                        fut.result(timeout=60)  # best-effort wait
-                    except Exception as e:
-                        logger.debug(f"Async checkpoint future ended with error (ignored at finish): {e}")
-        except Exception:
-            pass
+        """Finish the current wandb run and cleanup."""
+        # Wait for any pending async operations
+        self._wait_for_pending_operations()
+        
         # Shutdown executor
-        try:
-            if getattr(self, '_io_executor', None):
-                self._io_executor.shutdown(wait=False, cancel_futures=True)
-        except Exception:
-            pass
-        if hasattr(self, 'run') and self.run:
-            # Auto-cleanup test artifacts before finishing
+        if self._executor:
+            self._executor.shutdown(wait=True, cancel_futures=False)
+            self._executor = None
+            
+        # Auto-cleanup test artifacts if this is a test run
+        if self.run and self._is_test_run():
             try:
-                if self.run and hasattr(self.run, 'name'):
-                    run_name = self.run.name.lower()
-                    if any(keyword in run_name for keyword in ['test', 'async-test', 'cleanup-test']):
-                        logger.info("🧹 Auto-cleaning test artifacts before finish")
-                        self.cleanup_test_artifacts()
+                logger.info("🧹 Auto-cleaning test artifacts before finish")
+                self._cleanup_test_artifacts()
             except Exception as e:
                 logger.debug(f"Auto-cleanup failed (non-critical): {e}")
                 
-            self.run.finish()       
+        if self.run:
+            self.run.finish()
 
-        # Clean up WandB API object to prevent memory accumulation
-        if hasattr(self, 'wandb_api') and self.wandb_api:
+        # Clean up API object to prevent memory accumulation
+        if self.wandb_api:
             del self.wandb_api
             self.wandb_api = None
 
-        # Force garbage collection
-        import gc
         gc.collect()
-
         self.initialized = False
         logger.info("Wandb run finished and resources cleaned up")
 
-    def cleanup_test_artifacts(self, force_cleanup_all: bool = False) -> None:
-        """
-        Clean up test artifacts to prevent wandb pollution.
-        This should be called after tests to remove all created artifacts.
+    def _wait_for_pending_operations(self) -> None:
+        """Wait for all pending async operations to complete."""
+        if not self._pending_futures:
+            return
+            
+        logger.debug(f"Waiting for {len(self._pending_futures)} pending operations...")
+        for future in self._pending_futures:
+            try:
+                future.result(timeout=60)
+            except Exception as e:
+                logger.debug(f"Async operation completed with error: {e}")
         
-        Args:
-            force_cleanup_all: If True, removes ALL artifacts from the current run
-        """
-        if not self.enabled or not hasattr(self, 'run') or not self.run:
+        self._pending_futures.clear()
+
+    def _cleanup_test_artifacts(self) -> None:
+        """Clean up all artifacts created by test runs."""
+        if not self.run:
             return
             
         try:
-            # Get current run name to identify test artifacts
-            run_name = self.run.name if self.run else None
-            if not run_name:
-                return
-                
-            # Check if this looks like a test run
-            is_test_run = any(keyword in run_name.lower() for keyword in ['test', 'async-test', 'cleanup-test'])
+            # Get all artifacts created by this run using API
+            artifacts_to_delete = []
             
-            if not is_test_run and not force_cleanup_all:
-                logger.info(f"Skipping cleanup for non-test run: {run_name}")
-                return
-                
-            logger.info(f"🧹 Cleaning up test artifacts for run: {run_name}")
-            
-            # Clean up all artifacts created in this run
             try:
-                # Get all artifacts from this run - try multiple methods
-                artifacts = []
-                cleanup_count = 0
+                # Use API to get artifacts from this specific run
+                api_run = self.wandb_api.run(f"{self.run.entity}/{self.run.project}/{self.run.id}")
                 
-                # Method 1: Check logged artifacts from current run
-                if hasattr(self.run, 'logged_artifacts'):
-                    try:
-                        artifacts = list(self.run.logged_artifacts())
-                        logger.debug(f"Found {len(artifacts)} logged artifacts")
-                    except Exception as e:
-                        logger.debug(f"Could not get logged artifacts: {e}")
+                # Get output artifacts (ones created by this run)
+                output_artifacts = api_run.output_artifacts()
+                artifacts_to_delete = list(output_artifacts)
+                logger.debug(f"Found {len(artifacts_to_delete)} output artifacts to clean up")
                 
-                # Method 2: Use wandb API to find artifacts by run ID
-                if not artifacts:
-                    try:
-                        api = self.wandb_api or self._login_and_get_api()
-                        if api and hasattr(self.run, 'id'):
-                            # Get all artifacts for this specific run
-                            run_artifacts = api.run(f"{self.run.entity}/{self.run.project}/{self.run.id}").logged_artifacts()
-                            artifacts = list(run_artifacts)
-                            logger.debug(f"Found {len(artifacts)} artifacts via API for run {self.run.id}")
-                    except Exception as e:
-                        logger.debug(f"Could not get artifacts via API: {e}")
-                
-                # Method 3: Try to find artifacts by project and run name patterns
-                if not artifacts:
-                    try:
-                        # Search for artifacts that match test patterns
-                        api = self.wandb_api or self._login_and_get_api()
-                        if api:
-                            # Search by common test artifact names
-                            test_patterns = [
-                                f"{run_name}_checkpoint",
-                                f"{run_name.replace('-', '_')}_checkpoint", 
-                                "test_checkpoint",
-                                "cleanup_test_checkpoint"
-                            ]
-                            
-                            for pattern in test_patterns:
-                                try:
-                                    safe_pattern = self._sanitize_artifact_name(pattern)
-                                    # Try to delete this pattern directly
-                                    self._cleanup_old_checkpoints(safe_pattern, keep_latest=0)
-                                    cleanup_count += 1
-                                    logger.debug(f"  Cleaned up by pattern: {safe_pattern}")
-                                except Exception as e:
-                                    logger.debug(f"  Pattern {pattern} not found or already cleaned: {e}")
-                    except Exception as e:
-                        logger.debug(f"Pattern-based cleanup failed: {e}")
-                
-                # Method 4: Clean up known artifacts from the logged artifacts list
-                for artifact in artifacts:
-                    try:
-                        # Delete all versions of this artifact based on its type
-                        collection_name = artifact.name
-                        artifact_type = getattr(artifact, 'type', 'model_checkpoint')
-                        
-                        if artifact_type == 'model_checkpoint':
-                            # Use checkpoint cleanup for model checkpoints
-                            safe_name = self._sanitize_artifact_name(collection_name)
-                            self._cleanup_old_checkpoints(safe_name, keep_latest=0)
-                        else:
-                            # For other artifact types, try direct deletion
-                            try:
-                                artifact.delete()
-                                logger.debug(f"  Directly deleted artifact: {collection_name}")
-                            except Exception as delete_error:
-                                logger.debug(f"  Failed to directly delete artifact {collection_name}: {delete_error}")
-                                
-                        cleanup_count += 1
-                        logger.debug(f"  Cleaned up artifact: {collection_name} (type: {artifact_type})")
-                    except Exception as e:
-                        logger.debug(f"  Failed to cleanup artifact {getattr(artifact, 'name', 'unknown')}: {e}")
-                        
-                if cleanup_count > 0:
-                    logger.info(f"✅ Cleaned up {cleanup_count} test artifacts")
-                else:
-                    logger.info("ℹ️  No artifacts found to clean up (may have been auto-cleaned)")
-                    
             except Exception as e:
-                logger.warning(f"Failed to enumerate artifacts for cleanup: {e}")
-                
-            # Also try cleanup by common test checkpoint names
-            test_checkpoint_patterns = [
-                f"{run_name}_checkpoint",
-                "test_checkpoint", 
-                "test_checkpoint_sync",
-                "multi_checkpoint",
-                "async-test-run_checkpoint",
-                "cleanup-test-run_checkpoint"
-            ]
+                logger.debug(f"Could not get output artifacts via API: {e}")
             
-            for pattern in test_checkpoint_patterns:
+            # Fallback: try to clean up common test artifact patterns
+            if not artifacts_to_delete:
+                logger.debug("No output artifacts found, trying pattern-based cleanup")
+                
+                # Try to find test artifacts by name patterns
+                test_patterns = []
+                
+                # Add checkpoint patterns
+                checkpoint_name = self._get_artifact_name("checkpoint")
+                test_patterns.append((checkpoint_name, "model_checkpoint"))
+                
+                # Add model patterns - be more comprehensive about test model patterns
+                # Check if any artifacts match test patterns in the project
                 try:
-                    safe_pattern = self._sanitize_artifact_name(pattern)
-                    self._cleanup_old_checkpoints(safe_pattern, keep_latest=0)
-                    logger.debug(f"  Cleaned up checkpoint pattern: {safe_pattern}")
-                except Exception as e:
-                    logger.debug(f"  No artifacts found for pattern {pattern}: {e}")
+                    # Get all model artifact types in the project
+                    model_artifact_types = []
+                    try:
+                        model_artifact_types.append(self.wandb_api.artifact_type("model", project=wandb_config.project))
+                    except Exception:
+                        pass
                     
+                    try:
+                        model_artifact_types.append(self.wandb_api.artifact_type("model_checkpoint", project=wandb_config.project))
+                    except Exception:
+                        pass
+                    
+                    # Find collections that start with "test-"
+                    for artifact_type_obj in model_artifact_types:
+                        try:
+                            collections = artifact_type_obj.collections()
+                            for collection in collections:
+                                if collection.name.startswith("test-"):
+                                    test_patterns.append((collection.name, artifact_type_obj.name))
+                                    logger.debug(f"Found test artifact pattern: {collection.name} (type: {artifact_type_obj.name})")
+                        except Exception as e:
+                            logger.debug(f"Could not get collections for {artifact_type_obj.name}: {e}")
+                            
+                except Exception as e:
+                    logger.debug(f"Could not enumerate artifact types: {e}")
+                    
+                    # Fallback to hardcoded common patterns if API enumeration fails
+                    common_model_names = [
+                        "test_collection", "test_model", "train.siamesenet_dino", 
+                        "train.siamesenet", "player_model", "checkpoint"
+                    ]
+                    
+                    for base_name in common_model_names:
+                        test_name = self._get_artifact_name(base_name)
+                        test_patterns.append((test_name, "model"))
+                        test_patterns.append((test_name, "model_checkpoint"))
+                
+                # Remove duplicates
+                test_patterns = list(set(test_patterns))
+                
+                # Try to clean up each pattern
+                for artifact_name, artifact_type in test_patterns:
+                    try:
+                        # Check if collection exists first
+                        artifact_collection = self.wandb_api.artifact_type(artifact_type, project=wandb_config.project).collection(artifact_name)
+                        if artifact_collection:
+                            artifacts_to_delete.append(type('MockArtifact', (), {'name': artifact_name, 'type': artifact_type})())
+                            logger.debug(f"Added {artifact_name} ({artifact_type}) to cleanup list")
+                    except Exception:
+                        # Collection doesn't exist, skip
+                        continue
+            
+            # Delete all found artifacts
+            deleted_count = 0
+            for artifact in artifacts_to_delete:
+                try:
+                    # Use lightweight deletion without downloading
+                    self._lightweight_artifact_delete(artifact.name, artifact.type)
+                    deleted_count += 1
+                except Exception as e:
+                    logger.debug(f"Failed to delete artifact {artifact.name}: {e}")
+            
+            if deleted_count > 0:
+                logger.info(f"✅ Cleaned up {deleted_count} test artifacts")
+            else:
+                logger.info("ℹ️  No test artifacts found to clean up")
+                
         except Exception as e:
             logger.warning(f"Test artifact cleanup failed: {e}")
 
+    def cleanup_test_artifacts(self, force_cleanup_all: bool = False) -> None:
+        """Public method for test artifact cleanup (backwards compatibility)."""
+        self._cleanup_test_artifacts()
+
+    def _lightweight_artifact_delete(self, artifact_name: str, artifact_type: str) -> None:
+        """Delete artifact without downloading it first."""
+        try:
+            # Try to get the collection first
+            artifact_collection = self.wandb_api.artifact_type(artifact_type, project=wandb_config.project).collection(artifact_name)
+            
+            # Try to delete the entire collection
+            try:
+                artifact_collection.delete()
+                logger.debug(f"Deleted artifact collection: {artifact_name}")
+                return
+            except Exception as e:
+                logger.debug(f"Collection delete failed for {artifact_name}, trying per-version: {e}")
+            
+            # Fallback to per-version deletion
+            artifacts = list(artifact_collection.artifacts())
+            deleted_count = 0
+            for artifact in artifacts:
+                try:
+                    artifact.delete()
+                    deleted_count += 1
+                except Exception as e:
+                    logger.debug(f"Failed to delete version {artifact.version} of {artifact_name}: {e}")
+            
+            if deleted_count > 0:
+                logger.debug(f"Deleted {deleted_count} versions of artifact: {artifact_name}")
+            else:
+                raise Exception(f"No versions could be deleted for {artifact_name}")
+                
+        except Exception as e:
+            # Check if it's just that the artifact doesn't exist
+            if "404" in str(e) or "not found" in str(e).lower():
+                logger.debug(f"Artifact {artifact_name} not found (already deleted or never existed)")
+            else:
+                logger.debug(f"Could not delete artifact {artifact_name}: {e}")
+                raise
+
+    @monitor_memory
     @requires_wandb_initialized
     @safe_wandb_operation()
     def watch_model(self, model: torch.nn.Module, log_freq: Optional[int] = None) -> None:
@@ -538,348 +562,33 @@ class WandbLogger:
         self.run.watch(model, log_freq=freq)
         logger.info(f"Started watching model with log frequency: {freq}")
 
-    def _get_checkpoint_name(self) -> str:
-        """
-        Get the checkpoint name based on the current run name.
-        
-        Returns:
-            Checkpoint name in format: {run_name}_checkpoint
-        """
-        if self.run and self.run.name:
-            return f"{self.run.name}_checkpoint"
-        else:
-            # Fallback to default if run not initialized
-            return "checkpoint"
-
-    def get_checkpoint_name(self) -> str:
-        """
-        Public method to get the current checkpoint name.
-        
-        Returns:
-            Checkpoint name in format: {run_name}_checkpoint
-        """
-        return self._get_checkpoint_name()
-
-    @requires_wandb_enabled
-    @safe_wandb_operation()
-    def load_model_from_registry(self, model_class, collection_name: str, 
-                                alias: str = "latest", device: str = "cpu", **kwargs) -> Optional[torch.nn.Module]:
-        """
-        Load model from wandb model registry.
-        
-        Args:
-            model_class: The model class to instantiate
-            collection_name: Name of the model collection in wandb registry
-            alias: Model version alias (e.g., "latest", "best", "v1")
-            device: Device to load the model on
-            
-        Returns:
-            Loaded model instance or None if loading failed
-        """
-        
-        # Download artifact (guard against missing artifact / membership errors)
-        artifact_path = self._construct_artifact_path(collection_name, alias)
-        try:
-            model_artifact = self.wandb_api.artifact(artifact_path, type="model")
-            model_dir = model_artifact.download()
-        except Exception as e:
-            # Specific wandb errors (CommError / ValueError) indicate the artifact
-            # or membership was not found. Log a clear message and return None so
-            # callers can handle absence gracefully.
-            logger.warning(f"Could not retrieve wandb artifact '{artifact_path}': {e}")
-            return None
-
-        model_file_name = None
-        for file in model_artifact.files():
-            if file.name.endswith('.pth'):
-                model_file_name = file.name
-                break
-
-        if not model_file_name:
-            logger.error(f"No .pth file found in artifact: {artifact_path}")
-            return None
-
-        model_path = os.path.join(model_dir, model_file_name)
-        logger.info(f"Model path: {model_path}")
-        
-        if os.path.exists(model_path):
-            # Read artifact metadata to get saved model configuration
-            saved_config = {}
-            try:
-                if hasattr(model_artifact, 'metadata') and model_artifact.metadata:
-                    model_config_meta = model_artifact.metadata.get('model_config', {})
-                    if 'embedding_dim' in model_config_meta:
-                        saved_config['embedding_dim'] = model_config_meta['embedding_dim']
-                        logger.info(f"Found saved embedding_dim in metadata: {saved_config['embedding_dim']}")
-            except Exception as e:
-                logger.debug(f"Could not read artifact metadata: {e}")
-
-            # Merge saved config with provided kwargs (saved config takes precedence for critical params)
-            merged_kwargs = dict(kwargs)
-            merged_kwargs.update(saved_config)
-            
-            # Initialize model with merged configuration
-            model = model_class(**merged_kwargs)
-
-            # Load raw checkpoint (may be a state_dict or a full checkpoint dict)
-            raw = torch.load(model_path, map_location=device)
-            if isinstance(raw, dict) and 'model_state_dict' in raw:
-                state_dict = raw['model_state_dict']
-            else:
-                state_dict = raw
-
-            model_state = model.state_dict()
-
-            # If the checkpoint contains keys for a lazy-created head, ensure the model
-            # has its head constructed before attempting a strict load. This avoids
-            # "unexpected key" errors when the model lazily creates the head on first
-            # forward.
-            try:
-                sd_keys = set(state_dict.keys())
-            except Exception:
-                sd_keys = set()
-
-            if any(k.startswith('backbone._head') for k in sd_keys) and getattr(model.backbone, '_head', None) is None:
-                logger.info("Checkpoint contains backbone._head keys; initializing head via model API if available")
-                try:
-                    # Prefer a model-provided initialization API
-                    if hasattr(model, 'ensure_head_initialized'):
-                        model.ensure_head_initialized(device=device)
-                    else:
-                        # Fallback to conservative dummy forward
-                        model.to(device)
-                        model.eval()
-                        with torch.no_grad():
-                            dummy = torch.zeros((1, 3, 224, 224), device=device)
-                            model(dummy)
-                except Exception as e:
-                    logger.warning(f"Could not initialize model head before loading: {e}")
-
-            # Use centralized robust loader to handle lazy heads and mismatched keys
-            success, unexpected, missing, err = self._robust_load_state_dict(model, state_dict, device=device)
-            if success:
-                if unexpected:
-                    logger.warning(f"State dict contained unexpected keys (they were ignored): {unexpected[:10]}{('...' if len(unexpected)>10 else '')}")
-                if missing:
-                    logger.info(f"State dict is missing keys (these were left at defaults): {missing[:10]}{('...' if len(missing)>10 else '')}")
-                logger.info(f"✓ Successfully loaded model from wandb registry: {collection_name}:{alias}")
-                return model
-            else:
-                logger.error(f"Failed to load model from registry: {err}")
-                return None
-        else:
-            logger.warning(f"Model file not found in wandb artifact: {model_path}")
-            return None
-        
-    @requires_wandb_initialized
-    @safe_wandb_operation()
-    def save_model_to_registry(self, model: torch.nn.Module, collection_name: str, 
-                            alias: str = "latest", file_name: str = "model.pth", 
-                            metadata: Optional[Dict[str, Any]] = None, tags: Optional[List[str]] = None) -> None:
-        """
-        Save model to wandb model registry with automatic version management.
-        Keeps only the last versions plus any versions tagged.
-
-        Args:
-            model: PyTorch model to save
-            collection_name: Name for the model collection in wandb registry
-            alias: Model version alias (e.g., "latest", "best", "v1")
-            file_name: Name of the model file to save
-            metadata: Additional metadata to include
-            tags: Optional list of tags to add to the artifact
-        """
-        # Build metadata: merge user-provided metadata with detected model config
-        auto_meta: Dict[str, Any] = {}
-        try:
-            # Common high-level attrs
-            auto_meta['embedding_dim'] = getattr(model, 'embedding_dim', None)
-            auto_meta['dropout'] = getattr(model, 'dropout', getattr(model, 'dropout_rate', None))
-
-            # Try to detect backbone head linear layer shape(s)
-            head_info = {}
-            backbone = getattr(model, 'backbone', None)
-            if backbone is not None and getattr(backbone, '_head', None) is not None:
-                head = backbone._head
-                # find any Linear modules inside the head
-                for name, mod in head.named_modules():
-                    if isinstance(mod, torch.nn.Linear):
-                        head_info['linear_'+name] = {'in_features': mod.in_features, 'out_features': mod.out_features}
-                if head_info:
-                    auto_meta['head'] = head_info
-        except Exception as e:
-            logger.debug(f"Failed to auto-detect model metadata: {e}")
-
-        merged_meta = {} if metadata is None else dict(metadata)
-        # Put auto-detected metadata under key 'model_config' for loader consumption
-        merged_meta.setdefault('model_config', {})
-        merged_meta['model_config'].update(auto_meta)
-
-        # Use the collection name as provided (do not alter collection naming here)
-        artifact = wandb.Artifact(
-            name=collection_name,
-            type="model",
-            metadata=merged_meta
-        )
-
-        # Save model state dict to a local file and attach to artifact
-        model_path = file_name
-        torch.save(model.state_dict(), model_path)
-        artifact.add_file(model_path)
-
-        # Log artifact to wandb and attempt to link it under a registry path
-        logged_artifact = self.run.log_artifact(artifact, type="model", tags=tags)
-        target_path = f"wandb-registry-model/{collection_name}"
-        try:
-            self.run.link_artifact(logged_artifact, target_path=target_path)
-        except Exception as e:
-            logger.warning(f"Failed to link artifact to {target_path}: {e}")
-
-        logger.info(f"✓ Model saved to wandb registry: {collection_name}")
-
-        # Clean up old model versions (use collection_name as provided)
-        try:
-            self._cleanup_old_model_versions(collection_name)
-        except Exception as e:
-            logger.warning(f"Failed to cleanup old model versions for {collection_name}: {e}")
-
-        # Clean up old checkpoints since final model is now saved
-        checkpoint_name = self._get_checkpoint_name()
-        safe_checkpoint = self._sanitize_artifact_name(checkpoint_name)
-        try:
-            self._cleanup_old_checkpoints(safe_checkpoint, keep_latest=0)  # Remove all checkpoints
-        except Exception as e:
-            logger.warning(f"Failed to cleanup checkpoints for {safe_checkpoint}: {e}")
-
-        return None
-
-    def _cleanup_old_model_versions(self, collection_name: str, keep_latest: int = 3) -> None:
-        """
-        Clean up old model versions, keeping only the latest N versions and any marked "do not delete".
-        
-        Args:
-            collection_name: Name of the model artifact
-            keep_latest: Number of latest versions to keep (default: 3)
-        """
-        
-        # Get all versions of this model
-        artifact_collection_name = f"{wandb_config.team}/{wandb_config.project}/{collection_name}"
-
-        try:
-            # List all versions of the artifact
-            versions = list(self.wandb_api.artifact_type("model", project=wandb_config.project).collection(collection_name).artifacts())
-
-            if len(versions) <= keep_latest:
-                logger.info(f"Only {len(versions)} versions exist, no cleanup needed")
-                return
-            
-            # Sort versions by creation time (newest first)
-            versions.sort(key=lambda x: x.created_at, reverse=True)
-            
-            # Identify versions to delete
-            versions_to_delete = []
-            for i, version in enumerate(versions):
-                # Keep the latest N versions
-                if i < keep_latest:
-                    continue
-                
-                # Check if this version has "do not delete" alias or tag
-                do_not_delete = False
-                
-                # Check aliases
-                for alias in version.aliases:
-                    if alias in wandb_config.model_tags_to_skip_deletion:
-                        do_not_delete = True
-                        break
-                
-                # Check metadata for do not delete flag
-                if not do_not_delete and version.metadata:
-                    if version.metadata.get("do_not_delete", False) or \
-                       "do not delete" in str(version.metadata.get("tags", "")).lower():
-                        do_not_delete = True
-                
-                if not do_not_delete:
-                    versions_to_delete.append(version)
-            
-            # Delete old versions
-            for version in versions_to_delete:
-                try:
-                    version.delete()
-                    logger.info(f"Deleted old model version: {collection_name}:v{version.version}")
-                except Exception as e:
-                    logger.warning(f"Failed to delete version {version.version}: {e}")
-            
-            if versions_to_delete:
-                logger.info(f"Cleaned up {len(versions_to_delete)} old model versions")
-            else:
-                logger.info("No old versions to clean up (all marked as 'do not delete')")
-                
-        except Exception as e:
-            logger.warning(f"Failed to access artifact collection {artifact_collection_name}: {e}")
-
-    @requires_wandb_initialized
-    @safe_wandb_operation()
-    def update_run_config(self, config_dict: Dict[str, Any]) -> None:
-        """
-        Update the wandb run config and tags with the contents of a dictionary and a list of tags.
-        Args:
-            config_dict: Dictionary of config values to update in the wandb run
-        """
-        self.run.config.update(config_dict, allow_val_change=True)
-        logger.debug(f"Updated wandb run config with: {list(config_dict.keys())}")
-
-
+    @monitor_memory
     @requires_wandb_initialized
     @safe_wandb_operation()
     def save_checkpoint(self, epoch: int, model: Optional[torch.nn.Module] = None, 
-                   optimizer: Optional[torch.optim.Optimizer] = None,
-                   model_state_dict: Optional[Dict[str, Any]] = None,
-                   optimizer_state_dict: Optional[Dict[str, Any]] = None,
-                   loss: Optional[float] = None, 
-                   model_name: str = "model", model_config: Optional[Dict[str, Any]] = None,
-                   async_upload: bool = True,
-                   **kwargs) -> Optional[str]:
+                       optimizer: Optional[torch.optim.Optimizer] = None,
+                       model_state_dict: Optional[Dict[str, Any]] = None,
+                       optimizer_state_dict: Optional[Dict[str, Any]] = None,
+                       loss: Optional[float] = None, 
+                       model_config: Optional[Dict[str, Any]] = None,
+                       **kwargs) -> Optional[str]:
         """
-        Save model checkpoint to wandb and clean up previous versions.
+        Save model checkpoint to wandb asynchronously.
         
         Args:
             epoch: Current epoch number
-            model: The model to save (alternative to model_state_dict)
-            optimizer: The optimizer to save (alternative to optimizer_state_dict)
-            model_state_dict: Pre-computed model state dictionary (discouraged for memory reasons)
-            optimizer_state_dict: Pre-computed optimizer state dictionary (discouraged for memory reasons)
+            model: The model to save (preferred over state_dict for memory efficiency)
+            optimizer: The optimizer to save (preferred over state_dict for memory efficiency)
+            model_state_dict: Pre-computed model state dict (discouraged)
+            optimizer_state_dict: Pre-computed optimizer state dict (discouraged)
             loss: Current loss value
-            model_name: Name of the model for artifact naming
             model_config: Optional model configuration metadata
-            async_upload: Whether to upload asynchronously in background
+            **kwargs: Additional metadata
             
         Returns:
-            Artifact reference (name:latest) or placeholder when async
-            
-        Note:
-            For optimal memory usage, pass model and optimizer objects directly instead of pre-computed state_dicts.
+            Artifact reference string
         """
-        import os, psutil, gc
-
-        wandb_process_count_before = self._monitor_wandb_processes()
-        process = psutil.Process()
-        memory_before = process.memory_info().rss / 1024 / 1024
-
-        if loss is None:
-            loss = kwargs.get('current_loss', None)
-
-        # Normalize legacy / positional argument usage
-        try:
-            if model is not None and not hasattr(model, 'state_dict') and isinstance(model, dict):
-                model_state_dict = model; model = None
-            if optimizer is not None and not hasattr(optimizer, 'state_dict') and isinstance(optimizer, dict):
-                optimizer_state_dict = optimizer; optimizer = None
-            if model_state_dict is not None and isinstance(model_state_dict, (int, float)):
-                loss = float(model_state_dict); model_state_dict = None
-            if optimizer_state_dict is not None and isinstance(optimizer_state_dict, str):
-                model_name = optimizer_state_dict; optimizer_state_dict = None
-        except Exception:
-            pass
-
+        # Normalize inputs
         if model_state_dict is None and model is not None:
             model_state_dict = model.state_dict()
         if optimizer_state_dict is None and optimizer is not None:
@@ -890,362 +599,110 @@ class WandbLogger:
         if optimizer_state_dict is None:
             raise ValueError("Either optimizer or optimizer_state_dict must be provided")
 
+        # Get appropriate checkpoint name
+        checkpoint_name = self._get_artifact_name("checkpoint")
+        
+        # Create temp file for checkpoint
         with tempfile.NamedTemporaryFile(suffix=f'_epoch_{epoch}.pth', delete=False) as tmp_file:
             checkpoint_path = tmp_file.name
+
+        # Save checkpoint data
+        checkpoint_data = {
+            'epoch': epoch,
+            'model_state_dict': model_state_dict,
+            'optimizer_state_dict': optimizer_state_dict,
+            'loss': loss,
+            'timestamp': datetime.now().isoformat(),
+            'model_config': model_config or {}
+        }
+        torch.save(checkpoint_data, checkpoint_path)
+
+        # Schedule async upload and cleanup
+        if self._executor:
+            future = self._executor.submit(
+                self._upload_checkpoint_and_cleanup, 
+                checkpoint_path, 
+                checkpoint_name, 
+                epoch, 
+                loss
+            )
+            self._pending_futures.append(future)
+            
+            # Clean up completed futures
+            self._pending_futures = [f for f in self._pending_futures if not f.done()]
+            
+            logger.info(f"Scheduled async checkpoint upload for epoch {epoch}")
+            return f"{checkpoint_name}:latest"
+        else:
+            # Fallback to sync if executor unavailable
+            self._upload_checkpoint_and_cleanup(checkpoint_path, checkpoint_name, epoch, loss)
+            return f"{checkpoint_name}:latest"
+
+    def _upload_checkpoint_and_cleanup(self, checkpoint_path: str, checkpoint_name: str, epoch: int, loss: Optional[float]) -> None:
+        """Upload checkpoint and clean up old versions."""
         try:
-            checkpoint_data = {
-                'epoch': epoch,
-                'model_state_dict': model_state_dict,
-                'optimizer_state_dict': optimizer_state_dict,
-                'loss': loss,
-                'timestamp': datetime.now().isoformat(),
-                'model_config': model_config or {}
-            }
-            torch.save(checkpoint_data, checkpoint_path)
+            # Create and upload artifact
+            artifact = wandb.Artifact(
+                name=checkpoint_name,
+                type="model_checkpoint",
+                description=f"Model checkpoint for epoch {epoch}",
+                metadata={
+                    'epoch': epoch,
+                    'loss': loss,
+                    'timestamp': datetime.now().isoformat(),
+                    'is_test': self._is_test_run()
+                }
+            )
+            
+            artifact.add_file(checkpoint_path, name=f"checkpoint_epoch_{epoch}.pth")
+            logged_artifact = self.run.log_artifact(artifact)
+            
+            # Add 'latest' alias
+            try:
+                logged_artifact.aliases.append('latest')
+            except Exception as e:
+                logger.debug(f"Could not add 'latest' alias: {e}")
+            
+            logger.info(f"✅ Uploaded checkpoint for epoch {epoch}")
+            
+            # Clean up old checkpoints (keep only latest)
+            self._cleanup_artifacts_by_type(checkpoint_name, "model_checkpoint", keep_latest=self.checkpoint_retention_count)
+            
+        except Exception as e:
+            logger.error(f"Failed to upload checkpoint: {e}")
         finally:
-            try: del model_state_dict
-            except Exception: pass
-            try: del optimizer_state_dict
-            except Exception: pass
+            # Clean up temp file
+            try:
+                if os.path.exists(checkpoint_path):
+                    os.unlink(checkpoint_path)
+            except Exception:
+                pass
             gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
 
-        memory_after = process.memory_info().rss / 1024 / 1024
-        if abs(memory_after - memory_before) > 50:
-            logger.info(f"Checkpoint save memory: {memory_before:.1f}MB → {memory_after:.1f}MB (Δ{(memory_after-memory_before):+.1f}MB)")
-
-        artifact_name = self._get_checkpoint_name()
-        safe_artifact_name = self._sanitize_artifact_name(artifact_name)
-
-        def _upload_and_cleanup(path: str, safe_name: str):
-            # Initialize artifact info with defaults
-            artifact_info = {
-                'name': safe_name,
-                'logged_artifact': None,
-                'epoch': epoch
-            }
-            
-            try:
-                artifact = wandb.Artifact(
-                    name=safe_name,
-                    type="model_checkpoint",
-                    description=f"Model checkpoint for epoch {epoch}",
-                    metadata={
-                        'epoch': epoch,
-                        'loss': loss,
-                        'model_name': model_name,
-                        'timestamp': datetime.now().isoformat(),
-                        'async': bool(async_upload)
-                    }
-                )
-                artifact.add_file(path, name=f"checkpoint_epoch_{epoch}.pth")
-                logged_artifact = self.run.log_artifact(artifact)
-                
-                # Update artifact info with successful upload
-                artifact_info['logged_artifact'] = logged_artifact
-                
-                # Manage the 'latest' tag for checkpoints
-                try:
-                    self._manage_latest_checkpoint_tag(safe_name, logged_artifact)
-                except Exception as e:
-                    logger.debug(f"Latest tag management failed for {safe_name}: {e}")
-                
-            except Exception as e:
-                logger.warning(f"Checkpoint upload failed for {safe_name}: {e}")
-            finally:
-                try:
-                    if os.path.exists(path):
-                        os.unlink(path)
-                except Exception: pass
-                try: del artifact  # type: ignore
-                except Exception: pass
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                
-                # Cleanup old checkpoints with retry logic to handle timing issues
-                try:
-                    self._cleanup_old_checkpoints_with_retry(safe_name, artifact_info['epoch'])
-                except Exception as e:
-                    logger.debug(f"cleanup_old_checkpoints failed for {safe_name}: {e}")
-
-        if async_upload and getattr(self, '_io_executor', None):
-            try:
-                fut = self._io_executor.submit(_upload_and_cleanup, checkpoint_path, safe_artifact_name)
-                self._pending_checkpoint_futures.append(fut)
-                self._pending_checkpoint_futures = [f for f in self._pending_checkpoint_futures if not f.done()]
-                logger.info(f"Scheduled async checkpoint upload for epoch {epoch} -> {safe_artifact_name}")
-                return f"{safe_artifact_name}:pending"
-            except Exception as e:
-                logger.debug(f"Async scheduling failed, falling back to sync: {e}")
-
-        _upload_and_cleanup(checkpoint_path, safe_artifact_name)
-        wandb_process_count_after = self._monitor_wandb_processes()
-        if wandb_process_count_after > wandb_process_count_before + 2:
-            logger.info(f"WandB spawned {wandb_process_count_after - wandb_process_count_before} additional processes during checkpoint save - normal for uploads")
-        logger.info(f"Saved model checkpoint to wandb for epoch {epoch}")
-        return f"{safe_artifact_name}:latest"
-
-    def _cleanup_old_checkpoints(self, artifact_name: str, keep_latest: int = 1):
-        """
-        Clean up old wandb checkpoint artifacts, keeping only the latest N versions.
-
-        Args:
-            artifact_name: Name of the artifact to clean up
-            keep_latest: Number of latest versions to keep (default: 1)
-        """
-        try:
-            collection_name = artifact_name
-            logger.debug(f"Searching for checkpoint artifacts in project={wandb_config.project}, collection={collection_name}")
-
-            artifact_type_api = self.wandb_api.artifact_type("model_checkpoint", project=wandb_config.project)
-            artifact_collection = artifact_type_api.collection(collection_name)
-
-            # Fast path: if caller wants to remove ALL versions, attempt a single
-            # collection-level delete (cheap) and return.
-            if keep_latest == 0:
-                try:
-                    artifact_collection.delete()
-                    logger.info(f"Deleted entire checkpoint collection {collection_name} (keep_latest=0)")
-                    return
-                except Exception as e:
-                    # Fall back to per-artifact deletion below if collection delete fails
-                    logger.debug(f"Collection delete fast-path failed for {collection_name}: {e}; falling back to per-version deletion")
-
-            # Stream artifacts without materializing all metadata up-front.
-            # We keep only the `keep_latest` newest artifacts in a min-heap by created_at
-            import heapq
-            keep_heap: List[tuple] = []  # (created_at, artifact)
-            to_delete: List[Any] = []
-
-            for art in artifact_collection.artifacts():  # generator
-                created = getattr(art, 'created_at', None)
-                if created is None:
-                    # If no created_at, treat as oldest; mark for deletion unless within keep capacity
-                    if keep_latest > 0 and len(keep_heap) < keep_latest:
-                        heapq.heappush(keep_heap, (created, art))
-                    else:
-                        to_delete.append(art)
-                    continue
-                if keep_latest == 0:
-                    to_delete.append(art)
-                    continue
-                if len(keep_heap) < keep_latest:
-                    heapq.heappush(keep_heap, (created, art))
-                else:
-                    # Smallest (oldest) is at index 0; if current is newer, replace oldest
-                    if created > keep_heap[0][0]:
-                        _, oldest = heapq.heapreplace(keep_heap, (created, art))
-                        to_delete.append(oldest)
-                    else:
-                        to_delete.append(art)
-
-            total_found = len(keep_heap) + len(to_delete)
-            logger.debug(f"Found {total_found} checkpoint artifacts for {artifact_name}")
-
-            if total_found <= keep_latest:
-                logger.debug(f"Only {total_found} versions exist, no cleanup needed for {artifact_name}")
-                # Defensive cleanup
-                del keep_heap, to_delete
-                import gc; gc.collect()
-                return
-
-            deleted_count = 0
-            for version in to_delete:
-                try:
-                    logger.debug(f"Preparing to delete artifact version: {getattr(version, 'name', '<unknown>')} (created: {getattr(version, 'created_at', '<unknown>')})")
-                    # Alias removal (only if aliases present; skip heavy logic otherwise)
-                    try:
-                        aliases = getattr(version, 'aliases', None)
-                        if aliases:
-                            remove_fn = getattr(version, 'remove', None)
-                            if callable(remove_fn):
-                                for a in list(aliases):
-                                    try:
-                                        remove_fn(a)
-                                    except Exception:
-                                        pass
-                            else:
-                                try:
-                                    version.aliases = []  # type: ignore
-                                except Exception:
-                                    pass
-                    except Exception:
-                        pass
-                    version.delete()
-                    deleted_count += 1
-                except Exception as e:
-                    logger.error(f"Failed to delete old checkpoint {getattr(version, 'name', '<unknown>')}: {e}")
-
-            if deleted_count > 0:
-                logger.info(f"Cleaned up {deleted_count} old checkpoint artifacts for {artifact_name}")
-
-            # Fallback: if nothing deleted and keep_latest==0 (collection delete failed earlier)
-            if deleted_count == 0 and keep_latest == 0:
-                try:
-                    artifact_collection.delete()
-                    logger.info(f"Deleted artifact collection {collection_name} as fallback cleanup (second attempt)")
-                except Exception as e:
-                    logger.warning(f"Fallback collection delete failed for {collection_name}: {e}")
-
-            # Explicit cleanup of local references
-            del keep_heap, to_delete
-            import gc; gc.collect()
-
-        except Exception as e:
-            # Bubble up errors so callers can see when cleanup genuinely failed.
-            logger.error(f"Failed to cleanup checkpoints for {artifact_name}: {e}")
-            raise
-
-    def _cleanup_old_checkpoints_with_retry(self, artifact_name: str, current_epoch: int, keep_latest: int = 1, max_retries: int = 5):
-        """
-        Cleanup old checkpoints with retry logic to handle timing issues.
-        
-        This method waits for the artifact upload to complete and become visible 
-        in wandb before attempting cleanup. This ensures that the cleanup sees 
-        the newly uploaded artifact and doesn't delete the wrong ones.
-        
-        Args:
-            artifact_name: Name of the checkpoint artifact collection
-            current_epoch: The epoch number that was just uploaded
-            keep_latest: Number of latest versions to keep (default: 1)
-            max_retries: Maximum number of retry attempts (default: 5)
-        """
-        import time
-        
-        retry_count = 0
-        while retry_count < max_retries:
-            try:
-                # Get the artifact collection to check current state
-                collection_name = f"{self.run.entity}/{self.run.project}/{artifact_name}"
-                try:
-                    artifact_collection = self.wandb_api.artifact_collection("model_checkpoint", collection_name)
-                    artifacts = list(artifact_collection.artifacts())
-                    
-                    # Check if we can find the newly uploaded artifact
-                    current_epoch_found = False
-                    for artifact in artifacts:
-                        try:
-                            # Check metadata for current epoch
-                            metadata = getattr(artifact, 'metadata', {}) or {}
-                            if metadata.get('epoch') == current_epoch:
-                                current_epoch_found = True
-                                break
-                        except Exception:
-                            # If metadata check fails, try name-based detection
-                            if f"epoch_{current_epoch}" in getattr(artifact, 'name', ''):
-                                current_epoch_found = True
-                                break
-                    
-                    if current_epoch_found or retry_count >= max_retries - 1:
-                        # Either found the new artifact or max retries reached, proceed with cleanup
-                        logger.debug(f"Artifact for epoch {current_epoch} {'found' if current_epoch_found else 'not found but proceeding'}, running cleanup (attempt {retry_count + 1})")
-                        self._cleanup_old_checkpoints(artifact_name, keep_latest)
-                        return
-                    else:
-                        # New artifact not visible yet, wait and retry
-                        logger.debug(f"New artifact for epoch {current_epoch} not yet visible, retrying in {0.5 * (retry_count + 1)}s (attempt {retry_count + 1}/{max_retries})")
-                        time.sleep(0.5 * (retry_count + 1))  # Exponential backoff
-                        retry_count += 1
-                        
-                except Exception as e:
-                    # If we can't access the collection, fall back to regular cleanup
-                    logger.debug(f"Could not verify artifact upload completion: {e}, proceeding with cleanup")
-                    self._cleanup_old_checkpoints(artifact_name, keep_latest)
-                    return
-                    
-            except Exception as e:
-                logger.debug(f"Retry cleanup attempt {retry_count + 1} failed: {e}")
-                retry_count += 1
-                if retry_count >= max_retries:
-                    # Final fallback to regular cleanup
-                    logger.debug(f"Max retries reached, falling back to regular cleanup")
-                    try:
-                        self._cleanup_old_checkpoints(artifact_name, keep_latest)
-                    except Exception as fallback_error:
-                        logger.debug(f"Fallback cleanup also failed: {fallback_error}")
-                    return
-                time.sleep(0.5 * retry_count)
-
-    def _manage_latest_checkpoint_tag(self, new_artifact_name: str, new_artifact: Any) -> None:
-        """
-        Manage the 'latest' tag for checkpoints.
-        
-        Adds 'latest' tag to the new checkpoint and removes it from any previous checkpoints.
-        
-        Args:
-            new_artifact_name: Name of the newly created artifact
-            new_artifact: The logged artifact object
-        """
-        try:
-            # First, add 'latest' tag to the new artifact
-            if new_artifact:
-                try:
-                    new_artifact.aliases.append('latest')
-                    logger.debug(f"Added 'latest' tag to checkpoint: {new_artifact_name}")
-                except Exception as e:
-                    logger.debug(f"Could not add 'latest' tag to new artifact: {e}")
-            
-            # Then, find and remove 'latest' tag from other checkpoints
-            try:
-                # Get the artifact collection
-                collection_name = f"{self.run.entity}/{self.run.project}/{new_artifact_name}"
-                artifact_collection = self.wandb_api.artifact_collection("model_checkpoint", collection_name)
-                
-                # Iterate through all artifacts in the collection
-                for artifact in artifact_collection.artifacts():
-                    # Skip the new artifact we just created
-                    if artifact.name == new_artifact_name:
-                        continue
-                        
-                    # Check if this artifact has the 'latest' tag
-                    try:
-                        aliases = getattr(artifact, 'aliases', [])
-                        if 'latest' in aliases:
-                            # Remove the 'latest' tag
-                            try:
-                                aliases.remove('latest')
-                                artifact.aliases = aliases
-                                logger.debug(f"Removed 'latest' tag from previous checkpoint: {artifact.name}")
-                            except Exception as e:
-                                logger.debug(f"Could not remove 'latest' tag from {artifact.name}: {e}")
-                    except Exception as e:
-                        logger.debug(f"Could not check aliases for {artifact.name}: {e}")
-                        
-            except Exception as e:
-                logger.debug(f"Could not access artifact collection for tag management: {e}")
-                
-        except Exception as e:
-            logger.debug(f"Latest tag management failed: {e}")
-
+    @monitor_memory
     @requires_wandb_enabled
     @safe_wandb_operation()
-    def load_checkpoint(self, artifact_name: str, version: str = "latest") -> Optional[Dict[str, Any]]:
+    def load_checkpoint(self, artifact_name: Optional[str] = None, version: str = "latest") -> Optional[Dict[str, Any]]:
         """
         Load model checkpoint from wandb.
         
         Args:
-            artifact_name: Name of the wandb artifact
+            artifact_name: Name of the checkpoint artifact (auto-detected if None)
             version: Version of the artifact to load (default: "latest")
             
         Returns:
             Checkpoint data dictionary or None if failed
         """
-        
-        # Download artifact
+        if artifact_name is None:
+            artifact_name = self._get_artifact_name("checkpoint")
+            
         artifact_path = self._construct_artifact_path(artifact_name, version)
-        artifact_dir = None
+        
         try:
-            if self.wandb_api.artifact_exists(artifact_path):
-                artifact = self.wandb_api.artifact(artifact_path, type="model_checkpoint")
-                artifact_dir = artifact.download()
+            artifact = self.wandb_api.artifact(artifact_path, type="model_checkpoint")
+            artifact_dir = artifact.download()
         except Exception as e:
-            logger.info(f"Artifact {artifact_name}:{version} not found")
-            return None
-
-        if artifact_dir is None:
-            logger.error(f"Failed to download artifact {artifact_name}:{version}")
+            logger.info(f"Checkpoint {artifact_name}:{version} not found: {e}")
             return None
 
         # Find checkpoint file
@@ -1255,22 +712,23 @@ class WandbLogger:
             logger.error(f"No checkpoint files found in artifact {artifact_name}:{version}")
             return None
         
-        # Load the checkpoint (assume first .pth file)
+        # Load the checkpoint
         checkpoint_path = os.path.join(artifact_dir, checkpoint_files[0])
         checkpoint_data = torch.load(checkpoint_path, map_location='cpu')
         
-        logger.info(f"Loaded checkpoint from wandb: {artifact_name}:{version} (epoch {checkpoint_data.get('epoch', 'unknown')})")
+        logger.info(f"✅ Loaded checkpoint: {artifact_name}:{version} (epoch {checkpoint_data.get('epoch', 'unknown')})")
         return checkpoint_data
 
-
-    def resume_training_from_checkpoint(self, model: torch.nn.Module, optimizer: torch.optim.Optimizer, artifact_name: str, version: str = "latest") -> int:
+    @monitor_memory
+    def resume_training_from_checkpoint(self, model: torch.nn.Module, optimizer: torch.optim.Optimizer, 
+                                      artifact_name: Optional[str] = None, version: str = "latest") -> int:
         """
         Resume training from a wandb checkpoint.
         
         Args:
             model: Model to load state into
             optimizer: Optimizer to load state into  
-            artifact_name: Name of the wandb checkpoint artifact
+            artifact_name: Name of the checkpoint artifact (auto-detected if None)
             version: Version to load (default: "latest")
             
         Returns:
@@ -1283,92 +741,304 @@ class WandbLogger:
             return 1
         
         try:
-            # Prepare state_dict (checkpoint may be a dict containing model_state_dict)
+            # Load model state
             if isinstance(checkpoint_data, dict) and 'model_state_dict' in checkpoint_data:
                 state_dict = checkpoint_data['model_state_dict']
             else:
                 state_dict = checkpoint_data
 
-            # Defensive: ensure lazy-created backbone head exists if checkpoint contains its keys
-            try:
-                sd_keys = set(state_dict.keys())
-            except Exception:
-                sd_keys = set()
-
-            try:
-                model_backbone = getattr(model, 'backbone', None)
-            except Exception:
-                model_backbone = None
-
-            # If checkpoint has backbone._head.* keys but model's backbone hasn't created _head yet,
-            # attempt to initialize it via model API or a dummy forward so load_state_dict succeeds.
-            if any(k.startswith('backbone._head') for k in sd_keys) and model_backbone is not None and getattr(model_backbone, '_head', None) is None:
-                logger.info("Checkpoint appears to contain backbone._head keys; attempting to initialize model head before loading checkpoint")
-                try:
-                    if hasattr(model, 'ensure_head_initialized'):
-                        # Prefer model-provided convenience method
-                        try:
-                            device_str = str(next(model.parameters()).device)
-                        except Exception:
-                            device_str = 'cpu'
-                        model.ensure_head_initialized(device=device_str)
-                    else:
-                        # Fallback: run a conservative dummy forward on CPU/device of model
-                        try:
-                            dev = next(model.parameters()).device
-                        except Exception:
-                            dev = torch.device('cpu')
-                        model.to(dev)
-                        model.eval()
-                        with torch.no_grad():
-                            dummy = torch.zeros((1, 3, 224, 224), device=dev)
-                            model(dummy)
-                except Exception as e:
-                    logger.warning(f"Could not initialize model head before loading checkpoint: {e}")
-
-            model_state = model.state_dict()
-
-            # Use centralized robust loader to handle lazy heads and mismatched keys
             success, unexpected, missing, err = self._robust_load_state_dict(model, state_dict)
             if not success:
-                logger.error(f"Failed to load model state from checkpoint: {err}")
+                logger.error(f"Failed to load model state: {err}")
                 return 1
+                
             if unexpected:
-                logger.warning(f"State dict contained unexpected keys (they were ignored): {unexpected[:10]}{('...' if len(unexpected)>10 else '')}")
+                logger.warning(f"Unexpected keys in checkpoint: {len(unexpected)} keys")
             if missing:
-                logger.info(f"State dict is missing keys (these were left at defaults): {missing[:10]}{('...' if len(missing)>10 else '')}")
+                logger.info(f"Missing keys in checkpoint: {len(missing)} keys")
 
-            # Load optimizer state if present
+            # Load optimizer state
             try:
                 if isinstance(checkpoint_data, dict) and 'optimizer_state_dict' in checkpoint_data:
                     optimizer.load_state_dict(checkpoint_data['optimizer_state_dict'])
             except Exception as e:
-                logger.warning(f"Failed to load optimizer state from checkpoint: {e}")
+                logger.warning(f"Failed to load optimizer state: {e}")
 
             # Get starting epoch
             start_epoch = checkpoint_data.get('epoch', 0) + 1 if isinstance(checkpoint_data, dict) else 1
-            logger.info(f"Resumed training from epoch {start_epoch}")
+            logger.info(f"✅ Resumed training from epoch {start_epoch}")
             return start_epoch
 
         except Exception as e:
             logger.error(f"Failed to resume from checkpoint: {e}")
             return 1
 
+    @monitor_memory
+    @requires_wandb_enabled
+    @safe_wandb_operation()
+    def load_model_from_registry(self, model_class, collection_name: str, 
+                                alias: str = "latest", device: str = "cpu", **kwargs) -> Optional[torch.nn.Module]:
+        """
+        Load model from wandb model registry.
+        
+        Args:
+            model_class: The model class to instantiate
+            collection_name: Name of the model collection in wandb registry
+            alias: Model version alias (e.g., "latest", "best", "v1")
+            device: Device to load the model on
+            **kwargs: Additional model initialization parameters
+            
+        Returns:
+            Loaded model instance or None if loading failed
+        """
+        # Use appropriate model name based on test status
+        model_name = self._get_artifact_name(collection_name)
+        artifact_path = self._construct_artifact_path(model_name, alias)
+        
+        try:
+            model_artifact = self.wandb_api.artifact(artifact_path, type="model")
+            model_dir = model_artifact.download()
+        except Exception as e:
+            logger.warning(f"Could not retrieve model artifact '{artifact_path}': {e}")
+            return None
 
+        # Find model file
+        model_file_name = None
+        for file in model_artifact.files():
+            if file.name.endswith('.pth'):
+                model_file_name = file.name
+                break
+
+        if not model_file_name:
+            logger.error(f"No .pth file found in artifact: {artifact_path}")
+            return None
+
+        model_path = os.path.join(model_dir, model_file_name)
+        
+        if not os.path.exists(model_path):
+            logger.warning(f"Model file not found: {model_path}")
+            return None
+
+        # Read saved configuration from metadata
+        saved_config = {}
+        try:
+            if hasattr(model_artifact, 'metadata') and model_artifact.metadata:
+                model_config_meta = model_artifact.metadata.get('model_config', {})
+                if 'embedding_dim' in model_config_meta:
+                    saved_config['embedding_dim'] = model_config_meta['embedding_dim']
+                    logger.info(f"Using saved embedding_dim: {saved_config['embedding_dim']}")
+        except Exception as e:
+            logger.debug(f"Could not read artifact metadata: {e}")
+
+        # Merge configurations (saved config takes precedence)
+        merged_kwargs = dict(kwargs)
+        merged_kwargs.update(saved_config)
+        
+        # Initialize model
+        model = model_class(**merged_kwargs)
+
+        # Load model weights
+        raw = torch.load(model_path, map_location=device)
+        if isinstance(raw, dict) and 'model_state_dict' in raw:
+            state_dict = raw['model_state_dict']
+        else:
+            state_dict = raw
+
+        success, unexpected, missing, err = self._robust_load_state_dict(model, state_dict, device=device)
+        if success:
+            if unexpected:
+                logger.warning(f"Model had unexpected keys: {len(unexpected)} keys")
+            if missing:
+                logger.info(f"Model had missing keys: {len(missing)} keys")
+            logger.info(f"✅ Loaded model from registry: {collection_name}:{alias}")
+            return model
+        else:
+            logger.error(f"Failed to load model: {err}")
+            return None
+
+    @monitor_memory
+    @requires_wandb_initialized
+    @safe_wandb_operation()
+    def save_model_to_registry(self, model: torch.nn.Module, collection_name: str, 
+                            alias: str = "latest", file_name: str = "model.pth", 
+                            metadata: Optional[Dict[str, Any]] = None, 
+                            tags: Optional[List[str]] = None) -> None:
+        """
+        Save model to wandb model registry with automatic version management.
+
+        Args:
+            model: PyTorch model to save
+            collection_name: Name for the model collection
+            alias: Model version alias (e.g., "latest", "best", "v1")
+            file_name: Name of the model file to save
+            metadata: Additional metadata to include
+            tags: Optional list of tags to add to the artifact
+        """
+        # Use appropriate model name based on test status
+        model_name = self._get_artifact_name(collection_name)
+        
+        # Auto-detect model metadata
+        auto_meta = self._extract_model_metadata(model)
+        
+        # Merge metadata
+        merged_meta = {} if metadata is None else dict(metadata)
+        merged_meta.setdefault('model_config', {})
+        merged_meta['model_config'].update(auto_meta)
+        merged_meta['is_test'] = self._is_test_run()
+
+        # Create artifact
+        artifact = wandb.Artifact(
+            name=model_name,
+            type="model",
+            metadata=merged_meta
+        )
+
+        # Save model to temp file and add to artifact
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix='.pth', delete=False) as tmp_file:
+                temp_path = tmp_file.name
+            
+            torch.save(model.state_dict(), temp_path)
+            artifact.add_file(temp_path, name=file_name)
+
+            # Log artifact
+            logged_artifact = self.run.log_artifact(artifact, type="model", tags=tags)
+            
+            # Link to registry
+            target_path = f"wandb-registry-model/{model_name}"
+            try:
+                self.run.link_artifact(logged_artifact, target_path=target_path)
+            except Exception as e:
+                logger.warning(f"Failed to link artifact to registry: {e}")
+
+            logger.info(f"✅ Model saved to registry: {model_name}")
+
+            # Schedule async cleanup of old versions
+            if self._executor:
+                cleanup_future = self._executor.submit(
+                    self._cleanup_artifacts_by_type,
+                    model_name,
+                    "model", 
+                    self.model_retention_count
+                )
+                self._pending_futures.append(cleanup_future)
+                
+                # Also clean up checkpoints since model is saved
+                checkpoint_name = self._get_artifact_name("checkpoint")
+                checkpoint_cleanup_future = self._executor.submit(
+                    self._cleanup_artifacts_by_type,
+                    checkpoint_name,
+                    "model_checkpoint",
+                    0  # Remove all checkpoints when model is saved
+                )
+                self._pending_futures.append(checkpoint_cleanup_future)
+
+        finally:
+            # Clean up temp file
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except Exception:
+                    pass
+
+    def _extract_model_metadata(self, model: torch.nn.Module) -> Dict[str, Any]:
+        """Extract metadata from model for artifact storage."""
+        auto_meta = {}
+        try:
+            # Common model attributes
+            auto_meta['embedding_dim'] = getattr(model, 'embedding_dim', None)
+            auto_meta['dropout'] = getattr(model, 'dropout', getattr(model, 'dropout_rate', None))
+
+            # Try to detect backbone head configuration
+            head_info = {}
+            backbone = getattr(model, 'backbone', None)
+            if backbone is not None and getattr(backbone, '_head', None) is not None:
+                head = backbone._head
+                for name, mod in head.named_modules():
+                    if isinstance(mod, torch.nn.Linear):
+                        head_info[f'linear_{name}'] = {
+                            'in_features': mod.in_features, 
+                            'out_features': mod.out_features
+                        }
+                if head_info:
+                    auto_meta['head'] = head_info
+        except Exception as e:
+            logger.debug(f"Failed to extract model metadata: {e}")
+
+        return auto_meta
+
+    def _cleanup_artifacts_by_type(self, collection_name: str, artifact_type: str, keep_latest: int) -> None:
+        """Clean up old artifacts of a specific type, keeping only the latest N versions."""
+        try:
+            artifact_collection = self.wandb_api.artifact_type(artifact_type, project=wandb_config.project).collection(collection_name)
+
+            # Fast path for deletion of all versions
+            if keep_latest == 0:
+                try:
+                    artifact_collection.delete()
+                    logger.info(f"🗑️  Deleted entire collection: {collection_name}")
+                    return
+                except Exception as e:
+                    logger.debug(f"Collection delete failed, falling back to per-version: {e}")
+
+            # Get all artifacts, sorted by creation time (newest first)
+            artifacts = list(artifact_collection.artifacts())
+            if len(artifacts) <= keep_latest:
+                logger.debug(f"Only {len(artifacts)} versions exist for {collection_name}, no cleanup needed")
+                return
+
+            artifacts.sort(key=lambda x: x.created_at, reverse=True)
+            
+            # Identify versions to delete (keep latest N)
+            to_delete = artifacts[keep_latest:]
+            
+            # Skip versions marked as "do not delete"
+            filtered_to_delete = []
+            for artifact in to_delete:
+                do_not_delete = False
+                
+                # Check aliases
+                try:
+                    if hasattr(artifact, 'aliases'):
+                        protected_aliases = getattr(wandb_config, 'model_tags_to_skip_deletion', ['production', 'stable'])
+                        if any(alias in protected_aliases for alias in artifact.aliases):
+                            do_not_delete = True
+                except Exception:
+                    pass
+                
+                # Check metadata
+                try:
+                    if artifact.metadata and artifact.metadata.get("do_not_delete", False):
+                        do_not_delete = True
+                except Exception:
+                    pass
+                
+                if not do_not_delete:
+                    filtered_to_delete.append(artifact)
+
+            # Delete old versions
+            deleted_count = 0
+            for artifact in filtered_to_delete:
+                try:
+                    artifact.delete()
+                    deleted_count += 1
+                    logger.debug(f"🗑️  Deleted {artifact_type}: {artifact.name}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete {artifact.name}: {e}")
+
+            if deleted_count > 0:
+                logger.info(f"🗑️  Cleaned up {deleted_count} old {artifact_type} artifacts for {collection_name}")
+
+        except Exception as e:
+            logger.error(f"Failed to cleanup {artifact_type} artifacts for {collection_name}: {e}")
+
+    @monitor_memory
     @requires_wandb_initialized
     @safe_wandb_operation()
     def log_training_metrics(self, epoch: int, train_loss: float, val_loss: Optional[float] = None, 
                         learning_rate: Optional[float] = None, **kwargs) -> None:
-        """
-        Log training metrics for an epoch.
-        
-        Args:
-            epoch: Current epoch number
-            train_loss: Training loss for the epoch
-            val_loss: Optional validation loss
-            learning_rate: Current learning rate
-            **kwargs: Additional metrics to log
-        """
+        """Log training metrics for an epoch."""
         metrics = {
             "epoch": epoch,
             "train_loss": train_loss,
@@ -1377,55 +1047,80 @@ class WandbLogger:
         
         if val_loss is not None:
             metrics["val_loss"] = val_loss
-            
         if learning_rate is not None:
             metrics["learning_rate"] = learning_rate
         
         self.run.log(metrics)
         logger.debug(f"Logged training metrics for epoch {epoch}")
 
+    @monitor_memory
     @requires_wandb_initialized
     @safe_wandb_operation()
     def log_batch_metrics(self, batch_idx: int, epoch: int, batch_loss: float, **kwargs) -> None:
-        """
-        Log batch-level metrics during training.
-        
-        Args:
-            batch_idx: Current batch index
-            epoch: Current epoch number
-            batch_loss: Loss for this batch
-            **kwargs: Additional batch metrics to log
-        """
+        """Log batch-level metrics during training."""
         metrics = {
             "batch_loss": batch_loss,
             "epoch": epoch,
             "batch": batch_idx,
             **kwargs
         }
-        
         self.run.log(metrics)
 
-    def _sanitize_artifact_name(self, name: Optional[str]) -> str:
-        """
-        Sanitize artifact/model/checkpoint names so they only contain
-        allowed characters for wandb artifact names: alphanumeric, dash,
-        underscore and dot.
+    @monitor_memory
+    @requires_wandb_initialized
+    @safe_wandb_operation()
+    def update_run_config(self, config_dict: Dict[str, Any]) -> None:
+        """Update the wandb run config."""
+        self.run.config.update(config_dict, allow_val_change=True)
+        logger.debug(f"Updated wandb run config with: {list(config_dict.keys())}")
 
-        Any disallowed character is replaced with an underscore. If the
-        resulting name is empty, return a safe default.
-        """
+    def _sanitize_artifact_name(self, name: Optional[str]) -> str:
+        """Sanitize artifact names for wandb compatibility."""
         if not name:
             return "artifact"
-        # Replace any sequence of invalid chars with a single underscore
+        # Replace invalid chars with underscores
         safe = re.sub(r'[^A-Za-z0-9._-]+', '_', str(name))
-        # Trim leading/trailing underscores or dots
         safe = safe.strip('_.-')
         if not safe:
             return "artifact"
         if safe != name:
-            logger.info(f"Sanitized artifact name '{name}' -> '{safe}'")
+            logger.debug(f"Sanitized artifact name: '{name}' -> '{safe}'")
         return safe
 
+    def _monitor_wandb_processes(self) -> int:
+        """Monitor and count WandB-related processes for performance testing.
+        
+        Returns:
+            int: Number of WandB-related processes currently running
+        """
+        try:
+            import psutil
+            current_process = psutil.Process()
+            wandb_process_count = 0
+            
+            # Count WandB-related processes
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                try:
+                    if proc.info['name'] and 'wandb' in proc.info['name'].lower():
+                        wandb_process_count += 1
+                    elif proc.info['cmdline']:
+                        cmdline_str = ' '.join(proc.info['cmdline'])
+                        if 'wandb' in cmdline_str.lower():
+                            wandb_process_count += 1
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            
+            logger.debug(f"Found {wandb_process_count} WandB-related processes")
+            return wandb_process_count
+            
+        except ImportError:
+            logger.warning("psutil not available for process monitoring")
+            return 0
+        except Exception as e:
+            logger.warning(f"Error monitoring WandB processes: {e}")
+            return 0
 
+
+# Global instance
 wandb_logger = WandbLogger()
             

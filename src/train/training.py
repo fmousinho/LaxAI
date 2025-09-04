@@ -14,9 +14,11 @@ from utils.evaluation_memory import log_evaluation_memory_usage
 
 logger = logging.getLogger(__name__)
 
+# Constants
 EPOCHS_PER_VAL = 10
 BATCHES_PER_LOG_MSG = 10
 EPOCHS_PER_VAL = 0
+THRESHOLD_FOR_DATALOADER_RESTART = 90.0  # Memory percentage threshold for dataloader restart
 
 class Training:
     """

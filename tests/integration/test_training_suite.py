@@ -290,7 +290,7 @@ print(json.dumps(results))
 
     python_bin = os.environ.get('PYTHON_EXECUTABLE', None) or './.venv31211/bin/python'
     env = os.environ.copy()
-    env['PYTHONPATH'] = './src'
+    env['PYTHONPATH'] = './src:.'
 
     proc = subprocess.Popen([python_bin, runner_path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, text=True)
 
