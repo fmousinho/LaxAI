@@ -11,6 +11,8 @@ from train.wandb_logger import wandb_logger
 from utils.gpu_memory import clear_gpu_memory, log_gpu_memory_stats, GPUMemoryContext
 from utils.cpu_memory import CPUMemoryMonitor, clear_cpu_memory, cpu_memory_context, log_comprehensive_memory_stats
 from utils.evaluation_memory import log_evaluation_memory_usage
+from train.evaluator import (calculate_embedding_variance, calculate_intra_inter_distances, 
+                           calculate_triplet_mining_efficiency, calculate_gradient_norm)
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +20,7 @@ logger = logging.getLogger(__name__)
 EPOCHS_PER_VAL = 10
 BATCHES_PER_LOG_MSG = 10
 EPOCHS_PER_VAL = 0
-THRESHOLD_FOR_DATALOADER_RESTART = 90.0  # Memory percentage threshold for dataloader restart
+
 
 class Training:
     """
@@ -130,7 +132,6 @@ class Training:
         self.dataloader = None
         self.val_dataloader = None
         self.cpu_monitor = CPUMemoryMonitor()
-        self.last_worker_restart_epoch = -1  # Track last worker restart to prevent too frequent restarts
         
         # Memory leak tracking
         self.epoch_memory_baseline = None
@@ -197,6 +198,11 @@ class Training:
         if self.model is None:
             raise RuntimeError("No model to save. Train the model first.")
         
+        # Skip saving if WandB is not enabled
+        if not wandb_logger.enabled:
+            logger.info("WandB not enabled, skipping model save to registry")
+            return
+        
         try:
             # Collect additional metadata for reproducibility and traceability
             import datetime
@@ -234,12 +240,15 @@ class Training:
                 except Exception:
                     metadata["train_num_batches"] = None
 
-            wandb_logger.save_model_to_registry(
-                model=self.model,
-                collection_name=model_name,
-                metadata=metadata
-            )
-            logger.info(f"✓ Model saved to wandb registry: {model_name}:latest")
+            if wandb_logger.enabled:
+                wandb_logger.save_model_to_registry(
+                    model=self.model,
+                    collection_name=model_name,
+                    metadata=metadata
+                )
+                logger.info(f"✓ Model saved to wandb registry: {model_name}:latest")
+            else:
+                logger.info(f"WandB not enabled, skipping model save to registry")
         except Exception as e:
             # If wandb is expected to be enabled, fail the pipeline
             if getattr(wandb_config, 'enabled', False):
@@ -340,12 +349,25 @@ class Training:
             self.model.to(self.device)
             log_gpu_memory_stats("After moving model to device")
             
-            # Setup training components
-            self.loss_fn = nn.TripletMarginLoss(margin=self.margin, p=2)
-            self.optimizer = torch.optim.Adam(
+            # Enable backbone fine-tuning for DINOv3 models
+            if hasattr(self.model, 'enable_backbone_fine_tuning'):
+                try:
+                    self.model.enable_backbone_fine_tuning(unfreeze_layers=2)
+                    logger.info("Enabled backbone fine-tuning for DINOv3 model")
+                except Exception as e:
+                    logger.warning(f"Could not enable backbone fine-tuning: {e}")
+            
+            # Setup training components with improved loss function
+            # Use TripletMarginLoss with distance weighting for better convergence
+            self.loss_fn = nn.TripletMarginLoss(margin=self.margin, p=2, reduction='mean')
+            
+            # Use AdamW optimizer which is better for fine-tuning transformers
+            self.optimizer = torch.optim.AdamW(
                 self.model.parameters(), 
                 lr=self.learning_rate, 
-                weight_decay=self.weight_decay
+                weight_decay=self.weight_decay,
+                betas=(0.9, 0.999),  # Default AdamW betas
+                eps=1e-8  # Slightly higher epsilon for stability
             )
             log_gpu_memory_stats("After creating optimizer")
             # Scheduler uses its own patience/threshold for LR adjustment only
@@ -456,6 +478,16 @@ class Training:
                 running_loss = 0.0
                 ttl_batches = len(self.dataloader)
 
+                # Initialize metric accumulators for training progress tracking
+                running_embedding_variance = 0.0
+                running_intra_distance = 0.0
+                running_inter_distance = 0.0
+                running_margin_satisfaction = 0.0
+                running_hard_triplets = 0.0
+                running_easy_triplets = 0.0
+                running_mining_efficiency = 0.0
+                running_grad_norm = 0.0
+
                 # Update margin if decay rate is active (use actual epoch number)
                 new_margin = self.margin * (margin_decay_rate ** epoch)
                 if abs(new_margin - current_margin) > margin_change_threshold:
@@ -464,6 +496,13 @@ class Training:
                     logger.info(f"Margin updated for epoch {epoch+1}: {current_margin:.4f}")
                 else:
                     logger.debug(f"Margin unchanged for epoch {epoch+1}: {current_margin:.4f}")
+                    
+                # Add warmup phase for first few epochs
+                if epoch < 5:  # Warmup for first 5 epochs
+                    warmup_factor = min(1.0, (epoch + 1) / 5.0)
+                    for param_group in self.optimizer.param_groups:
+                        param_group['lr'] = self.learning_rate * warmup_factor
+                    logger.debug(f"Warmup LR for epoch {epoch+1}: {self.learning_rate * warmup_factor:.2e}")
                     
                 for i, (anchor, positive, negative, _) in enumerate(self.dataloader):
 
@@ -483,13 +522,35 @@ class Training:
                     emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative)  # pyright: ignore[reportCallIssue]
                     loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
 
+                    # Calculate training progress metrics
+                    # These metrics help diagnose why loss might be staying near margin
+                    embedding_variance = calculate_embedding_variance(torch.cat([emb_anchor, emb_positive, emb_negative], dim=0))
+                    distance_metrics = calculate_intra_inter_distances(emb_anchor, emb_positive, emb_negative)
+                    mining_metrics = calculate_triplet_mining_efficiency(emb_anchor, emb_positive, emb_negative, current_margin)
+
                     # Backward and optimizer step
                     loss.backward()
+                    grad_norm = calculate_gradient_norm(self.model)
                     self.optimizer.step()
 
                     # Extract scalar immediately and clear GPU tensors to free memory
                     loss_value = loss.item()
                     running_loss += loss_value
+
+                    # Accumulate training progress metrics
+                    # 1. Embedding variance - measures feature diversity (high >0.1 is good)
+                    running_embedding_variance += embedding_variance
+                    # 2. Intra/inter distances - intra should be small (<0.5), inter large (>1.0)
+                    running_intra_distance += distance_metrics['intra_class_distance']
+                    running_inter_distance += distance_metrics['inter_class_distance']
+                    # 3. Margin satisfaction - ratio of triplets satisfying margin constraint (>0.8 is good)
+                    running_margin_satisfaction += distance_metrics['triplet_margin_satisfaction']
+                    # 4. Triplet mining efficiency - higher ratio (>0.7) indicates better triplet selection
+                    running_hard_triplets += mining_metrics['hard_triplets_ratio']
+                    running_easy_triplets += mining_metrics['easy_triplets_ratio']
+                    running_mining_efficiency += mining_metrics['mining_efficiency']
+                    # 5. Gradient norm - monitors for explosion (>1000) or vanishing (<0.01)
+                    running_grad_norm += grad_norm
                     
                     # Explicitly delete ALL tensors and intermediate results to prevent accumulation
                     del anchor, positive, negative, emb_anchor, emb_positive, emb_negative, loss
@@ -519,6 +580,16 @@ class Training:
 
                 # Calculate and log training loss
                 epoch_train_loss = running_loss / ttl_batches if ttl_batches > 0 else 0.0
+
+                # Calculate average training progress metrics
+                epoch_embedding_variance = running_embedding_variance / ttl_batches if ttl_batches > 0 else 0.0
+                epoch_intra_distance = running_intra_distance / ttl_batches if ttl_batches > 0 else 0.0
+                epoch_inter_distance = running_inter_distance / ttl_batches if ttl_batches > 0 else 0.0
+                epoch_margin_satisfaction = running_margin_satisfaction / ttl_batches if ttl_batches > 0 else 0.0
+                epoch_hard_triplets = running_hard_triplets / ttl_batches if ttl_batches > 0 else 0.0
+                epoch_easy_triplets = running_easy_triplets / ttl_batches if ttl_batches > 0 else 0.0
+                epoch_mining_efficiency = running_mining_efficiency / ttl_batches if ttl_batches > 0 else 0.0
+                epoch_grad_norm = running_grad_norm / ttl_batches if ttl_batches > 0 else 0.0
                 
                 # Memory cleanup after training phase
                 # clear_cpu_memory()
@@ -596,14 +667,34 @@ class Training:
                         logger.info(f"  - {key}: {val:.4f}")
 
                 logger.info(f"Margin used: {current_margin:.4f}")
+
+                # Log training progress metrics with diagnostic guidance
+                logger.info(f"Training Progress Metrics:")
+                logger.info(f"  - Embedding Variance: {epoch_embedding_variance:.4f} (target: >0.1 for diverse features)")
+                logger.info(f"  - Intra-class Distance: {epoch_intra_distance:.4f} (target: <0.5 for tight clusters)")
+                logger.info(f"  - Inter-class Distance: {epoch_inter_distance:.4f} (target: >1.0 for separation)")
+                logger.info(f"  - Margin Satisfaction: {epoch_margin_satisfaction:.4f} (target: >0.8 for effective triplets)")
+                logger.info(f"  - Hard Triplets Ratio: {epoch_hard_triplets:.4f} (target: 0.3-0.7 for balanced difficulty)")
+                logger.info(f"  - Easy Triplets Ratio: {epoch_easy_triplets:.4f} (target: <0.3 to avoid trivial learning)")
+                logger.info(f"  - Mining Efficiency: {epoch_mining_efficiency:.4f} (target: >0.7 for good triplet selection)")
+                logger.info(f"  - Gradient Norm: {epoch_grad_norm:.4f} (target: 0.01-100, watch for explosion >1000)")
                 
                 # Log epoch metrics to wandb with memory management
-                if wandb_config.enabled:
+                if wandb_logger.enabled:
                     # Create metrics dict with explicit cleanup
                     metrics = {
                         "train_loss": float(epoch_train_loss),  # Ensure scalar values
                         "margin": float(current_margin),
-                        "current_lr": float(self.optimizer.param_groups[0]['lr'])
+                        "current_lr": float(self.optimizer.param_groups[0]['lr']),
+                        # Training progress metrics
+                        "embedding_variance": float(epoch_embedding_variance),
+                        "intra_class_distance": float(epoch_intra_distance),
+                        "inter_class_distance": float(epoch_inter_distance),
+                        "margin_satisfaction": float(epoch_margin_satisfaction),
+                        "hard_triplets_ratio": float(epoch_hard_triplets),
+                        "easy_triplets_ratio": float(epoch_easy_triplets),
+                        "mining_efficiency": float(epoch_mining_efficiency),
+                        "gradient_norm": float(epoch_grad_norm)
                     }
                     if epoch_val_loss is not None:
                         metrics["val_loss"] = float(epoch_val_loss)
@@ -611,7 +702,8 @@ class Training:
                         for k, v in reid_metrics.items():
                             metrics[k] = float(v) if isinstance(v, (int, float)) else v
                     
-                    wandb_logger.log_metrics(metrics)
+                    if wandb_logger.enabled:
+                        wandb_logger.log_metrics(metrics)
                     
                     # Explicitly clear metrics dict to prevent accumulation
                     del metrics
@@ -637,7 +729,7 @@ class Training:
                     logger.info(f"Learning rate after scheduler step: {current_lr:.6f}")
 
                 # Save checkpoint at the end of each epoch with aggressive memory management
-                if wandb_config.enabled and self.optimizer is not None:
+                if wandb_logger.enabled and self.optimizer is not None:
                     try:
                         # Monitor memory before checkpoint save
                         import psutil
@@ -955,7 +1047,7 @@ class Training:
         """
         start_epoch = 1
         
-        if not wandb_config.enabled:
+        if not wandb_logger.enabled:
             logger.info("WandB not enabled, starting fresh training")
             return start_epoch
             
@@ -1238,146 +1330,4 @@ class Training:
         except Exception as e:
             logger.debug(f"Aggressive memory cleanup failed {context}: {e}")
 
-    def _restart_dataloader_workers_optimized(self):
-        """
-        Performance-optimized DataLoader worker restart.
-        
-        This method minimizes restart overhead by:
-        1. Using faster worker termination strategies
-        2. Avoiding unnecessary DataLoader recreation when possible
-        3. Preserving dataset state and caches
-        """
-        try:
-            import time
-            
-            # Store original dataset references and configurations
-            train_dataset = self.dataloader.dataset if self.dataloader else None
-            val_dataset = self.val_dataloader.dataset if self.val_dataloader else None
-            
-            # Store current DataLoader configurations to avoid recreation overhead
-            train_config = None
-            val_config = None
-            
-            if self.dataloader:
-                train_config = {
-                    'batch_size': self.dataloader.batch_size,
-                    'num_workers': self.dataloader.num_workers,
-                    'pin_memory': self.dataloader.pin_memory,
-                    'persistent_workers': getattr(self.dataloader, 'persistent_workers', False),
-                    'prefetch_factor': getattr(self.dataloader, 'prefetch_factor', 2),
-                    'drop_last': self.dataloader.drop_last,
-                    'shuffle': True  # Training dataloader always shuffles
-                }
-            
-            if self.val_dataloader:
-                val_config = {
-                    'batch_size': self.val_dataloader.batch_size,
-                    'num_workers': self.val_dataloader.num_workers,
-                    'pin_memory': self.val_dataloader.pin_memory,
-                    'persistent_workers': getattr(self.val_dataloader, 'persistent_workers', False),
-                    'prefetch_factor': getattr(self.val_dataloader, 'prefetch_factor', 2),
-                    'drop_last': self.val_dataloader.drop_last,
-                    'shuffle': False  # Validation dataloader doesn't shuffle
-                }
-            
-            # Fast worker cleanup - terminate workers without waiting too long
-            workers_terminated = 0
-            
-            if self.dataloader and hasattr(self.dataloader, '_iterator') and self.dataloader._iterator:
-                try:
-                    if hasattr(self.dataloader._iterator, '_workers'):
-                        for worker in self.dataloader._iterator._workers:
-                            if worker.is_alive():
-                                worker.terminate()
-                                workers_terminated += 1
-                        # Quick join with short timeout to avoid blocking
-                        for worker in self.dataloader._iterator._workers:
-                            if worker.is_alive():
-                                worker.join(timeout=0.5)  # Reduced timeout
-                    # Clear iterator reference
-                    self.dataloader._iterator = None
-                except Exception as e:
-                    logger.debug(f"Error during training DataLoader worker cleanup: {e}")
-            
-            if self.val_dataloader and hasattr(self.val_dataloader, '_iterator') and self.val_dataloader._iterator:
-                try:
-                    if hasattr(self.val_dataloader._iterator, '_workers'):
-                        for worker in self.val_dataloader._iterator._workers:
-                            if worker.is_alive():
-                                worker.terminate()
-                                workers_terminated += 1
-                        # Quick join with short timeout
-                        for worker in self.val_dataloader._iterator._workers:
-                            if worker.is_alive():
-                                worker.join(timeout=0.5)  # Reduced timeout
-                    # Clear iterator reference
-                    self.val_dataloader._iterator = None
-                except Exception as e:
-                    logger.debug(f"Error during validation DataLoader worker cleanup: {e}")
-            
-            # Force garbage collection to clean up worker references
-            import gc
-            gc.collect()
-            
-            # Recreate DataLoaders with preserved configurations (faster than setup_dataloader)
-            if train_dataset and train_config:
-                from torch.utils.data import DataLoader
-                self.dataloader = DataLoader(train_dataset, **train_config)
-                logger.debug("Training DataLoader recreated with preserved config")
-            
-            if val_dataset and val_config:
-                from torch.utils.data import DataLoader
-                self.val_dataloader = DataLoader(val_dataset, **val_config)
-                logger.debug("Validation DataLoader recreated with preserved config")
-            
-            logger.info(f"DataLoader workers restarted (terminated {workers_terminated} workers)")
-                
-        except Exception as e:
-            logger.warning(f"Optimized DataLoader worker restart failed, falling back to standard restart: {e}")
-            # Fallback to original method
-            self._restart_dataloader_workers()
-
-    def _restart_dataloader_workers(self):
-        """
-        Restart DataLoader workers when CPU memory utilization exceeds threshold.
-        
-        This method terminates existing workers and recreates the DataLoader
-        with fresh workers, clearing any accumulated state. Called automatically
-        when CPU memory utilization exceeds 90%.
-        """
-        try:
-            # Store original dataset references
-            train_dataset = self.dataloader.dataset if self.dataloader else None
-            val_dataset = self.val_dataloader.dataset if self.val_dataloader else None
-            
-            # Clean up existing workers
-            if self.dataloader and hasattr(self.dataloader, '_iterator'):
-                if hasattr(self.dataloader._iterator, '_workers'):
-                    for worker in self.dataloader._iterator._workers:
-                        if worker.is_alive():
-                            worker.terminate()
-                            worker.join(timeout=1.0)
-            
-            if self.val_dataloader and hasattr(self.val_dataloader, '_iterator'):
-                if hasattr(self.val_dataloader._iterator, '_workers'):
-                    for worker in self.val_dataloader._iterator._workers:
-                        if worker.is_alive():
-                            worker.terminate()
-                            worker.join(timeout=1.0)
-            
-            # Force garbage collection to clean up worker references
-            import gc
-            gc.collect()
-            
-            # Recreate DataLoaders with fresh workers
-            if train_dataset:
-                self.setup_dataloader(train_dataset, type='train')
-                logger.info("Training DataLoader workers restarted")
-            
-            if val_dataset:
-                self.setup_dataloader(val_dataset, type='val')
-                logger.info("Validation DataLoader workers restarted")
-                
-        except Exception as e:
-            logger.warning(f"Failed to restart DataLoader workers: {e}")
-            # Continue training even if worker restart fails
+    

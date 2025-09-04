@@ -156,6 +156,11 @@ class LacrossePlayerDataset(Dataset):
         try:
             img = self.storage_client.download_as_appropriate_type(blob_path)
             
+            # Check if download failed and returned None
+            if img is None:
+                logger.error(f"Failed to download image {blob_path} - returned None")
+                return Image.new('RGB', (224, 224), color='black')
+            
             # Convert numpy array to PIL Image if needed
             if isinstance(img, np.ndarray) and img.ndim == 3 and img.shape[2] == 3:
                 img = Image.fromarray(img)

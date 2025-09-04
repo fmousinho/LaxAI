@@ -52,7 +52,7 @@ def test_trackdata_basic_updates():
 
 def test_warp_bbox_torch_matches_numpy():
     import torch
-    from track.tracker import warp_bbox, warp_bbox_torch
+    from src.common.tracker import warp_bbox, warp_bbox_torch
 
     bboxes = np.array([
         [0, 0, 10, 10],

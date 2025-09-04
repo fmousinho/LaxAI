@@ -156,11 +156,77 @@ Troubleshooting
 Development & Testing
 ---------------------
 
+### Running Tests
+
 Run unit tests with pytest from the repo root:
 
 ```bash
 PYTHONPATH=./src ./.venv31211/bin/python -m pytest -q
 ```
+
+### Test Performance Optimization
+
+The integration tests can be slow due to real data loading and model training. Here are several ways to speed them up:
+
+#### 1. Use Test Configuration (Recommended)
+
+Switch to optimized test configuration for faster local development:
+
+```bash
+# Switch to fast test configuration
+python switch_config.py --test
+
+# Run tests with optimized settings
+PYTHONPATH=./src ./.venv31211/bin/python -m pytest tests/integration/test_training_suite.py::test_train_all_with_dino -v
+
+# Switch back to production configuration when done
+python switch_config.py --prod
+
+# Check current configuration status
+python switch_config.py --status
+```
+
+The test configuration includes:
+- Smaller batch sizes (8 instead of 256)
+- Reduced DataLoader workers (0 for local testing)
+- Optimized prefetch settings
+- Disabled memory cleanup for faster startup
+
+#### 2. Run Only Fast Tests
+
+Skip slow integration tests during development:
+
+```bash
+# Run only fast tests (excludes slow training tests)
+PYTHONPATH=./src ./.venv31211/bin/python -m pytest -m "not slow"
+
+# Run only unit tests (fast)
+PYTHONPATH=./src ./.venv31211/bin/python -m pytest tests/test_training_suite.py
+
+# Run specific fast test
+PYTHONPATH=./src ./.venv31211/bin/python -m pytest tests/integration/test_training_suite.py::test_train_all_timeboxed_30_seconds -v
+```
+
+#### 3. Use Mocked Tests
+
+The `test_train_all_timeboxed_30_seconds` test uses extensive mocking to avoid real GCS operations and completes in ~30 seconds.
+
+#### 4. Manual Optimization
+
+For even faster testing, you can temporarily modify test parameters:
+
+```python
+# In test files, reduce these values:
+training_kwargs={"num_epochs": 1, "batch_size": 4}  # Even smaller batch
+n_datasets_to_use=1  # Use only 1 dataset
+```
+
+### Test Categories
+
+- **Fast tests** (`@pytest.mark.fast`): Complete in < 30 seconds
+- **Slow tests** (`@pytest.mark.slow`): Training integration tests that take several minutes
+- **Integration tests**: Require external services (GCS, WandB)
+- **Unit tests**: Fast, isolated tests
 
 Create `.env.example` (already provided) and do not commit real secrets. Use CI secrets or Secret Manager for the real keys.
 

@@ -1,0 +1,36 @@
+# Test-specific configuration overrides for faster test execution
+# This file contains optimized settings for running tests on local machines
+
+[training_config]
+# Smaller batch size for faster iteration
+batch_size = 8
+
+# Reduced number of workers for local testing
+num_workers = 0
+
+# Smaller learning rate for stability with small batches
+learning_rate = 1e-4
+
+# Reduced epochs for faster testing (tests override this to 1 anyway)
+num_epochs = 1
+
+# Smaller prefetch for local testing
+prefetch_factor = 1
+
+# Disable memory cleanup for faster startup
+clear_memory_on_start = false
+aggressive_memory_cleanup = false
+
+[evaluator_config]
+# Smaller batch size for evaluation
+emb_batch_size = 8
+
+# Reduced workers for local testing
+number_of_workers = 0
+
+# Smaller prefetch
+prefetch_factor = 1
+
+[detection_config]
+# Smaller batch size for detection
+# (Add detection-specific optimizations if needed)

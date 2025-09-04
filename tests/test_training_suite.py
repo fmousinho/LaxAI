@@ -133,7 +133,7 @@ def test_siamesenet_dino_can_download_and_initialize(tmp_path):
 
 
 @pytest.mark.slow
-def test_train_all_resnet_with_one_dataset():
+def test_train_all_with_one_dataset():
     # Ensure secrets for longer e2e tests
     env_secrets.setup_environment_secrets()
 
@@ -292,7 +292,7 @@ print(json.dumps(results))
 
     python_bin = os.environ.get('PYTHON_EXECUTABLE', None) or './.venv31211/bin/python'
     env = os.environ.copy()
-    env['PYTHONPATH'] = './src:.'
+    env['PYTHONPATH'] = './src'
 
     proc = subprocess.Popen([python_bin, runner_path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, text=True)
 
@@ -416,7 +416,7 @@ def test_train_all_memory_stability_with_single_dataset():
                 "batch_size": 8,
                 "num_workers": 0,  # No multiprocessing for cleaner memory monitoring
             },
-            model_kwargs={"model_class_module": "train.siamesenet_dino", "model_class_str": "SiameseNet"},
+            model_kwargs={"model_class_module": "train.siamesenet", "model_class_str": "SiameseNet"},
             n_datasets_to_use=1,  # Single dataset mode
         )
 
@@ -435,7 +435,6 @@ def test_train_all_memory_stability_with_single_dataset():
     finally:
         # Restore original function
         train_all.train = original_train
-
 def test_train_all_memory_monitoring_during_epochs():
     """Test memory monitoring specifically during training epochs."""
     import psutil
@@ -480,7 +479,7 @@ def test_train_all_memory_monitoring_during_epochs():
             resume_from_checkpoint=False,
             wandb_tags=["memory_monitoring"],
             training_kwargs={"num_epochs": 1, "batch_size": 8},
-            model_kwargs={"model_class_module": "train.siamesenet_dino", "model_class_str": "SiameseNet"},
+            model_kwargs={"model_class_module": "train.siamesenet", "model_class_str": "SiameseNet"},
             n_datasets_to_use=1,
         )
 

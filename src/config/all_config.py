@@ -35,10 +35,10 @@ class DebugConfig:
 @dataclass
 class ModelConfig:
     """Configuration for model dimensions and architecture."""
-    input_height: int = 120
-    input_width: int = 80
-    embedding_dim: int = 384  
-    dropout_rate: float = 0.2
+    input_height: int = 224  # Increased to match DINOv3 expected input
+    input_width: int = 224   # Increased to match DINOv3 expected input
+    embedding_dim: int = 512  # Increased embedding dimension for better representation
+    dropout_rate: float = 0.1  # Reduced dropout for fine-tuning
     resnet_conv_kernel_size: int = 3
     resnet_conv_stride: int = 1
     resnet_conv_padding: int = 1
@@ -70,23 +70,23 @@ class TrackerConfig:
 @dataclass
 class TrainingConfig:
     """Configuration for training parameters."""
-    batch_size: int = 128
+    batch_size: int = 256  # Increased from 128 for better triplet mining
     num_workers: int = 8 if sys.platform != "darwin" else 0  # Number of DataLoader workers
-    learning_rate: float = 1e-3
-    lr_scheduler_patience: int = 3
-    lr_scheduler_threshold: float = 1e-4
-    lr_scheduler_factor: float = 0.5  # Factor by which to reduce learning rate
-    lr_scheduler_min_lr: float = 1e-7  # Minimum learning rate after reduction
-    num_epochs: int = 50
-    margin: float = 0.2
-    weight_decay: float = 1e-4  # L2 regularization weight decay
+    learning_rate: float = 5e-5  # Reduced from 1e-3 for fine-tuning
+    lr_scheduler_patience: int = 5  # Increased patience
+    lr_scheduler_threshold: float = 1e-5  # More sensitive threshold
+    lr_scheduler_factor: float = 0.3  # More conservative reduction
+    lr_scheduler_min_lr: float = 1e-8  # Lower minimum LR
+    num_epochs: int = 100  # Increased epochs for fine-tuning
+    margin: float = 0.5  # Increased from 0.2 for better separation
+    weight_decay: float = 5e-5  # Reduced L2 regularization
     train_ratio: float = 0.8
-    min_images_per_player: int = 2
+    min_images_per_player: int = 3  # Increased minimum images per player
     force_pretraining: bool = False  # Force using ResNet defaults for pretraining
-    early_stopping_patience: Optional[int] = 10  # Number of epochs to wait before early stopping (None = disabled)
-    margin_decay_rate: float = 0.98  # Decay rate for margin
-    margin_change_threshold: float = 0.01  # Minimum change in margin to trigger update
-    prefetch_factor: int = 2  # Number of batches to prefetch for DataLoader
+    early_stopping_patience: Optional[int] = 15  # More patience for convergence
+    margin_decay_rate: float = 0.995  # Slower margin decay
+    margin_change_threshold: float = 0.005  # More sensitive margin updates
+    prefetch_factor: int = 4  # Increased prefetch for better GPU utilization
     n_datasets_to_use: Optional[int] = None  # Number of datasets to use for training (None = use all)
     # GPU memory management settings
     clear_memory_on_start: bool = True  # Clear GPU memory when training starts

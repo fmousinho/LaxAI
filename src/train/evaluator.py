@@ -942,5 +942,99 @@ class ModelEvaluator:
         logger.info("Evaluation cleanup completed")
 
 
+# Training Progress Metrics Functions
+# These functions calculate metrics to monitor training progress and diagnose convergence issues
+
+def calculate_embedding_variance(embeddings: torch.Tensor) -> float:
+    """Calculate variance of embedding vectors to measure feature diversity.
+
+    Higher variance indicates more diverse and discriminative features.
+    Low variance might indicate collapsed representations or poor feature learning.
+    """
+    if embeddings.dim() == 1:
+        embeddings = embeddings.unsqueeze(0)
+    return torch.var(embeddings, dim=0).mean().item()
+
+
+def calculate_intra_inter_distances(anchor_emb: torch.Tensor, positive_emb: torch.Tensor,
+                                  negative_emb: torch.Tensor) -> Dict[str, float]:
+    """Calculate intra-class and inter-class distances for triplet analysis.
+
+    Returns:
+        - intra_class_distance: Average distance between anchor and positive (same class)
+        - inter_class_distance: Average distance between anchor and negative (different class)
+        - triplet_margin_satisfaction: Ratio of triplets that satisfy the margin constraint
+    """
+    # Intra-class distances (should be small)
+    intra_dist = torch.mean(torch.norm(anchor_emb - positive_emb, dim=1)).item()
+
+    # Inter-class distances (should be large)
+    inter_dist = torch.mean(torch.norm(anchor_emb - negative_emb, dim=1)).item()
+
+    # Triplet margin satisfaction ratio
+    triplet_distances = torch.norm(anchor_emb - positive_emb, dim=1) - torch.norm(anchor_emb - negative_emb, dim=1)
+    margin_satisfaction = torch.mean((triplet_distances < 0).float()).item()
+
+    return {
+        'intra_class_distance': intra_dist,
+        'inter_class_distance': inter_dist,
+        'triplet_margin_satisfaction': margin_satisfaction
+    }
+
+
+def calculate_triplet_mining_efficiency(anchor_emb: torch.Tensor, positive_emb: torch.Tensor,
+                                       negative_emb: torch.Tensor, margin: float) -> Dict[str, float]:
+    """Calculate triplet mining efficiency metrics.
+
+    Analyzes the quality of triplet selection for training:
+    - Hard triplets: Challenging cases where positive and negative are close
+    - Easy triplets: Trivial cases where positive is much closer than negative
+    - Semi-hard triplets: Balanced cases that provide good learning signal
+
+    Returns:
+        - hard_triplets_ratio: Ratio of triplets that are challenging to learn
+        - easy_triplets_ratio: Ratio of triplets that are too easy
+        - semi_hard_triplets_ratio: Ratio of well-balanced triplets
+        - mining_efficiency: Overall efficiency score (higher is better)
+    """
+    # Calculate distances
+    pos_dist = torch.norm(anchor_emb - positive_emb, dim=1)
+    neg_dist = torch.norm(anchor_emb - negative_emb, dim=1)
+
+    # Hard triplets: where positive distance is close to negative distance
+    hard_triplets = torch.mean((pos_dist > neg_dist - margin).float()).item()
+
+    # Easy triplets: where positive is much closer than negative
+    easy_triplets = torch.mean((pos_dist < neg_dist - 2 * margin).float()).item()
+
+    # Semi-hard triplets: where negative is closer than positive but still satisfies margin
+    semi_hard = torch.mean(((pos_dist < neg_dist) & (neg_dist < pos_dist + margin)).float()).item()
+
+    return {
+        'hard_triplets_ratio': hard_triplets,
+        'easy_triplets_ratio': easy_triplets,
+        'semi_hard_triplets_ratio': semi_hard,
+        'mining_efficiency': 1.0 - easy_triplets  # Higher is better (more challenging triplets)
+    }
+
+
+def calculate_gradient_norm(model: torch.nn.Module) -> float:
+    """Calculate the norm of gradients for all model parameters.
+
+    Monitors for gradient explosion (very high values) or vanishing (very low values).
+    Typical range: 0.01 - 100, depending on model size and learning rate.
+    """
+    total_norm = 0.0
+    param_count = 0
+
+    for param in model.parameters():
+        if param.grad is not None:
+            param_norm = param.grad.data.norm(2)
+            total_norm += param_norm.item() ** 2
+            param_count += 1
+
+    return total_norm ** (1. / 2) if param_count > 0 else 0.0
+
+
 # Backwards-compatible alias: some tests and callers expect `Evaluator`
 Evaluator = ModelEvaluator
