@@ -182,22 +182,34 @@ class WandbLogger:
 
     def _is_test_run(self) -> bool:
         """Check if current run is a test run."""
-        # Method 1: Check if we're running under pytest
+        # Method 3: Check run name for test indicators FIRST (highest priority)
+        if self.run and hasattr(self.run, 'name') and self.run.name:
+            run_name = self.run.name.lower()
+            # More specific test indicators to avoid false positives
+            test_indicators = ['test-', '-test', '_test', 'test_', 'wandb', 'e2e', 'integration', 'unit']
+            if any(indicator in run_name for indicator in test_indicators):
+                return True
+            # If run name is production-like, don't treat as test run even under pytest
+            production_indicators = ['prod', 'production', 'main', 'master', 'release', 'baseline']
+            if any(indicator in run_name for indicator in production_indicators):
+                return False
+        
+        # Method 1: Check if we're running under pytest - only if run name contains test indicators
         import sys
         if 'pytest' in sys.modules or 'PYTEST_CURRENT_TEST' in os.environ:
-            return True
+            # Only treat as test run if we have a run name with test indicators
+            if self.run and hasattr(self.run, 'name') and self.run.name:
+                run_name = self.run.name.lower()
+                test_indicators = ['test-', '-test', '_test', 'test_', 'wandb', 'e2e', 'integration', 'unit']
+                if any(indicator in run_name for indicator in test_indicators):
+                    return True
+            # If no run name or run name doesn't have test indicators, don't treat as test
+            return False
             
         # Method 2: Check for test-related environment variables
         test_env_vars = ['TESTING', 'TEST_MODE', 'CI', 'GITHUB_ACTIONS']
         if any(os.environ.get(var, '').lower() in ['1', 'true', 'yes'] for var in test_env_vars):
             return True
-            
-        # Method 3: Check run name for test indicators (existing logic)
-        if self.run and hasattr(self.run, 'name') and self.run.name:
-            run_name = self.run.name.lower()
-            test_indicators = ['test', 'wandb', 'e2e', 'integration', 'unit']
-            if any(indicator in run_name for indicator in test_indicators):
-                return True
         
         # Method 4: Check if running in test directories
         try:

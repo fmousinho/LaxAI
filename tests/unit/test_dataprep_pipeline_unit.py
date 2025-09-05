@@ -41,7 +41,7 @@ class TestDataPrepPipelineUnit:
         """Create a mock TrainingConfig for testing."""
         config = MagicMock()
         config.train_ratio = 0.8
-        config.dataloader_workers = 2
+        config.num_workers = 2
         return config
 
     @pytest.fixture
