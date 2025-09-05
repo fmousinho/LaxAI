@@ -122,6 +122,10 @@ class DetectionModel:
                     pretrain_weights=temp_checkpoint_path,
                     num_classes=6
                 )
+
+                self.model.to(self.device)
+                self.model.optimize_for_inference()
+
                 return True
 
         except wandb.errors.CommError as comm_err:

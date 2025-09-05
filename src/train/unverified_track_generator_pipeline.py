@@ -585,7 +585,7 @@ class DataPrepPipeline(Pipeline):
                             affine_matrix = self.tracker.get_affine_matrix(previous_frame_rgb, frame_rgb)
 
                         # Apply the affine transformation to the detections
-                        detections = self.tracker.track(detections, affine_matrix)
+                        detections = self.tracker.update_with_transform(detections, affine_matrix)
 
                     except Exception as e:
                         logger.error(f"Error processing frame {frame_number} for video {video_guid}: {e}")

@@ -21,7 +21,7 @@ setup_environment_secrets()
 # This must be imported before any modules that use GCS or WandB
 
 # Imports using relative imports since we're now in the src package
-from common.google_storage import get_storage, GCSPaths
+from common.google_storage import get_storage
 from train.unverified_track_generator_pipeline import DataPrepPipeline
 from config.all_config import detection_config
 
@@ -51,20 +51,32 @@ def create_unverified_tracks(tenant_id: str, crop_sampling_rate: int, verbose: b
     # 1. Find all videos in the raw directory
     try:
         tenant_storage = get_storage(tenant_id)
-        path_manager = GCSPaths()
         
-        # Use the proper GCS path pattern for raw data
-        raw_data_prefix = path_manager.get_path("raw_data")
-        if raw_data_prefix is None:
-            logger.error("raw_data path not found in GCSPaths configuration.")
-            return
-            
-        logger.info(f"Searching for videos in GCS path: {raw_data_prefix}")
-        raw_blobs = tenant_storage.list_blobs(prefix=raw_data_prefix)
+        # First try the standard prefix pattern
+        raw_blobs = tenant_storage.list_blobs(prefix="raw/")
         
+        # If no blobs found, try alternative patterns
         if not raw_blobs:
-            logger.warning(f"No blobs found with raw data prefix: {raw_data_prefix}")
-            return
+            logger.info("No blobs found with 'raw/' prefix, trying alternative patterns...")
+            for prefix in ["/raw/", "raw", "/raw"]:
+                try:
+                    raw_blobs = tenant_storage.list_blobs(prefix=prefix)
+                    if raw_blobs:
+                        logger.info(f"Found blobs with prefix '{prefix}'")
+                        break
+                except Exception as prefix_error:
+                    logger.warning(f"Error with prefix '{prefix}': {prefix_error}")
+        
+        # If still no blobs found, search all blobs for raw video files
+        if not raw_blobs:
+            logger.info("No blobs found with any raw prefix, searching all blobs...")
+            all_blobs = tenant_storage.list_blobs()
+            raw_blobs = [
+                blob for blob in all_blobs
+                if 'raw' in blob.lower() and blob.lower().endswith(('.mp4', '.mov', '.avi'))
+            ]
+            if raw_blobs:
+                logger.info(f"Found {len(raw_blobs)} video files containing 'raw' in path")
         
         # Extract video filenames and their full paths
         video_files = []
@@ -75,12 +87,19 @@ def create_unverified_tracks(tenant_id: str, crop_sampling_rate: int, verbose: b
                 filename = blob.split('/')[-1]
                 video_files.append(filename)
                 
-                # Use the full blob path for the pipeline
-                video_paths[filename] = blob
-                logger.info(f"Video: {filename} -> Path: {blob}")
+                # Strip tenant prefix if present to get relative path
+                # The blob path might be like "tenant1/user/raw/video.mp4"
+                # We need to extract just "raw/video.mp4" for the pipeline
+                if '/raw/' in blob:
+                    relative_path = 'raw/' + filename
+                else:
+                    relative_path = blob
+                
+                video_paths[filename] = relative_path
+                logger.info(f"Video: {filename} -> Path: {relative_path}")
         
         if not video_files:
-            logger.warning(f"No video files found in GCS path: {raw_data_prefix}")
+            logger.warning("No video files found in 'raw/' directory. Exiting.")
             return
         logger.info(f"Found {len(video_files)} videos to process: {video_files}")
     except Exception as e:

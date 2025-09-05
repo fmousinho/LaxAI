@@ -12,8 +12,8 @@ import psutil
 import gc
 import time
 
-# from utils.env_secrets import setup_environment_secrets
-# setup_environment_secrets()
+from utils.env_secrets import setup_environment_secrets
+setup_environment_secrets()
 
 from config.all_config import wandb_config
 
