@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 class DINOv3Backbone(nn.Module):
     """Minimal wrapper around a Hugging Face DINOv3 model for SiameseNet.
-    
+
     Loads the model via AutoModel, creates an embedding head lazily on first forward.
     """
 
@@ -23,10 +23,10 @@ class DINOv3Backbone(nn.Module):
 
     def __init__(self, embedding_dim: int, dropout: float = model_config.dropout_rate):
         super().__init__()
-        
+
         self.embedding_dim = embedding_dim
         self.dropout = dropout
-        
+
         # Check for HF token - allow testing without it
         token = os.environ.get('HUGGINGFACE_HUB_TOKEN')
         if not token:
@@ -53,7 +53,7 @@ class DINOv3Backbone(nn.Module):
             # Initialize head for simple backbone
             self._head = self._build_head(128)  # 128 features from the CNN
             return
-            
+
         login(token=token)
 
         # load model via transformers AutoModel
@@ -64,7 +64,7 @@ class DINOv3Backbone(nn.Module):
 
         # lazy head creation on first forward
         self._head = None
-        
+
         logger.info(f"Initialized DINOv3Backbone variant={self.PRETRAINED_MODEL_NAME}")
 
     def _build_head(self, feat_dim: int):
@@ -142,7 +142,7 @@ class DINOv3Backbone(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         feats = self._extract_features(x)
-        
+
         # lazy head creation on first forward (only for HF models)
         if self._head is None:
             feat_dim = int(feats.shape[-1])
@@ -184,19 +184,19 @@ class SiameseNet(nn.Module):
 
     def enable_backbone_fine_tuning(self, unfreeze_layers: int = 2) -> None:
         """Enable fine-tuning of the last N layers of the DINOv3 backbone.
-        
+
         Args:
             unfreeze_layers: Number of layers to unfreeze from the end (default: 2)
         """
         # Freeze all backbone parameters first
         for param in self.backbone.parameters():
             param.requires_grad = False
-            
+
         # Unfreeze the head (embedding layer)
         if hasattr(self.backbone, '_head') and self.backbone._head is not None:
             for param in self.backbone._head.parameters():
                 param.requires_grad = True
-        
+
         # Try to unfreeze the last N layers of the backbone
         try:
             # For ConvNeXt models, unfreeze the last few stages
@@ -207,7 +207,7 @@ class SiameseNet(nn.Module):
                     for param in stages[i].parameters():
                         param.requires_grad = True
                 logger.info(f"Unfroze last {min(unfreeze_layers, num_stages)} stages of DINOv3 backbone")
-            
+
             # Alternative: unfreeze by layer name patterns
             elif hasattr(self.backbone.backbone, 'named_parameters'):
                 unfrozen_count = 0
@@ -217,7 +217,7 @@ class SiameseNet(nn.Module):
                         param.requires_grad = True
                         unfrozen_count += 1
                 logger.info(f"Unfroze {unfrozen_count} parameters in DINOv3 backbone")
-                
+
         except Exception as e:
             logger.warning(f"Could not selectively unfreeze backbone layers: {e}")
             # Fallback: unfreeze entire backbone
@@ -260,7 +260,7 @@ class SiameseNet(nn.Module):
             with torch.no_grad():
                 _ = self.backbone(x)
 
-        attn = self.backbone.get_attention_maps() if hasattr(self.backbone, 'get_attention_maps') else {}
+        attn = self.backbone.get_attention_maps() if hasattr(self.backbone, 'get_attention_maps') else {} #type: ignore[call-arg]
         if not attn:
             logger.warning("No attention maps available from DINOv3 backbone (model may not expose internals).")
         return attn

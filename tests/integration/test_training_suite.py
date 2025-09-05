@@ -6,7 +6,8 @@ import inspect
 import subprocess
 import tempfile
 import signal
-from types import SimpleNamespace
+from typing import Optional
+from pathlib import Path
 import importlib
 
 import pytest
@@ -29,7 +30,8 @@ except Exception:
 
 class DummyRequest:
     """Minimal request object with attribute access and model_dump()."""
-    def __init__(self, tenant_id="tenant1", n_datasets_to_use=None):
+    def __init__(self, tenant_id: str = "tenant1", n_datasets_to_use: Optional[int] = None):
+        """Initialize DummyRequest with default test values."""
         self.tenant_id = tenant_id
         self.verbose = True
         self.custom_name = "run1"
@@ -40,6 +42,7 @@ class DummyRequest:
         self.model_params = None
 
     def model_dump(self):
+        """Return dictionary representation of the request object."""
         return {
             "tenant_id": self.tenant_id,
             "verbose": self.verbose,
@@ -52,7 +55,8 @@ class DummyRequest:
         }
 
 
-def make_request_obj(tenant_id="tenant1", n_datasets_to_use=None):
+def make_request_obj(tenant_id: str = "tenant1", n_datasets_to_use: Optional[int] = None):
+    """Create a DummyRequest object with the specified parameters."""
     return DummyRequest(tenant_id=tenant_id, n_datasets_to_use=n_datasets_to_use)
 
 
@@ -61,6 +65,7 @@ def make_request_obj(tenant_id="tenant1", n_datasets_to_use=None):
 # ---------------------
 
 def test_cancel_via_service_cli():
+    """Test cancelling a training job via the service CLI interface."""
     # Import the training service module the router uses so the in-memory
     # job store is shared.
     training_service = importlib.import_module('services.training_service')
@@ -85,6 +90,7 @@ def test_cancel_via_service_cli():
 
 
 def test_cancel_via_web_api_endpoint():
+    """Test cancelling a training job via the web API endpoint."""
     training_service = importlib.import_module('services.training_service')
     from src.api.v1.endpoints import train as train_router_module
 
@@ -106,7 +112,7 @@ def test_cancel_via_web_api_endpoint():
     assert job_after["status"] in ("cancelled", "cancelling")
 
 
-def test_siamesenet_dino_can_download_and_initialize(tmp_path):
+def test_siamesenet_dino_can_download_and_initialize(tmp_path: Path):
     """Integration test: ensure SiameseNet downloads DINOv3 from Hugging Face and initializes."""
     # Ensure environment secrets are set for the test run
     setup_environment_secrets()
@@ -236,12 +242,14 @@ def test_train_all_with_dino_memory_stable():
 
 
 def test_train_signature_has_n_datasets_to_use():
+    """Test that the train function signature includes n_datasets_to_use parameter."""
     from src.scripts.train_all import train
     sig = inspect.signature(train)
     assert "n_datasets_to_use" in sig.parameters
 
 
 def test_convert_request_to_kwargs_includes_top_level_n_datasets():
+    """Test that request conversion includes top-level n_datasets parameter."""
     from src.services.training_service import _convert_request_to_kwargs
 
     req = SimpleNamespace(

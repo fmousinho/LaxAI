@@ -761,7 +761,7 @@ class WandbLogger:
         
         # Load the checkpoint
         checkpoint_path = os.path.join(artifact_dir, checkpoint_files[0])
-        checkpoint_data = torch.load(checkpoint_path, map_location='cpu')
+        checkpoint_data = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
         
         logger.info(f"✅ Loaded checkpoint: {artifact_name}:{version} (epoch {checkpoint_data.get('epoch', 'unknown')})")
         return checkpoint_data
@@ -885,7 +885,7 @@ class WandbLogger:
         model = model_class(**merged_kwargs)
 
         # Load model weights
-        raw = torch.load(model_path, map_location=device)
+        raw = torch.load(model_path, map_location=device, weights_only=False)
         if isinstance(raw, dict) and 'model_state_dict' in raw:
             state_dict = raw['model_state_dict']
         else:
