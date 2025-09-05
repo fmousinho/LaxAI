@@ -781,7 +781,6 @@ class Training:
                     try:
                         # Monitor memory before checkpoint save
                         import psutil
-                        import gc
                         process = psutil.Process()
                         memory_before_checkpoint = process.memory_info().rss / 1024 / 1024  # MB
                         logger.debug(f"Memory before checkpoint save: {memory_before_checkpoint:.1f}MB")
@@ -832,7 +831,6 @@ class Training:
                         del reid_metrics
                     
                     # Force garbage collection at end of each epoch
-                    import gc
                     gc.collect()
                     
                     # Log memory after cleanup
@@ -967,7 +965,6 @@ class Training:
         # Use the centralized comprehensive evaluator to compute and persist
         # full evaluation, then return the retrieval metrics used by training.
         from train.evaluator import ModelEvaluator
-        import gc
 
         # dataloader may be a DataLoader; evaluator expects a Dataset instance
         dataset = getattr(dataloader, 'dataset', dataloader)
@@ -1357,7 +1354,6 @@ class Training:
             context: Context string for logging
         """
         try:
-            import gc
             import psutil
             
             # Log memory before cleanup

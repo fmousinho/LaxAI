@@ -198,6 +198,10 @@ class WandbLogger:
         """Get the checkpoint artifact name (for backwards compatibility)."""
         return self._get_artifact_name("checkpoint")
 
+    def get_checkpoint_name(self) -> str:
+        """Get the checkpoint artifact name."""
+        return self._get_checkpoint_name()
+
     
     
     @monitor_memory

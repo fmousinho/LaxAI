@@ -45,6 +45,7 @@ import random
 from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import cv2
 import supervision as sv
 from PIL import Image
 from supervision import Detections
@@ -55,10 +56,12 @@ from common.detection import DetectionModel
 from common.pipeline_step import StepStatus
 from common.pipeline import Pipeline, PipelineStatus
 from config.all_config import DetectionConfig, detection_config, model_config, training_config
-from config import logging_config
 from common.background_mask import BackgroundMaskDetector, create_frame_generator_from_images
 from train.augmentation import augment_images
-from utils.id_generator import create_video_id, create_frame_id, create_dataset_id, create_run_id, create_crop_id, create_aug_crop_id
+from utils.id_generator import (
+    create_video_id, create_frame_id, create_dataset_id, create_run_id, 
+    create_crop_id, create_aug_crop_id
+)
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +167,7 @@ class DataPrepPipeline(Pipeline):
                  tenant_id: str, 
                  verbose: bool = True, 
                  save_intermediate: bool = True, 
-                 enable_grass_mask: bool = model_config.enable_grass_mask, 
+                 enable_grass_mask: Optional[bool] = None, 
                  delete_process_folder: bool = True, 
                  **kwargs):
         """
@@ -194,7 +197,7 @@ class DataPrepPipeline(Pipeline):
         self.video_capture = None
         self.train_ratio = training_config.train_ratio
         self.delete_process_folder = delete_process_folder
-        self.dataloader_workers = training_config.dataloader_workers
+        self.dataloader_workers = training_config.num_workers
         
         # Import transform_config to get the background removal setting
         from config.all_config import transform_config
@@ -227,7 +230,10 @@ class DataPrepPipeline(Pipeline):
             self.detection_model = DetectionModel()
             logger.info("Detection model loaded successfully")
         except RuntimeError as e:
-            logger.critical(f"CRITICAL ERROR: Detection model is required for training pipeline but failed to load: {e}")
+            logger.critical(
+                f"CRITICAL ERROR: Detection model is required for training pipeline "
+                f"but failed to load: {e}"
+            )
             raise RuntimeError(f"Training pipeline cannot continue without detection model: {e}")
         
         # Define base pipeline steps (always included)
@@ -332,7 +338,10 @@ class DataPrepPipeline(Pipeline):
         if not tasks:
             return [], 0
 
-        logger.info(f"Starting parallel {operation_func.__name__} of {len(tasks)} items{' for ' + context_info if context_info else ''}")
+        logger.info(
+            f"Starting parallel {operation_func.__name__} of {len(tasks)} items"
+            f"{' for ' + context_info if context_info else ''}"
+        )
         failed_operations = []
         
         with ThreadPoolExecutor(max_workers=self.dataloader_workers) as executor:
@@ -341,7 +350,8 @@ class DataPrepPipeline(Pipeline):
             # For move: operation_func(*task) - source, destination
             # For delete: operation_func(task) - blob_name (string)
             future_to_task = {
-                executor.submit(operation_func, *task) if isinstance(task, tuple) else executor.submit(operation_func, task): task
+                executor.submit(operation_func, *task) if isinstance(task, tuple) 
+                else executor.submit(operation_func, task): task
                 for task in tasks
             }
             
@@ -361,9 +371,15 @@ class DataPrepPipeline(Pipeline):
         successful_count = len(tasks) - len(failed_operations)
         
         if failed_operations:
-            logger.warning(f"Failed to {operation_func.__name__} {len(failed_operations)} out of {len(tasks)} items{' for ' + context_info if context_info else ''}")
+            logger.warning(
+                f"Failed to {operation_func.__name__} {len(failed_operations)} out of "
+                f"{len(tasks)} items{' for ' + context_info if context_info else ''}"
+            )
 
-        logger.info(f"Completed {successful_count} {operation_func.__name__} operations{' for ' + context_info if context_info else ''}")
+        logger.info(
+            f"Completed {successful_count} {operation_func.__name__} operations"
+            f"{' for ' + context_info if context_info else ''}"
+        )
 
         return failed_operations, successful_count
 
@@ -531,7 +547,7 @@ class DataPrepPipeline(Pipeline):
             return context
 
         except Exception as e:
-            logger.error(f"Failed to import video {video_path}: {str(e)}")
+            logger.error(f"Failed to import video {raw_video_path}: {str(e)}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
     
     
@@ -614,7 +630,11 @@ class DataPrepPipeline(Pipeline):
 
             if detections_count == 0:
                 logger.warning(f"No detections found for video {video_guid} - skipping crop extraction")
-                return {"status": StepStatus.ERROR.value, "error": "No detections found in video frames"}
+                context.update({
+                    "status": StepStatus.COMPLETED.value,
+                    "all_detections": all_detections
+                })
+                return context
 
             context.update({
                 "status": StepStatus.COMPLETED.value,
@@ -705,7 +725,10 @@ class DataPrepPipeline(Pipeline):
             )
             
             if failed_uploads:
-                logger.warning(f"Failed to upload {len(failed_uploads)} out of {len(upload_tasks)} crops for {video_guid}")
+                logger.warning(
+                    f"Failed to upload {len(failed_uploads)} out of {len(upload_tasks)} "
+                    f"crops for {video_guid}"
+                )
             
             logger.info(f"Successfully uploaded {crops_uploaded} crops across {len(frames_data)} frames")
             
@@ -996,12 +1019,13 @@ class DataPrepPipeline(Pipeline):
         return (width >= MIN_VIDEO_RESOLUTION[0] and height >= MIN_VIDEO_RESOLUTION[1])
 
 
-    def _extract_video_metadata(self, cap) -> Dict[str, Any]:
+    def _extract_video_metadata(self, cap, video_path: str = "") -> Dict[str, Any]:
         """
         Extract metadata from video file.
         
         Args:
             cap: OpenCV VideoCapture object
+            video_path: Path to the video file for error messages
             
         Returns:
             Dictionary with video metadata
@@ -1069,7 +1093,7 @@ class DataPrepPipeline(Pipeline):
                 logger.error(f"Could not open video for frame extraction: {video_blob_name}")
                 return {"status": StepStatus.ERROR.value, "error": f"Could not open video: {video_blob_name}"}
 
-            video_metadata = self._extract_video_metadata(cap)
+            video_metadata = self._extract_video_metadata(cap, video_blob_name)
 
             if not self._validate_video_resolution(video_metadata["width"], video_metadata["height"]):
                 logger.error(f"Video resolution {video_metadata['width']}x{video_metadata['height']} is below minimum requirement")
