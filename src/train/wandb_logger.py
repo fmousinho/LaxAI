@@ -1,6 +1,7 @@
 import os
 import logging
 import tempfile
+import logging
 from datetime import datetime
 from functools import wraps
 from typing import Dict, Any, Optional, List, Callable, Tuple
@@ -11,13 +12,8 @@ import psutil
 import gc
 import time
 
-from utils.env_secrets import setup_environment_secrets
-try:
-    setup_environment_secrets()
-    logger.debug("Environment secrets loaded successfully")
-except Exception as e:
-    logger.error(f"Failed to load environment secrets: {e}")
-    logger.warning("Continuing without environment secrets - WandB may not work properly")
+# from utils.env_secrets import setup_environment_secrets
+# setup_environment_secrets()
 
 from config.all_config import wandb_config
 
@@ -167,28 +163,17 @@ class WandbLogger:
         api_key = os.environ.get("WANDB_API_KEY")
         if not api_key:
             logger.error("WANDB_API_KEY environment variable not found")
-            logger.debug(f"Available environment variables: {[k for k in os.environ.keys() if 'wandb' in k.lower() or 'api' in k.lower()]}")
             return None
-        logger.debug("WANDB_API_KEY found in environment")
         return api_key
     
     def _login_and_get_api(self) -> Optional[object]:
         """Login to wandb and return API object."""
         api_key = self._get_api_key()
         if not api_key:
-            logger.error("Cannot login to WandB: API key not available")
             return None
         
-        try:
-            logger.debug("Attempting to login to WandB...")
-            wandb.login(key=api_key)
-            logger.debug("WandB login successful, creating API object...")
-            api = wandb.Api()
-            logger.debug("WandB API object created successfully")
-            return api
-        except Exception as e:
-            logger.error(f"Failed to login to WandB: {e}")
-            return None
+        wandb.login(key=api_key)
+        return wandb.Api()
     
     def _construct_artifact_path(self, artifact_name: str, version: str = "latest") -> str:
         """Construct standardized artifact path."""

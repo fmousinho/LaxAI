@@ -878,10 +878,6 @@ class Training:
                         # Log memory trend every epoch
                         logger.info(f"Memory trend: Baseline={self.epoch_memory_baseline:.1f}MB, Current={current_memory:.1f}MB, Increase={memory_increase:.1f}MB ({memory_increase_per_epoch:.1f}MB/epoch)")
                         
-                        # Alert if memory increase per epoch exceeds threshold
-                        if memory_increase_per_epoch > self.memory_leak_threshold_mb:
-                            logger.warning(f"⚠️  POTENTIAL MEMORY LEAK DETECTED: {memory_increase_per_epoch:.1f}MB increase per epoch (threshold: {self.memory_leak_threshold_mb}MB)")
-                            logger.warning("Consider: 1) Reducing validation frequency, 2) Disabling comprehensive evaluation, 3) Reducing batch size")
                     else:
                         # Baseline not yet established
                         logger.debug(f"Memory monitoring: {current_memory:.1f}MB (baseline not yet established)")

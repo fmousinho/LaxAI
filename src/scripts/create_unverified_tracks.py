@@ -12,12 +12,16 @@ import os
 import logging
 import argparse
 
+from config import logging_config
+
+from utils.env_secrets import setup_environment_secrets
+setup_environment_secrets()
 
 # IMPORTANT: Load environment variables and credentials FIRST
 # This must be imported before any modules that use GCS or WandB
 
 # Imports using relative imports since we're now in the src package
-from common.google_storage import get_storage
+from common.google_storage import get_storage, GCSPaths
 from train.unverified_track_generator_pipeline import DataPrepPipeline
 from config.all_config import detection_config
 
@@ -32,13 +36,13 @@ logger = logging.getLogger(__name__)
 
 
 
-def load_transform(tenant_id: str, frames_per_video: int, verbose: bool, save_intermediate: bool):
+def create_unverified_tracks(tenant_id: str, crop_sampling_rate: int, verbose: bool, save_intermediate: bool):
     """
     Main function to orchestrate the data prep and training workflows using the unverified tracks pipeline.
 
     Args:
         tenant_id: The tenant ID for GCS operations.
-        frames_per_video: Number of frames to extract per video in the data prep pipeline.
+        crop_sampling_rate: Save a crop every N frames.
         verbose: Enable verbose logging for pipelines.
         save_intermediate: Save intermediate pipeline results to GCS.
     """
@@ -47,32 +51,20 @@ def load_transform(tenant_id: str, frames_per_video: int, verbose: bool, save_in
     # 1. Find all videos in the raw directory
     try:
         tenant_storage = get_storage(tenant_id)
+        path_manager = GCSPaths()
         
-        # First try the standard prefix pattern
-        raw_blobs = tenant_storage.list_blobs(prefix="raw/")
+        # Use the proper GCS path pattern for raw data
+        raw_data_prefix = path_manager.get_path("raw_data")
+        if raw_data_prefix is None:
+            logger.error("raw_data path not found in GCSPaths configuration.")
+            return
+            
+        logger.info(f"Searching for videos in GCS path: {raw_data_prefix}")
+        raw_blobs = tenant_storage.list_blobs(prefix=raw_data_prefix)
         
-        # If no blobs found, try alternative patterns
         if not raw_blobs:
-            logger.info("No blobs found with 'raw/' prefix, trying alternative patterns...")
-            for prefix in ["/raw/", "raw", "/raw"]:
-                try:
-                    raw_blobs = tenant_storage.list_blobs(prefix=prefix)
-                    if raw_blobs:
-                        logger.info(f"Found blobs with prefix '{prefix}'")
-                        break
-                except Exception as prefix_error:
-                    logger.warning(f"Error with prefix '{prefix}': {prefix_error}")
-        
-        # If still no blobs found, search all blobs for raw video files
-        if not raw_blobs:
-            logger.info("No blobs found with any raw prefix, searching all blobs...")
-            all_blobs = tenant_storage.list_blobs()
-            raw_blobs = [
-                blob for blob in all_blobs
-                if 'raw' in blob.lower() and blob.lower().endswith(('.mp4', '.mov', '.avi'))
-            ]
-            if raw_blobs:
-                logger.info(f"Found {len(raw_blobs)} video files containing 'raw' in path")
+            logger.warning(f"No blobs found with raw data prefix: {raw_data_prefix}")
+            return
         
         # Extract video filenames and their full paths
         video_files = []
@@ -83,19 +75,12 @@ def load_transform(tenant_id: str, frames_per_video: int, verbose: bool, save_in
                 filename = blob.split('/')[-1]
                 video_files.append(filename)
                 
-                # Strip tenant prefix if present to get relative path
-                # The blob path might be like "tenant1/user/raw/video.mp4"
-                # We need to extract just "raw/video.mp4" for the pipeline
-                if '/raw/' in blob:
-                    relative_path = 'raw/' + filename
-                else:
-                    relative_path = blob
-                
-                video_paths[filename] = relative_path
-                logger.info(f"Video: {filename} -> Path: {relative_path}")
+                # Use the full blob path for the pipeline
+                video_paths[filename] = blob
+                logger.info(f"Video: {filename} -> Path: {blob}")
         
         if not video_files:
-            logger.warning("No video files found in 'raw/' directory. Exiting.")
+            logger.warning(f"No video files found in GCS path: {raw_data_prefix}")
             return
         logger.info(f"Found {len(video_files)} videos to process: {video_files}")
     except Exception as e:
@@ -109,7 +94,7 @@ def load_transform(tenant_id: str, frames_per_video: int, verbose: bool, save_in
         # Create a new unverified tracks pipeline instance for each video to avoid state conflicts
         # Update the config with the specified frames per video
         original_frames_per_video = detection_config.frames_per_video
-        detection_config.frames_per_video = frames_per_video
+        detection_config.frames_per_video = crop_sampling_rate
         
         unverified_tracks_pipeline = DataPrepPipeline(
             config=detection_config,
@@ -138,14 +123,14 @@ def load_transform(tenant_id: str, frames_per_video: int, verbose: bool, save_in
 def main():
     parser = argparse.ArgumentParser(description="Run the full LaxAI Data Prep and Training Workflow using the unverified tracks pipeline.")
     parser.add_argument("--tenant_id", type=str, default="tenant1", help="The tenant ID for GCS.")
-    parser.add_argument("--frames", type=int, default=20, help="Number of frames to extract per video.")
+    parser.add_argument("--crop_sampling_rate", type=int, default=20, help="Save a crop every N frames.")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose pipeline logging.")
     parser.add_argument("--save_intermediate", action="store_true", help="Save intermediate pipeline step results to GCS.")
     args = parser.parse_args()
 
-    load_transform(
+    create_unverified_tracks(
         tenant_id=args.tenant_id,
-        frames_per_video=args.frames,
+        crop_sampling_rate=args.crop_sampling_rate,
         verbose=args.verbose,
         save_intermediate=args.save_intermediate
     )

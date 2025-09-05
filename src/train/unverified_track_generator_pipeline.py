@@ -199,7 +199,7 @@ class DataPrepPipeline(Pipeline):
         self.video_capture = None
         self.train_ratio = training_config.train_ratio
         self.delete_process_folder = delete_process_folder
-        self.dataloader_workers = training_config.dataloader_workers
+        self.dataloader_workers = training_config.num_workers
         
         # Import transform_config to get the background removal setting
         from config.all_config import transform_config
