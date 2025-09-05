@@ -727,10 +727,10 @@ class WandbLogger:
         try:
  
             self.run.log_artifact(
-                artifact_or_path = checktpoin_path,
+                artifact_or_path = checkpoint_path,
                 name = checkpoint_name,
                 type="model_checkpoint",
-                alisases = ['latest']
+                aliases = ['latest']
             )  # Register artifact with the run
             
             logger.info(f"✅ Uploaded checkpoint for epoch {epoch}")

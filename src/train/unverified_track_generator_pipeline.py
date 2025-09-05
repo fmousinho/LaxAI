@@ -652,8 +652,96 @@ class TrackGeneratorPipeline(Pipeline):
             logger.error(f"Critical error in player detection for video {video_guid}: {e}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
 
+    def _get_crops(self, frame, detections, video_guid: str):
+        """
+        Extract high-quality crops from frame detections and save to unverified tracks GCS path.
+        
+        This function processes detections from a frame, applies quality filters to discard
+        low-quality crops, and saves the remaining crops to the appropriate GCS path structure.
+        
+        Args:
+            frame: The frame image as numpy array
+            detections: Supervision Detections object for the frame
+            video_guid: Unique identifier for the video
+            
+        Returns:
+            List[Tuple[str, np.ndarray]]: List of (blob_path, crop_image) tuples for upload
+        """
+        upload_tasks = []
+        
+        if not isinstance(detections, sv.Detections):
+            logger.error("Invalid detections format - expected sv.Detections object")
+            return upload_tasks
 
-    def _map_players(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        # Map detections to players using the new module
+        detections = map_detections_to_players(detections)
+
+        track_detections = {}
+        for i, detection in enumerate(detections):
+            track_id = detection[4] if len(detection) > 4 else 0  # tracker_id is at index 4
+            if track_id not in track_detections:
+                track_detections[track_id] = []
+            track_detections[track_id].append((i, detection))
+        
+        # Process each track's detections
+        for track_id, track_det_list in track_detections.items():
+            for det_idx, detection in track_det_list:
+                try:
+                    # Extract crop from frame
+                    crop_np = crop_image(frame, detection[0].astype(int))
+                    
+                    # Apply quality filters
+                    if not self._is_crop_quality_sufficient(crop_np):
+                        logger.debug(f"Discarding low-quality crop for detection {det_idx} in track {track_id}")
+                        continue
+                    
+                    # Get frame_id from detection data if available, otherwise use index
+                    if detections.data and 'frame_index' in detections.data and isinstance(detections.data['frame_index'], (list, np.ndarray)):
+                        frame_id = detections.data['frame_index'][det_idx] if det_idx < len(detections.data['frame_index']) else str(det_idx)
+                    else:
+                        frame_id = str(det_idx)
+                    
+                    # Generate GCS path for unverified tracks using the path manager
+                    folder_path = self.path_manager.get_path("unverified_tracks", video_id=video_guid, track_id=track_id)
+                    blob_path = f"{folder_path}crop_{det_idx}_{frame_id}.jpg"
+                    
+                    upload_tasks.append((blob_path, crop_np))
+                    
+                except Exception as e:
+                    logger.error(f"Error extracting crop for detection {det_idx} in track {track_id}: {e}")
+                    continue
+        
+        return upload_tasks
+
+    def _is_crop_quality_sufficient(self, crop: np.ndarray) -> bool:
+        """
+        Check if a crop meets quality thresholds for reliable embeddings.
+        
+        Args:
+            crop: The crop image as numpy array
+            
+        Returns:
+            bool: True if crop quality is sufficient, False otherwise
+        """
+        # Check minimum size (48x96 pixels as suggested)
+        height, width = crop.shape[:2]
+        if width < 48 or height < 96:
+            logger.debug(f"Crop too small: {width}x{height}")
+            return False
+        
+        # Check contrast using standard deviation of grayscale image
+        gray_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        contrast = np.std(gray_crop)
+        
+        # Low contrast threshold (adjustable based on testing)
+        min_contrast = 20.0
+        if contrast < min_contrast:
+            logger.debug(f"Crop has low contrast: {contrast:.2f} < {min_contrast}")
+            return False
+        
+        return True
+        
+    def _map_players_to_tracks(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Map player IDs to their corresponding track IDs in the context.
         
@@ -663,20 +751,6 @@ class TrackGeneratorPipeline(Pipeline):
         # This method is kept for backwards compatibility but is no longer used
         # Player mapping is now handled in _extract_crops_from_frame using map_detections_to_players
         return {"status": StepStatus.COMPLETED.value}
-        """
-        Generate the folder path for crops based on track_id and frame_id.
-        
-        Args:
-            track_id: The track identifier for the detection
-            frame_id: The frame identifier
-            video_guid: The video identifier
-            
-        Returns:
-            str: The folder path for storing crops
-        """
-        # Create a unique folder name combining track_id and frame_id
-        folder_name = f"track_{track_id}_frame_{frame_id}"
-        return f"{video_guid}/crops/{folder_name}"
 
 
     def _extract_crops_from_frame(self, frame: np.ndarray, video_folder: str, detections: sv.Detections, video_guid: str) -> List[Tuple[str, np.ndarray]]:
@@ -696,7 +770,6 @@ class TrackGeneratorPipeline(Pipeline):
             List[Tuple[str, np.ndarray]]: List of (blob_path, crop_image) tuples for upload
         """
         upload_tasks = []
-        players_in_frame = set()
         
         if not isinstance(detections, sv.Detections):
             logger.error("Invalid detections format - expected sv.Detections object")
@@ -711,10 +784,6 @@ class TrackGeneratorPipeline(Pipeline):
         # Map detections to players using the new module
         detections = map_detections_to_players(detections)
 
-        # Get player IDs for this frame
-        player_ids = detections.data.get('player_id', [])
-        players_in_frame = set(player_ids)
-
         track_detections = {}
         for i, detection in enumerate(detections):
             track_id = detection[4] if len(detection) > 4 else 0  # tracker_id is at index 4
@@ -722,33 +791,8 @@ class TrackGeneratorPipeline(Pipeline):
                 track_detections[track_id] = []
             track_detections[track_id].append((i, detection))
         
-        # Process each track's detections
-        for track_id, track_det_list in track_detections.items():
-            for det_idx, detection in track_det_list:
-                try:
-                    # Extract crop from frame
-                    crop_np = crop_image(frame, detection[0].astype(int))
-                    
-                    # Get frame_id from detection data if available, otherwise use index
-                    if detections.data and 'frame_index' in detections.data and isinstance(detections.data['frame_index'], (list, np.ndarray)):
-                        frame_id = detections.data['frame_index'][det_idx] if det_idx < len(detections.data['frame_index']) else str(det_idx)
-                    else:
-                        frame_id = str(det_idx)
-                    
-                    # Generate folder path for this track
-                    crop_folder = self._get_crop_folder_path(track_id, str(frame_id), video_guid)
-                    
-                    # Create unique filename for this crop
-                    file_name = f"crop_{det_idx}.jpg"
-                    blob_path = f"{crop_folder}/{file_name}"
-                    
-                    upload_tasks.append((blob_path, crop_np))
-                    
-                except Exception as e:
-                    logger.error(f"Error extracting crop for detection {det_idx} in track {track_id}: {e}")
-                    continue
-        
-        return upload_tasks
+        # Use the new _get_crops function with quality filtering
+        return self._get_crops(frame, detections, video_guid)
     
 
     def _extract_track_crops(self, context: Dict[str, Any]) -> Dict[str, Any]:
