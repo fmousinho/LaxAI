@@ -235,13 +235,13 @@ class DataPrepPipeline(Pipeline):
                 "function": self._import_video
             }),
             ("generate_detections", {
-                "description": "Run player detection model on whole video",
+                "description": "Run player detection and tracking model on whole video",
                 "function": self._get_detections_and_tracks
-            }),
-            ("extract_track_crops", {
-                "description": "Extract crops for each track",
-                "function": self._extract_track_crops
             })
+            # ("extract_track_crops", {
+            #     "description": "Extract crops for each track",
+            #     "function": self._extract_track_crops
+            # })
         ]
 
         step_definitions = dict(step_definitions)
@@ -391,11 +391,11 @@ class DataPrepPipeline(Pipeline):
         logger.info(f"Starting data preparation pipeline for video: {video_path}")
 
         # Create initial context with the video path
-        initial_context = {"raw_video_path": video_path}
+        context = {"raw_video_path": video_path}
         
         # Call the base class run method with the initial context
         # The base class now handles checkpoint functionality automatically
-        results = super().run(initial_context, resume_from_checkpoint=resume_from_checkpoint)
+        results = super().run(context, resume_from_checkpoint=resume_from_checkpoint)
         
         # Add training-specific result formatting
         context = results.get("context", {})

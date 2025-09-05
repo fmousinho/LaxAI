@@ -15,6 +15,7 @@ import argparse
 from typing import Optional
 
 # Imports using relative imports since we're now in the src package
+from utils.env_secrets import load_secrets
 from config.logging_config import print_banner
 from config.parameter_registry import parameter_registry
 from common.google_storage import get_storage, GCSPaths
