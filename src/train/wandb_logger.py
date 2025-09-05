@@ -181,12 +181,36 @@ class WandbLogger:
 
     def _is_test_run(self) -> bool:
         """Check if current run is a test run."""
-        if not self.run or not hasattr(self.run, 'name'):
-            return False
+        # Method 1: Check if we're running under pytest
+        import sys
+        if 'pytest' in sys.modules or 'PYTEST_CURRENT_TEST' in os.environ:
+            return True
+            
+        # Method 2: Check for test-related environment variables
+        test_env_vars = ['TESTING', 'TEST_MODE', 'CI', 'GITHUB_ACTIONS']
+        if any(os.environ.get(var, '').lower() in ['1', 'true', 'yes'] for var in test_env_vars):
+            return True
+            
+        # Method 3: Check run name for test indicators (existing logic)
+        if self.run and hasattr(self.run, 'name') and self.run.name:
+            run_name = self.run.name.lower()
+            test_indicators = ['test', 'wandb', 'e2e', 'integration', 'unit']
+            if any(indicator in run_name for indicator in test_indicators):
+                return True
         
-        run_name = self.run.name.lower()
-        test_indicators = ['test', 'wandb']
-        return any(indicator in run_name for indicator in test_indicators)
+        # Method 4: Check if running in test directories
+        try:
+            import inspect
+            frame = inspect.currentframe()
+            while frame:
+                filename = frame.f_code.co_filename
+                if '/tests/' in filename or filename.endswith('test.py') or filename.startswith('test_'):
+                    return True
+                frame = frame.f_back
+        except Exception:
+            pass
+        
+        return False
     
     def _get_artifact_name(self, base_name: str) -> str:
         """Get artifact name with test prefix if this is a test run."""
@@ -590,7 +614,15 @@ class WandbLogger:
                        model_config: Optional[Dict[str, Any]] = None,
                        **kwargs) -> Optional[str]:
         """
-        Save model checkpoint to wandb asynchronously.
+        Save training checkpoint to wandb artifacts for resumption purposes.
+        
+        Checkpoints are saved at the end of each epoch and contain:
+        - Model state_dict (for model weights)  
+        - Optimizer state_dict (for training state)
+        - Epoch number, loss, and metadata
+        
+        This is separate from save_model_to_registry() which saves the final 
+        production model only after successful training completion.
         
         Args:
             epoch: Current epoch number
@@ -920,7 +952,16 @@ class WandbLogger:
                             metadata: Optional[Dict[str, Any]] = None, 
                             tags: Optional[List[str]] = None) -> None:
         """
-        Save model to wandb model registry with automatic version management.
+        Save final production model to wandb model registry.
+        
+        This should ONLY be called after successful completion of training.
+        It saves the final trained model for production use, not for training resumption.
+        
+        Key differences from save_checkpoint():
+        - Saves only model state_dict (no optimizer state)
+        - Intended for production deployment 
+        - Called once at end of successful training
+        - Does NOT clean up checkpoints (they serve different purposes)
 
         Args:
             model: PyTorch model to save
@@ -931,7 +972,37 @@ class WandbLogger:
             tags: Optional list of tags to add to the artifact
         """
         # Use appropriate model name based on test status
+        is_test = self._is_test_run()
         model_name = self._get_artifact_name(collection_name)
+        
+        # Critical safety check: Always force test prefix if we detect ANY test environment
+        import sys
+        forced_test_prefix = False
+        
+        # Multiple redundant checks to prevent production model overwrites
+        test_indicators = [
+            'pytest' in sys.modules,
+            'PYTEST_CURRENT_TEST' in os.environ,
+            hasattr(sys, '_getframe') and any('/tests/' in f.f_code.co_filename 
+                                            for f in (sys._getframe(i) for i in range(10)) 
+                                            if f is not None),
+            collection_name and any(indicator in collection_name.lower() 
+                                  for indicator in ['test', 'dummy', 'mock', 'fake'])
+        ]
+        
+        if any(test_indicators) and not model_name.startswith('test-'):
+            model_name = f"test-{model_name}"
+            forced_test_prefix = True
+            logger.error(f"SAFETY OVERRIDE: Detected test environment, forcing test prefix! Model: '{collection_name}' -> '{model_name}'")
+        
+        # Log critical information about test detection
+        if is_test or forced_test_prefix:
+            logger.warning(f"TEST RUN DETECTED: Saving model '{collection_name}' as '{model_name}' (test-prefixed)")
+        else:
+            logger.info(f"Production model save: '{collection_name}' as '{model_name}'")
+            # Final safety check - if this looks like a test model name, warn
+            if any(indicator in collection_name.lower() for indicator in ['test', 'dummy', 'e2e', 'integration']):
+                logger.warning(f"Model name '{collection_name}' looks like a test but no test environment detected!")
         
         # Auto-detect model metadata
         auto_meta = self._extract_model_metadata(model)
@@ -970,7 +1041,7 @@ class WandbLogger:
 
             logger.info(f"✅ Model saved to registry: {model_name}")
 
-            # Schedule async cleanup of old versions
+            # Schedule async cleanup of old model versions only
             if self._executor:
                 cleanup_future = self._executor.submit(
                     self._cleanup_artifacts_by_type,
@@ -980,15 +1051,10 @@ class WandbLogger:
                 )
                 self._pending_futures.append(cleanup_future)
                 
-                # Also clean up checkpoints since model is saved
-                checkpoint_name = self._get_checkpoint_name()
-                checkpoint_cleanup_future = self._executor.submit(
-                    self._cleanup_artifacts_by_type,
-                    checkpoint_name,
-                    "model_checkpoint",
-                    0  # Remove all checkpoints when model is saved
-                )
-                self._pending_futures.append(checkpoint_cleanup_future)
+                # Note: We do NOT clean up checkpoints when a final model is saved.
+                # Checkpoints serve a different purpose (training resumption) and should
+                # be retained for debugging and recovery purposes. They are managed
+                # separately via checkpoint_retention_count during checkpoint saves.
 
         finally:
             # Clean up temp file
@@ -1113,6 +1179,32 @@ class WandbLogger:
                 logger.error(f"Attribute error during artifact cleanup for {collection_name}: {e}")
         except Exception as e:
             logger.error(f"Failed to cleanup {artifact_type} artifacts for {collection_name}: {e}")
+
+    @monitor_memory  
+    @requires_wandb_initialized
+    @safe_wandb_operation()
+    def cleanup_checkpoints(self, keep_latest: int = 2) -> None:
+        """
+        Explicitly clean up checkpoint artifacts, keeping only the latest N versions.
+        
+        This method allows explicit checkpoint cleanup separate from model saving.
+        Useful for maintenance or when checkpoint retention needs to be adjusted.
+        
+        Args:
+            keep_latest: Number of latest checkpoint versions to keep (default: 2)
+        """
+        if self._executor:
+            checkpoint_name = self._get_checkpoint_name()
+            cleanup_future = self._executor.submit(
+                self._cleanup_artifacts_by_type,
+                checkpoint_name,
+                "model_checkpoint",
+                keep_latest
+            )
+            self._pending_futures.append(cleanup_future)
+            logger.info(f"🧹 Scheduled cleanup of old checkpoints, keeping latest {keep_latest} versions")
+        else:
+            logger.warning("No executor available for checkpoint cleanup")
 
     @monitor_memory
     @requires_wandb_initialized
