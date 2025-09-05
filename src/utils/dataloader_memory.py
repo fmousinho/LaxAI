@@ -201,3 +201,49 @@ def create_memory_efficient_dataloader(
         memory_constrained=memory_constrained,
         **kwargs
     )
+
+
+def worker_init_fn(worker_id: int) -> None:
+    """
+    Initialize worker process with suppressed logging and custom startup message.
+    
+    This function suppresses all logging from DataLoader worker processes and replaces
+    them with clean "starting worker X" messages. It's designed to reduce log noise
+    when using multiple workers in PyTorch DataLoaders.
+    
+    Args:
+        worker_id: The worker ID assigned by PyTorch DataLoader
+    """
+    import logging
+    import os
+    import sys
+    from typing import Any
+    
+    # Suppress all logging from worker processes
+    logging.getLogger().setLevel(logging.WARNING)
+    
+    # Suppress stdout/stderr from libraries that might log
+    # Redirect to null device to completely silence worker output
+    sys.stdout = open(os.devnull, 'w')
+    sys.stderr = open(os.devnull, 'w')
+    
+    # Create a custom logger just for our startup message
+    worker_logger = logging.getLogger(f'worker_{worker_id}')
+    worker_logger.setLevel(logging.INFO)
+    
+    # Create handler that writes to the original stderr (bypassing our redirect)
+    class WorkerMessageHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            # Write directly to original stderr file descriptor
+            try:
+                os.write(2, f"Starting worker {worker_id}\n".encode())
+            except (OSError, AttributeError):
+                # Fallback if direct write fails
+                pass
+    
+    # Add our custom handler
+    worker_logger.addHandler(WorkerMessageHandler())
+    worker_logger.propagate = False  # Don't send to parent loggers
+    
+    # Log the startup message
+    worker_logger.info(f"Starting worker {worker_id}")

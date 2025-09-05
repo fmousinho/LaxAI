@@ -13,11 +13,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import utils.env_secrets as env_secrets
+from utils.env_secrets import setup_environment_secrets
 
 # Ensure environment secrets for integration tests that require them
 try:
-    env_secrets.setup_environment_secrets()
+    setup_environment_secrets()
 except Exception:
     # Let tests that require secrets handle failures explicitly
     pass
@@ -109,7 +109,7 @@ def test_cancel_via_web_api_endpoint():
 def test_siamesenet_dino_can_download_and_initialize(tmp_path):
     """Integration test: ensure SiameseNet downloads DINOv3 from Hugging Face and initializes."""
     # Ensure environment secrets are set for the test run
-    env_secrets.setup_environment_secrets()
+    setup_environment_secrets()
 
     assert 'HUGGINGFACE_HUB_TOKEN' in os.environ and os.environ.get('HUGGINGFACE_HUB_TOKEN'), \
         "HUGGINGFACE_HUB_TOKEN not found in environment after setup_environment_secrets()"
@@ -140,17 +140,17 @@ def test_train_all_resnet_with_two_datasets_memory_stable():
     import gc
 
     # Ensure secrets for longer e2e tests
-    env_secrets.setup_environment_secrets()
+    setup_environment_secrets()
 
     # Setup memory monitoring
     process = psutil.Process()
     gc.collect()
     initial_memory = process.memory_info().rss / 1024 / 1024  # MB
 
-    from scripts import train_all
+    from scripts.train_all import train
 
     try:
-        results = train_all.train(
+        results = train(
             tenant_id="tenant1",
             verbose=False,
             save_intermediate=False,
@@ -191,17 +191,17 @@ def test_train_all_with_dino_memory_stable():
     import psutil
     import gc
 
-    env_secrets.setup_environment_secrets()
+    setup_environment_secrets()
 
     # Setup memory monitoring
     process = psutil.Process()
     gc.collect()
     initial_memory = process.memory_info().rss / 1024 / 1024  # MB
 
-    from scripts import train_all
+    from scripts.train_all import train
 
     try:
-        results = train_all.train(
+        results = train(
             tenant_id="tenant1",
             verbose=False,
             save_intermediate=False,

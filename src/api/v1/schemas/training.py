@@ -75,7 +75,7 @@ class TrainingRequest(BaseModel):
     # renders them in the UI and request bodies are validated into model objects.
     training_params: Optional['TrainingConfig'] = None  #type: ignore[valid-type]
     model_params: Optional['ModelConfig'] = None. #type: ignore[valid-type]
-    eval_params: Optional['EvalConfig'] = None. #type: ignore[valid-type]
+    eval_params: Optional['EvalConfig'] = None #type: ignore[valid-type]
 
 class TrainingResponse(BaseModel):
     """Response schema for training endpoint"""

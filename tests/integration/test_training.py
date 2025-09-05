@@ -73,11 +73,11 @@ def test_training_runs_and_triggers_evaluation(monkeypatch):
     monkeypatch.setattr(evaluator_mod.ModelEvaluator, 'evaluate_comprehensive', fake_evaluate)
 
     # Prevent wandb logger from raising during tests when not initialized
-    import train.wandb_logger as tw
+    from src.train.wandb_logger import wandb_logger as tw
     # Stub common wandb interactions used during training so tests remain isolated
-    monkeypatch.setattr(tw.wandb_logger, 'log_metrics', lambda *a, **k: None)
-    monkeypatch.setattr(tw.wandb_logger, 'save_checkpoint', lambda *a, **k: None)
-    monkeypatch.setattr(tw.wandb_logger, 'save_model_to_registry', lambda *a, **k: None)
+    monkeypatch.setattr(tw, 'log_metrics', lambda *a, **k: None)
+    monkeypatch.setattr(tw, 'save_checkpoint', lambda *a, **k: None)
+    monkeypatch.setattr(tw, 'save_model_to_registry', lambda *a, **k: None)
 
     # Create training instance and set required hyperparameters directly
     t = Training(device=torch.device('cpu'))
@@ -92,7 +92,7 @@ def test_training_runs_and_triggers_evaluation(monkeypatch):
     t.scheduler_threshold = 0.01
     t.lr_scheduler_min_lr = 1e-6
     t.force_pretraining = True
-    t.train_workers = 0
+    t.num_workers = 0
     t.margin_decay_rate = 1.0
     t.margin_change_threshold = 1e-6
 

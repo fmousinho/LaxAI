@@ -11,6 +11,8 @@ from train.wandb_logger import wandb_logger
 from utils.gpu_memory import clear_gpu_memory, log_gpu_memory_stats, GPUMemoryContext
 from utils.cpu_memory import CPUMemoryMonitor, clear_cpu_memory, cpu_memory_context, log_comprehensive_memory_stats
 from utils.evaluation_memory import log_evaluation_memory_usage
+from utils.dataloader_memory import worker_init_fn
+
 from train.evaluator import (calculate_embedding_variance, calculate_intra_inter_distances, 
                            calculate_triplet_mining_efficiency, calculate_gradient_norm)
 
@@ -289,6 +291,10 @@ class Training:
             'prefetch_factor': prefetch_factor,  # Increased prefetch for speed
             'drop_last': True if type == 'train' else False  # Drop incomplete batches for consistent timing
         }
+        
+        # Add worker initialization function to suppress logs and show custom messages
+        if self.num_workers > 0:
+            dataloader_kwargs['worker_init_fn'] = worker_init_fn
         
         # Add batch size and dataset-specific options
         base_config = {
@@ -1390,4 +1396,4 @@ class Training:
         except Exception as e:
             logger.debug(f"Aggressive memory cleanup failed {context}: {e}")
 
-    
+

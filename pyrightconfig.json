@@ -11,7 +11,7 @@
     ".git"
   ],
   "typeCheckingMode": "basic", // Or "strict", "off", depending on your overall desire
-  "extraPaths": [], // Add any paths Pylance needs to resolve imports
+  "extraPaths": ["src", "."], // Add any paths Pylance needs to resolve imports
 
   "overrides": [
     {
