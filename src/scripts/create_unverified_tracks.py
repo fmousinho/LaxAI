@@ -21,8 +21,8 @@ setup_environment_secrets()
 # This must be imported before any modules that use GCS or WandB
 
 # Imports using relative imports since we're now in the src package
-from common.google_storage import get_storage
-from train.unverified_track_generator_pipeline import DataPrepPipeline
+from common.google_storage import get_storage, GCSPaths
+from train.unverified_track_generator_pipeline import TrackGeneratorPipeline
 from config.all_config import detection_config
 
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 
-def create_unverified_tracks(tenant_id: str, crop_sampling_rate: int, verbose: bool, save_intermediate: bool):
+def create_unverified_tracks(tenant_id: str, crop_sampling_rate: int, verbose: bool, save_intermediate: bool, resume_from_checkpoint: bool = True):
     """
     Main function to orchestrate the data prep and training workflows using the unverified tracks pipeline.
 
@@ -45,19 +45,30 @@ def create_unverified_tracks(tenant_id: str, crop_sampling_rate: int, verbose: b
         crop_sampling_rate: Save a crop every N frames.
         verbose: Enable verbose logging for pipelines.
         save_intermediate: Save intermediate pipeline results to GCS.
+        resume_from_checkpoint: Whether to resume from existing checkpoint data (skip completed steps).
     """
     logger.info(f"--- Starting End-to-End Workflow for Tenant: {tenant_id} ---")
+    
+    # Log resume configuration for user clarity
+    if resume_from_checkpoint:
+        logger.info("✓ Resume mode: ENABLED - Will skip completed pipeline steps")
+    else:
+        logger.info("⚠ Resume mode: DISABLED - Will start from scratch and overwrite existing data")
 
     # 1. Find all videos in the raw directory
     try:
         tenant_storage = get_storage(tenant_id)
+        path_manager = GCSPaths()
+        
+        # Get the raw data prefix for this tenant
+        raw_prefix = path_manager.get_path("raw_data")
         
         # First try the standard prefix pattern
-        raw_blobs = tenant_storage.list_blobs(prefix="raw/")
+        raw_blobs = tenant_storage.list_blobs(prefix=raw_prefix)
         
         # If no blobs found, try alternative patterns
         if not raw_blobs:
-            logger.info("No blobs found with 'raw/' prefix, trying alternative patterns...")
+            logger.info(f"No blobs found with '{raw_prefix}' prefix, trying alternative patterns...")
             for prefix in ["/raw/", "raw", "/raw"]:
                 try:
                     raw_blobs = tenant_storage.list_blobs(prefix=prefix)
@@ -67,16 +78,6 @@ def create_unverified_tracks(tenant_id: str, crop_sampling_rate: int, verbose: b
                 except Exception as prefix_error:
                     logger.warning(f"Error with prefix '{prefix}': {prefix_error}")
         
-        # If still no blobs found, search all blobs for raw video files
-        if not raw_blobs:
-            logger.info("No blobs found with any raw prefix, searching all blobs...")
-            all_blobs = tenant_storage.list_blobs()
-            raw_blobs = [
-                blob for blob in all_blobs
-                if 'raw' in blob.lower() and blob.lower().endswith(('.mp4', '.mov', '.avi'))
-            ]
-            if raw_blobs:
-                logger.info(f"Found {len(raw_blobs)} video files containing 'raw' in path")
         
         # Extract video filenames and their full paths
         video_files = []
@@ -99,9 +100,41 @@ def create_unverified_tracks(tenant_id: str, crop_sampling_rate: int, verbose: b
                 logger.info(f"Video: {filename} -> Path: {relative_path}")
         
         if not video_files:
-            logger.warning("No video files found in 'raw/' directory. Exiting.")
-            return
-        logger.info(f"Found {len(video_files)} videos to process: {video_files}")
+            if not resume_from_checkpoint:
+                logger.error("No video files found in 'raw/' directory and resume is disabled. Exiting.")
+                return
+            else:
+                logger.warning("No video files found in 'raw/' directory. This is expected when resuming - videos were already imported.")
+                logger.info("Attempting to discover videos from existing pipeline runs...")
+                
+                # When resuming, try to find videos that were already imported using structured paths
+                try:
+                    # Look for imported videos using the process folder structure
+                    process_prefix = "process/"  # Base process folder prefix
+                    process_blobs = tenant_storage.list_blobs(prefix=process_prefix)
+                    imported_videos = set()
+                    
+                    for blob in process_blobs:
+                        # Look for video files in imported directories (process/{video_id}/imported/)
+                        if (blob.lower().endswith(('.mp4', '.mov', '.avi')) and 
+                            '/imported/' in blob):
+                            filename = blob.split('/')[-1]
+                            imported_videos.add(filename)
+                            # For resume, we use the imported video path
+                            video_paths[filename] = blob
+                    
+                    video_files = list(imported_videos)
+                    if video_files:
+                        logger.info(f"Found {len(video_files)} previously imported videos to resume: {video_files}")
+                    else:
+                        logger.error("No imported videos found for resume. Nothing to process.")
+                        return
+                        
+                except Exception as e:
+                    logger.error(f"Failed to discover imported videos for resume: {e}")
+                    return
+        else:
+            logger.info(f"Found {len(video_files)} videos to process: {video_files}")
     except Exception as e:
         logger.error(f"Failed to list videos from GCS. Ensure credentials are correct. Error: {e}")
         return
@@ -115,7 +148,7 @@ def create_unverified_tracks(tenant_id: str, crop_sampling_rate: int, verbose: b
         original_frames_per_video = detection_config.frames_per_video
         detection_config.frames_per_video = crop_sampling_rate
         
-        unverified_tracks_pipeline = DataPrepPipeline(
+        unverified_tracks_pipeline = TrackGeneratorPipeline(
             config=detection_config,
             tenant_id=tenant_id,
             verbose=verbose,
@@ -124,7 +157,15 @@ def create_unverified_tracks(tenant_id: str, crop_sampling_rate: int, verbose: b
         
         # Use the full path for the video
         video_full_path = video_paths[video_file]
-        dataprep_results = unverified_tracks_pipeline.run(video_path=video_full_path)
+        
+        # Log resume status for user clarity
+        resume_status = "with checkpoint resume enabled" if resume_from_checkpoint else "from scratch (no resume)"
+        logger.info(f"Starting pipeline for {video_file} {resume_status}")
+        
+        dataprep_results = unverified_tracks_pipeline.run(
+            video_path=video_full_path, 
+            resume_from_checkpoint=resume_from_checkpoint
+        )
 
         if dataprep_results.get("status") == "completed":
             logger.info(f"Unverified tracks pipeline completed successfully for {video_file}!")
@@ -145,13 +186,18 @@ def main():
     parser.add_argument("--crop_sampling_rate", type=int, default=20, help="Save a crop every N frames.")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose pipeline logging.")
     parser.add_argument("--save_intermediate", action="store_true", help="Save intermediate pipeline step results to GCS.")
+    parser.add_argument("--no-resume", action="store_true", help="Start from scratch instead of resuming from checkpoint (default: resume enabled).")
     args = parser.parse_args()
+
+    # Resume is enabled by default, unless --no-resume is specified
+    resume_from_checkpoint = not args.no_resume
 
     create_unverified_tracks(
         tenant_id=args.tenant_id,
         crop_sampling_rate=args.crop_sampling_rate,
         verbose=args.verbose,
-        save_intermediate=args.save_intermediate
+        save_intermediate=args.save_intermediate,
+        resume_from_checkpoint=resume_from_checkpoint
     )
 
 if __name__ == "__main__":

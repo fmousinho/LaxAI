@@ -72,7 +72,7 @@ MIN_VIDEO_RESOLUTION = (1920, 1080)
 FRAME_SAMPLING_FOR_CROP = 15
 
 
-class DataPrepPipeline(Pipeline):
+class TrackGeneratorPipeline(Pipeline):
     """
     Comprehensive data preparation pipeline for lacrosse video processing.
 
@@ -582,10 +582,10 @@ class DataPrepPipeline(Pipeline):
                         if frame_number == 0:
                             affine_matrix = self.tracker.get_identity_affine_matrix()
                         else:
-                            affine_matrix = self.tracker.get_affine_matrix(previous_frame_rgb, frame_rgb)
+                            affine_matrix = self.tracker.calculate_affine_transform(previous_frame_rgb, frame_rgb)
 
                         # Apply the affine transformation to the detections
-                        detections = self.tracker.update_with_transform(detections, affine_matrix)
+                        detections = self.tracker.update_with_transform(detections, affine_matrix, frame_rgb)
 
                     except Exception as e:
                         logger.error(f"Error processing frame {frame_number} for video {video_guid}: {e}")
@@ -593,7 +593,11 @@ class DataPrepPipeline(Pipeline):
                         
                     finally:
                         previous_frame_rgb = frame_rgb
-                        detections.data['frame_index'] = frame_number
+                        # Set frame_index for all detections in this frame
+                        if len(detections) > 0:
+                            detections.data['frame_index'] = [frame_number] * len(detections)
+                        else:
+                            detections.data['frame_index'] = []
                         all_detections.append(detections)
 
                     frame_number += 1
@@ -613,7 +617,7 @@ class DataPrepPipeline(Pipeline):
                     'xyxy': merged_detections.xyxy.tolist() if merged_detections.xyxy is not None else [],
                     'confidence': merged_detections.confidence.tolist() if merged_detections.confidence is not None else [],
                     'class_id': merged_detections.class_id.tolist() if merged_detections.class_id is not None else [],
-                    'frame_index': merged_detections.data.get('frame_index', []).tolist() if merged_detections.data and 'frame_index' in merged_detections.data else [],
+                    'frame_index': list(merged_detections.data.get('frame_index', [])) if merged_detections.data and 'frame_index' in merged_detections.data else [],
                     'total_frames': len(all_detections),
                     'total_detections': detections_count
                 }
@@ -726,7 +730,10 @@ class DataPrepPipeline(Pipeline):
                     crop_np = crop_image(frame, detection[0].astype(int))
                     
                     # Get frame_id from detection data if available, otherwise use index
-                    frame_id = detections.data.get('frame_index', [det_idx])[det_idx] if detections.data and 'frame_index' in detections.data else str(det_idx)
+                    if detections.data and 'frame_index' in detections.data and isinstance(detections.data['frame_index'], (list, np.ndarray)):
+                        frame_id = detections.data['frame_index'][det_idx] if det_idx < len(detections.data['frame_index']) else str(det_idx)
+                    else:
+                        frame_id = str(det_idx)
                     
                     # Generate folder path for this track
                     crop_folder = self._get_crop_folder_path(track_id, str(frame_id), video_guid)

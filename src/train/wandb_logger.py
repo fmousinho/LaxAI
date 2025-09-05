@@ -726,7 +726,12 @@ class WandbLogger:
                 }
             )
             
-            artifact.add_file(checkpoint_path, name=f"checkpoint_epoch_{epoch}.pth")
+            artifact.add_file(
+                checkpoint_path,
+                name=f"checkpoint_epoch_{epoch}.pth",
+                skip_cache=True,
+                )
+            artifact.finalize()
             logged_artifact = self.run.log_artifact(artifact)
             
             # Add 'latest' alias

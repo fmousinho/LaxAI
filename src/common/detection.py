@@ -120,10 +120,9 @@ class DetectionModel:
                 self.model = RFDETRBase(
                     device=self.device.type,
                     pretrain_weights=temp_checkpoint_path,
-                    num_classes=6
+                    num_classes=6,
                 )
 
-                self.model.to(self.device)
                 self.model.optimize_for_inference()
 
                 return True
