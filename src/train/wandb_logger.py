@@ -713,32 +713,13 @@ class WandbLogger:
     def _upload_checkpoint_and_cleanup(self, checkpoint_path: str, checkpoint_name: str, epoch: int, loss: Optional[float]) -> None:
         """Upload checkpoint and clean up old versions."""
         try:
-            # Create and upload artifact
-            artifact = wandb.Artifact(
-                name=checkpoint_name,
+ 
+            self.run.log_artifact(
+                artifact_or_path = checktpoin_path,
+                name = checkpoint_name,
                 type="model_checkpoint",
-                description=f"Model checkpoint for epoch {epoch}",
-                metadata={
-                    'epoch': epoch,
-                    'loss': loss,
-                    'timestamp': datetime.now().isoformat(),
-                    'is_test': self._is_test_run()
-                }
-            )
-            
-            artifact.add_file(
-                checkpoint_path,
-                name=f"checkpoint_epoch_{epoch}.pth",
-                skip_cache=True,
-                )
-            artifact.finalize()
-            logged_artifact = self.run.log_artifact(artifact)
-            
-            # Add 'latest' alias
-            try:
-                logged_artifact.aliases.append('latest')
-            except Exception as e:
-                logger.debug(f"Could not add 'latest' alias: {e}")
+                alisases = ['latest']
+            )  # Register artifact with the run
             
             logger.info(f"✅ Uploaded checkpoint for epoch {epoch}")
             
@@ -761,17 +742,7 @@ class WandbLogger:
             except Exception:
                 pass
             
-            # Clear references to help GC
-            try:
-                del artifact
-            except NameError:
-                pass
-            try:
-                del logged_artifact
-            except NameError:
-                pass
-            
-            gc.collect()
+         
 
     @monitor_memory
     @requires_wandb_enabled
