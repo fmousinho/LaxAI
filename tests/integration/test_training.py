@@ -43,6 +43,7 @@ class DummyModel(SiameseNet):
     
     def __init__(self, dim=4, emb_dim=2):
         # Initialize with test-friendly parameters
+        # Force consistent architecture for testing
         super().__init__(
             embedding_dim=emb_dim,
             use_cbam=False,  # Disable CBAM for faster testing
@@ -95,6 +96,10 @@ def test_training_runs_and_triggers_evaluation(monkeypatch):
     t.num_workers = 0
     t.margin_decay_rate = 1.0
     t.margin_change_threshold = 1e-6
+
+    # Prevent loading any existing checkpoints in test to avoid architecture mismatch
+    monkeypatch.setattr(tw, 'load_checkpoint', lambda *a, **k: None)
+    monkeypatch.setattr(tw, 'resume_training_from_checkpoint', lambda *a, **k: 1)
 
     # Setup small datasets
     train_ds = DummyTripletDataset(n=2, dim=4)

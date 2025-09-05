@@ -14,7 +14,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from utils.env_secrets import setup_environment_secrets
+from src.utils.env_secrets import setup_environment_secrets
 
 # Ensure environment secrets for integration tests that require them
 try:

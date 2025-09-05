@@ -195,8 +195,17 @@ class WandbLogger:
         return base_name
     
     def _get_checkpoint_name(self) -> str:
-        """Get the checkpoint artifact name (for backwards compatibility)."""
-        return self._get_artifact_name("checkpoint")
+        """Get the checkpoint artifact name with run name to prevent overwrites."""
+        base_name = "checkpoint"
+        
+        # Include run name to make checkpoints unique per run
+        if self.run and hasattr(self.run, 'name') and self.run.name:
+            run_name = self.run.name
+            # Sanitize run name for artifact naming
+            safe_run_name = self._sanitize_artifact_name(run_name)
+            base_name = f"checkpoint-{safe_run_name}"
+        
+        return self._get_artifact_name(base_name)
 
     def get_checkpoint_name(self) -> str:
         """Get the checkpoint artifact name."""
@@ -438,7 +447,7 @@ class WandbLogger:
                 test_patterns = []
                 
                 # Add checkpoint patterns
-                checkpoint_name = self._get_artifact_name("checkpoint")
+                checkpoint_name = self._get_checkpoint_name()
                 test_patterns.append((checkpoint_name, "model_checkpoint"))
                 
                 # Add model patterns - be more comprehensive about test model patterns
@@ -608,7 +617,7 @@ class WandbLogger:
             raise ValueError("Either optimizer or optimizer_state_dict must be provided")
 
         # Get appropriate checkpoint name
-        checkpoint_name = self._get_artifact_name("checkpoint")
+        checkpoint_name = self._get_checkpoint_name()
         
         # Create temp file for checkpoint (ensure it's properly closed)
         with tempfile.NamedTemporaryFile(suffix=f'_epoch_{epoch}.pth', delete=False) as tmp_file:
@@ -741,7 +750,7 @@ class WandbLogger:
             Checkpoint data dictionary or None if failed
         """
         if artifact_name is None:
-            artifact_name = self._get_artifact_name("checkpoint")
+            artifact_name = self._get_checkpoint_name()
             
         artifact_path = self._construct_artifact_path(artifact_name, version)
         
@@ -972,7 +981,7 @@ class WandbLogger:
                 self._pending_futures.append(cleanup_future)
                 
                 # Also clean up checkpoints since model is saved
-                checkpoint_name = self._get_artifact_name("checkpoint")
+                checkpoint_name = self._get_checkpoint_name()
                 checkpoint_cleanup_future = self._executor.submit(
                     self._cleanup_artifacts_by_type,
                     checkpoint_name,
