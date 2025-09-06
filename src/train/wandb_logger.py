@@ -1516,7 +1516,7 @@ def _upload_checkpoint_in_subprocess(
             import subprocess
             logger.info("Running wandb artifact cache cleanup...")
             result = subprocess.run(
-                ["wandb", "artifact", "cache", "cleanup"],
+                ["wandb", "artifact", "cache", "cleanup", "--remove-temp", "1GB"],
                 capture_output=True,
                 text=True,
                 timeout=30  # 30 second timeout
