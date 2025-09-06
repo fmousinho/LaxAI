@@ -5,13 +5,53 @@
     "."
   ],
   "exclude": [
-    "**/node_modules",
+    "**/.git",
+    "**/.venv*",
     "**/__pycache__",
-    ".venv",
-    ".git"
+    "**/.pytest_cache",
+    "**/node_modules",
+    "**/.DS_Store",
+    "**/runs/**",
+    "**/notebooks/**",
+    "**/analyse/reports/**",
+    "**/tools/token.json",
+    "**/tools/credentials.json",
+    "**/*.md",
+    "**/*.json",
+    "**/*.txt",
+    "**/*.yml",
+    "**/*.yaml",
+    "**/*.env*",
+    "**/*.log",
+    "**/*.csv",
+    "**/*.xml",
+    "**/*.html",
+    "**/*.css",
+    "**/*.js",
+    "**/*.ts",
+    "**/.file_cache/**",
+    "**/detections.json",
+    "**/tracks.json",
+    "**/*.pth",
+    "**/*.pt",
+    "**/*.ckpt",
+    "**/*.pkl",
+    "**/*.pickle",
+    "**/*.ipynb",
+    "**/*.jpg",
+    "**/*.jpeg",
+    "**/*.png",
+    "**/*.gif",
+    "**/*.bmp",
+    "**/*.tiff",
+    "**/*.mp4",
+    "**/*.avi",
+    "**/*.mov",
+    "**/*.mkv",
+    "**/*.webm"
   ],
   "typeCheckingMode": "basic", // Or "strict", "off", depending on your overall desire
-  "extraPaths": ["src", "."], // Add any paths Pylance needs to resolve imports
+  "extraPaths": ["src", ".", "./tools"], // Add any paths Pylance needs to resolve imports
 
   "overrides": [
     {

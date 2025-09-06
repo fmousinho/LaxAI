@@ -130,6 +130,11 @@ class TrackGeneratorPipeline(Pipeline):
         background_mask_detector (BackgroundMaskDetector, optional): Background removal system with statistical color analysis
         tenant_storage (GoogleStorageClient): GCS client for tenant-specific operations and data management
         path_manager (GCSPaths): Structured path management system for GCS organization and file naming
+        
+        Crop Quality Constants:
+        MIN_CROP_WIDTH (int): Minimum width for crop quality (default: 48)
+        MIN_CROP_HEIGHT (int): Minimum height for crop quality (default: 96) 
+        MIN_CROP_CONTRAST (float): Minimum contrast threshold for crop quality (default: 20.0)
 
     Raises:
         RuntimeError: If detection model fails to load or GCS credentials are invalid
@@ -164,6 +169,11 @@ class TrackGeneratorPipeline(Pipeline):
         Videos must meet minimum resolution requirements (1920x1080) for processing.
         All processing is tenant-isolated for multi-tenant environments.
     """
+
+    # Crop quality constants
+    MIN_CROP_WIDTH = 48
+    MIN_CROP_HEIGHT = 96
+    MIN_CROP_CONTRAST = 20.0
 
     def __init__(self, 
                  config: DetectionConfig, 
@@ -587,6 +597,9 @@ class TrackGeneratorPipeline(Pipeline):
                         # Apply the affine transformation to the detections
                         detections = self.tracker.update_with_transform(detections, affine_matrix, frame_rgb)
 
+                        if frame_number % FRAME_SAMPLING_FOR_CROP == 0:
+                            self._get_crops(frame_rgb, detections, video_guid)
+
                     except Exception as e:
                         logger.error(f"Error processing frame {frame_number} for video {video_guid}: {e}")
                         detections = sv.Detections.empty()
@@ -723,20 +736,19 @@ class TrackGeneratorPipeline(Pipeline):
         Returns:
             bool: True if crop quality is sufficient, False otherwise
         """
-        # Check minimum size (48x96 pixels as suggested)
+        # Check minimum size
         height, width = crop.shape[:2]
-        if width < 48 or height < 96:
-            logger.debug(f"Crop too small: {width}x{height}")
+        if width < self.MIN_CROP_WIDTH or height < self.MIN_CROP_HEIGHT:
+            logger.debug(f"Crop too small: {width}x{height} (min: {self.MIN_CROP_WIDTH}x{self.MIN_CROP_HEIGHT})")
             return False
         
         # Check contrast using standard deviation of grayscale image
         gray_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
         contrast = np.std(gray_crop)
         
-        # Low contrast threshold (adjustable based on testing)
-        min_contrast = 20.0
-        if contrast < min_contrast:
-            logger.debug(f"Crop has low contrast: {contrast:.2f} < {min_contrast}")
+        # Low contrast threshold
+        if contrast < self.MIN_CROP_CONTRAST:
+            logger.debug(f"Crop has low contrast: {contrast:.2f} < {self.MIN_CROP_CONTRAST}")
             return False
         
         return True

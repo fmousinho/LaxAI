@@ -138,6 +138,11 @@ class TrainPipeline(Pipeline):
             }
             # Pass to generic pipeline without resume_from_checkpoint for the pipeline steps
             results = super().run(context)
+            
+            # Add wandb run ID to results for test verification
+            if wandb_logger.run and hasattr(wandb_logger.run, 'id'):
+                results["run_id"] = wandb_logger.run.id
+            
             wandb_logger.finish()
 
             # If the pipeline reported step failures, surface specific errors

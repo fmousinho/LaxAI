@@ -58,6 +58,12 @@ def mock_wandb_for_memory_test():
     with patch('train.wandb_logger.wandb') as mock_wandb:
         # Mock WandB initialization
         mock_run = MagicMock()
+        # Set specific attributes that are needed by the wandb_logger
+        mock_run.id = "test_run_id_12345"
+        mock_run.name = "test_run_name"
+        mock_run.project = "LaxAI"
+        mock_run.entity = "fmousinho76"
+        
         mock_wandb.init.return_value = mock_run
         mock_wandb.run = mock_run
 

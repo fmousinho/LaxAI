@@ -2,6 +2,7 @@ import os
 import logging
 import tempfile
 import logging
+import uuid
 from datetime import datetime
 from functools import wraps
 from typing import Dict, Any, Optional, List, Callable, Tuple
@@ -11,6 +12,8 @@ import re
 import psutil
 import gc
 import time
+import sys
+import subprocess
 
 from utils.env_secrets import setup_environment_secrets
 setup_environment_secrets()
@@ -447,13 +450,23 @@ class WandbLogger:
             return
             
         logger.debug(f"Waiting for {len(self._pending_futures)} pending operations...")
+        critical_errors = []
+        
         for future in self._pending_futures:
             try:
                 future.result(timeout=60)
+            except (NameError, AttributeError, TypeError) as e:
+                # Critical errors indicate bugs - collect and re-raise
+                logger.error(f"Critical error in async operation: {e}")
+                critical_errors.append(e)
             except Exception as e:
                 logger.debug(f"Async operation completed with error: {e}")
         
         self._pending_futures.clear()
+        
+        # Re-raise critical errors after processing all futures
+        if critical_errors:
+            raise critical_errors[0]
 
     def _cleanup_test_artifacts(self) -> None:
         """Clean up all artifacts created by test runs."""
@@ -690,40 +703,147 @@ class WandbLogger:
         # Schedule async upload and cleanup
         if self._executor:
             future = self._executor.submit(
-                self._upload_checkpoint_and_cleanup, 
-                checkpoint_path, 
-                checkpoint_name, 
-                epoch, 
-                loss
+                self._trigger_checkpoint_upload_and_cleanup,
+                checkpoint_path,
+                checkpoint_name,
+                epoch,
+                loss,
             )
             self._pending_futures.append(future)
-            
+
             # Clean up completed futures more aggressively
-            completed_futures = [f for f in self._pending_futures if f.done()]
-            for future in completed_futures:
-                try:
-                    # Get result to ensure any exceptions are raised
-                    future.result(timeout=0.1)
-                except Exception as e:
-                    logger.debug(f"Async operation completed with error: {e}")
-                finally:
-                    # Remove from list
-                    if future in self._pending_futures:
-                        self._pending_futures.remove(future)
-            
-            # Keep only non-completed futures
-            self._pending_futures = [f for f in self._pending_futures if not f.done()]
-            
+            self._cleanup_completed_futures()
+
             logger.info(f"Scheduled async checkpoint upload for epoch {epoch}")
             return f"{checkpoint_name}:latest"
         else:
             # Fallback to sync if executor unavailable
-            self._upload_checkpoint_and_cleanup(checkpoint_path, checkpoint_name, epoch, loss)
+            self._trigger_checkpoint_upload_and_cleanup(
+                checkpoint_path, checkpoint_name, epoch, loss
+            )
             return f"{checkpoint_name}:latest"
+
+    def _cleanup_completed_futures(self):
+        """Iterate through pending futures and clean up any that are done."""
+        completed_futures = [f for f in self._pending_futures if f.done()]
+        for future in completed_futures:
+            try:
+                # Get result to ensure any exceptions are raised
+                future.result(timeout=0.1)
+            except (NameError, AttributeError, TypeError) as e:
+                # Critical errors indicate bugs - re-raise these
+                logger.error(f"Critical error in async operation: {e}")
+                raise
+            except Exception as e:
+                logger.debug(f"Async operation completed with error: {e}")
+            finally:
+                # Remove from list
+                if future in self._pending_futures:
+                    self._pending_futures.remove(future)
+        # Keep only non-completed futures
+        self._pending_futures = [f for f in self._pending_futures if not f.done()]
+
+    def _trigger_checkpoint_upload_and_cleanup(
+        self, checkpoint_path: str, checkpoint_name: str, epoch: int, loss: Optional[float]
+    ) -> None:
+        """
+        Orchestrates checkpoint upload via subprocess and then cleans up old artifacts.
+        This method is the target for the ThreadPoolExecutor.
+        """
+        try:
+            # Step 1: Upload the artifact in a separate process to isolate memory.
+            self._launch_checkpoint_subprocess(checkpoint_path, checkpoint_name)
+            logger.info(f"✅ Subprocess upload completed for epoch {epoch}")
+
+            # Step 2: Clean up old checkpoints in the main process.
+            self._cleanup_artifacts_by_type(
+                checkpoint_name, "model_checkpoint", keep_latest=self.checkpoint_retention_count
+            )
+
+            # Step 3: Periodic aggressive memory cleanup for long training runs.
+            self._checkpoint_count += 1
+            if self._checkpoint_count % self._memory_cleanup_interval == 0:
+                logger.info(
+                    f"🧹 Periodic memory cleanup after {self._checkpoint_count} checkpoints"
+                )
+                self._force_memory_cleanup()
+
+        except (NameError, AttributeError, TypeError) as e:
+            logger.error(f"Critical error during checkpoint orchestration (likely bug): {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to orchestrate checkpoint upload and cleanup: {e}")
+        finally:
+            # Always clean up the temp file, even if subprocess failed
+            try:
+                if os.path.exists(checkpoint_path):
+                    os.unlink(checkpoint_path)
+                    logger.debug(f"Cleaned up temp file: {checkpoint_path}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up temp file {checkpoint_path}: {e}")
+
+    def _launch_checkpoint_subprocess(self, checkpoint_path: str, checkpoint_name: str) -> None:
+        """
+        Launches a separate process to upload a checkpoint artifact to wandb.
+        This isolates the memory usage of the upload from the main training process.
+        """
+        if not self.run or not self.run.id:
+            raise RuntimeError("Wandb run is not initialized or has no ID.")
+
+        run_id = self.run.id
+        script_path = os.path.abspath(__file__)
+        python_executable = sys.executable
+
+        command = [
+            python_executable,
+            script_path,
+            "--upload-checkpoint",
+            "--run-id", run_id,
+            "--checkpoint-path", checkpoint_path,
+            "--checkpoint-name", checkpoint_name,
+            "--project", wandb_config.project,
+            "--entity", wandb_config.team,
+        ]
+
+        logger.info(f"Launching subprocess for checkpoint upload: {' '.join(command)}")
+
+        try:
+            # We use subprocess.run and capture output for better error diagnosis.
+            # This call is blocking within its thread, which is intended.
+            result = subprocess.run(
+                command,
+                check=True,  # Raises CalledProcessError if the command returns a non-zero exit code.
+                capture_output=True,
+                text=True,
+                env=os.environ,
+            )
+            logger.debug(f"Subprocess stdout: {result.stdout}")
+            if result.stderr:
+                logger.warning(f"Subprocess stderr: {result.stderr}")
+
+        except subprocess.CalledProcessError as e:
+            # Log detailed error information from the subprocess
+            error_message = (
+                f"Subprocess for checkpoint upload failed with exit code {e.returncode}.\n"
+                f"  Command: {' '.join(e.cmd)}\n"
+                f"  Stdout: {e.stdout}\n"
+                f"  Stderr: {e.stderr}"
+            )
+            logger.error(error_message)
+            # Don't re-raise the exception to avoid breaking training
+            # Just log the error and continue
+            return
+        except Exception as e:
+            logger.error(f"An unexpected error occurred while launching subprocess: {e}")
+            # Don't re-raise to avoid breaking training
+            return
 
     @monitor_memory
     def _upload_checkpoint_and_cleanup(self, checkpoint_path: str, checkpoint_name: str, epoch: int, loss: Optional[float]) -> None:
-        """Upload checkpoint and clean up old versions."""
+        """
+        [DEPRECATED] This method is kept for reference but is replaced by the subprocess mechanism.
+        Upload checkpoint and clean up old versions.
+        """
         try:
  
             self.run.log_artifact(
@@ -744,8 +864,16 @@ class WandbLogger:
                 logger.info(f"🧹 Periodic memory cleanup after {self._checkpoint_count} checkpoints")
                 self._force_memory_cleanup()
             
+        except (NameError, AttributeError, TypeError) as e:
+            # Critical errors that indicate bugs in the code - these should not be silently caught
+            logger.error(f"Critical error in checkpoint upload (likely bug): {e}")
+            raise  # Re-raise critical errors to fail fast and expose bugs
+            
         except Exception as e:
+            # Handle expected wandb/network related errors
             logger.error(f"Failed to upload checkpoint: {e}")
+            # For expected errors, we don't re-raise to avoid breaking training
+            # But we should still track these for monitoring
         finally:
             # Clean up temp file
             try:
@@ -1310,4 +1438,116 @@ class WandbLogger:
 
 # Global instance
 wandb_logger = WandbLogger()
-            
+
+
+# --- Subprocess Script Logic ---
+# This block allows the file to be executed as a standalone script
+# for memory-isolated artifact uploads.
+
+def _upload_checkpoint_in_subprocess(
+    run_id: str,
+    checkpoint_path: str,
+    checkpoint_name: str,
+    project: str,
+    entity: str,
+):
+    """
+    This function runs in a separate process to upload a checkpoint.
+    It initializes a wandb run, uploads the artifact, and finishes.
+    """
+    run = None
+    try:
+        # Set up logging for the subprocess
+        logging.basicConfig(level=logging.INFO)
+        logger.info(f"Subprocess started for run_id: {run_id}")
+
+        # Check if the checkpoint file exists before proceeding
+        if not os.path.exists(checkpoint_path):
+            logger.error(f"Checkpoint file not found at: {checkpoint_path}")
+            raise FileNotFoundError(f"Checkpoint file does not exist: {checkpoint_path}")
+
+        # Create a temporary run for artifact upload to avoid conflicts
+        # We can't resume the main run from subprocess as it's already active
+        temp_run_name = f"temp_checkpoint_upload_{uuid.uuid4().hex[:8]}"
+        logger.info(f"Creating temporary wandb run for artifact upload: {temp_run_name}")
+        
+        run = wandb.init(
+            project=project,
+            entity=entity,
+            name=temp_run_name,
+            job_type="checkpoint_upload",
+            tags=["temp", "checkpoint"],
+            settings=wandb.Settings(init_timeout=300)  # 5 minute timeout should be sufficient
+        )
+
+        if run is None:
+            raise ConnectionError(f"Failed to create temporary wandb run for checkpoint upload.")
+
+        logger.info(f"Successfully created temporary run {run.name} (ID: {run.id}) for artifact upload.")
+
+        # Create and log the artifact to the temporary run
+        artifact = wandb.Artifact(
+            name=checkpoint_name,
+            type="model_checkpoint",
+            description=f"Checkpoint uploaded from run {run_id}"
+        )
+        artifact.add_file(checkpoint_path)
+
+        # Upload the artifact
+        run.log_artifact(artifact, aliases=["latest"])
+        
+        logger.info(f"✅ Successfully uploaded artifact '{checkpoint_name}' via temporary run.")
+
+        # Note: The artifact is now available in the project and can be accessed by name
+        # from any run in the same project, including the original run_id
+
+        logger.info(f"✅ Successfully uploaded artifact '{checkpoint_name}' in subprocess.")
+
+    except Exception as e:
+        logger.error(f"Error in checkpoint upload subprocess: {e}", exc_info=True)
+        # Re-raise to ensure the parent process sees a non-zero exit code
+        raise
+    finally:
+        # Ensure the run is finished to stop the subprocess
+        if run:
+            run.finish()
+        # Clean up the temporary file
+        if os.path.exists(checkpoint_path):
+            try:
+                os.unlink(checkpoint_path)
+                logger.info(f"Cleaned up temp file: {checkpoint_path}")
+            except OSError as e:
+                logger.error(f"Error removing temp file {checkpoint_path}: {e}")
+
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(description="WandbLogger utility script.")
+    parser.add_argument("--upload-checkpoint", action="store_true", help="Run the checkpoint upload task.")
+    parser.add_argument("--run-id", type=str, help="Wandb run ID to resume.")
+    parser.add_argument("--checkpoint-path", type=str, help="Path to the checkpoint file to upload.")
+    parser.add_argument("--checkpoint-name", type=str, help="Name of the checkpoint artifact.")
+    parser.add_argument("--project", type=str, help="Wandb project name.")
+    parser.add_argument("--entity", type=str, help="Wandb entity (team) name.")
+
+    args = parser.parse_args()
+
+    if args.upload_checkpoint:
+        if not all([args.run_id, args.checkpoint_path, args.checkpoint_name, args.project, args.entity]):
+            print("Error: --run-id, --checkpoint-path, --checkpoint-name, --project, and --entity are required for --upload-checkpoint.", file=sys.stderr)
+            sys.exit(1)
+        
+        try:
+            _upload_checkpoint_in_subprocess(
+                run_id=args.run_id,
+                checkpoint_path=args.checkpoint_path,
+                checkpoint_name=args.checkpoint_name,
+                project=args.project,
+                entity=args.entity,
+            )
+            sys.exit(0)
+        except Exception as e:
+            # The error is already logged in the function, just exit with failure.
+            sys.exit(1)

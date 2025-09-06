@@ -577,3 +577,62 @@ class TestWandbLoggerCheckpointRetrieval:
                 mock_artifact.assert_called_once()
                 call_args = mock_artifact.call_args[0]
                 assert expected_artifact_name in call_args[0]  # First argument should contain the artifact reference
+
+    def test_critical_errors_are_properly_raised(self, mock_wandb_logger):
+        """Test that critical errors like NameError are re-raised instead of just logged."""
+        import tempfile
+        import torch
+        import os
+        
+        # Set up logger with mock run
+        mock_run = MagicMock()
+        mock_wandb_logger.run = mock_run
+        mock_wandb_logger.initialized = True
+        
+        # Create a dummy checkpoint file
+        with tempfile.NamedTemporaryFile(suffix='.pth', delete=False) as f:
+            checkpoint_path = f.name
+            torch.save({'test': 'data'}, checkpoint_path)
+        
+        try:
+            # Mock log_artifact to raise NameError (simulating a typo)
+            mock_run.log_artifact.side_effect = NameError("undefined_variable")
+            
+            # Verify that NameError is re-raised
+            with pytest.raises(NameError, match="undefined_variable"):
+                mock_wandb_logger._upload_checkpoint_and_cleanup(
+                    checkpoint_path, 'test-checkpoint', 1, 0.5
+                )
+        finally:
+            # Clean up (file might already be deleted by the method's finally block)
+            if os.path.exists(checkpoint_path):
+                os.unlink(checkpoint_path)
+
+    def test_non_critical_errors_are_logged_not_raised(self, mock_wandb_logger):
+        """Test that non-critical errors are logged but not re-raised."""
+        import tempfile
+        import torch
+        import os
+        
+        # Set up logger with mock run
+        mock_run = MagicMock()
+        mock_wandb_logger.run = mock_run
+        mock_wandb_logger.initialized = True
+        
+        # Create a dummy checkpoint file
+        with tempfile.NamedTemporaryFile(suffix='.pth', delete=False) as f:
+            checkpoint_path = f.name
+            torch.save({'test': 'data'}, checkpoint_path)
+        
+        try:
+            # Mock log_artifact to raise a non-critical error
+            mock_run.log_artifact.side_effect = ConnectionError("Network timeout")
+            
+            # This should not raise an exception (error should be logged only)
+            mock_wandb_logger._upload_checkpoint_and_cleanup(
+                checkpoint_path, 'test-checkpoint', 1, 0.5
+            )
+        finally:
+            # Clean up (file might already be deleted by the method's finally block)
+            if os.path.exists(checkpoint_path):
+                os.unlink(checkpoint_path)

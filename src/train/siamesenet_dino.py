@@ -202,11 +202,15 @@ class SiameseNet(nn.Module):
             # For ConvNeXt models, unfreeze the last few stages
             if hasattr(self.backbone.backbone, 'stages'):
                 stages = self.backbone.backbone.stages
-                num_stages = len(stages)
-                for i in range(max(0, num_stages - unfreeze_layers), num_stages):
-                    for param in stages[i].parameters():
-                        param.requires_grad = True
-                logger.info(f"Unfroze last {min(unfreeze_layers, num_stages)} stages of DINOv3 backbone")
+                if hasattr(stages, '__len__') and hasattr(stages, '__getitem__'):
+                    num_stages = len(stages)
+                    for i in range(max(0, num_stages - unfreeze_layers), num_stages):
+                        if i < num_stages and hasattr(stages[i], 'parameters'):
+                            for param in stages[i].parameters():
+                                param.requires_grad = True
+                    logger.info(f"Unfroze last {min(unfreeze_layers, num_stages)} stages of DINOv3 backbone")
+                else:
+                    logger.warning("Backbone stages attribute found but does not support expected interface")
 
             # Alternative: unfreeze by layer name patterns
             elif hasattr(self.backbone.backbone, 'named_parameters'):
