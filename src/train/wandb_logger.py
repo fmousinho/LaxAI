@@ -820,6 +820,10 @@ class WandbLogger:
             logger.debug(f"Subprocess stdout: {result.stdout}")
             if result.stderr:
                 logger.warning(f"Subprocess stderr: {result.stderr}")
+            
+            # Also log subprocess output at INFO level for Google Cloud Logger
+            if result.stdout.strip():
+                logger.info(f"Subprocess output: {result.stdout.strip()}")
 
         except subprocess.CalledProcessError as e:
             # Log detailed error information from the subprocess
@@ -1457,8 +1461,12 @@ def _upload_checkpoint_in_subprocess(
     """
     run = None
     try:
-        # Set up logging for the subprocess
-        logging.basicConfig(level=logging.INFO)
+        # Set up logging for the subprocess - use the same format as main process
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        logger = logging.getLogger(__name__)
         logger.info(f"Subprocess started for run_id: {run_id}")
 
         # Check if the checkpoint file exists before proceeding
@@ -1502,6 +1510,31 @@ def _upload_checkpoint_in_subprocess(
         # from any run in the same project, including the original run_id
 
         logger.info(f"✅ Successfully uploaded artifact '{checkpoint_name}' in subprocess.")
+        
+        # Clean up wandb artifact cache after successful upload
+        try:
+            import subprocess
+            logger.info("Running wandb artifact cache cleanup...")
+            result = subprocess.run(
+                ["wandb", "artifact", "cache", "cleanup"],
+                capture_output=True,
+                text=True,
+                timeout=30  # 30 second timeout
+            )
+            if result.returncode == 0:
+                logger.info("✅ Wandb artifact cache cleanup completed")
+                if result.stdout.strip():
+                    logger.debug(f"Cache cleanup output: {result.stdout.strip()}")
+            else:
+                logger.warning(f"Wandb cache cleanup failed with exit code {result.returncode}")
+                if result.stderr:
+                    logger.warning(f"Cache cleanup stderr: {result.stderr.strip()}")
+        except subprocess.TimeoutExpired:
+            logger.warning("Wandb cache cleanup timed out")
+        except FileNotFoundError:
+            logger.warning("wandb CLI not found, skipping cache cleanup")
+        except Exception as e:
+            logger.warning(f"Failed to run wandb cache cleanup: {e}")
 
     except Exception as e:
         logger.error(f"Error in checkpoint upload subprocess: {e}", exc_info=True)
