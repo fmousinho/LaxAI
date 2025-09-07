@@ -54,16 +54,21 @@ def stop_pipeline(pipeline_name: str) -> bool:
     Returns:
         True if pipeline was found and stop initiated, False otherwise
     """
+    logger.info(f"PipelineRegistry: Attempting to stop pipeline: {pipeline_name}")
+    
     with _registry_lock:
         if pipeline_name in _active_pipelines:
             pipeline = _active_pipelines[pipeline_name]
+            logger.info(f"PipelineRegistry: Found active pipeline {pipeline_name}, requesting stop")
             pipeline.request_stop()
+            logger.debug(f"PipelineRegistry: Stop request sent to pipeline {pipeline_name}")
             return True
         else:
             # Pipeline not yet registered: queue a pending cancellation so
             # that when/if the pipeline registers it will immediately stop.
+            logger.warning(f"PipelineRegistry: Pipeline {pipeline_name} not found in active registry")
             _pending_cancellations.add(pipeline_name)
-            logger.warning(f"Could not find pipeline to cancel: {pipeline_name}. Will attempt later, but no guarantees.")
+            logger.info(f"PipelineRegistry: Queued pending cancellation for pipeline {pipeline_name} - will apply when registered")
             return True
 
 
@@ -137,12 +142,14 @@ class Pipeline:
         # Register this pipeline globally
         with _registry_lock:
             _active_pipelines[pipeline_name] = self
-            logger.info(f"Registered pipeline: {pipeline_name}")
+            logger.info(f"PipelineRegistry: Registered pipeline: {pipeline_name}")
             # If there was a pending cancellation for this pipeline name, apply it now
             if pipeline_name in _pending_cancellations:
-                logger.info(f"Applying queued cancellation for pipeline during registration: {pipeline_name}")
+                logger.info(f"PipelineRegistry: Applying queued cancellation for pipeline during registration: {pipeline_name}")
+                logger.debug(f"PipelineRegistry: Found pending cancellation for {pipeline_name}, applying immediately")
                 self.request_stop()
                 _pending_cancellations.discard(pipeline_name)
+                logger.debug(f"PipelineRegistry: Removed {pipeline_name} from pending cancellations set")
         
         if self.verbose:
             logger.info(f"Initialized {pipeline_name} pipeline")
@@ -168,18 +175,23 @@ class Pipeline:
         """Request the pipeline to stop execution at the next convenient point."""
         with self._stop_lock:
             self._stop_requested = True
-            logger.info(f"Stop requested for pipeline: {self.pipeline_name}")
+            logger.info(f"PipelineFramework: Stop requested for pipeline: {self.pipeline_name}")
+            logger.debug(f"PipelineFramework: Pipeline {self.pipeline_name} stop flag set to True")
 
     def is_stop_requested(self) -> bool:
         """Check if a stop has been requested."""
         with self._stop_lock:
-            return self._stop_requested
+            requested = self._stop_requested
+            if requested:
+                logger.debug(f"PipelineFramework: Stop request detected for pipeline: {self.pipeline_name}")
+            return requested
 
     def _check_cancellation(self):
         """Check if cancellation was requested and raise exception if so."""
         if self.is_stop_requested():
             self.status = PipelineStatus.CANCELLED
-            logger.info(f"Pipeline {self.pipeline_name} cancelled by request")
+            logger.info(f"PipelineFramework: Pipeline {self.pipeline_name} cancelled by request - raising InterruptedError")
+            logger.debug(f"PipelineFramework: Pipeline {self.pipeline_name} status set to CANCELLED, raising exception")
             raise InterruptedError("Pipeline execution cancelled by user request")
 
     def _cleanup_registry(self):

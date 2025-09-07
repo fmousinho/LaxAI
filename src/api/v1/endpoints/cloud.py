@@ -177,7 +177,7 @@ async def get_job_status(task_id: str) -> JobStatusResponse:
 
 
 @router.delete("/jobs/{task_id}")
-async def cancel_job(task_id: str) -> Dict[str, str]:
+async def cancel_job(task_id: str) -> Dict[str, Any]:
     """
     Cancel a training job.
     
@@ -196,25 +196,34 @@ async def cancel_job(task_id: str) -> Dict[str, str]:
                 detail="Firestore client not available"
             )
         
-        # Update job status to cancelled
+        # First try to stop the actual pipeline if it's running locally
+        logger.info(f"CloudAPI: Attempting to cancel job {task_id} - checking for local pipeline")
+        from services.training_service import cancel_job as stop_pipeline_job
+        pipeline_stopped = stop_pipeline_job(task_id)
+        logger.info(f"CloudAPI: Local pipeline stop result for job {task_id}: {pipeline_stopped}")
+        
+        # Then update job status to cancelled in Firestore
+        logger.info(f"CloudAPI: Updating Firestore status for cancelled job {task_id}")
         success = firestore_client.update_job_status(
             task_id, 
             JobStatus.CANCELLED,
-            progress={"message": "Job cancelled by user request"}
+            progress={"message": "Job cancelled by user request", "pipeline_stopped": pipeline_stopped}
         )
         
         if not success:
+            logger.error(f"CloudAPI: Failed to update Firestore status for cancelled job {task_id}")
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to cancel job {task_id}"
             )
         
-        logger.info(f"Cancelled job {task_id}")
+        logger.info(f"CloudAPI: Successfully cancelled job {task_id} (pipeline_stopped: {pipeline_stopped})")
         
         return {
             "task_id": task_id,
             "status": "cancelled",
-            "message": "Job cancelled successfully"
+            "message": "Job cancelled successfully",
+            "pipeline_stopped": pipeline_stopped
         }
         
     except HTTPException:

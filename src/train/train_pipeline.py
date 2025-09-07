@@ -354,6 +354,11 @@ class TrainPipeline(Pipeline):
             
             return context
             
+        except InterruptedError as e:
+            logger.info(f"Model training cancelled by external request: {e}")
+            # Re-raise InterruptedError to propagate cancellation up the chain
+            raise
+            
         except Exception as e:
             error_msg = f"Model training failed: {str(e)}"
             logger.error(error_msg)
@@ -468,6 +473,11 @@ class TrainPipeline(Pipeline):
                 print("\n" + evaluation_report)
             
             return context
+            
+        except InterruptedError as e:
+            logger.info(f"Model evaluation cancelled by external request: {e}")
+            # Re-raise InterruptedError to propagate cancellation up the chain
+            raise
             
         except Exception as e:
             error_msg = f"Model evaluation failed: {str(e)}"

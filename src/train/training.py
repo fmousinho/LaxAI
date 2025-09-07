@@ -886,6 +886,36 @@ class Training:
                     logger.debug(f"Memory leak detection warning: {memory_check_error}")
 
 
+        except InterruptedError as e:
+            logger.info(f"Training cancelled by external request: {e}")
+            
+            # Clean up both GPU and CPU memory on cancellation
+            logger.info("Cleaning up GPU and CPU memory after training cancellation...")
+            
+            # Clear all variables that might hold GPU tensors
+            if 'anchor' in locals():
+                del anchor
+            if 'positive' in locals():
+                del positive
+            if 'negative' in locals():
+                del negative
+            if 'emb_anchor' in locals():
+                del emb_anchor
+            if 'emb_positive' in locals():
+                del emb_positive
+            if 'emb_negative' in locals():
+                del emb_negative
+            if 'loss' in locals():
+                del loss
+            
+            # Force cleanup
+            clear_gpu_memory()
+            clear_cpu_memory(force=True)
+            self.cpu_monitor.log_memory_stats("After cancellation cleanup")
+            
+            # Re-raise the InterruptedError to propagate cancellation
+            raise
+            
         except (RuntimeError, torch.cuda.OutOfMemoryError) as e:
             logger.error(f"Training failed with error: {e}")
             

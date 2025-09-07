@@ -21,6 +21,7 @@ from config.logging_config import print_banner
 from config.parameter_registry import parameter_registry
 from common.google_storage import get_storage, GCSPaths
 from train.train_pipeline import TrainPipeline
+from utils.cpu_memory import clear_cpu_memory, log_comprehensive_memory_stats
 
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
@@ -129,6 +130,10 @@ def train(tenant_id: str,
 
 
         logger.info("--- End-to-End Workflow Finished ---")
+        
+        # Clean up memory after workflow completion
+        log_comprehensive_memory_stats("Workflow completion")
+        clear_cpu_memory(force=True)
 
         # Return the pipeline results to callers (tests, API wrappers)
         return train_results
@@ -136,6 +141,10 @@ def train(tenant_id: str,
     except Exception as e:
         logger.error(f"Error occurred during workflow: {e}")
         logger.error(f"Details: {json.dumps(e.args, indent=2)}")
+        
+        # Clean up memory even on failure
+        clear_cpu_memory(force=True)
+        
         # Surface exceptions to callers/tests
         raise
 

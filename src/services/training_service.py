@@ -178,8 +178,8 @@ async def _run_training_task(task_id: str, kwargs: Dict[str, Any]):
 
 		result = await loop.run_in_executor(None, training_wrapper)
 
-		if isinstance(result, dict) and result.get("pipeline_name"):
-			TRAINING_JOBS[task_id]["pipeline_name"] = result.get("pipeline_name")
+		# Pipeline name is already set correctly when job was created
+		# No need to update it from result
 
 		returned_status = result.get("status") if isinstance(result, dict) else None
 		if returned_status == "completed":
@@ -195,7 +195,8 @@ async def _run_training_task(task_id: str, kwargs: Dict[str, Any]):
 
 	except InterruptedError as e:
 		cancel_msg = f"Training cancelled: {str(e)}"
-		logger.info(f"Training task {task_id} was cancelled: {cancel_msg}")
+		logger.info(f"TrainingService: Training task {task_id} was cancelled: {cancel_msg}")
+		logger.debug(f"TrainingService: Cancellation occurred during training execution for task {task_id}")
 
 		TRAINING_JOBS[task_id]["status"] = "cancelled"
 		TRAINING_JOBS[task_id]["progress"]["status"] = "cancelled"
@@ -272,36 +273,49 @@ def cancel_job(task_id: str) -> bool:
 	Returns True if a pipeline stop was requested; False if job was only marked cancelled
 	because pipeline was not registered/found.
 	"""
+	logger.info(f"CancellationService: Starting cancellation process for task {task_id}")
+
 	job = TRAINING_JOBS.get(task_id)
 	if not job:
+		logger.warning(f"CancellationService: Job {task_id} not found in tracking store")
 		return False
 
-	if job["status"] not in ["pending", "running"]:
-		# Nothing to do
+	current_status = job.get("status", "unknown")
+	logger.info(f"CancellationService: Job {task_id} current status: {current_status}")
+
+	if current_status not in ["pending", "running"]:
+		logger.info(f"CancellationService: Job {task_id} not in cancellable state (status: {current_status})")
 		return False
 
 	pipeline_name = job.get("pipeline_name")
+	logger.info(f"CancellationService: Job {task_id} pipeline name: {pipeline_name}")
+
 	if pipeline_name:
+		logger.info(f"CancellationService: Attempting to stop pipeline {pipeline_name} for task {task_id}")
+
 		# Import here to avoid heavy ML dependencies during module import
 		from common.pipeline import stop_pipeline
-		
+
 		stopped = stop_pipeline(pipeline_name)
 		if stopped:
 			job["status"] = "cancelling"
 			job["progress"]["status"] = "cancelling"
 			job["progress"]["message"] = "Training pipeline cancellation requested"
-			logger.info(f"Requested cancellation for pipeline {pipeline_name} (task {task_id})")
+			logger.info(f"CancellationService: Successfully requested cancellation for pipeline {pipeline_name} (task {task_id})")
+			logger.debug(f"CancellationService: Pipeline {pipeline_name} stop request sent - waiting for graceful shutdown")
 			return True
 		else:
 			job["status"] = "cancelled"
 			job["progress"]["status"] = "cancelled"
 			job["progress"]["message"] = "Training job marked as cancelled (pipeline not found or already stopped)"
-			logger.warning(f"Pipeline {pipeline_name} not found; marked job {task_id} as cancelled in tracking only")
+			logger.warning(f"CancellationService: Pipeline {pipeline_name} not found or already stopped; marked job {task_id} as cancelled in tracking only")
+			logger.debug(f"CancellationService: Pipeline registry lookup failed for {pipeline_name} - job marked cancelled locally")
 			return False
 	else:
 		# Pipeline name missing; mark cancelled in tracker
 		job["status"] = "cancelled"
 		job["progress"]["status"] = "cancelled"
 		job["progress"]["message"] = "Training job marked as cancelled (pipeline not yet registered)"
-		logger.warning(f"Pipeline name not set for job {task_id}; marked as cancelled in tracker only")
+		logger.warning(f"CancellationService: Pipeline name not set for job {task_id}; marked as cancelled in tracker only")
+		logger.debug(f"CancellationService: Job {task_id} created without pipeline_name - likely cancelled before pipeline registration")
 		return False
