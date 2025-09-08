@@ -14,7 +14,7 @@ from utils.evaluation_memory import log_evaluation_memory_usage
 from utils.dataloader_memory import worker_init_fn
 
 from train.evaluator import (calculate_embedding_variance, calculate_intra_inter_distances, 
-                           calculate_triplet_mining_efficiency, calculate_gradient_norm)
+                           calculate_triplet_mining_efficiency, calculate_gradient_norm, ModelEvaluator)
 
 logger = logging.getLogger(__name__)
 
@@ -709,7 +709,10 @@ class Training:
                     logger.info(f"Validation Loss: {epoch_val_loss:.4f}")
                     monitoring_loss = epoch_val_loss
                     for key, val in reid_metrics.items():
-                        logger.info(f"  - {key}: {val:.4f}")
+                        if isinstance(val, dict):
+                            logger.info(f"  - {key}: [nested metrics]")
+                        else:
+                            logger.info(f"  - {key}: {val:.4f}")
 
                 # Clear evaluation metrics to prevent memory accumulation
                 # Don't delete reid_metrics here as it's still needed for WandB logging

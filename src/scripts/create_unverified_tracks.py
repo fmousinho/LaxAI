@@ -22,7 +22,7 @@ setup_environment_secrets()
 
 # Imports using relative imports since we're now in the src package
 from common.google_storage import get_storage, GCSPaths
-from train.unverified_track_generator_pipeline import TrackGeneratorPipeline
+from track.unverified_track_generator_pipeline import TrackGeneratorPipeline
 from config.all_config import detection_config
 
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.

@@ -59,10 +59,11 @@ def test_training_runs_and_triggers_evaluation(monkeypatch):
     # Force validation to run every epoch
     monkeypatch.setattr(training_mod, 'EPOCHS_PER_VAL', 1)
 
-    # Spy on evaluator to ensure it's called during validation
+    # Spy on the evaluation method to ensure it's called during validation
     called = {'count': 0}
+    original_evaluate = training_mod.Training._evaluate_reid_metrics
 
-    def fake_evaluate(self, dataset):
+    def mock_evaluate_reid_metrics(self, dataloader):
         called['count'] += 1
         # Return a small, valid metrics dict
         return {
@@ -71,7 +72,7 @@ def test_training_runs_and_triggers_evaluation(monkeypatch):
             'distance_metrics': {'avg_distance_same_player': 0.1}
         }
 
-    monkeypatch.setattr(evaluator_mod.ModelEvaluator, 'evaluate_comprehensive', fake_evaluate)
+    monkeypatch.setattr(training_mod.Training, '_evaluate_reid_metrics', mock_evaluate_reid_metrics)
 
     # Prevent wandb logger from raising during tests when not initialized
     from src.train.wandb_logger import wandb_logger as tw

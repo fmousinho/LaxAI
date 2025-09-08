@@ -20,7 +20,7 @@ def test_siamese_one_epoch_on_device(device):
     """
     try:
         from src.train.siamesenet import SiameseNet
-        from config.all_config import model_config
+        from src.config.all_config import model_config
     except Exception as e:
         pytest.skip(f"Could not import SiameseNet or config: {e}")
 

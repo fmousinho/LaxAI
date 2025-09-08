@@ -136,6 +136,9 @@ class Pipeline:
         self._stop_requested = False
         self._stop_lock = threading.Lock()
         
+        # Track completed steps for checkpointing
+        self._current_completed_steps = []
+        
         # Initialize steps based on definitions
         self.steps = self._initialize_steps()
         
@@ -148,15 +151,11 @@ class Pipeline:
                 logger.info(f"PipelineRegistry: Applying queued cancellation for pipeline during registration: {pipeline_name}")
                 logger.debug(f"PipelineRegistry: Found pending cancellation for {pipeline_name}, applying immediately")
                 self.request_stop()
-                _pending_cancellations.discard(pipeline_name)
-                logger.debug(f"PipelineRegistry: Removed {pipeline_name} from pending cancellations set")
-        
-        if self.verbose:
-            logger.info(f"Initialized {pipeline_name} pipeline")
-            logger.info(f"Run GUID: {self.run_guid}")
-            logger.info(f"Verbose mode: {self.verbose}")
-            logger.info(f"Save intermediate: {self.save_intermediate}")
-            logger.info(f"Steps: {list(self.steps.keys())}")
+    
+    @property
+    def current_completed_steps(self) -> List[str]:
+        """Get the list of currently completed steps."""
+        return self._current_completed_steps.copy()
     
     def _initialize_steps(self) -> Dict[str, PipelineStep]:
         """
@@ -441,6 +440,22 @@ class Pipeline:
             logger.error(f"Error saving checkpoint: {e}")
             return False
     
+    def save_checkpoint(self, context: Dict[str, Any], completed_steps: List[str]) -> bool:
+        """
+        Public method to save a checkpoint during step execution.
+        
+        This allows long-running steps to save their progress periodically,
+        enabling more granular resumption capabilities.
+        
+        Args:
+            context: Current pipeline context with step progress
+            completed_steps: List of completed step names
+            
+        Returns:
+            True if checkpoint saved successfully, False otherwise
+        """
+        return self._save_checkpoint(context, completed_steps)
+    
     def _make_json_serializable(self, obj):
         """
         Recursively convert any object to a JSON-serializable format.
@@ -682,9 +697,11 @@ class Pipeline:
             if checkpoint_data:
                 context = self._restore_from_checkpoint(checkpoint_data)
                 completed_steps = checkpoint_data["completed_steps"]
+                self._current_completed_steps = completed_steps.copy()  # Update current completed steps
                 logger.info(f"Resuming from checkpoint. Skipping {len(completed_steps)} completed steps")
             else:
                 logger.info("No valid checkpoint found, starting from beginning")
+                self._current_completed_steps = []
         
         results = {
             "pipeline_name": self.pipeline_name,
@@ -729,6 +746,7 @@ class Pipeline:
                     
                     results["steps_completed"] += 1
                     completed_steps.append(step_name)
+                    self._current_completed_steps.append(step_name)  # Update current completed steps
                     
                     # Save checkpoint after each completed step
                     if not self._save_checkpoint(context, completed_steps):
