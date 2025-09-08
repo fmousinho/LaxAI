@@ -1,3 +1,0 @@
--r requirements-base.txt
-
-# DO NOT include torch/torchvision if your BASE_IMAGE already provides them

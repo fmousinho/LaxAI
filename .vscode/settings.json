@@ -1,11 +1,66 @@
 {
+  // Python Configuration
   "python.defaultInterpreterPath": "/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI/.venv31211/bin/python",
-  "python.analysis.diagnosticMode": "openFilesOnly",
-
-  "python.testing.pytestEnabled": true,
-  "python.testing.pytestArgs": [
-    "tests"
+  "python.analysis.diagnosticMode": "workspace",
+  "python.analysis.extraPaths": [
+    "./src",
+    "./src/track",
+    "./src/train",
+    "./src/api",
+    "./src/cloud",
+    "./src/common",
+    "./src/config"
   ],
+  "python.analysis.autoImportCompletions": true,
+  "python.analysis.typeCheckingMode": "basic",
+
+  // Testing Configuration
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": ["tests"],
   "python.testing.unittestEnabled": false,
-  "python.testing.autoTestDiscoverOnSaveEnabled": true
+  "python.testing.autoTestDiscoverOnSaveEnabled": true,
+
+  // Linting Configuration
+  "python.linting.enabled": true,
+  "python.linting.pylintEnabled": false,
+  "python.linting.flake8Enabled": true,
+  "python.linting.flake8Args": ["--max-line-length=120", "--ignore=E203,W503"],
+
+  // File Associations and Exclusions
+  "files.associations": {
+    "*.code-workspace": "jsonc",
+    "*.env": "properties",
+    "Dockerfile*": "dockerfile"
+  },
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "**/.venv*": false,
+    "**/wandb": true,
+    "**/artifacts": false,
+    "**/.DS_Store": true
+  },
+
+  // Editor Configuration
+  "editor.rulers": [88, 120],
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.organizeImports": "explicit"
+  },
+
+  // Terminal Configuration
+  "terminal.integrated.env.osx": {
+    "PYTHONPATH": "${workspaceFolder}/src"
+  },
+
+  // Search Configuration
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/bower_components": true,
+    "**/*.code-search": true,
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "**/wandb": true,
+    "**/artifacts": true
+  }
 }

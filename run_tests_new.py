@@ -9,11 +9,10 @@ Runs tests across all services in the correct order:
 5. End-to-end tests (slowest, run last)
 """
 
-import os
 import subprocess
 import sys
+import os
 from pathlib import Path
-
 
 def run_command(cmd, description, cwd=None):
     """Run a command and return the exit code."""
