@@ -377,12 +377,13 @@ def test_train_all_resnet_with_checkpoint_verification():
     # Ensure secrets for longer e2e tests
     setup_environment_secrets()
 
-    from train_all import train
+    from services.service_training.src.workflows.training_workflow import \
+        TrainingWorkflow
 
     run_name = f"e2e_resnet_checkpoint_test_{uuid.uuid4().hex[:8]}"
 
     try:
-        results = train(
+        workflow = TrainingWorkflow(
             tenant_id="tenant1",
             verbose=False,
             save_intermediate=False,
@@ -393,6 +394,7 @@ def test_train_all_resnet_with_checkpoint_verification():
             model_kwargs={"model_class_module": "siamesenet", "model_class_str": "SiameseNet"},
             n_datasets_to_use=2,
         )
+        results = workflow.execute()
 
         # Verify training completed successfully
         assert isinstance(results, dict)
@@ -476,10 +478,11 @@ def test_train_all_with_dino_memory_stable():
     gc.collect()
     initial_memory = process.memory_info().rss / 1024 / 1024  # MB
 
-    from train_all import train
+    from services.service_training.src.workflows.training_workflow import \
+        TrainingWorkflow
 
     try:
-        results = train(
+        workflow = TrainingWorkflow(
             tenant_id="tenant1",
             verbose=False,
             save_intermediate=False,
@@ -490,6 +493,7 @@ def test_train_all_with_dino_memory_stable():
             model_kwargs={"model_class_module": "siamesenet_dino", "model_class_str": "SiameseNet"},
             n_datasets_to_use=1,
         )
+        results = workflow.execute()
 
         # Verify training completed successfully
         assert isinstance(results, dict)
@@ -515,9 +519,10 @@ def test_train_all_with_dino_memory_stable():
 
 
 def test_train_signature_has_n_datasets_to_use():
-    """Test that the train function signature includes n_datasets_to_use parameter."""
-    from train_all import train
-    sig = inspect.signature(train)
+    """Test that the TrainingWorkflow class signature includes n_datasets_to_use parameter."""
+    from services.service_training.src.workflows.training_workflow import \
+        TrainingWorkflow
+    sig = inspect.signature(TrainingWorkflow.__init__)
     assert "n_datasets_to_use" in sig.parameters
 
 

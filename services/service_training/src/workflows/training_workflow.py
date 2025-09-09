@@ -80,7 +80,8 @@ class TrainingWorkflow:
         """
         try:
             storage = get_storage()
-            tenant_path = GCSPaths.tenant_path(self.tenant_id)
+            path_manager = GCSPaths()
+            tenant_path =path_manager.get_path(self.tenant_id)
 
             # List all directories in the tenant's processed data path
             processed_path = f"{tenant_path}/processed"
