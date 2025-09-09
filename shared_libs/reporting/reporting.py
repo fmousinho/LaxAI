@@ -1,8 +1,10 @@
 import logging
 import os
+
 import cv2
 
 logger = logging.getLogger(__name__)
+
 
 def generate_track_report_html(run_id: str, run_output_dir: str, track_rows: list):
     """Generates an HTML report with a row for each track, showing crops, masked crops, team, and player ID."""
@@ -20,12 +22,12 @@ def generate_track_report_html(run_id: str, run_output_dir: str, track_rows: lis
         masked_crop = row["masked_crop"]
         crop_path = None
         masked_path = None
-        if crop is not None and hasattr(crop, 'size') and crop.size > 0:
+        if crop is not None and hasattr(crop, "size") and crop.size > 0:
             crop_filename = f"crop_{tid}.png"
             crop_abs_path = os.path.join(crops_dir, crop_filename)
             cv2.imwrite(crop_abs_path, crop)
             crop_path = os.path.join("crops", crop_filename)
-        if masked_crop is not None and hasattr(masked_crop, 'size') and masked_crop.size > 0:
+        if masked_crop is not None and hasattr(masked_crop, "size") and masked_crop.size > 0:
             masked_filename = f"masked_{tid}.png"
             masked_abs_path = os.path.join(masked_dir, masked_filename)
             cv2.imwrite(masked_abs_path, masked_crop)
@@ -64,19 +66,19 @@ def generate_track_report_html(run_id: str, run_output_dir: str, track_rows: lis
         <tbody>
 """
     for row in track_rows:
-        html_content += f"<tr>"
+        html_content += "<tr>"
         html_content += f"<td>{row['track_id']}</td>"
         if row["crop_path"]:
             html_content += f'<td><img src="{row["crop_path"]}" class="crop-img"></td>'
         else:
-            html_content += f'<td></td>'
+            html_content += "<td></td>"
         if row["masked_path"]:
             html_content += f'<td><img src="{row["masked_path"]}" class="crop-img"></td>'
         else:
-            html_content += f'<td></td>'
+            html_content += "<td></td>"
         html_content += f"<td>{row['team']}</td>"
         html_content += f"<td>{row['player_id']}</td>"
-        html_content += f"</tr>"
+        html_content += "</tr>"
     html_content += """
         </tbody>
     </table>
@@ -86,13 +88,14 @@ def generate_track_report_html(run_id: str, run_output_dir: str, track_rows: lis
     with open(report_html_path, "w", encoding="utf-8") as f:
         f.write(html_content)
     logger.info(f"Generated Track Analysis HTML report for run {run_id}:")
-    logger.info (f"link: {report_html_path}")
+    logger.info(f"link: {report_html_path}")
 
 
 logger = logging.getLogger(__name__)
 
-REPORTS_BASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "analyse", "reports")
-
+REPORTS_BASE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "analyse", "reports"
+)
 
 
 def generate_player_report_html(run_id: str, run_output_dir: str, player_rows: list):
@@ -106,21 +109,23 @@ def generate_player_report_html(run_id: str, run_output_dir: str, player_rows: l
         player_id = row["player_id"]
         player_crop_dir = os.path.join(crops_dir, f"player_{player_id}")
         os.makedirs(player_crop_dir, exist_ok=True)
-        
+
         # Process each track for this player
         for track_idx, track_data in enumerate(row["tracks"]):
             track_id = track_data["track_id"]
             track_crop_dir = os.path.join(player_crop_dir, f"track_{track_id}")
             os.makedirs(track_crop_dir, exist_ok=True)
-            
+
             crop_paths = []
             for i, crop_np in enumerate(track_data["crops"]):
-                if crop_np is None or not hasattr(crop_np, 'size') or crop_np.size == 0:
+                if crop_np is None or not hasattr(crop_np, "size") or crop_np.size == 0:
                     continue
                 crop_filename = f"crop_{i}.png"
                 crop_abs_path = os.path.join(track_crop_dir, crop_filename)
                 cv2.imwrite(crop_abs_path, crop_np)
-                relative_path = os.path.join("crops", f"player_{player_id}", f"track_{track_id}", crop_filename)
+                relative_path = os.path.join(
+                    "crops", f"player_{player_id}", f"track_{track_id}", crop_filename
+                )
                 crop_paths.append(relative_path)
             track_data["report_crop_paths"] = crop_paths
 
@@ -172,17 +177,17 @@ def generate_player_report_html(run_id: str, run_output_dir: str, player_rows: l
     for row in sorted_rows:
         player_id = row["player_id"]
         num_tracks = row["num_tracks"]
-        total_crops = row["total_crops"]
-        
+        row["total_crops"]
+
         # Track detail rows with player ID in the first row
         first_track = True
-        
+
         for track_data in row["tracks"]:
             track_id = track_data["track_id"]
             frame_range = f"{track_data['frame_first_seen']}-{track_data['frame_last_seen']}"
             num_crops = track_data["num_crops"]
             team = track_data.get("team", "Unknown")
-            
+
             if first_track:
                 # First row shows player info and first tracker
                 html_content += f"""
@@ -207,7 +212,7 @@ def generate_player_report_html(run_id: str, run_output_dir: str, player_rows: l
                 <td>
                     <div class="crop-gallery">
 """
-            
+
             for crop_path in track_data["report_crop_paths"]:
                 html_content += f'                        <img src="{crop_path}" alt="Crop for player {player_id} track {track_id}">\n'
             html_content += """
@@ -231,7 +236,11 @@ def update_main_index_html():
     os.makedirs(REPORTS_BASE_DIR, exist_ok=True)
     index_html_path = os.path.join(REPORTS_BASE_DIR, "index.html")
 
-    run_ids = [item for item in os.listdir(REPORTS_BASE_DIR) if os.path.isdir(os.path.join(REPORTS_BASE_DIR, item))]
+    run_ids = [
+        item
+        for item in os.listdir(REPORTS_BASE_DIR)
+        if os.path.isdir(os.path.join(REPORTS_BASE_DIR, item))
+    ]
     run_ids.sort(reverse=True)
 
     html_content = """
@@ -260,7 +269,7 @@ def update_main_index_html():
         for run_id in run_ids:
             html_content += f'        <li><a href="{run_id}/report.html">Run - {run_id}</a></li>\n'
         html_content += "    </ul>\n"
-    
+
     html_content += """
 </body>
 </html>

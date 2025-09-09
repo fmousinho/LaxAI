@@ -6,30 +6,15 @@ functions for the LaxAI system, providing a single point of access for all modul
 """
 
 # Import configuration instances and classes from all_config.py
-from .all_config import (
-    # Instances
-    model_config,
-    tracker_config,
-    training_config,
-    detection_config,
-    clustering_config,
-    player_config,
-    track_stitching_config,
-    transform_config,
-    background_mask_config,
-    debug_config,
-    # Classes
-    ModelConfig,
-    TrackerConfig,
-    TrainingConfig,
-    DetectionConfig,
-    ClusteringConfig,
-    PlayerConfig,
-    TrackStitchingConfig,
-    TransformConfig,
-    BackgroundMaskConfig,
-    DebugConfig
-)
+from . import logging_config
+from .all_config import BackgroundMaskConfig  # Instances; Classes
+from .all_config import (ClusteringConfig, DebugConfig, DetectionConfig,
+                         ModelConfig, PlayerConfig, TrackerConfig,
+                         TrackStitchingConfig, TrainingConfig, TransformConfig,
+                         background_mask_config, clustering_config,
+                         debug_config, detection_config, model_config,
+                         player_config, track_stitching_config, tracker_config,
+                         training_config, transform_config)
 
 # Lazily import transform-related functions and instances from transforms.py.
 # The transforms module imports heavy dependencies (OpenCV / torchvision).
@@ -39,24 +24,24 @@ from .all_config import (
 # We use module-level __getattr__ (PEP 562) to defer importing until the
 # attribute is actually accessed.
 _TRANSFORM_EXPORTS = {
-    'get_transforms',
-    'TRANSFORMS',
-    'training_transforms',
-    'inference_transforms',
-    'validation_transforms',
-    'opencv_safe_transforms',
-    'opencv_safe_training_transforms',
-    'tensor_to_pil',
-    'ensure_rgb_format',
-    'BackgroundRemovalTransform',
-    'create_background_removal_transform',
-    'create_transforms_with_background_removal',
-    'set_global_background_detector',
-    'get_global_background_detector',
-    'initialize_background_removal',
-    'is_background_removal_enabled',
-    'refresh_transform_instances',
-    'create_background_detector_from_images',
+    "get_transforms",
+    "TRANSFORMS",
+    "training_transforms",
+    "inference_transforms",
+    "validation_transforms",
+    "opencv_safe_transforms",
+    "opencv_safe_training_transforms",
+    "tensor_to_pil",
+    "ensure_rgb_format",
+    "BackgroundRemovalTransform",
+    "create_background_removal_transform",
+    "create_transforms_with_background_removal",
+    "set_global_background_detector",
+    "get_global_background_detector",
+    "initialize_background_removal",
+    "is_background_removal_enabled",
+    "refresh_transform_instances",
+    "create_background_detector_from_images",
 }
 
 
@@ -81,58 +66,54 @@ def __dir__():
     base = globals().keys()
     return sorted(list(base) + list(_TRANSFORM_EXPORTS))
 
+
 # Import logging configuration (inferred from usage in dataprep_pipeline.py)
-from . import logging_config
 
 
 # Define the public API for the config package
 __all__ = [
     # --- Configuration Instances ---
-    'model_config',
-    'tracker_config',
-    'training_config',
-    'detection_config',
-    'clustering_config',
-    'player_config',
-    'track_stitching_config',
-    'transform_config',
-    'background_mask_config',
-    'debug_config',
-    'logging_config',
-
+    "model_config",
+    "tracker_config",
+    "training_config",
+    "detection_config",
+    "clustering_config",
+    "player_config",
+    "track_stitching_config",
+    "transform_config",
+    "background_mask_config",
+    "debug_config",
+    "logging_config",
     # --- Configuration Classes ---
-    'ModelConfig',
-    'TrackerConfig',
-    'TrainingConfig',
-    'DetectionConfig',
-    'ClusteringConfig',
-    'PlayerConfig',
-    'TrackStitchingConfig',
-    'TransformConfig',
-    'BackgroundMaskConfig',
-    'DebugConfig',
-
+    "ModelConfig",
+    "TrackerConfig",
+    "TrainingConfig",
+    "DetectionConfig",
+    "ClusteringConfig",
+    "PlayerConfig",
+    "TrackStitchingConfig",
+    "TransformConfig",
+    "BackgroundMaskConfig",
+    "DebugConfig",
     # --- Transform Functions & Components ---
-    'get_transforms',
-    'create_transforms_with_background_removal',
-    'BackgroundRemovalTransform',
-    'create_background_removal_transform',
-    'ensure_rgb_format',
-    'tensor_to_pil',
-
+    "get_transforms",  # type: ignore
+    "create_transforms_with_background_removal",  # type: ignore
+    "BackgroundRemovalTransform",  # type: ignore
+    "create_background_removal_transform",  # type: ignore
+    "ensure_rgb_format",  # type: ignore
+    "tensor_to_pil",  # type: ignore
     # --- Transform Instances ---
-    'TRANSFORMS',
-    'training_transforms',
-    'inference_transforms',
-    'validation_transforms',
-    'opencv_safe_transforms',
-    'opencv_safe_training_transforms',
-
+    "TRANSFORMS",  # type: ignore
+    "training_transforms",  # type: ignore
+    "inference_transforms",  # type: ignore
+    "validation_transforms",  # type: ignore
+    "opencv_safe_transforms",  # type: ignore
+    "opencv_safe_training_transforms",  # type: ignore
     # --- Background Removal API ---
-    'set_global_background_detector',
-    'get_global_background_detector',
-    'initialize_background_removal',
-    'is_background_removal_enabled',
-    'refresh_transform_instances',
-    'create_background_detector_from_images',
+    "set_global_background_detector",  # type: ignore
+    "get_global_background_detector",  # type: ignore
+    "initialize_background_removal",  # type: ignore
+    "is_background_removal_enabled",  # type: ignore
+    "refresh_transform_instances",  # type: ignore
+    "create_background_detector_from_images",  # type: ignore
 ]

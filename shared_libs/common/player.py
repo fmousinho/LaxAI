@@ -2,10 +2,6 @@ import logging
 from typing import Dict, List, Literal, Optional
 
 import numpy as np
-import supervision as sv
-from scipy.optimize import linear_sum_assignment
-
-from config.all_config import player_config
 
 logger = logging.getLogger(__name__)
 
@@ -29,20 +25,20 @@ class Player:
         det_class: The detection class ID of the player (e.g., 3 for 'player')
         team: The assigned team ID for the player
     """
-    
+
     _next_id: int = 1
-    _registry: Dict[int, 'Player'] = {}  # Registry to map tracker IDs to Player objects
+    _registry: Dict[int, "Player"] = {}  # Registry to map tracker IDs to Player objects
 
     def __init__(
         self,
         tracker_id: Optional[int] = None,
-        initial_embedding: Optional[np.ndarray] = None, 
-        initial_crops: Optional[List[np.ndarray]] = None, 
-        team: Optional[int] = None
+        initial_embedding: Optional[np.ndarray] = None,
+        initial_crops: Optional[List[np.ndarray]] = None,
+        team: Optional[int] = None,
     ) -> None:
         """
         Initialize a new Player instance.
-        
+
         Args:
             tracker_id: Optional tracker ID to associate with this player
             initial_embedding: Optional initial embedding vector
@@ -66,7 +62,7 @@ class Player:
         self.frame_last_seen: int = -1
 
     @classmethod
-    def get_player_by_tid(cls, tracker_id: int) -> Optional['Player']:
+    def get_player_by_tid(cls, tracker_id: int) -> Optional["Player"]:
         """
         Retrieve a Player instance from the registry by its tracker_id.
 
@@ -77,9 +73,9 @@ class Player:
             The Player instance if found, otherwise None
         """
         return cls._registry.get(tracker_id)
-    
+
     @classmethod
-    def get_player_by_id(cls, player_id: int) -> Optional['Player']:
+    def get_player_by_id(cls, player_id: int) -> Optional["Player"]:
         """
         Retrieve a Player instance from the registry by its unique player ID.
 
@@ -97,9 +93,7 @@ class Player:
         return None
 
     def update_embeddings(
-        self, 
-        new_embedding: np.ndarray, 
-        new_det_class: Optional[int] = None
+        self, new_embedding: np.ndarray, new_det_class: Optional[int] = None
     ) -> None:
         """
         Update the player's embedding and optionally their detection class.
@@ -115,7 +109,7 @@ class Player:
     def add_crop(self, crop: np.ndarray) -> None:
         """
         Add a new crop image to the player's collection.
-        
+
         Args:
             crop: The crop image to add
         """
@@ -127,4 +121,3 @@ class Player:
     def __repr__(self) -> str:
         """Return a string representation of the Player."""
         return f"Player(id={self.id}, team={self.team}, tracker_ids={self.associated_tracker_ids})"
-

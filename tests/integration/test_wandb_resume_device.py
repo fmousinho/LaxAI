@@ -14,11 +14,11 @@ def test_resume_from_cpu_checkpoint_to_gpu(monkeypatch):
     - Assert the training.model parameters and optimizer state tensors are on CUDA afterwards
     """
     try:
-        from src.train.siamesenet import SiameseNet
-        from src.train.training import Training
         from config.all_config import model_config, wandb_config
-        from src.train import wandb_logger as wl_mod
-        from src.train.wandb_logger import wandb_logger
+        from siamesenet import SiameseNet
+        from training import Training
+
+        from services.service_training.src.wandb_logger import wandb_logger
     except Exception as e:
         pytest.skip(f"Could not import required modules: {e}")
 

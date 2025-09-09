@@ -5,14 +5,14 @@ This module provides utilities to optimize dataset memory usage and prevent
 memory leaks from caching mechanisms.
 """
 
-import os
-import logging
 import gc
-from typing import Dict, Any, Optional, List
-import torch
+import logging
+from typing import Any, Dict, Optional
+
 from torch.utils.data import Dataset
 
 logger = logging.getLogger(__name__)
+
 
 class DatasetMemoryMonitor:
     """Monitor dataset memory usage and cache statistics."""
@@ -23,9 +23,9 @@ class DatasetMemoryMonitor:
 
     def _get_cache_size(self) -> int:
         """Get current cache size if dataset has caching."""
-        if hasattr(self.dataset, '_image_cache'):
-            cache = getattr(self.dataset, '_image_cache')
-            if hasattr(cache, '__len__'):
+        if hasattr(self.dataset, "_image_cache"):
+            cache = getattr(self.dataset, "_image_cache")
+            if hasattr(cache, "__len__"):
                 return len(cache)
         return 0
 
@@ -53,6 +53,7 @@ class DatasetMemoryMonitor:
         else:
             logger.debug(f"{context} - Dataset Cache: No cache or empty")
 
+
 def optimize_dataset_cache(dataset: Dataset, max_cache_size: Optional[int] = None):
     """
     Optimize dataset cache settings for memory efficiency.
@@ -61,16 +62,17 @@ def optimize_dataset_cache(dataset: Dataset, max_cache_size: Optional[int] = Non
         dataset: The dataset to optimize
         max_cache_size: Maximum cache size (if None, uses default optimization)
     """
-    if not hasattr(dataset, '_image_cache'):
+    if not hasattr(dataset, "_image_cache"):
         logger.debug("Dataset does not have image cache to optimize")
         return
 
-    cache = getattr(dataset, '_image_cache')
+    cache = getattr(dataset, "_image_cache")
 
     # Set optimal cache size based on available memory
     if max_cache_size is None:
         try:
             import psutil
+
             memory_gb = psutil.virtual_memory().available / 1024 / 1024 / 1024
             # Use 10% of available memory for cache, assuming ~10MB per image
             max_cache_size = int((memory_gb * 0.1) * 100)
@@ -79,10 +81,11 @@ def optimize_dataset_cache(dataset: Dataset, max_cache_size: Optional[int] = Non
             max_cache_size = 100
 
     # Apply cache size limit if cache supports it
-    if hasattr(cache, 'maxsize'):
-        original_maxsize = getattr(cache, 'maxsize', None)
+    if hasattr(cache, "maxsize"):
+        original_maxsize = getattr(cache, "maxsize", None)
         cache.maxsize = max_cache_size
         logger.info(f"Dataset cache maxsize set to {max_cache_size} (was {original_maxsize})")
+
 
 def clear_dataset_cache(dataset: Dataset, force: bool = False):
     """
@@ -93,28 +96,29 @@ def clear_dataset_cache(dataset: Dataset, force: bool = False):
         force: If True, use more aggressive clearing
     """
     try:
-        if hasattr(dataset, '_image_cache'):
-            cache = getattr(dataset, '_image_cache')
+        if hasattr(dataset, "_image_cache"):
+            cache = getattr(dataset, "_image_cache")
 
             # Clear cache if it has a clear method
-            if hasattr(cache, 'clear'):
+            if hasattr(cache, "clear"):
                 cache.clear()
                 logger.debug("Dataset image cache cleared")
 
             # For LRU cache, also clear internal structures
-            if hasattr(cache, 'cache_info'):
+            if hasattr(cache, "cache_info"):
                 info = cache.cache_info()
                 logger.debug(f"Cache cleared - was {info}")
 
         # Clear any other cached data
-        if hasattr(dataset, '_cached_data') and force:
-            dataset._cached_data.clear()
+        if hasattr(dataset, "_cached_data") and force:
+            dataset._cached_data.clear()  # type: ignore
 
         # Force garbage collection
         gc.collect()
 
     except Exception as e:
         logger.warning(f"Failed to clear dataset cache: {e}")
+
 
 def monitor_dataset_memory(dataset: Dataset, context: str = ""):
     """
@@ -130,11 +134,13 @@ def monitor_dataset_memory(dataset: Dataset, context: str = ""):
     # Additional memory monitoring
     try:
         import psutil
+
         process = psutil.Process()
         memory_mb = process.memory_info().rss / 1024 / 1024
         logger.info(f"{context} - Process Memory: {memory_mb:.1f}MB")
     except ImportError:
         pass
+
 
 class MemoryEfficientDatasetWrapper:
     """
@@ -163,7 +169,7 @@ class MemoryEfficientDatasetWrapper:
 
     def __len__(self):
         """Return dataset length."""
-        return len(self.dataset)
+        return len(self.dataset)  # type: ignore
 
     def __getitem__(self, idx):
         """Get item from dataset with memory monitoring."""
@@ -187,14 +193,13 @@ class MemoryEfficientDatasetWrapper:
         stats = {
             "access_count": self.access_count,
             "cache_size": self.monitor._get_cache_size() if self.monitor else 0,
-            "cache_memory_mb": self.monitor._get_cache_memory_usage() if self.monitor else 0.0
+            "cache_memory_mb": self.monitor._get_cache_memory_usage() if self.monitor else 0.0,
         }
         return stats
 
+
 def create_memory_efficient_dataset(
-    dataset: Dataset,
-    monitor_cache: bool = True,
-    auto_cleanup: bool = True
+    dataset: Dataset, monitor_cache: bool = True, auto_cleanup: bool = True
 ) -> MemoryEfficientDatasetWrapper:
     """
     Factory function to create memory-efficient dataset wrapper.
@@ -208,7 +213,5 @@ def create_memory_efficient_dataset(
         MemoryEfficientDatasetWrapper instance
     """
     return MemoryEfficientDatasetWrapper(
-        dataset=dataset,
-        monitor_cache=monitor_cache,
-        auto_cleanup=auto_cleanup
+        dataset=dataset, monitor_cache=monitor_cache, auto_cleanup=auto_cleanup
     )

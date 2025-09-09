@@ -5,21 +5,22 @@ This module provides utilities to optimize DataLoader configuration and prevent
 memory leaks from worker processes and caching.
 """
 
-import os
-import torch
-import logging
 import gc
-from torch.utils.data import DataLoader
-from typing import Optional, Any, Dict
+import logging
 import multiprocessing as mp
+from typing import Any, Dict, Optional
+
+import torch
+from torch.utils.data import DataLoader
 
 logger = logging.getLogger(__name__)
+
 
 def get_optimal_dataloader_config(
     num_workers: Optional[int] = None,
     batch_size: int = 32,
     dataset_size: Optional[int] = None,
-    memory_constrained: bool = False
+    memory_constrained: bool = False,
 ) -> Dict[str, Any]:
     """
     Get optimal DataLoader configuration for memory efficiency.
@@ -53,15 +54,18 @@ def get_optimal_dataloader_config(
             prefetch_factor = 2  # Default prefetch
 
     config = {
-        'num_workers': num_workers,
-        'pin_memory': torch.cuda.is_available() and num_workers > 0,
-        'persistent_workers': num_workers > 0,
-        'prefetch_factor': prefetch_factor,
-        'drop_last': True  # Consistent batch sizes
+        "num_workers": num_workers,
+        "pin_memory": torch.cuda.is_available() and num_workers > 0,
+        "persistent_workers": num_workers > 0,
+        "prefetch_factor": prefetch_factor,
+        "drop_last": True,  # Consistent batch sizes
     }
 
-    logger.info(f"Optimal DataLoader config: workers={num_workers}, prefetch={prefetch_factor}, pin_memory={config['pin_memory']}")
+    logger.info(
+        f"Optimal DataLoader config: workers={num_workers}, prefetch={prefetch_factor}, pin_memory={config['pin_memory']}"
+    )
     return config
+
 
 def cleanup_dataloader_workers(dataloader: DataLoader):
     """
@@ -72,9 +76,9 @@ def cleanup_dataloader_workers(dataloader: DataLoader):
     """
     try:
         # Shutdown the worker processes
-        if hasattr(dataloader, '_iterator') and dataloader._iterator is not None:
-            if hasattr(dataloader._iterator, '_shutdown_workers'):
-                dataloader._iterator._shutdown_workers()
+        if hasattr(dataloader, "_iterator") and dataloader._iterator is not None:
+            if hasattr(dataloader._iterator, "_shutdown_workers"):
+                dataloader._iterator._shutdown_workers()  # type: ignore
 
         # Force garbage collection
         gc.collect()
@@ -82,6 +86,7 @@ def cleanup_dataloader_workers(dataloader: DataLoader):
         logger.debug("DataLoader workers cleaned up successfully")
     except Exception as e:
         logger.warning(f"Failed to cleanup DataLoader workers: {e}")
+
 
 def monitor_dataloader_memory(dataloader: DataLoader, context: str = ""):
     """
@@ -93,14 +98,15 @@ def monitor_dataloader_memory(dataloader: DataLoader, context: str = ""):
     """
     try:
         import psutil
+
         process = psutil.Process()
 
         # Get worker process information if available
         worker_info = ""
-        if hasattr(dataloader, '_iterator') and dataloader._iterator is not None:
+        if hasattr(dataloader, "_iterator") and dataloader._iterator is not None:
             iterator = dataloader._iterator
-            if hasattr(iterator, '_workers') and iterator._workers:
-                worker_count = len(iterator._workers)
+            if hasattr(iterator, "_workers") and iterator._workers:  # type: ignore
+                worker_count = len(iterator._workers)  # type: ignore
                 worker_info = f", {worker_count} workers"
 
         memory_mb = process.memory_info().rss / 1024 / 1024
@@ -110,6 +116,7 @@ def monitor_dataloader_memory(dataloader: DataLoader, context: str = ""):
         logger.debug(f"{context} - DataLoader monitoring unavailable (psutil not installed)")
     except Exception as e:
         logger.warning(f"Failed to monitor DataLoader memory: {e}")
+
 
 class MemoryEfficientDataLoader:
     """
@@ -131,15 +138,15 @@ class MemoryEfficientDataLoader:
 
         # Get optimal configuration
         optimal_config = get_optimal_dataloader_config(
-            num_workers=kwargs.get('num_workers'),
+            num_workers=kwargs.get("num_workers"),
             batch_size=batch_size,
-            dataset_size=len(dataset) if hasattr(dataset, '__len__') else None,
-            memory_constrained=memory_constrained
+            dataset_size=len(dataset) if hasattr(dataset, "__len__") else None,
+            memory_constrained=memory_constrained,
         )
 
         # Merge with user-provided kwargs (user kwargs take precedence)
         dataloader_kwargs = {**optimal_config, **kwargs}
-        dataloader_kwargs['batch_size'] = batch_size
+        dataloader_kwargs["batch_size"] = batch_size
 
         self.dataloader = DataLoader(dataset, **dataloader_kwargs)
         self.memory_constrained = memory_constrained
@@ -162,12 +169,12 @@ class MemoryEfficientDataLoader:
     @property
     def pin_memory(self):
         """Get pin_memory setting."""
-        return getattr(self.dataloader, 'pin_memory', False)
+        return getattr(self.dataloader, "pin_memory", False)
 
     @property
     def persistent_workers(self):
         """Get persistent_workers setting."""
-        return getattr(self.dataloader, 'persistent_workers', False)
+        return getattr(self.dataloader, "persistent_workers", False)
 
     def cleanup(self):
         """Clean up DataLoader resources."""
@@ -177,11 +184,9 @@ class MemoryEfficientDataLoader:
         """Monitor DataLoader memory usage."""
         monitor_dataloader_memory(self.dataloader, context)
 
+
 def create_memory_efficient_dataloader(
-    dataset,
-    batch_size: int = 32,
-    memory_constrained: bool = False,
-    **kwargs
+    dataset, batch_size: int = 32, memory_constrained: bool = False, **kwargs
 ) -> MemoryEfficientDataLoader:
     """
     Factory function to create a memory-efficient DataLoader.
@@ -196,41 +201,37 @@ def create_memory_efficient_dataloader(
         MemoryEfficientDataLoader instance
     """
     return MemoryEfficientDataLoader(
-        dataset=dataset,
-        batch_size=batch_size,
-        memory_constrained=memory_constrained,
-        **kwargs
+        dataset=dataset, batch_size=batch_size, memory_constrained=memory_constrained, **kwargs
     )
 
 
 def worker_init_fn(worker_id: int) -> None:
     """
     Initialize worker process with suppressed logging and custom startup message.
-    
+
     This function suppresses all logging from DataLoader worker processes and replaces
     them with clean "starting worker X" messages. It's designed to reduce log noise
     when using multiple workers in PyTorch DataLoaders.
-    
+
     Args:
         worker_id: The worker ID assigned by PyTorch DataLoader
     """
     import logging
     import os
     import sys
-    from typing import Any
-    
+
     # Suppress all logging from worker processes
     logging.getLogger().setLevel(logging.WARNING)
-    
+
     # Suppress stdout/stderr from libraries that might log
     # Redirect to null device to completely silence worker output
-    sys.stdout = open(os.devnull, 'w')
-    sys.stderr = open(os.devnull, 'w')
-    
+    sys.stdout = open(os.devnull, "w")
+    sys.stderr = open(os.devnull, "w")
+
     # Create a custom logger just for our startup message
-    worker_logger = logging.getLogger(f'worker_{worker_id}')
+    worker_logger = logging.getLogger(f"worker_{worker_id}")
     worker_logger.setLevel(logging.INFO)
-    
+
     # Create handler that writes to the original stderr (bypassing our redirect)
     class WorkerMessageHandler(logging.Handler):
         def emit(self, record: logging.LogRecord) -> None:
@@ -240,10 +241,10 @@ def worker_init_fn(worker_id: int) -> None:
             except (OSError, AttributeError):
                 # Fallback if direct write fails
                 pass
-    
+
     # Add our custom handler
     worker_logger.addHandler(WorkerMessageHandler())
     worker_logger.propagate = False  # Don't send to parent loggers
-    
+
     # Log the startup message
     worker_logger.info(f"Starting worker {worker_id}")

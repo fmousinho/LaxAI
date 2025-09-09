@@ -1,9 +1,8 @@
-import torch
-import pytest
 import numpy as np
-
-from src.train.training import Training
-from src.train.siamesenet import SiameseNet
+import pytest
+import torch
+from siamesenet import SiameseNet
+from training import Training
 
 
 class DummyTripletDataset(torch.utils.data.Dataset):
@@ -53,8 +52,8 @@ class DummyModel(SiameseNet):
 
 def test_training_runs_and_triggers_evaluation(monkeypatch):
     # Arrange
-    import src.train.training as training_mod
-    import train.evaluator as evaluator_mod
+    import evaluator as evaluator_mod
+    import training as training_mod
 
     # Force validation to run every epoch
     monkeypatch.setattr(training_mod, 'EPOCHS_PER_VAL', 1)
@@ -75,7 +74,8 @@ def test_training_runs_and_triggers_evaluation(monkeypatch):
     monkeypatch.setattr(training_mod.Training, '_evaluate_reid_metrics', mock_evaluate_reid_metrics)
 
     # Prevent wandb logger from raising during tests when not initialized
-    from src.train.wandb_logger import wandb_logger as tw
+    from services.service_training.src.wandb_logger import wandb_logger as tw
+
     # Stub common wandb interactions used during training so tests remain isolated
     monkeypatch.setattr(tw, 'log_metrics', lambda *a, **k: None)
     monkeypatch.setattr(tw, 'save_checkpoint', lambda *a, **k: None)

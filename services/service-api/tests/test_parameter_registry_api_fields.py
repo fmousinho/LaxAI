@@ -3,10 +3,10 @@ import sys
 
 def test_training_config_includes_registered_params():
     """Ensure dynamic TrainingConfig model includes all parameters registered under 'training_config'."""
-    sys.path.append('src')
+    
 
     from config.parameter_registry import parameter_registry
-    from api.v1.schemas.training import create_training_config_model
+    from v1.schemas.training import create_training_config_model
 
     TrainingConfig = create_training_config_model()
 

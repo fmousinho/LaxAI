@@ -6,13 +6,14 @@ module so the endpoint code stays thin and the business logic is testable.
 """
 import asyncio
 import logging
+import time
 import traceback
 import uuid
-import time
 from typing import Any, Dict, Optional, Tuple
+
 from fastapi import BackgroundTasks
 
-from utils.env_secrets import setup_environment_secrets
+from shared_libs.utils.env_secrets import setup_environment_secrets
 
 # Try to setup environment secrets, but don't fail if unavailable
 try:
@@ -40,7 +41,7 @@ def validate_training_params(payload) -> None:
 	"""
 	try:
 		# Import the dynamic TrainingConfig here to avoid circular imports
-		from api.v1.schemas.training import TrainingConfig
+		from v1.schemas.training import TrainingConfig
 	except Exception as e:
 		# If the dynamic schema cannot be imported, raise a clear error
 		raise RuntimeError(f"Failed to load TrainingConfig for validation: {e}")
@@ -152,7 +153,7 @@ async def _run_training_task(task_id: str, kwargs: Dict[str, Any]):
 	"""
 	try:
 		# Import training function here to avoid heavy ML dependencies during module import
-		from scripts.train_all import train as train_function
+		from service_training.src.train_all import train as train_function
 		
 		TRAINING_JOBS[task_id]["status"] = "running"
 		TRAINING_JOBS[task_id]["progress"]["status"] = "initializing"

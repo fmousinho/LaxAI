@@ -7,19 +7,20 @@ and updates progress in Firestore.
 
 Designed to run as a Cloud Run Job with GPU support and long timeouts.
 """
-import os
+import base64
 import json
 import logging
+import os
 import signal
 import sys
 import time
 from datetime import datetime
-from typing import Dict, Any, Optional
-import base64
+from typing import Any, Dict, Optional
 
 import config.logging_config
 
-from utils.env_secrets import setup_environment_secrets
+from shared_libs.utils.env_secrets import setup_environment_secrets
+
 setup_environment_secrets()
 
 # Configure logging
@@ -27,19 +28,19 @@ setup_environment_secrets()
 logger = logging.getLogger(__name__)
 
 
-from google.cloud import pubsub_v1
-from google.cloud import logging as cloud_logging
 from concurrent.futures import ThreadPoolExecutor
 
+from google.cloud import logging as cloud_logging
+from google.cloud import pubsub_v1
 
 # Import our custom modules
 try:
     # Import cloud modules (same directory in deployment)
-    from cloud.firestore_client import get_firestore_client, JobStatus
-    
-    # Import training modules from the main application
-    from services.training_service import validate_training_params, _run_training_task
     from api.v1.schemas.training import TrainingRequest
+    from cloud.firestore_client import JobStatus, get_firestore_client
+    # Import training modules from the main application
+    from services.training_service import (_run_training_task,
+                                           validate_training_params)
         
 except ImportError as e:
     logger.error(f"Failed to import local modules: {e}")

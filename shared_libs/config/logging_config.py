@@ -1,26 +1,30 @@
 import logging.config
 import sys
 import time
+import warnings
 
 LOGGING_LINE_SIZE = 110
+
 
 def _is_notebook() -> bool:
     """Check if the code is running in a Jupyter-like environment."""
     try:
         # Check for Google Colab
-        if 'google.colab' in sys.modules:
+        if "google.colab" in sys.modules:
             return True
         # Check for Jupyter
         try:
-            from IPython import get_ipython
+            from IPython.core.getipython import get_ipython
+
             shell = get_ipython().__class__.__name__
-            if shell == 'ZMQInteractiveShell':
+            if shell == "ZMQInteractiveShell":
                 return True
             return False
         except ImportError:
             return False
     except NameError:
         return False
+
 
 class PipeFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
@@ -35,10 +39,11 @@ class PipeFormatter(logging.Formatter):
         levelname = f"{record.levelname:<7}"
         asctime = f"{asctime:<12}"
         # Remove extension from filename
-        filename = record.filename.rsplit('.', 1)[0] if '.' in record.filename else record.filename
+        filename = record.filename.rsplit(".", 1)[0] if "." in record.filename else record.filename
         msg = record.getMessage()
 
         return f"{asctime} | {levelname} | [{filename}] {msg}"
+
 
 LOGGING = {
     "version": 1,
@@ -49,8 +54,8 @@ LOGGING = {
             "class": "pythonjsonlogger.json.JsonFormatter",
         },
         "pipe": {
-            '()': PipeFormatter,
-            'datefmt': "%H:%M:%S,%03d",
+            "()": PipeFormatter,
+            "datefmt": "%H:%M:%S,%03d",
         },
     },
     "handlers": {
@@ -69,7 +74,6 @@ if sys.stdout.isatty() or _is_notebook():
 else:
     LOGGING["handlers"]["stdout"]["formatter"] = "json"
 
-import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -83,7 +87,3 @@ def print_banner() -> None:
         print("=" * LOGGING_LINE_SIZE)
         print("{:^100}".format("LaxAI Starting Application"))
         print("=" * LOGGING_LINE_SIZE)
-
-
-
-

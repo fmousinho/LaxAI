@@ -21,10 +21,11 @@ Example:
 """
 
 import logging
-import numpy as np
 from typing import Optional
 
+import numpy as np
 import supervision as sv
+
 from common.player import Player
 
 logger = logging.getLogger(__name__)
@@ -68,7 +69,7 @@ def map_detections_to_players(detections: sv.Detections) -> sv.Detections:
         return detections
 
     # Extract track_ids efficiently
-    if hasattr(detections, 'tracker_id') and detections.tracker_id is not None:
+    if hasattr(detections, "tracker_id") and detections.tracker_id is not None:
         track_ids = detections.tracker_id
     else:
         logger.warning("Detections object does not have tracker_id attribute")
@@ -96,7 +97,7 @@ def map_detections_to_players(detections: sv.Detections) -> sv.Detections:
     if detections.data is None:
         detections.data = {}
 
-    detections.data['player_id'] = player_ids
+    detections.data["player_id"] = player_ids
 
     logger.info(f"Mapped {len(track_ids)} detections to {len(set(player_ids))} unique players")
 
@@ -116,7 +117,15 @@ def get_player_ids_from_detections(detections: sv.Detections) -> Optional[np.nda
     if detections is None or detections.data is None:
         return None
 
-    return detections.data.get('player_id')
+    player_ids = detections.data.get("player_id")
+    if player_ids is None:
+        return None
+
+    # Ensure we return a numpy array
+    if not isinstance(player_ids, np.ndarray):
+        player_ids = np.array(player_ids)
+
+    return player_ids
 
 
 def get_unique_players_from_detections(detections: sv.Detections) -> set:

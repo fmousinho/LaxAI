@@ -1,11 +1,11 @@
-import sys
 import json
+import sys
 
 
 def test_openapi_contains_eval_params():
-    sys.path.append('src')
+    
     from fastapi import FastAPI
-    from api.v1.endpoints import train as train_endpoint
+    from v1.endpoints import train as train_endpoint
     app = FastAPI()
     app.include_router(train_endpoint.router, prefix='/api/v1')
 
@@ -23,8 +23,9 @@ def test_openapi_contains_eval_params():
 
 
 def test_pydantic_docs_include_training_params():
-    sys.path.append('src')
-    from api.v1.schemas import training as t
+    
+    from v1.schemas import training as t
+
     # Ensure TrainingConfig doc contains at least one known training param from registry
     doc = t.get_parameter_documentation if hasattr(t, 'get_parameter_documentation') else None
     # Fallback: check that TrainingConfig model has model_fields

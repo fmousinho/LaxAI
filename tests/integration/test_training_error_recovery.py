@@ -9,18 +9,20 @@ This test ensures that:
 5. Model loading errors are handled appropriately
 """
 
+import gc
+import time
+from contextlib import contextmanager
+from unittest.mock import MagicMock, Mock, patch
+
+import psutil
 import pytest
 import torch
-import gc
-import psutil
-import time
-from unittest.mock import MagicMock, patch, Mock
-from contextlib import contextmanager
-
-from train.training import Training
-from train.wandb_logger import WandbLogger, wandb_logger
 from config.all_config import training_config, wandb_config
-from utils.env_secrets import setup_environment_secrets
+from training import Training
+
+from services.service_training.src.wandb_logger import (WandbLogger,
+                                                        wandb_logger)
+from shared_libs.utils.env_secrets import setup_environment_secrets
 
 
 class TrainingErrorSimulator:
@@ -30,7 +32,7 @@ class TrainingErrorSimulator:
     @contextmanager
     def simulate_dataset_error():
         """Simulate dataset loading/iteration errors."""
-        with patch('train.training.Training.setup_training_pipeline') as mock_setup:
+        with patch('service_training.training.Training.setup_training_pipeline') as mock_setup:
             mock_setup.side_effect = RuntimeError("Simulated dataset loading error")
             yield mock_setup
     
@@ -50,7 +52,7 @@ class TrainingErrorSimulator:
             yield torch.randn(2, 3, 224, 224)  # First batch works
             raise RuntimeError("Simulated DataLoader error")
         
-        with patch('train.training.Training.setup_dataloader') as mock_dataloader:
+        with patch('service_training.training.Training.setup_dataloader') as mock_dataloader:
             mock_dl = MagicMock()
             mock_dl.__iter__ = lambda: failing_dataloader()
             mock_dl.__len__ = lambda: 2
@@ -62,7 +64,7 @@ class TrainingErrorSimulator:
     def simulate_checkpoint_save_error():
         """Simulate checkpoint saving errors."""
         # Import the specific instance to mock it properly
-        from train.wandb_logger import wandb_logger
+        from services.service_training.src.wandb_logger import wandb_logger
         with patch.object(wandb_logger, 'save_checkpoint') as mock_save:
             mock_save.side_effect = RuntimeError("Simulated checkpoint save error")
             yield mock_save

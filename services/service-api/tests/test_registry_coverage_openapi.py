@@ -9,11 +9,11 @@ def test_all_registered_params_present_in_openapi():
       - If param is in parameter_registry.model_parameters -> ModelConfig
       - If param is in parameter_registry.eval_parameters -> EvalConfig
     """
-    sys.path.append('src')
+    
 
     from config.parameter_registry import parameter_registry
     from fastapi import FastAPI
-    from api.v1.endpoints import train as train_endpoint
+    from v1.endpoints import train as train_endpoint
 
     # Build a lightweight app with only the train router to generate OpenAPI safely
     app = FastAPI()

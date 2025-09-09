@@ -7,10 +7,12 @@ during model evaluation after training.
 
 import logging
 from contextlib import contextmanager
-from typing import Optional, Any
+from typing import Any, Optional
+
 import torch
 
 logger = logging.getLogger(__name__)
+
 
 @contextmanager
 def evaluation_memory_context(training_instance, evaluator_instance):
@@ -42,6 +44,7 @@ def evaluation_memory_context(training_instance, evaluator_instance):
 
         logger.info("Evaluation memory context cleanup completed")
 
+
 def evaluate_with_memory_management(training_instance, dataset, **eval_kwargs):
     """
     Evaluate a trained model with comprehensive memory management.
@@ -54,7 +57,7 @@ def evaluate_with_memory_management(training_instance, dataset, **eval_kwargs):
     Returns:
         Evaluation results dictionary
     """
-    from train.evaluator import ModelEvaluator
+    from evaluator import ModelEvaluator
 
     logger.info("Starting evaluation with memory management")
 
@@ -62,10 +65,7 @@ def evaluate_with_memory_management(training_instance, dataset, **eval_kwargs):
     eval_model = training_instance.get_model_for_evaluation()
 
     # Create evaluator
-    evaluator = ModelEvaluator(
-        model=eval_model,
-        device=training_instance.device
-    )
+    evaluator = ModelEvaluator(model=eval_model, device=training_instance.device)
 
     try:
         # Run evaluation
@@ -81,6 +81,7 @@ def evaluate_with_memory_management(training_instance, dataset, **eval_kwargs):
         evaluator.cleanup()
         raise
 
+
 def get_memory_efficient_evaluation_config():
     """
     Get configuration recommendations for memory-efficient evaluation.
@@ -89,34 +90,31 @@ def get_memory_efficient_evaluation_config():
         Dictionary with evaluation configuration recommendations
     """
     return {
-        "batch_size": {
-            "recommended": 32,
-            "memory_constrained": 16,
-            "high_memory": 64
-        },
+        "batch_size": {"recommended": 32, "memory_constrained": 16, "high_memory": 64},
         "pairwise_batch_size": {
             "recommended": 4096,
             "memory_constrained": 2048,
-            "high_memory": 8192
+            "high_memory": 8192,
         },
         "batched_ranking_threshold": {
             "recommended": 5000,
             "memory_constrained": 2000,
-            "high_memory": 10000
+            "high_memory": 10000,
         },
         "pairwise_sample_cap": {
             "recommended": 1000000,
             "memory_constrained": 500000,
-            "high_memory": 2000000
+            "high_memory": 2000000,
         },
         "memory_management_tips": [
             "Use batched evaluation for large datasets (>5000 samples)",
             "Reduce batch sizes if experiencing memory issues",
             "Call evaluator.cleanup() after evaluation",
             "Consider moving model to CPU after training if GPU memory is limited",
-            "Use evaluation_memory_context() for automatic cleanup"
-        ]
+            "Use evaluation_memory_context() for automatic cleanup",
+        ],
     }
+
 
 def log_evaluation_memory_usage(stage: str, evaluator: Optional[Any] = None):
     """
@@ -128,6 +126,7 @@ def log_evaluation_memory_usage(stage: str, evaluator: Optional[Any] = None):
     """
     try:
         import psutil
+
         process = psutil.Process()
         memory_mb = process.memory_info().rss / 1024 / 1024
 
@@ -137,7 +136,7 @@ def log_evaluation_memory_usage(stage: str, evaluator: Optional[Any] = None):
             gpu_mb = torch.cuda.memory_allocated() / 1024 / 1024
             log_msg += f", {gpu_mb:.1f}MB GPU"
 
-        if evaluator and hasattr(evaluator, 'model') and evaluator.model:
+        if evaluator and hasattr(evaluator, "model") and evaluator.model:
             log_msg += f", Model on {evaluator.model.device}"
 
         logger.info(log_msg)
@@ -146,6 +145,7 @@ def log_evaluation_memory_usage(stage: str, evaluator: Optional[Any] = None):
         logger.debug(f"Evaluation Memory ({stage}) - psutil not available")
     except Exception as e:
         logger.warning(f"Failed to log evaluation memory: {e}")
+
 
 # Example usage patterns
 EVALUATION_MEMORY_EXAMPLES = """

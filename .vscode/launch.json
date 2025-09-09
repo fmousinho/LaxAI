@@ -64,11 +64,11 @@
       "request": "launch",
       "module": "pytest",
       "python": "${command:python.interpreterPath}",
-      "args": ["tests/train/", "-v", "--tb=short"],
+      "args": ["services/service-training/tests/", "-v", "--tb=short"],
       "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}",
+      "cwd": "${workspaceFolder}/services/service-training",
       "env": {
-        "PYTHONPATH": "${workspaceFolder}/src"
+        "PYTHONPATH": "${workspaceFolder}/shared_libs:${workspaceFolder}/services/service-training/src"
       }
     },
 

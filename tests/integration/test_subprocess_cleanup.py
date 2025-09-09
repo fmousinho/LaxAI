@@ -1,13 +1,14 @@
 import os
 import time
 import uuid
+from pathlib import Path
+
 import psutil
 import pytest
 import torch
-from pathlib import Path
 
-from src.train.wandb_logger import WandbLogger
-from src.utils.env_secrets import setup_environment_secrets
+from services.service_training.src.wandb_logger import WandbLogger
+from shared_libs.utils.env_secrets import setup_environment_secrets
 
 # Ensure secrets are loaded for wandb communication
 setup_environment_secrets()

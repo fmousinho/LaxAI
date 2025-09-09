@@ -3,18 +3,19 @@ Test suite for training pipeline memory stability and performance.
 Tests the comprehensive memory fixes implemented to resolve end-of-epoch memory spikes.
 """
 
-import os
 import gc
+import os
+from datetime import datetime
+from unittest.mock import MagicMock, patch
+
 import psutil
 import pytest
 import torch
-from unittest.mock import patch, MagicMock
-from datetime import datetime
-
-from train.train_pipeline import TrainPipeline
-from common.google_storage import get_storage, GCSPaths
 from config.all_config import training_config, wandb_config
-from utils.env_secrets import setup_environment_secrets
+from train_pipeline import TrainPipeline
+
+from common.google_storage import GCSPaths, get_storage
+from shared_libs.utils.env_secrets import setup_environment_secrets
 
 
 @pytest.fixture
@@ -55,7 +56,7 @@ def mock_gcs_paths():
 @pytest.fixture
 def mock_wandb_for_memory_test():
     """Mock WandB to avoid actual logging during memory tests."""
-    with patch('train.wandb_logger.wandb') as mock_wandb:
+    with patch('wandb_logger.wandb') as mock_wandb:
         # Mock WandB initialization
         mock_run = MagicMock()
         # Set specific attributes that are needed by the wandb_logger
@@ -267,7 +268,7 @@ class TestTrainingPipelineMemoryStability:
 
     def test_memory_efficient_checkpoint_saving(self, mock_wandb_for_memory_test, memory_monitor):
         """Test that checkpoint saving doesn't cause memory spikes."""
-        from train.wandb_logger import WandbLogger
+        from services.service_training.src.wandb_logger import WandbLogger
 
         # Setup environment
         setup_environment_secrets()

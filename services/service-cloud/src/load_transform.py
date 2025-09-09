@@ -8,18 +8,19 @@ This script automates the following process:
 3. Upon successful data preparation, it identifies the generated training datasets.
 4. For each training dataset, it runs the Model Training Pipeline.
 """
-import os
-import logging
 import argparse
+import logging
+import os
 
+from config.all_config import detection_config
+from dataprep_pipeline import DataPrepPipeline
+
+# Imports using relative imports since we're now in the src package
+from common.google_storage import get_storage
 
 # IMPORTANT: Load environment variables and credentials FIRST
 # This must be imported before any modules that use GCS or WandB
 
-# Imports using relative imports since we're now in the src package
-from common.google_storage import get_storage
-from train.dataprep_pipeline import DataPrepPipeline
-from config.all_config import detection_config
 
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'

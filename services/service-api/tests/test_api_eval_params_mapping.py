@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 def test_convert_request_to_kwargs_maps_eval_params():
     """Ensure the service converts request.eval_params into eval_kwargs in the kwargs dict."""
-    sys.path.append('src')
-    from src.services.training_service import _convert_request_to_kwargs
+    
+    from training_service import _convert_request_to_kwargs
 
     req = SimpleNamespace(
         tenant_id='tenant1',
@@ -27,8 +27,8 @@ def test_convert_request_to_kwargs_maps_eval_params():
 
 def test_convert_request_to_kwargs_maps_training_params():
     """Ensure the service converts request.training_params into training_kwargs in the kwargs dict."""
-    sys.path.append('src')
-    from src.services.training_service import _convert_request_to_kwargs
+    
+    from training_service import _convert_request_to_kwargs
 
     req = SimpleNamespace(
         tenant_id='tenant1',
@@ -51,11 +51,11 @@ def test_convert_request_to_kwargs_maps_training_params():
 def test_training_batch_size_flow_from_api_to_dataloader():
     """Test that batch_size from API flows correctly to DataLoader configuration."""
     import sys
-    sys.path.append('src')
-    from src.services.training_service import _convert_request_to_kwargs
-    from src.train.training import Training
     from unittest.mock import Mock, patch
+
     import torch
+    from training import Training
+    from training_service import _convert_request_to_kwargs
 
     # Mock the dataset and other dependencies
     mock_dataset = Mock()
@@ -109,11 +109,11 @@ def test_training_batch_size_flow_from_api_to_dataloader():
 def test_end_to_end_batch_size_verification():
     """Integration test showing complete batch_size flow from API to DataLoader."""
     import sys
-    sys.path.append('src')
-    from src.services.training_service import _convert_request_to_kwargs
-    from src.train.training import Training
     from unittest.mock import Mock, patch
+
     import torch
+    from training import Training
+    from training_service import _convert_request_to_kwargs
 
     print("\n=== END-TO-END BATCH SIZE VERIFICATION ===")
 

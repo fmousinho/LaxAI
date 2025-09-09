@@ -1,19 +1,18 @@
 import logging
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import cv2
 import numpy as np
 import supervision as sv
 import torch
-
-from config.all_config import tracker_config, model_config
-
-
+from config.all_config import model_config, tracker_config
 
 logger = logging.getLogger(__name__)
 
 
-def warp_bbox(bbox_tlbr: Union[np.ndarray, "torch.Tensor"], affine_matrix: Union[np.ndarray, "torch.Tensor"]) -> np.ndarray:
+def warp_bbox(
+    bbox_tlbr: Union[np.ndarray, "torch.Tensor"], affine_matrix: Union[np.ndarray, "torch.Tensor"]
+) -> np.ndarray:
     """
     Applies an affine transformation to a single bounding box.
 
@@ -86,9 +85,7 @@ def warp_bbox(bbox_tlbr: Union[np.ndarray, "torch.Tensor"], affine_matrix: Union
 
     # Convert to homogenous coordinates by adding a '1'
     # corners_hom will be (4, 3)
-    corners_hom = np.concatenate(
-        [corners, np.ones((4, 1))], axis=1
-    )
+    corners_hom = np.concatenate([corners, np.ones((4, 1))], axis=1)
 
     # Apply the transformation matrix
     # m_3x3 is (3,3), corners_hom.T is (3,4)
@@ -102,10 +99,12 @@ def warp_bbox(bbox_tlbr: Union[np.ndarray, "torch.Tensor"], affine_matrix: Union
     warped_corners = warped_corners_hom[:, :2] / warped_corners_hom[:, 2, np.newaxis]
 
     # Re-calculate the new axis-aligned bounding boxes (xyxy)
-    min_xy = warped_corners.min(axis=0) # min_xy will be (2,)
-    max_xy = warped_corners.max(axis=0) # max_xy will be (2,)
+    min_xy = warped_corners.min(axis=0)  # min_xy will be (2,)
+    max_xy = warped_corners.max(axis=0)  # max_xy will be (2,)
 
-    warped_xyxy = np.hstack([np.maximum(0, min_xy), np.maximum(0, max_xy)]) # Ensure no negative coordinates
+    warped_xyxy = np.hstack(
+        [np.maximum(0, min_xy), np.maximum(0, max_xy)]
+    )  # Ensure no negative coordinates
 
     return warped_xyxy
 
@@ -141,7 +140,11 @@ def warp_bbox_torch(bboxes: "torch.Tensor", affine: "torch.Tensor") -> "torch.Te
     if affine.dim() == 2:
         affine = affine.unsqueeze(0).expand(N, -1, -1)
     # Build 3x3 matrices
-    bottom = torch.tensor([0.0, 0.0, 1.0], device=device, dtype=torch.float32).view(1, 1, 3).expand(N, 1, 3)
+    bottom = (
+        torch.tensor([0.0, 0.0, 1.0], device=device, dtype=torch.float32)
+        .view(1, 1, 3)
+        .expand(N, 1, 3)
+    )
     M = torch.cat([affine, bottom], dim=1)  # (N,3,3)
 
     # Apply transformation: (N,3,3) @ (N,3,4) -> (N,3,4)
@@ -158,12 +161,12 @@ def warp_bbox_torch(bboxes: "torch.Tensor", affine: "torch.Tensor") -> "torch.Te
 class TrackData:
     """
     A simple data class to hold re-identification data for a track.
-    
+
     This class stores crop images, embeddings, and metadata for individual
     tracks across multiple frames to support re-identification and team
     classification tasks.
     """
-    
+
     def __init__(
         self,
         track_id: int,
@@ -174,7 +177,7 @@ class TrackData:
     ) -> None:
         """
         Initialize track data for a new track.
-        
+
         Args:
             track_id: Unique identifier for the track
             crop: Initial crop image for the track
@@ -220,16 +223,11 @@ class TrackData:
     def num_crops(self) -> int:
         """Return the number of crops stored for this track."""
         return len(self.crops)
-    
-    def update_data(
-        self, 
-        crop: np.ndarray, 
-        class_id: int, 
-        confidence: float
-    ) -> None:
+
+    def update_data(self, crop: np.ndarray, class_id: int, confidence: float) -> None:
         """
         Update the track data with a new crop, class ID, and confidence.
-        
+
         Args:
             crop: New crop image to add
             class_id: Class identifier for the detection
@@ -244,7 +242,7 @@ class TrackData:
     def update_metadata(self, class_id: int, confidence: float) -> None:
         """
         Update the track metadata without adding a crop.
-        
+
         Args:
             class_id: Class identifier for the detection
             confidence: Confidence score for the detection
@@ -253,8 +251,6 @@ class TrackData:
             self._class_confidence = confidence
             self._class_id = class_id
         self.frame_last_seen += 1
-
-
 
 
 class AffineAwareByteTrack(sv.ByteTrack):
@@ -275,7 +271,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
     ) -> None:
         """
         Initialize the AffineAwareByteTrack tracker.
-        
+
         Args:
             maintain_separate_track_obj: Whether to maintain separate track objects
             crop_save_interval: Interval for saving crops
@@ -285,7 +281,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
             lost_track_buffer=tracker_config.lost_track_buffer,
             minimum_matching_threshold=tracker_config.minimum_matching_threshold,
             frame_rate=30,
-            minimum_consecutive_frames=tracker_config.minimum_consecutive_frames
+            minimum_consecutive_frames=tracker_config.minimum_consecutive_frames,
         )
         self.track_data: dict[int, TrackData] = {}
         self.id_type = tracker_config.id_type
@@ -294,10 +290,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
         self.frame_count = 0
 
     def update_with_transform(
-        self, 
-        detections: sv.Detections, 
-        affine_matrix: np.ndarray, 
-        frame: np.ndarray
+        self, detections: sv.Detections, affine_matrix: np.ndarray, frame: np.ndarray
     ) -> sv.Detections:
         """
         Update the tracker with new detections after applying affine compensation.
@@ -321,29 +314,35 @@ class AffineAwareByteTrack(sv.ByteTrack):
         if len(detections) == 0:
             self.frame_count += 1
             return detections
-        
+
         # Warp the internal tracks' predicted locations
         # ByteTrack keeps the following 3 types of lists of tracks, all in the STtrack format
         for track_list_type in [self.tracked_tracks, self.lost_tracks]:
             for track in track_list_type:
-                if track.mean is None or track.covariance is None:  # Should not happen for active/lost tracks
+                if (
+                    track.mean is None or track.covariance is None
+                ):  # Should not happen for active/lost tracks
                     continue
 
                 current_bbox_tlbr = track.tlbr  # Derived from track.mean, shape (4,)
-                warped_bbox_tlbr = warp_bbox(current_bbox_tlbr, affine_matrix)  # Expected shape (4,)
-                
+                warped_bbox_tlbr = warp_bbox(
+                    current_bbox_tlbr, affine_matrix
+                )  # Expected shape (4,)
+
                 # Convert warped_bbox_tlbr to [cx, cy, a, h] for Kalman state
                 w_x1, w_y1, w_x2, w_y2 = warped_bbox_tlbr
                 w_w = w_x2 - w_x1
                 w_h = w_y2 - w_y1
 
                 if w_w <= 0 or w_h <= 0:  # Warped box is degenerate, skip update for this track
-                    logger.debug(f"Track {track.internal_track_id} warped to degenerate bbox: {warped_bbox_tlbr}. Skipping state update.")
+                    logger.debug(
+                        f"Track {track.internal_track_id} warped to degenerate bbox: {warped_bbox_tlbr}. Skipping state update."
+                    )
                     continue
 
                 new_cx = w_x1 + w_w / np.float32(2.0)
                 new_cy = w_y1 + w_h / np.float32(2.0)
-                new_a = w_w / w_h 
+                new_a = w_w / w_h
                 new_h = w_h
 
                 # Update positional components of track.mean
@@ -373,25 +372,25 @@ class AffineAwareByteTrack(sv.ByteTrack):
                 # Reset the entire covariance matrix to reflect the new state's uncertainty,
                 # similar to KalmanFilter.initiate().
                 # We do NOT reset track.mean[4:8] (velocities); the filter will adjust them.
-                
-                # pylint: disable=protected-access 
+
+                # pylint: disable=protected-access
                 std_pos_w = self.kalman_filter._std_weight_position
-                std_vel_w = self.kalman_filter._std_weight_velocity 
+                std_vel_w = self.kalman_filter._std_weight_velocity
                 # pylint: enable=protected-access
 
-                current_h = track.mean[3] # This is new_h
+                current_h = track.mean[3]  # This is new_h
 
                 std = [
-                    2 * std_pos_w * current_h,       # std_cx
-                    2 * std_pos_w * current_h,       # std_cy
-                    1e-2,                            # std_a (aspect ratio std is usually small and fixed)
-                    2 * std_pos_w * current_h,       # std_h
-                    10 * std_vel_w * current_h,      # std_vcx
-                    10 * std_vel_w * current_h,      # std_vcy
-                    1e-1,                            # std_va (aspect ratio velocity std, 1e-5 in supervision is very small, 1e-1 or 1e-2 is more common)
-                    10 * std_vel_w * current_h       # std_vh
+                    2 * std_pos_w * current_h,  # std_cx
+                    2 * std_pos_w * current_h,  # std_cy
+                    1e-2,  # std_a (aspect ratio std is usually small and fixed)
+                    2 * std_pos_w * current_h,  # std_h
+                    10 * std_vel_w * current_h,  # std_vcx
+                    10 * std_vel_w * current_h,  # std_vcy
+                    1e-1,  # std_va (aspect ratio velocity std, 1e-5 in supervision is very small, 1e-1 or 1e-2 is more common)
+                    10 * std_vel_w * current_h,  # std_vh
                 ]
-                
+
                 # Ensure all std values are at least a small epsilon to avoid issues
                 # if current_h is zero or extremely small (though earlier checks should prevent zero current_h)
                 min_std_val = 1e-6
@@ -399,13 +398,16 @@ class AffineAwareByteTrack(sv.ByteTrack):
 
                 track.covariance = np.diag(np.square(std_np))
 
-        logger.debug("Applied affine transform to %d tracked, %d lost, %d removed tracks before update.",
-                     len(self.tracked_tracks), len(self.lost_tracks), len(self.removed_tracks))
-                
-        
+        logger.debug(
+            "Applied affine transform to %d tracked, %d lost, %d removed tracks before update.",
+            len(self.tracked_tracks),
+            len(self.lost_tracks),
+            len(self.removed_tracks),
+        )
+
         detections = super().update_with_detections(detections)
 
-        if self.id_type == 'internal':
+        if self.id_type == "internal":
             # Create a map from external_track_id to internal_track_id for currently tracked tracks.
             external_to_internal_id_map = {
                 track.external_track_id: track.internal_track_id
@@ -415,25 +417,27 @@ class AffineAwareByteTrack(sv.ByteTrack):
             # Replace external track IDs in detections with their internal counterparts.
             if detections.tracker_id is not None:
                 # Using .get() provides a default value (-1) for IDs not in the map.
-                internal_ids = np.array([
-                    external_to_internal_id_map.get(int(ext_id), -1)
-                    for ext_id in detections.tracker_id
-                ], dtype=int)
+                internal_ids = np.array(
+                    [
+                        external_to_internal_id_map.get(int(ext_id), -1)
+                        for ext_id in detections.tracker_id
+                    ],
+                    dtype=int,
+                )
                 detections.tracker_id = internal_ids
 
         # Updates crops for each track
         if self.maintain_separate_track_obj:
             self._update_tracks_obj(detections, frame)
-        
+
         # Increment frame count for crop saving logic
         self.frame_count += 1
 
         return detections
-    
+
     @staticmethod
     def calculate_affine_transform(
-        prev_frame: np.ndarray, 
-        current_frame: np.ndarray
+        prev_frame: np.ndarray, current_frame: np.ndarray
     ) -> Optional[np.ndarray]:
         """
         Calculate the affine transformation matrix between two frames.
@@ -455,22 +459,18 @@ class AffineAwareByteTrack(sv.ByteTrack):
 
         # Find good features to track
         prev_pts = cv2.goodFeaturesToTrack(
-            prev_gray, 
-            maxCorners=200, 
-            qualityLevel=0.01, 
-            minDistance=30
+            prev_gray, maxCorners=200, qualityLevel=0.01, minDistance=30
         )
 
         if prev_pts is None:
-            logger.warning("Could not calculate affine matrix because prev_pts is None (no good features found in previous frame).")
+            logger.warning(
+                "Could not calculate affine matrix because prev_pts is None (no good features found in previous frame)."
+            )
             return None
 
         # Calculate optical flow
         current_pts, status, err = cv2.calcOpticalFlowPyrLK(
-            prev_gray, 
-            current_gray, 
-            prev_pts, 
-            None  # type: ignore
+            prev_gray, current_gray, prev_pts, None  # type: ignore
         )
 
         # Filter out bad points
@@ -478,20 +478,27 @@ class AffineAwareByteTrack(sv.ByteTrack):
             good_new = current_pts[status == 1]
             good_old = prev_pts[status == 1]
         else:
-            logger.warning("Could not calculate affine matrix because current_pts or status is None after optical flow.")
+            logger.warning(
+                "Could not calculate affine matrix because current_pts or status is None after optical flow."
+            )
             return None
 
         # We need at least 3 points to estimate the affine transform
         if len(good_new) < 3:
-            logger.warning("Could not calculate affine matrix: not enough good points found after optical flow (found %d, need at least 3).", len(good_new))
+            logger.warning(
+                "Could not calculate affine matrix: not enough good points found after optical flow (found %d, need at least 3).",
+                len(good_new),
+            )
             return None
 
         # Estimate the affine transformation matrix
         # This matrix will map points from the prev_gray frame to the current_gray frame
         m, mask = cv2.estimateAffine2D(good_old, good_new)
-        
+
         if m is None:
-            logger.warning("cv2.estimateAffine2D returned None, failed to estimate affine transform.")
+            logger.warning(
+                "cv2.estimateAffine2D returned None, failed to estimate affine transform."
+            )
             return None
 
         # Ensure the affine matrix is float32
@@ -512,9 +519,8 @@ class AffineAwareByteTrack(sv.ByteTrack):
         Returns:
             A 2x3 float32 NumPy array representing the identity affine matrix.
         """
-        return np.array([[1.0, 0.0, 0.0],
-                         [0.0, 1.0, 0.0]], dtype=np.float32)
-    
+        return np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+
     def get_tids_for_frame(self) -> List[int]:
         """
         Retrieve all unique track IDs for the current frame, including lost tracks.
@@ -529,7 +535,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
         tids.update(track.internal_track_id for track in self.lost_tracks)
 
         return sorted(list(tids))
-        
+
     def _update_tracks_obj(self, detections: sv.Detections, frame: np.ndarray) -> None:
         """
         Update the track data with the latest detections and crops.
@@ -549,7 +555,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
         for i, tid in enumerate(detections_track_ids):
             class_id = detections.class_id[i] if detections.class_id is not None else -1
             confidence = detections.confidence[i] if detections.confidence is not None else 0.0
-            
+
             if tid not in self.track_data:
                 # For new tracks, always save the first crop
                 crop = sv.crop_image(frame, detections.xyxy[i])
@@ -558,7 +564,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
                     crop=crop,
                     class_id=class_id,
                     confidence=confidence,
-                    frame_id=self.frame_count
+                    frame_id=self.frame_count,
                 )
             else:
                 # For existing tracks, only save crop at intervals
@@ -570,10 +576,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
                     self.track_data[tid].update_metadata(class_id, confidence)
 
     def update_track_with_embedding_and_team(
-        self, 
-        track_id: int, 
-        embedding: np.ndarray, 
-        team: int
+        self, track_id: int, embedding: np.ndarray, team: int
     ) -> None:
         """
         Add an embedding and team information to the track data for a specific track ID.
@@ -588,7 +591,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
             self.track_data[track_id].team = team
         else:
             logger.warning(f"Track ID {track_id} not found in track data. Cannot add embedding.")
-       
+
     def get_tracks_data(self) -> Dict[int, TrackData]:
         """
         Retrieve the track data for all tracks.
@@ -597,7 +600,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
             A dictionary mapping track IDs to their corresponding TrackData objects.
         """
         return self.track_data
-    
+
     def get_n_of_tracks(self) -> int:
         """
         Returns the number of unique tracks currently being tracked.
@@ -606,11 +609,9 @@ class AffineAwareByteTrack(sv.ByteTrack):
             The number of unique tracks.
         """
         return len(self.track_data)
-    
+
     def create_embeddings_for_tracks(
-        self, 
-        embeddings_processor: Callable, 
-        device: torch.device = torch.device("cpu")
+        self, embeddings_processor: Callable, device: torch.device = torch.device("cpu")
     ) -> None:
         """
         Create embeddings for all tracks using batch processing.
@@ -631,7 +632,8 @@ class AffineAwareByteTrack(sv.ByteTrack):
         total_tracks = len(track_ids)
         for idx, tid in enumerate(track_ids, 1):
             # Log progress every 5%
-            from modules.utils import log_progress
+            from services.service_training.src.utils import log_progress
+
             log_progress(logger, "Embedding creation progress", idx, total_tracks)
 
             # ...existing code...
@@ -645,33 +647,49 @@ class AffineAwareByteTrack(sv.ByteTrack):
                 for crop in crops:
                     # Basic validation - transforms will handle resizing
                     if crop is None or crop.size == 0 or len(crop.shape) < 2:
-                        logger.warning(f"Track {tid}: Skipping invalid crop (None, empty, or wrong dimensions).")
+                        logger.warning(
+                            f"Track {tid}: Skipping invalid crop (None, empty, or wrong dimensions)."
+                        )
                         continue
                     # Check if crop has valid dimensions
                     if crop.shape[0] <= 0 or crop.shape[1] <= 0:
-                        logger.warning(f"Track {tid}: Skipping crop with invalid dimensions {crop.shape}.")
+                        logger.warning(
+                            f"Track {tid}: Skipping crop with invalid dimensions {crop.shape}."
+                        )
                         continue
                     # Check if crop is too small (minimum 1x1)
                     if crop.shape[0] < 1 or crop.shape[1] < 1:
                         logger.warning(f"Track {tid}: Skipping crop too small {crop.shape}.")
                         continue
                     valid_crops.append(crop)
-                
-                logger.debug(f"Track {tid}: {len(valid_crops)}/{len(crops)} valid crops after filtering.")
+
+                logger.debug(
+                    f"Track {tid}: {len(valid_crops)}/{len(crops)} valid crops after filtering."
+                )
                 # Check if we have any valid crops after filtering
                 if not valid_crops:
-                    logger.warning(f"Track {tid}: No valid crops found after filtering. Creating zero embedding.")
-                    self.track_data[tid].embedding = np.zeros((model_config.embedding_dim,), dtype=np.float32)
+                    logger.warning(
+                        f"Track {tid}: No valid crops found after filtering. Creating zero embedding."
+                    )
+                    self.track_data[tid].embedding = np.zeros(
+                        (model_config.embedding_dim,), dtype=np.float32
+                    )
                     continue
-                
+
                 # Pass crops directly to embeddings_processor (no manual preprocessing)
                 # The embeddings_processor will handle transforms and normalization
                 with torch.no_grad():
                     # Prefer to batch-process crops as a torch tensor on the target device
                     try:
-                        if isinstance(valid_crops, list) and len(valid_crops) > 0 and isinstance(valid_crops[0], np.ndarray):
+                        if (
+                            isinstance(valid_crops, list)
+                            and len(valid_crops) > 0
+                            and isinstance(valid_crops[0], np.ndarray)
+                        ):
                             # Convert numpy crops to a single torch tensor batch
-                            batch = [torch.from_numpy(c).permute(2,0,1).float() for c in valid_crops]
+                            batch = [
+                                torch.from_numpy(c).permute(2, 0, 1).float() for c in valid_crops
+                            ]
                             batch = torch.stack(batch, dim=0).to(device)
                             track_embeddings = embeddings_processor(batch)
                         else:
@@ -679,14 +697,16 @@ class AffineAwareByteTrack(sv.ByteTrack):
                     except Exception:
                         # Fallback to original processor call (some processors expect PIL/ndarray inputs)
                         track_embeddings = embeddings_processor(valid_crops)
-                
+
                 # Convert to tensor if needed for averaging and normalization
                 if isinstance(track_embeddings, np.ndarray):
-                    track_embeddings = torch.tensor(track_embeddings, device=device, dtype=torch.float32)
-                
+                    track_embeddings = torch.tensor(
+                        track_embeddings, device=device, dtype=torch.float32
+                    )
+
                 # Average the embeddings across all crops for this track
                 avg_embedding = torch.mean(track_embeddings, dim=0)
-    
+
                 # Store the averaged embedding
                 if isinstance(avg_embedding, torch.Tensor):
                     self.track_data[tid].embedding = avg_embedding.cpu().numpy()
@@ -696,14 +716,16 @@ class AffineAwareByteTrack(sv.ByteTrack):
             except Exception as e:
                 logger.error(f"Failed to create embedding for track {tid}: {e}")
                 # Set a zero embedding as fallback (matching configured embedding dimension)
-                self.track_data[tid].embedding = np.zeros((model_config.embedding_dim,), dtype=np.float32)
+                self.track_data[tid].embedding = np.zeros(
+                    (model_config.embedding_dim,), dtype=np.float32
+                )
 
         logger.info(f"Successfully processed embeddings for {len(track_ids)} tracks.")
 
     def get_embedding_statistics(self) -> Dict[str, Any]:
         """
         Returns statistics about the embeddings created for tracks.
-        
+
         Returns:
             Dict containing statistics about tracks and embeddings
         """
@@ -713,27 +735,26 @@ class AffineAwareByteTrack(sv.ByteTrack):
             "tracks_without_embeddings": 0,
             "total_crops": 0,
             "crops_per_track": [],
-            "embedding_dimensions": None
+            "embedding_dimensions": None,
         }
-        
+
         for track_data in self.track_data.values():
             stats["total_crops"] += track_data.num_crops
             stats["crops_per_track"].append(track_data.num_crops)
-            
+
             if track_data.embedding.size > 0:
                 stats["tracks_with_embeddings"] += 1
                 if stats["embedding_dimensions"] is None:
                     stats["embedding_dimensions"] = track_data.embedding.shape[0]
             else:
                 stats["tracks_without_embeddings"] += 1
-        
+
         if stats["crops_per_track"]:
             stats["avg_crops_per_track"] = np.mean(stats["crops_per_track"])
             stats["min_crops_per_track"] = np.min(stats["crops_per_track"])
             stats["max_crops_per_track"] = np.max(stats["crops_per_track"])
-        
+
         return stats
-    
 
     def update_tracks_with_loaded_detections(self, detections: sv.Detections, frame: np.ndarray):
         """

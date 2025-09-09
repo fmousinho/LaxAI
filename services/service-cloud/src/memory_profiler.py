@@ -6,22 +6,24 @@ This script provides comprehensive memory profiling capabilities to monitor
 and diagnose memory leaks during training epochs.
 """
 
+import argparse
+import gc
+import json
+import logging
 import os
 import sys
 import time
-import logging
-import argparse
-import json
-from typing import Dict, Any, List
 from pathlib import Path
+from typing import Any, Dict, List
+
 import torch
-import gc
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from utils.cpu_memory import CPUMemoryMonitor, log_comprehensive_memory_stats, clear_cpu_memory
-from utils.gpu_memory import log_gpu_memory_stats, clear_gpu_memory
+from shared_libs.utils.cpu_memory import (CPUMemoryMonitor, clear_cpu_memory,
+                                          log_comprehensive_memory_stats)
+from shared_libs.utils.gpu_memory import clear_gpu_memory, log_gpu_memory_stats
 
 logger = logging.getLogger(__name__)
 

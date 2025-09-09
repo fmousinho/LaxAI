@@ -1,17 +1,26 @@
 import logging
 import os
+import sys
 import tempfile
+# Suppress WandB Scope.user deprecation warning
+import warnings
 from typing import List, Optional, Union
 
 import numpy as np
-from supervision import Detections
 import torch
-#from utils.env_or_colab import load_env_or_colab
+from config.all_config import detection_config, wandb_config
 from PIL import Image
 from rfdetr import RFDETRBase  # type: ignore
+from supervision import Detections
+from utils.env_secrets import setup_environment_secrets
+
+setup_environment_secrets()
+
 import wandb
 
-from config.all_config import detection_config, wandb_config
+warnings.filterwarnings(
+    "ignore", message=r".*The `Scope\.user` setter is deprecated.*", category=DeprecationWarning
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +45,7 @@ class DetectionModel:
         model_dir: str = COLLECTION_NAME,
         model_version: str = ALIAS,
         device: Optional[torch.device] = None,
-    ): 
+    ):
         """
         Initializes the DetectionModel.
 
@@ -56,9 +65,11 @@ class DetectionModel:
                 self.device = torch.device("cpu")
         else:
             self.device = device
-        
+
         if self._load_model():
-            logger.info(f"Detection model '{self.model.__class__.__name__}' successfully initialized")
+            logger.info(
+                f"Detection model '{self.model.__class__.__name__}' " "successfully initialized"
+            )
             logger.info(f"Detection threshold: {detection_config.prediction_threshold}")
             logger.info(f"Model loaded onto device: {self.device}")
         else:
@@ -76,22 +87,19 @@ class DetectionModel:
         wandb_api_key = os.getenv("WANDB_API_KEY")
 
         if not wandb_api_key:
-            logger.error("WANDB_API_KEY not found in environment variables or .env file.")
-            return
+            logger.error("WandB API key not found in any source.")
+            return False
         else:
-            logger.info("WANDB_API_KEY found in environment variables or .env file.")
+            logger.info("WandB API key successfully loaded.")
         wandb.login(key=wandb_api_key)
-       
 
         try:
             run = wandb.init(
-                entity=wandb_config.team,
-                project=wandb_config.project,
-                job_type="download-model"
+                entity=wandb_config.team, project=wandb_config.project, job_type="download-model"
             )
 
             logger.info(f"Attempting to fetch artifact: {self.model_artifact}")
-            fetched_artifact = run.use_artifact(artifact_or_name=self.model_artifact, type='model')
+            fetched_artifact = run.use_artifact(artifact_or_name=self.model_artifact, type="model")
 
             # Create a temporary directory to download the model to.
             with tempfile.TemporaryDirectory() as temp_dir:
@@ -127,10 +135,10 @@ class DetectionModel:
 
                 return True
 
-        except wandb.errors.CommError as comm_err:
+        except ConnectionError as comm_err:  # Communication error (originally wandb.errors.CommError)
             logger.error(f"Communication error with wandb: {comm_err}", exc_info=True)
             return False
-        except wandb.errors.UsageError as usage_err:
+        except ValueError as usage_err:  # Usage/configuration error (originally wandb.errors.UsageError)
             logger.error(f"Usage error with wandb: {usage_err}", exc_info=True)
             return False
         except Exception as e:
@@ -144,11 +152,19 @@ class DetectionModel:
                     os.remove(temp_checkpoint_path)
                     logger.debug(f"Temporary checkpoint file removed: {temp_checkpoint_path}")
                 except OSError as e:
-                    logger.warning(f"Error removing temporary checkpoint file {temp_checkpoint_path}: {e}")
+                    logger.warning(
+                        f"Error removing temporary checkpoint file " f"{temp_checkpoint_path}: {e}"
+                    )
 
     def generate_detections(
         self,
-        images: Union[str, Image.Image, np.ndarray, torch.Tensor, List[Union[str, np.ndarray, Image.Image, torch.Tensor]]],
+        images: Union[
+            str,
+            Image.Image,
+            np.ndarray,
+            torch.Tensor,
+            List[Union[str, np.ndarray, Image.Image, torch.Tensor]],
+        ],
         threshold: float = detection_config.prediction_threshold,
         **kwargs,
     ) -> Union[Detections, List[Detections]]:
@@ -170,8 +186,8 @@ class DetectionModel:
         """
         if isinstance(images, (torch.Tensor, list)) and sys.platform == "darwin":
             raise NotImplementedError(
-                "torch.Tensor and List inputs are not yet supported by the underlying RF-DETR model. "
-                "Please use a file path (str), PIL.Image, or np.ndarray."
+                "torch.Tensor and List inputs are not yet supported by the underlying "
+                "RF-DETR model. Please use a file path (str), PIL.Image, or np.ndarray."
             )
 
         return self.model.predict(images, threshold=threshold, **kwargs)

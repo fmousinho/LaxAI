@@ -1,9 +1,9 @@
-import os
 import importlib
+import os
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
 
 try:
     import utils.env_secrets as env_secrets
@@ -14,7 +14,7 @@ except Exception:
 
 
 def make_app_with_router():
-    from src.api.v1.endpoints import train as train_router_module
+    from v1.endpoints import train as train_router_module
     app = FastAPI()
     app.include_router(train_router_module.router)
     return app

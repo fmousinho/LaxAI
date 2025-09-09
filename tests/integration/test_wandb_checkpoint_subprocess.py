@@ -1,15 +1,21 @@
 
 import os
-import uuid
 import time
+import uuid
+# Suppress WandB Scope.user deprecation warning
+import warnings
 from pathlib import Path
+
 import pytest
 import torch
-import wandb
 
-from src.train.wandb_logger import WandbLogger
-from src.utils.env_secrets import setup_environment_secrets
-from src.config.all_config import wandb_config
+warnings.filterwarnings("ignore", message=r".*The `Scope\.user` setter is deprecated.*", category=DeprecationWarning)
+
+from config.all_config import wandb_config
+
+import wandb
+from services.service_training.src.wandb_logger import WandbLogger
+from shared_libs.utils.env_secrets import setup_environment_secrets
 
 # Ensure secrets are loaded for wandb communication
 setup_environment_secrets()
@@ -81,7 +87,7 @@ def test_checkpoint_subprocess_upload_e2e(wandb_logger_instance: WandbLogger, tm
             # The artifact name includes the version, so check if it starts with our checkpoint name
             assert artifact.name.startswith(checkpoint_name), f"Expected artifact name to start with '{checkpoint_name}', got '{artifact.name}'"
             print(f"✅ Verification successful! Found artifact '{artifact.name}'")
-        except wandb.errors.CommError as e:
+        except Exception as e:  # Originally wandb.errors.CommError, but not available in current wandb version
             pytest.fail(f"Failed to find artifact '{artifact_path}'. It was not created. Error: {e}")
 
     except Exception as e:

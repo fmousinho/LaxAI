@@ -1,36 +1,30 @@
 """
-Training API endpoint for LaxAI.
+Training API endpoint for LaxAI - Gateway to service-training.
 """
 import asyncio
 import logging
+import os
 import traceback
 import uuid
-from typing import Dict, Any
-from fastapi import APIRouter, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse
+from typing import Any, Dict
 
-from ..schemas.training import (
-    TrainingRequest, 
-    TrainingResponse, 
-    TrainingProgress, 
-    ErrorResponse,
-    TrainingConfig,
-)
+import httpx
+from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
-from common.pipeline import get_active_pipelines
-from services.training_service import (
-    create_job,
-    start_job,
-    get_job,
-    list_jobs,
-    cancel_job
-)
+
+from ..schemas.training import (ErrorResponse, TrainingConfig,
+                                TrainingProgress, TrainingRequest,
+                                TrainingResponse)
 
 logger = logging.getLogger(__name__)
 
 # The service manages job storage now
 
 router = APIRouter()
+
+# Training service URL (use localhost for development, service name for Docker)
+TRAINING_SERVICE_URL = os.getenv("TRAINING_SERVICE_URL", "http://localhost:8001/api/v1")
 
 
 # Request conversion is handled inside the service
@@ -45,36 +39,24 @@ async def start_training(
     background_tasks: BackgroundTasks
 ):
     """
-    Start a training job with the provided configuration.
+    Start a training job by proxying to service-training.
     
     Returns a task ID that can be used to track progress.
     """
     try:
-        # Defer validation to the service layer so the API does not depend on
-        # schema internals directly. The service will raise on validation
-        # failure and we map that to a 422 below.
-        from services import training_service
-        try:
-            training_service.validate_training_params(request.training_params)
-        except Exception as ve:
-            raise HTTPException(status_code=422, detail=ErrorResponse(
-                detail=f"training_params validation failed: {ve}",
-                error_type="validation_error"
-            ).model_dump())
-        # Create job entry and get kwargs
-        task_id, kwargs = create_job(request)
+        # Proxy the request to service-training
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{TRAINING_SERVICE_URL}/train",
+                json=request.model_dump(),
+                timeout=30.0
+            )
+            response.raise_for_status()
+            return response.json()
 
-        # Schedule the job via the service
-        start_job(task_id, kwargs, background_tasks)
-
-        logger.info(f"Started training task {task_id} for tenant {request.tenant_id}")
-
-        return TrainingResponse(
-            status="accepted",
-            task_id=task_id,
-            message=f"Training job started with ID: {task_id}"
-        )
-
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error from service-training: {e}")
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
     except Exception as e:
         error_msg = f"Failed to start training: {str(e)}"
         logger.error(error_msg)
@@ -92,75 +74,93 @@ async def start_training(
 @router.get("/train/{task_id}/status", response_model=TrainingResponse)
 async def get_training_status(task_id: str):
     """
-    Get the status of a training job.
+    Get the status of a training job by proxying to service-training.
     """
-    job = get_job(task_id)
-    if job is None:
-        raise HTTPException(
-            status_code=404,
-            detail=ErrorResponse(
-                detail=f"Training task {task_id} not found",
-                error_type="task_not_found"
-            ).model_dump()
-        )
-    return TrainingResponse(
-        status=job["status"],
-        task_id=task_id,
-        message=f"Training job {task_id} is {job['status']}"
-    )
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{TRAINING_SERVICE_URL}/train/{task_id}/status",
+                timeout=10.0
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            raise HTTPException(
+                status_code=404,
+                detail=ErrorResponse(
+                    detail=f"Training task {task_id} not found",
+                    error_type="task_not_found"
+                ).model_dump()
+            )
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        logger.error(f"Failed to get training status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/train/jobs", response_model=Dict[str, Any])
 async def list_training_jobs():
     """
-    List all training jobs and their statuses.
+    List all training jobs and their statuses by proxying to service-training.
     """
-    jobs = list_jobs()
-    jobs_summary = {}
-    for task_id, job in jobs.items():
-        jobs_summary[task_id] = {
-            "status": job["status"],
-            "tenant_id": job["request"]["tenant_id"],
-            "custom_name": job["request"]["custom_name"],
-            "created_at": job["created_at"],
-            "progress_status": job["progress"]["status"],
-            "progress_message": job["progress"]["message"]
-        }
-
-    return {"total_jobs": len(jobs), "jobs": jobs_summary}
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{TRAINING_SERVICE_URL}/train/jobs",
+                timeout=10.0
+            )
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        logger.error(f"Failed to list training jobs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/train/{task_id}")
 async def cancel_training_job(task_id: str):
     """
-    Cancel a training job using the pipeline control system.
+    Cancel a training job by proxying to service-training.
     """
-    job = get_job(task_id)
-    if job is None:
-        raise HTTPException(
-            status_code=404,
-            detail=ErrorResponse(
-                detail=f"Training task {task_id} not found",
-                error_type="task_not_found"
-            ).model_dump()
-        )
-
-    pipeline_stopped = cancel_job(task_id)
-
-    return {"message": f"Training job {task_id} cancelled", "pipeline_stopped": pipeline_stopped}
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                f"{TRAINING_SERVICE_URL}/train/{task_id}",
+                timeout=10.0
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            raise HTTPException(
+                status_code=404,
+                detail=ErrorResponse(
+                    detail=f"Training task {task_id} not found",
+                    error_type="task_not_found"
+                ).model_dump()
+            )
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        logger.error(f"Failed to cancel training job: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/train/pipelines", response_model=Dict[str, Any])
 async def list_active_pipelines():
     """
-    List all currently active training pipelines.
+    List all currently active training pipelines by proxying to service-training.
     """
-    active_pipelines = get_active_pipelines()
-    
-    return {
-        "total_active_pipelines": len(active_pipelines),
-        "pipelines": active_pipelines
-    }
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{TRAINING_SERVICE_URL}/train/pipelines",
+                timeout=10.0
+            )
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        logger.error(f"Failed to list active pipelines: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 

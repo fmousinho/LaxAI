@@ -3,15 +3,15 @@ Cloud training endpoints for job orchestration and monitoring.
 """
 import logging
 import uuid
-from typing import Dict, Any, Optional, List
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
-from pydantic import BaseModel, Field
-
-from cloud.firestore_client import get_firestore_client, JobStatus
-from cloud.function_orchestrator import validate_request_payload, publish_job_to_pubsub
 from api.v1.schemas.training import TrainingRequest
+from cloud.firestore_client import JobStatus, get_firestore_client
+from cloud.function_orchestrator import (publish_job_to_pubsub,
+                                         validate_request_payload)
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +198,7 @@ async def cancel_job(task_id: str) -> Dict[str, Any]:
         
         # First try to stop the actual pipeline if it's running locally
         logger.info(f"CloudAPI: Attempting to cancel job {task_id} - checking for local pipeline")
-        from services.training_service import cancel_job as stop_pipeline_job
+        from training_service import cancel_job as stop_pipeline_job
         pipeline_stopped = stop_pipeline_job(task_id)
         logger.info(f"CloudAPI: Local pipeline stop result for job {task_id}: {pipeline_stopped}")
         

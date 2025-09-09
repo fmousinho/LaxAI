@@ -8,22 +8,24 @@ This script automates the following process:
 3. Upon successful data preparation, it identifies the generated training datasets.
 4. For each training dataset, it runs the Model Training Pipeline.
 """
-import os
-import logging
 import argparse
+import logging
+import os
 
 from config import logging_config
 
-from utils.env_secrets import setup_environment_secrets
+from shared_libs.utils.env_secrets import setup_environment_secrets
+
 setup_environment_secrets()
 
 # IMPORTANT: Load environment variables and credentials FIRST
 # This must be imported before any modules that use GCS or WandB
 
-# Imports using relative imports since we're now in the src package
-from common.google_storage import get_storage, GCSPaths
-from track.unverified_track_generator_pipeline import TrackGeneratorPipeline
 from config.all_config import detection_config
+from unverified_track_generator_pipeline import TrackGeneratorPipeline
+
+# Imports using relative imports since we're now in the src package
+from common.google_storage import GCSPaths, get_storage
 
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'

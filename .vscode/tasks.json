@@ -84,7 +84,13 @@
       "label": "🧠 Train: Run Training Tests",
       "type": "shell",
       "command": "python",
-      "args": ["-m", "pytest", "tests/train/", "-v", "--tb=short"],
+      "args": [
+        "-m",
+        "pytest",
+        "services/service-training/tests/",
+        "-v",
+        "--tb=short"
+      ],
       "group": "test",
       "presentation": {
         "echo": true,
@@ -95,10 +101,10 @@
       "options": {
         "cwd": "${workspaceFolder}",
         "env": {
-          "PYTHONPATH": "${workspaceFolder}/src"
+          "PYTHONPATH": "${workspaceFolder}/shared_libs:${workspaceFolder}/services/service-training/src"
         }
       },
-      "problemMatcher": ["$python"]
+      "problemMatcher": "$python"
     },
 
     // 🌐 API SERVICE TASKS

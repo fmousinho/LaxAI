@@ -1,11 +1,12 @@
 import logging
 import os
-import argparse # For custom type checking
-import importlib.metadata # For check_requirements
-from packaging.requirements import Requirement, InvalidRequirement # For check_requirements
-from packaging.version import Version # For check_requirements
+import argparse  # For custom type checking
+import importlib.metadata  # For check_requirements
+from packaging.requirements import Requirement, InvalidRequirement  # For check_requirements
+from packaging.version import Version  # For check_requirements
 
 logger = logging.getLogger(__name__)
+
 
 def check_requirements(requirements_filename="requirements.txt"):
     """
@@ -25,28 +26,34 @@ def check_requirements(requirements_filename="requirements.txt"):
     try:
         missing_packages = []
         version_mismatches = []
-        with open(requirements_path, 'r') as f:
+        with open(requirements_path, "r") as f:
             for line in f:
                 line = line.strip()
-                if not line or line.startswith('#'): # Skip empty lines and comments
+                if not line or line.startswith("#"):  # Skip empty lines and comments
                     continue
                 try:
                     req = Requirement(line)
                     dist = importlib.metadata.distribution(req.name)
                     installed_version = Version(dist.version)
                     if not req.specifier.contains(installed_version, prereleases=True):
-                        version_mismatches.append(f"  - {req.name}: Installed={installed_version}, Required={req.specifier}")
+                        version_mismatches.append(
+                            f"  - {req.name}: Installed={installed_version}, Required={req.specifier}"
+                        )
                 except InvalidRequirement:
                     logger.error(f"Warning: Skipping invalid requirement line: {line}")
                 except importlib.metadata.PackageNotFoundError:
                     # Only append if req was successfully created
                     try:
                         req = Requirement(line)
-                        missing_packages.append(f"  - {req.name} ({req.specifier or 'any version'})")
+                        missing_packages.append(
+                            f"  - {req.name} ({req.specifier or 'any version'})"
+                        )
                     except InvalidRequirement:
-                        logger.error(f"Warning: Skipping invalid requirement line (package not found): {line}")
+                        logger.error(
+                            f"Warning: Skipping invalid requirement line (package not found): {line}"
+                        )
 
-        if not missing_packages and not version_mismatches: # All good
+        if not missing_packages and not version_mismatches:  # All good
             logger.info("All requirements are installed and versions match.")
             return True
     except FileNotFoundError:
@@ -62,10 +69,14 @@ def check_requirements(requirements_filename="requirements.txt"):
         logger.error("\n".join(version_mismatches))
 
     if missing_packages or version_mismatches:
-        logger.error(f"\nPlease install or update the required packages. If running from the project root, you might use: pip install -r LaxAI/{requirements_filename}") # Adjusted path hint
+        # Adjusted path hint
+        logger.error(
+            f"\nPlease install or update the required packages. If running from the project root, you might use: pip install -r LaxAI/{requirements_filename}"
+        )
         return False
 
-    return True # Should have returned True if no errors and no FileNotFoundError
+    return True  # Should have returned True if no errors and no FileNotFoundError
+
 
 def frame_interval_type(arg_string: str) -> tuple[int, int]:
     """
@@ -84,7 +95,7 @@ def frame_interval_type(arg_string: str) -> tuple[int, int]:
         argparse.ArgumentTypeError: If the string is not in the correct format or values are invalid.
     """
     try:
-        parts = arg_string.split(':')
+        parts = arg_string.split(":")
         if len(parts) != 2:
             raise ValueError("must be in START:END format (e.g., '100:500').")
         start_frame = int(parts[0])
@@ -92,7 +103,9 @@ def frame_interval_type(arg_string: str) -> tuple[int, int]:
         if start_frame < 0 or end_frame < 0:
             raise ValueError("frame numbers must be non-negative.")
         if start_frame >= end_frame:
-            raise ValueError(f"START frame ({start_frame}) must be strictly less than END frame ({end_frame}).")
+            raise ValueError(
+                f"START frame ({start_frame}) must be strictly less than END frame ({end_frame})."
+            )
         return start_frame, end_frame
-    except ValueError as e: # Catches int() conversion errors and our custom ValueErrors
+    except ValueError as e:  # Catches int() conversion errors and our custom ValueErrors
         raise argparse.ArgumentTypeError(f"Invalid frame interval '{arg_string}': {e}")

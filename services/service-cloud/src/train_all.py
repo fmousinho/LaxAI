@@ -8,20 +8,23 @@ This script automates the following process:
 3. Upon successful data preparation, it identifies the generated training datasets.
 4. For each training dataset, it runs the Model Training Pipeline.
 """
-import os
-import logging 
-import json
 import argparse
+import json
+import logging
+import os
 from typing import Optional
 
 # Imports using relative imports since we're now in the src package
-from utils.env_secrets import setup_environment_secrets
+from shared_libs.utils.env_secrets import setup_environment_secrets
+
 setup_environment_secrets()
 from config.logging_config import print_banner
 from config.parameter_registry import parameter_registry
-from common.google_storage import get_storage, GCSPaths
-from train.train_pipeline import TrainPipeline
-from utils.cpu_memory import clear_cpu_memory, log_comprehensive_memory_stats
+from train_pipeline import TrainPipeline
+
+from common.google_storage import GCSPaths, get_storage
+from shared_libs.utils.cpu_memory import (clear_cpu_memory,
+                                          log_comprehensive_memory_stats)
 
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
@@ -41,7 +44,7 @@ def train(tenant_id: str,
           wandb_tags: Optional[list] = None,
           training_kwargs: Optional[dict] = None,
           model_kwargs: Optional[dict] = None,
-          pipeline_name: Optional[str] = "default",
+          pipeline_name: str = "default",
           n_datasets_to_use: Optional[int] = None,
           eval_kwargs: Optional[dict] = None):
     """
@@ -90,7 +93,7 @@ def train(tenant_id: str,
             tenant_id=tenant_id, 
             verbose=verbose, 
             save_intermediate=save_intermediate,
-            pipeline_name=pipeline_name,
+            pipeline_name=pipeline_name or "default",
             **all_kwargs
         )
 

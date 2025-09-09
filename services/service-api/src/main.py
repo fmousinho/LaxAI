@@ -7,8 +7,16 @@ Handles REST API endpoints and web interface operations.
 
 import uvicorn
 from fastapi import FastAPI
+from v1.endpoints.train import router as train_router
 
 app = FastAPI(title="LaxAI API Service", version="1.0.0")
+
+# Include training router
+app.include_router(
+    train_router,
+    prefix="/api/v1",
+    tags=["training"]
+)
 
 @app.get("/")
 async def root():
