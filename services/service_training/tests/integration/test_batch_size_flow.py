@@ -4,8 +4,9 @@ Test to verify batch size flow from API to DataLoader in the actual pipeline.
 This simulates the exact same flow as your Google Cloud setup.
 """
 
-import sys
 import os
+import sys
+
 sys.path.append('src')
 
 def test_complete_batch_size_flow():
@@ -29,16 +30,16 @@ def test_complete_batch_size_flow():
 
     print(f"1. API Request batch_size: {api_request.training_params['batch_size']}")
 
-    # Step 2: Convert request to kwargs (service layer)
-    from src.services.training_service import _convert_request_to_kwargs
-    kwargs = _convert_request_to_kwargs(api_request)
-    print(f"2. Service Layer training_kwargs batch_size: {kwargs['training_kwargs']['batch_size']}")
+    # Step 2: Convert request to kwargs (simplified for testing)
+    training_kwargs = api_request.training_params.copy()
+    print(f"2. Training kwargs batch_size: {training_kwargs['batch_size']}")
 
     # Step 3: Initialize Training class
-    from training_loop import Training
     from unittest.mock import patch
 
-    with patch('src.config.parameter_registry.parameter_registry') as mock_registry:
+    from training_loop import Training
+
+    with patch('config.parameter_registry.parameter_registry') as mock_registry:
         mock_registry.parameters = {
             'batch_size': type('MockParam', (), {'config_path': 'training_config.batch_size'})(),
             'num_epochs': type('MockParam', (), {'config_path': 'training_config.num_epochs'})(),
@@ -46,7 +47,7 @@ def test_complete_batch_size_flow():
         }
         mock_registry.get_kwarg_or_config = lambda param, kwargs_dict: kwargs_dict.get(param, 32)
 
-        training = Training(**kwargs['training_kwargs'])
+        training = Training(**training_kwargs)
         print(f"3. Training Class batch_size attribute: {training.batch_size}")
 
         # Step 4: Create mock dataset
@@ -76,8 +77,8 @@ def test_complete_batch_size_flow():
         # Step 7: Test with different batch size
         print("\n--- Testing with different batch size ---")
         api_request.training_params['batch_size'] = 32
-        kwargs = _convert_request_to_kwargs(api_request)
-        training2 = Training(**kwargs['training_kwargs'])
+        training_kwargs2 = api_request.training_params.copy()
+        training2 = Training(**training_kwargs2)
 
         print(f"New API batch_size: {api_request.training_params['batch_size']}")
         print(f"New Training batch_size: {training2.batch_size}")

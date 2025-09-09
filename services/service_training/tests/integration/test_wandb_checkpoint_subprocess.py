@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 import torch
-from wandb_logger import WandbLogger
+from src.wandb_logger import WandbLogger
 
 import wandb
 from shared_libs.config.all_config import wandb_config

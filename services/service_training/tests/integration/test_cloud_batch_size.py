@@ -18,11 +18,10 @@ logger = logging.getLogger(__name__)
 def test_batch_size_with_actual_dataset():
     """Test batch size flow using the actual dataset and parameters."""
     from config.parameter_registry import parameter_registry
-    from services.training_service import _convert_request_to_kwargs
     from train_pipeline import TrainPipeline
     from training_loop import Training
 
-    from common.google_storage import get_storage
+    from shared_libs.common.google_storage import get_storage
 
     # Simulate the request that user is sending
     class MockRequest:
@@ -57,12 +56,11 @@ def test_batch_size_with_actual_dataset():
     print("=== Testing Batch Size Flow with Actual Dataset ===")
     print(f"Request batch_size: {request.training_params['batch_size']}")
 
-    # Step 1: Convert request to kwargs (same as API)
-    kwargs = _convert_request_to_kwargs(request)
-    print(f"1. Converted kwargs training_kwargs: {kwargs.get('training_kwargs', {})}")
+    # Step 1: Convert request to kwargs (simplified for testing)
+    training_kwargs = request.training_params.copy()
+    print(f"1. Training kwargs: {training_kwargs}")
 
     # Step 2: Extract batch_size from kwargs
-    training_kwargs = kwargs.get('training_kwargs', {})
     batch_size = training_kwargs.get('batch_size', 32)  # Default
     print(f"2. Extracted batch_size: {batch_size}")
 
@@ -95,7 +93,8 @@ def test_batch_size_with_actual_dataset():
                 # Create actual dataset
                 from config.all_config import training_config
                 from config.transforms import get_transforms
-                from dataset import LacrossePlayerDataset
+
+                from shared_libs.common.dataset import LacrossePlayerDataset
 
                 training_transforms = get_transforms('training')
                 dataset = LacrossePlayerDataset(

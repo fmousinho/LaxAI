@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 import torch
-from siamesenet import SiameseNet
+from src.siamesenet import SiameseNet
 from training_loop import Training
 
 

@@ -4,16 +4,17 @@ import os
 import traceback
 from typing import Any, Callable, Dict, List, Optional
 
-from config.all_config import model_config, training_config, wandb_config
 from dataset import LacrossePlayerDataset
 from evaluator import Evaluator, ModelEvaluator
 from training_loop import Training
 from transforms import get_transforms
 from wandb_logger import wandb_logger
 
-from common.google_storage import GCSPaths, get_storage
-from common.pipeline import Pipeline, PipelineStatus
-from common.pipeline_step import StepStatus
+from shared_libs.common.google_storage import GCSPaths, get_storage
+from shared_libs.common.pipeline import Pipeline, PipelineStatus
+from shared_libs.common.pipeline_step import StepStatus
+from shared_libs.config.all_config import (model_config, training_config,
+                                           wandb_config)
 
 logger = logging.getLogger(__name__)
 

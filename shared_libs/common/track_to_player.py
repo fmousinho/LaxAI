@@ -26,7 +26,7 @@ from typing import Optional
 import numpy as np
 import supervision as sv
 
-from common.player import Player
+from shared_libs.common.player import Player
 
 logger = logging.getLogger(__name__)
 

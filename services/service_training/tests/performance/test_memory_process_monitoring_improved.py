@@ -1,11 +1,14 @@
-import pytest
-import torch
 import gc
 import time
+
 import psutil
-from tests.fixtures.wandb_test_helpers import wandb_test_manager, create_minimal_checkpoint
-from train.wandb_logger import WandbLogger
-from utils.env_secrets import setup_environment_secrets
+import pytest
+import torch
+from src.wandb_logger import WandbLogger
+
+from shared_libs.utils.env_secrets import setup_environment_secrets
+from tests.fixtures.wandb_test_helpers import (create_minimal_checkpoint,
+                                               wandb_test_manager)
 
 
 @pytest.mark.integration

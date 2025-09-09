@@ -14,9 +14,10 @@ from typing import Any, List, Optional, Tuple
 
 import cv2
 import numpy as np
-from config.all_config import detection_config
-from config.transforms import ensure_rgb_format
 from supervision import Detections
+
+from shared_libs.config.all_config import detection_config
+from shared_libs.config.transforms import ensure_rgb_format
 
 logger = logging.getLogger(__name__)
 

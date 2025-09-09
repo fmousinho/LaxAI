@@ -12,12 +12,12 @@ from collections import defaultdict
 from typing import List, Optional
 
 import numpy as np
-from config.all_config import detection_config
 from supervision import (Detections, JSONSink, VideoInfo,
                          get_video_frames_generator)
 
-from common.detection import DetectionModel
-from common.tracker import AffineAwareByteTrack
+from shared_libs.common.detection import DetectionModel
+from shared_libs.common.tracker import AffineAwareByteTrack
+from shared_libs.config.all_config import detection_config
 
 logger = logging.getLogger(__name__)
 

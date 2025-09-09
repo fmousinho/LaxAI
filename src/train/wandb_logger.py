@@ -1,21 +1,21 @@
+import gc
+import logging
 import os
-import logging
+import re
+import subprocess
+import sys
 import tempfile
-import logging
+import time
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from functools import wraps
-from typing import Dict, Any, Optional, List, Callable, Tuple
-from concurrent.futures import ThreadPoolExecutor, Future
-import torch
-import re
-import psutil
-import gc
-import time
-import sys
-import subprocess
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+import psutil
+import torch
 from utils.env_secrets import setup_environment_secrets
+
 setup_environment_secrets()
 
 from config.all_config import wandb_config
@@ -24,10 +24,12 @@ logger = logging.getLogger(__name__)
 
 # Try to import wandb, handle gracefully if not available:
 import wandb
+
 WANDB_AVAILABLE = True
 
 # Suppress WandB Scope.user deprecation warning
 import warnings
+
 warnings.filterwarnings("ignore", message=r".*The `Scope\.user` setter is deprecated.*", category=DeprecationWarning)
 
 
@@ -327,14 +329,15 @@ class WandbLogger:
             try:
                 if hasattr(model, 'ensure_head_initialized'):
                     # prefer model API
-                    device_str = str(next(model.parameters()).device)
-                except Exception:
-                    device_str = device
-                model.to(device)
-                model.eval()
-                with torch.no_grad():
-                    dummy = torch.zeros((1, 3, 224, 224), device=device)
-                    model(dummy)
+                    try:
+                        device_str = str(next(model.parameters()).device)
+                    except Exception:
+                        device_str = device
+                    model.to(device)
+                    model.eval()
+                    with torch.no_grad():
+                        dummy = torch.zeros((1, 3, 224, 224), device=device)
+                        model(dummy)
             except Exception as e:
                 logger.warning(f"Could not initialize model head before loading state_dict: {e}")
 

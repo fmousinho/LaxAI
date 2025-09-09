@@ -5,7 +5,8 @@ import cv2
 import numpy as np
 import supervision as sv
 import torch
-from config.all_config import model_config, tracker_config
+
+from shared_libs.config.all_config import model_config, tracker_config
 
 logger = logging.getLogger(__name__)
 
@@ -632,7 +633,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
         total_tracks = len(track_ids)
         for idx, tid in enumerate(track_ids, 1):
             # Log progress every 5%
-            from services.service_training.src.utils import log_progress
+            from shared_libs.utils import log_progress
 
             log_progress(logger, "Embedding creation progress", idx, total_tracks)
 

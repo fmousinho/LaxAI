@@ -11,17 +11,17 @@ from unittest.mock import MagicMock, patch
 import psutil
 import pytest
 import torch
-from config.all_config import training_config, wandb_config
 from train_pipeline import TrainPipeline
-from utils.env_secrets import setup_environment_secrets
 
-from common.google_storage import GCSPaths, get_storage
+from shared_libs.common.google_storage import GCSPaths, get_storage
+from shared_libs.config.all_config import training_config, wandb_config
+from shared_libs.utils.env_secrets import setup_environment_secrets
 
 
 @pytest.fixture
 def mock_gcs_client():
     """Mock GCS client to avoid actual cloud storage calls."""
-    with patch('common.google_storage.get_storage') as mock_get_storage:
+    with patch('shared_libs.common.google_storage.get_storage') as mock_get_storage:
         mock_client = MagicMock()
         mock_get_storage.return_value = mock_client
 

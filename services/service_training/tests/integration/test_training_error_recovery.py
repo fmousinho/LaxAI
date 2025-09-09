@@ -17,11 +17,11 @@ from unittest.mock import MagicMock, Mock, patch
 import psutil
 import pytest
 import torch
-from config.all_config import training_config, wandb_config
 from training_loop import Training
-from utils.env_secrets import setup_environment_secrets
+from wandb_logger import WandbLogger, wandb_logger
 
-from train.wandb_logger import WandbLogger, wandb_logger
+from shared_libs.config.all_config import training_config, wandb_config
+from shared_libs.utils.env_secrets import setup_environment_secrets
 
 
 class TrainingErrorSimulator:
@@ -31,7 +31,7 @@ class TrainingErrorSimulator:
     @contextmanager
     def simulate_dataset_error():
         """Simulate dataset loading/iteration errors."""
-        with patch('train.training.Training.setup_training_pipeline') as mock_setup:
+        with patch('training_loop.Training.setup_training_pipeline') as mock_setup:
             mock_setup.side_effect = RuntimeError("Simulated dataset loading error")
             yield mock_setup
     
@@ -39,7 +39,7 @@ class TrainingErrorSimulator:
     @contextmanager
     def simulate_model_error():
         """Simulate model loading/initialization errors."""
-        with patch('train.training.Training.setup_model') as mock_model:
+        with patch('training_loop.Training.setup_model') as mock_model:
             mock_model.side_effect = RuntimeError("Simulated model loading error")
             yield mock_model
     
@@ -51,7 +51,7 @@ class TrainingErrorSimulator:
             yield torch.randn(2, 3, 224, 224)  # First batch works
             raise RuntimeError("Simulated DataLoader error")
         
-        with patch('train.training.Training.setup_dataloader') as mock_dataloader:
+        with patch('training_loop.Training.setup_dataloader') as mock_dataloader:
             mock_dl = MagicMock()
             mock_dl.__iter__ = lambda: failing_dataloader()
             mock_dl.__len__ = lambda: 2

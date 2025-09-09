@@ -8,11 +8,12 @@ from typing import List, Optional, Union
 
 import numpy as np
 import torch
-from config.all_config import detection_config, wandb_config
 from PIL import Image
 from rfdetr import RFDETRBase  # type: ignore
 from supervision import Detections
-from utils.env_secrets import setup_environment_secrets
+
+from shared_libs.config.all_config import detection_config, wandb_config
+from shared_libs.utils.env_secrets import setup_environment_secrets
 
 setup_environment_secrets()
 

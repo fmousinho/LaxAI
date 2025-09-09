@@ -6,20 +6,22 @@ from typing import Any, Callable, Dict, Optional
 import numpy as np
 import torch
 import torch.nn as nn
-from config.all_config import model_config, training_config, wandb_config
 from evaluator import (ModelEvaluator, calculate_embedding_variance,
                        calculate_gradient_norm,
                        calculate_intra_inter_distances,
                        calculate_triplet_mining_efficiency)
 from torch.utils.data import DataLoader, Dataset
-from utils.cpu_memory import (CPUMemoryMonitor, clear_cpu_memory,
-                              cpu_memory_context,
-                              log_comprehensive_memory_stats)
-from utils.dataloader_memory import worker_init_fn
-from utils.evaluation_memory import log_evaluation_memory_usage
-from utils.gpu_memory import (GPUMemoryContext, clear_gpu_memory,
-                              log_gpu_memory_stats)
 from wandb_logger import wandb_logger
+
+from shared_libs.config.all_config import (model_config, training_config,
+                                           wandb_config)
+from shared_libs.utils.cpu_memory import (CPUMemoryMonitor, clear_cpu_memory,
+                                          cpu_memory_context,
+                                          log_comprehensive_memory_stats)
+from shared_libs.utils.dataloader_memory import worker_init_fn
+from shared_libs.utils.evaluation_memory import log_evaluation_memory_usage
+from shared_libs.utils.gpu_memory import (GPUMemoryContext, clear_gpu_memory,
+                                          log_gpu_memory_stats)
 
 logger = logging.getLogger(__name__)
 

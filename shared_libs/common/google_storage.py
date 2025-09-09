@@ -27,13 +27,14 @@ from typing import Any, Optional
 import cv2
 import numpy as np
 import yaml
-from config.all_config import google_storage_config
 from google.auth.exceptions import DefaultCredentialsError
 from google.cloud import storage
 from google.cloud.exceptions import Forbidden, NotFound
 from google.cloud.storage import Blob
 from google.oauth2 import service_account
 from supervision import Detections, JSONSink
+
+from shared_libs.config.all_config import google_storage_config
 
 logger = logging.getLogger(__name__)
 

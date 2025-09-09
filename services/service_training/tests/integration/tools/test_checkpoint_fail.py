@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
+import gc
 import os
 import sys
 import time
-import gc
 
 # Ensure project src is importable
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -11,7 +11,8 @@ if ROOT not in sys.path:
 
 import psutil
 import torch
-from train.wandb_logger import wandb_logger
+from src.wandb_logger import WandbLogger
+
 
 class DummyRun:
     def __init__(self, name='test_run'):
@@ -22,7 +23,8 @@ class DummyRun:
     def finish(self):
         pass
 
-# Configure wandb_logger for test
+# Create and configure wandb_logger instance for test
+wandb_logger = WandbLogger()
 wandb_logger.enabled = True
 wandb_logger.initialized = True
 wandb_logger.run = DummyRun()

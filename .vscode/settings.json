@@ -47,6 +47,23 @@
     "PYTHONPATH": "${workspaceFolder}/shared_libs:${workspaceFolder}/services/service-training/src:${workspaceFolder}/services/service-api/src:${workspaceFolder}/services/service-cloud/src"
   },
 
+  // Python Testing Configuration for Service Training
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": [
+    "--rootdir=${workspaceFolder}/services/service_training",
+    "tests",
+    "--tb=short",
+    "-v"
+  ],
+  "python.testing.cwd": "${workspaceFolder}/services/service_training",
+  "python.testing.unittestEnabled": false,
+  "python.testing.autoTestDiscoverOnSaveEnabled": true,
+
+  // Environment Variables for Testing
+  "python.testing.env": {
+    "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/services/service_training/src"
+  },
+
   // Search Configuration
   "search.exclude": {
     "**/node_modules": true,
