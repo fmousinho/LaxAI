@@ -16,7 +16,7 @@ except ImportError:
 
 from train.dataset import LacrossePlayerDataset
 from config.all_config import wandb_config, evaluator_config
-from config.transforms import get_transforms
+from transforms import get_transforms
 from train.wandb_logger import wandb_logger
 
 logger = logging.getLogger(__name__)

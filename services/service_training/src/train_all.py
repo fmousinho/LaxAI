@@ -18,7 +18,7 @@ from typing import Optional
 from utils.env_secrets import setup_environment_secrets
 setup_environment_secrets()
 from config.logging_config import print_banner
-from config.parameter_registry import parameter_registry
+from parameter_registry import parameter_registry
 from common.google_storage import get_storage, GCSPaths
 from train.train_pipeline import TrainPipeline
 from utils.cpu_memory import clear_cpu_memory, log_comprehensive_memory_stats

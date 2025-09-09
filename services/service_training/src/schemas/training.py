@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from shared_libs.config.parameter_registry import parameter_registry
+from parameter_registry import parameter_registry
 
 
 def generate_example_from_config() -> Dict[str, Any]:

@@ -11,7 +11,7 @@ from common.pipeline import Pipeline, PipelineStatus
 from train.dataset import LacrossePlayerDataset
 from train.training import Training
 from train.evaluator import ModelEvaluator, Evaluator
-from config.transforms import get_transforms
+from transforms import get_transforms
 from config.all_config import training_config, model_config, wandb_config
 from train.wandb_logger import wandb_logger
 

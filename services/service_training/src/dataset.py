@@ -14,7 +14,7 @@ import os
 import random
 import numpy as np
 from functools import lru_cache
-from config.transforms import get_transforms
+from transforms import get_transforms
 
 from config.all_config import training_config
 
