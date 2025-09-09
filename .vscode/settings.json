@@ -4,7 +4,7 @@
   "python.analysis.diagnosticMode": "workspace",
   "python.analysis.extraPaths": [
     "./shared_libs",
-    "./services/service-training/src",
+    "./services/service_training/src",
     "./services/service-api/src",
     "./services/service-cloud/src"
   ],
@@ -44,24 +44,25 @@
 
   // Terminal Configuration
   "terminal.integrated.env.osx": {
-    "PYTHONPATH": "${workspaceFolder}/shared_libs:${workspaceFolder}/services/service-training/src:${workspaceFolder}/services/service-api/src:${workspaceFolder}/services/service-cloud/src"
+    "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/services/service_training/src:${workspaceFolder}/shared_libs:${workspaceFolder}/services/service_tracking/src:${workspaceFolder}/services/service-api/src:${workspaceFolder}/services/service-cloud/src"
   },
 
   // Python Testing Configuration for Service Training
   "python.testing.pytestEnabled": true,
   "python.testing.pytestArgs": [
-    "--rootdir=${workspaceFolder}/services/service_training",
-    "tests",
-    "--tb=short",
-    "-v"
+    "--config-file=${workspaceFolder}/pytest.ini",
+    "--rootdir=${workspaceFolder}",
+    "services/service_training/tests",
+    "-v",
+    "-s"
   ],
-  "python.testing.cwd": "${workspaceFolder}/services/service_training",
+  "python.testing.cwd": "${workspaceFolder}",
   "python.testing.unittestEnabled": false,
   "python.testing.autoTestDiscoverOnSaveEnabled": true,
 
   // Environment Variables for Testing
   "python.testing.env": {
-    "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/services/service_training/src"
+    "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/services/service_training/src:${workspaceFolder}/shared_libs:${workspaceFolder}/services/service_tracking/src:${workspaceFolder}/services/service-api/src:${workspaceFolder}/services/service-cloud/src"
   },
 
   // Search Configuration
