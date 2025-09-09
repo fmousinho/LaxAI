@@ -299,7 +299,7 @@ def test_training_cancellation_with_interrupted_error():
     import torch
 
     # Create a minimal training setup
-    from training import Training
+    from training_loop import Training
 
     # Mock components to avoid actual training
     with patch('torch.optim.AdamW'), \

@@ -23,7 +23,7 @@ def test_batch_size_with_actual_dataset():
     from config.parameter_registry import parameter_registry
     sys.path.insert(0, '../../services/service-api/src')
     from train_pipeline import TrainPipeline
-    from training import Training
+    from training_loop import Training
     from training_service import _convert_request_to_kwargs
 
     from shared_libs.common.google_storage import get_storage

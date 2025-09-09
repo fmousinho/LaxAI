@@ -35,7 +35,7 @@ def test_complete_batch_size_flow():
     print(f"2. Service Layer training_kwargs batch_size: {kwargs['training_kwargs']['batch_size']}")
 
     # Step 3: Initialize Training class
-    from training import Training
+    from training_loop import Training
     from unittest.mock import patch
 
     with patch('src.config.parameter_registry.parameter_registry') as mock_registry:

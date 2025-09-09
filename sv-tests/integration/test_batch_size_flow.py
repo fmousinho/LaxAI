@@ -40,7 +40,7 @@ def test_complete_batch_size_flow():
     # Step 3: Initialize Training class
     from unittest.mock import patch
 
-    from training import Training
+    from training_loop import Training
 
     with patch('services.service_training.src.config.parameter_registry.parameter_registry') as mock_registry:
         mock_registry.parameters = {

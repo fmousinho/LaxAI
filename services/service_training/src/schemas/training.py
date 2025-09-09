@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from parameter_registry import parameter_registry
+from pydantic import BaseModel, ConfigDict, Field
 
 
 def generate_example_from_config() -> Dict[str, Any]:

@@ -7,9 +7,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
-
-from schemas.training import (TrainingRequest, TrainingResponse,
-                                TrainingStatus)
+from schemas.training import TrainingRequest, TrainingResponse, TrainingStatus
 
 router = APIRouter(prefix="/train", tags=["training"])
 

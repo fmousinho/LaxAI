@@ -18,7 +18,7 @@ import psutil
 import pytest
 import torch
 from config.all_config import training_config, wandb_config
-from training import Training
+from training_loop import Training
 
 from services.service_training.src.wandb_logger import (WandbLogger,
                                                         wandb_logger)

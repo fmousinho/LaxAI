@@ -8,20 +8,22 @@ This script automates the following process:
 3. Upon successful data preparation, it identifies the generated training datasets.
 4. For each training dataset, it runs the Model Training Pipeline.
 """
-import os
-import logging 
-import json
 import argparse
+import json
+import logging
+import os
 from typing import Optional
 
 # Imports using relative imports since we're now in the src package
 from utils.env_secrets import setup_environment_secrets
+
 setup_environment_secrets()
 from config.logging_config import print_banner
 from parameter_registry import parameter_registry
-from common.google_storage import get_storage, GCSPaths
-from train.train_pipeline import TrainPipeline
 from utils.cpu_memory import clear_cpu_memory, log_comprehensive_memory_stats
+
+from common.google_storage import GCSPaths, get_storage
+from train.train_pipeline import TrainPipeline
 
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'

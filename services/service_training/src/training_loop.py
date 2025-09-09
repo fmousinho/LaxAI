@@ -1,20 +1,25 @@
-import os
 import gc
-import torch
 import logging
-from typing import Optional, Any, Dict, Callable
-from torch.utils.data import DataLoader, Dataset
-import torch.nn as nn
-import numpy as np
-from config.all_config import model_config, training_config, wandb_config
-from train.wandb_logger import wandb_logger
-from utils.gpu_memory import clear_gpu_memory, log_gpu_memory_stats, GPUMemoryContext
-from utils.cpu_memory import CPUMemoryMonitor, clear_cpu_memory, cpu_memory_context, log_comprehensive_memory_stats
-from utils.evaluation_memory import log_evaluation_memory_usage
-from utils.dataloader_memory import worker_init_fn
+import os
+from typing import Any, Callable, Dict, Optional
 
-from train.evaluator import (calculate_embedding_variance, calculate_intra_inter_distances, 
-                           calculate_triplet_mining_efficiency, calculate_gradient_norm, ModelEvaluator)
+import numpy as np
+import torch
+import torch.nn as nn
+from config.all_config import model_config, training_config, wandb_config
+from evaluator import (ModelEvaluator, calculate_embedding_variance,
+                       calculate_gradient_norm,
+                       calculate_intra_inter_distances,
+                       calculate_triplet_mining_efficiency)
+from torch.utils.data import DataLoader, Dataset
+from utils.cpu_memory import (CPUMemoryMonitor, clear_cpu_memory,
+                              cpu_memory_context,
+                              log_comprehensive_memory_stats)
+from utils.dataloader_memory import worker_init_fn
+from utils.evaluation_memory import log_evaluation_memory_usage
+from utils.gpu_memory import (GPUMemoryContext, clear_gpu_memory,
+                              log_gpu_memory_stats)
+from wandb_logger import wandb_logger
 
 logger = logging.getLogger(__name__)
 
@@ -999,7 +1004,7 @@ class Training:
         """
         # Use the centralized comprehensive evaluator to compute and persist
         # full evaluation, then return the retrieval metrics used by training.
-        from train.evaluator import ModelEvaluator
+        from evaluator import ModelEvaluator
 
         # dataloader may be a DataLoader; evaluator expects a Dataset instance
         dataset = getattr(dataloader, 'dataset', dataloader)
@@ -1390,7 +1395,7 @@ class Training:
         """
         try:
             import psutil
-            
+
             # Log memory before cleanup
             process = psutil.Process()
             memory_before = process.memory_info().rss / 1024 / 1024  # MB

@@ -54,7 +54,7 @@ def test_training_batch_size_flow_from_api_to_dataloader():
     from unittest.mock import Mock, patch
 
     import torch
-    from training import Training
+    from training_loop import Training
     from training_service import _convert_request_to_kwargs
 
     # Mock the dataset and other dependencies
@@ -112,7 +112,7 @@ def test_end_to_end_batch_size_verification():
     from unittest.mock import Mock, patch
 
     import torch
-    from training import Training
+    from training_loop import Training
     from training_service import _convert_request_to_kwargs
 
     print("\n=== END-TO-END BATCH SIZE VERIFICATION ===")

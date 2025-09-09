@@ -11,8 +11,9 @@ import numpy as np
 import torchvision.transforms as transforms
 from PIL import Image
 
-from shared_libs.config.all_config import (background_mask_config, detection_config,
-                         model_config, transform_config)
+from shared_libs.config.all_config import (background_mask_config,
+                                           detection_config, model_config,
+                                           transform_config)
 
 if TYPE_CHECKING:
     from common.background_mask import BackgroundMaskDetector

@@ -2,7 +2,7 @@ import torch
 import pytest
 import numpy as np
 
-from training import Training
+from training_loop import Training
 from siamesenet import SiameseNet
 
 

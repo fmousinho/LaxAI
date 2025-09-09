@@ -15,7 +15,7 @@ def test_resume_from_cpu_checkpoint_to_gpu(monkeypatch):
     """
     try:
         from siamesenet import SiameseNet
-        from training import Training
+        from training_loop import Training
         from config.all_config import model_config, wandb_config
         from src.train import wandb_logger as wl_mod
         from wandb_logger import wandb_logger

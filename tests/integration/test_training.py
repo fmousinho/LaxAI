@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import torch
 from siamesenet import SiameseNet
-from training import Training
+from training_loop import Training
 
 
 class DummyTripletDataset(torch.utils.data.Dataset):

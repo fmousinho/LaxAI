@@ -16,7 +16,7 @@ def test_resume_from_cpu_checkpoint_to_gpu(monkeypatch):
     try:
         from config.all_config import model_config, wandb_config
         from siamesenet import SiameseNet
-        from training import Training
+        from training_loop import Training
 
         from services.service_training.src.wandb_logger import wandb_logger
     except Exception as e:

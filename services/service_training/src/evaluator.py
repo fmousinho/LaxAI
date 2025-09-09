@@ -1,12 +1,15 @@
-import os
+import json
 import logging
+import os
+from collections import defaultdict
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
 import numpy as np
 import torch
 import torch.nn.functional as F
-from typing import Dict, List, Tuple, Any, Optional, Callable
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, precision_recall_fscore_support, roc_auc_score
-from collections import defaultdict
-import json
+from sklearn.metrics import (accuracy_score, f1_score,
+                             precision_recall_fscore_support, precision_score,
+                             recall_score, roc_auc_score)
 
 try:
     import psutil
@@ -14,10 +17,10 @@ try:
 except ImportError:
     PSUTIL_AVAILABLE = False
 
-from train.dataset import LacrossePlayerDataset
-from config.all_config import wandb_config, evaluator_config
+from config.all_config import evaluator_config, wandb_config
+from dataset import LacrossePlayerDataset
 from transforms import get_transforms
-from train.wandb_logger import wandb_logger
+from wandb_logger import wandb_logger
 
 logger = logging.getLogger(__name__)
 
@@ -532,7 +535,9 @@ class ModelEvaluator:
         if scores_np.size > 0 and labels_np.size > 0 and labels_np.sum() > 0:
             best_thresh, best_f1 = self._find_optimal_threshold(labels_np, scores_np)
             y_pred = (scores_np > best_thresh).astype(int)
-            from sklearn.metrics import precision_recall_fscore_support, accuracy_score, roc_auc_score
+            from sklearn.metrics import (accuracy_score,
+                                         precision_recall_fscore_support,
+                                         roc_auc_score)
             acc = float(accuracy_score(labels_np, y_pred))
             prec, rec, f1, _ = precision_recall_fscore_support(labels_np, y_pred, average='binary', zero_division=0)
             try:

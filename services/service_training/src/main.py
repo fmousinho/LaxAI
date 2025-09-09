@@ -15,7 +15,6 @@ from typing import List
 import config.logging_config
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
 from routers import training
 
 # Fork safety fix - must be at the very beginning
