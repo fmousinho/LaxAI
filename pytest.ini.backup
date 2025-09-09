@@ -1,0 +1,37 @@
+[pytest]
+markers =
+    integration: mark a test as an integration test that requires external services
+    performance: mark a test as a performance test for memory and timing analysis
+    fast: mark a test as a fast test that should complete quickly (< 30 seconds)
+    slow: mark a test as a slow test that requires more time (> 30 seconds)
+    e2e: mark a test as an end-to-end test that should run last
+    service_tracking: mark a test as related to the tracking service
+    service_training: mark a test as related to the training service
+    service_api: mark a test as related to the API service
+    service_cloud: mark a test as related to the cloud service
+
+# Add test configuration for multi-service architecture
+addopts =
+    --strict-markers
+    --disable-warnings
+    --tb=short
+    -v
+
+# Test discovery patterns
+python_files = test_*.py *_test.py
+python_classes = Test*
+python_functions = test_*
+
+# Only search in root-level tests by default to avoid conftest.py conflicts
+# Service-specific tests are run via run_tests.py or multi-root workspaces
+testpaths = sv-tests/
+
+# Exclude patterns for files that shouldn't be collected as tests
+filterwarnings =
+    ignore::DeprecationWarning
+    ignore::PendingDeprecationWarning
+    ignore::ImportWarning
+
+# Timeout settings (requires pytest-timeout plugin)
+# timeout = 300
+# timeout_method = thread

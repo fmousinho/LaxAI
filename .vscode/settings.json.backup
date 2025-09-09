@@ -1,15 +1,33 @@
 {
-  // Basic Python Configuration
+  // Python Configuration - Updated for Multi-Service Architecture
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
   "python.analysis.diagnosticMode": "workspace",
   "python.analysis.extraPaths": [
     "./shared_libs",
+    "./services/service-tracking/src",
     "./services/service-training/src",
     "./services/service-api/src",
     "./services/service-cloud/src"
   ],
   "python.analysis.autoImportCompletions": true,
   "python.analysis.typeCheckingMode": "basic",
+
+  // Multi-Service Testing Configuration - Service-Training Tests Only
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": [
+    "--rootdir=${workspaceFolder}",
+    "services/service-training/tests",
+    "--tb=short",
+    "-v"
+  ],
+  "python.testing.cwd": "${workspaceFolder}",
+  "python.testing.unittestEnabled": false,
+  "python.testing.autoTestDiscoverOnSaveEnabled": true,
+
+  // Environment Variables for Testing
+  "python.testing.env": {
+    "PYTHONPATH": "${workspaceFolder}/shared_libs:${workspaceFolder}/services/service-training/src"
+  },
 
   // Environment Configuration
   "python.envFile": "${workspaceFolder}/.env",
@@ -42,9 +60,9 @@
     "source.organizeImports": "explicit"
   },
 
-  // Terminal Configuration
+  // Terminal Configuration - Updated for Multi-Service
   "terminal.integrated.env.osx": {
-    "PYTHONPATH": "${workspaceFolder}/shared_libs:${workspaceFolder}/services/service-training/src:${workspaceFolder}/services/service-api/src:${workspaceFolder}/services/service-cloud/src"
+    "PYTHONPATH": "${workspaceFolder}/shared_libs:${workspaceFolder}/services/service-tracking/src:${workspaceFolder}/services/service-training/src:${workspaceFolder}/services/service-api/src:${workspaceFolder}/services/service-cloud/src"
   },
 
   // Search Configuration
