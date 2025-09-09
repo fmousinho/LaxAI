@@ -3,10 +3,10 @@
 Test script to verify batch size flow with actual dataset on Google Cloud.
 This script simulates the exact same flow as the API endpoint.
 """
+import logging
 import os
 import sys
-import logging
-from typing import Dict, Any
+from typing import Any, Dict
 
 # Add src to path
 sys.path.insert(0, '/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI/src')
@@ -19,8 +19,9 @@ def test_batch_size_with_actual_dataset():
     """Test batch size flow using the actual dataset and parameters."""
     from config.parameter_registry import parameter_registry
     from services.training_service import _convert_request_to_kwargs
-    from train.training import Training
-    from train.train_pipeline import TrainPipeline
+    from train_pipeline import TrainPipeline
+    from training_loop import Training
+
     from common.google_storage import get_storage
 
     # Simulate the request that user is sending
@@ -92,9 +93,9 @@ def test_batch_size_with_actual_dataset():
                 print(f"6. Train folder: {train_folder}")
 
                 # Create actual dataset
-                from train.dataset import LacrossePlayerDataset
-                from config.transforms import get_transforms
                 from config.all_config import training_config
+                from config.transforms import get_transforms
+                from dataset import LacrossePlayerDataset
 
                 training_transforms = get_transforms('training')
                 dataset = LacrossePlayerDataset(

@@ -1,7 +1,6 @@
 import pytest
 import torch
 
-
 # Build device list dynamically so pytest reports skipped devices cleanly
 devices = [torch.device('cpu')]
 if torch.backends.mps.is_available():
@@ -19,8 +18,12 @@ def test_siamese_one_epoch_on_device(device):
     instantiated (for example if pretrained weights cannot be downloaded).
     """
     try:
+        import os
+        import sys
+
         from siamesenet import SiameseNet
-        from ../../../shared_libs/config.all_config import model_config
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'shared_libs'))
+        from config.all_config import model_config
     except Exception as e:
         pytest.skip(f"Could not import SiameseNet or config: {e}")
 

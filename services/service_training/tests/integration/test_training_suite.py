@@ -1,21 +1,21 @@
-import os
-import json
-import time
-import uuid
+import importlib
 import inspect
+import json
+import os
+import signal
 import subprocess
 import tempfile
-import signal
-from typing import Optional
+import time
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
-import importlib
+from typing import Optional
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from ../../../shared_libs/utils.env_secrets import setup_environment_secrets
+from shared_libs.utils.env_secrets import setup_environment_secrets
 
 # Ensure environment secrets for integration tests that require them
 try:
@@ -92,7 +92,7 @@ def test_cancel_via_service_cli():
 
 def test_cancel_via_service_cli_with_pipeline_stop_verification():
     """Test cancelling a training job with actual pipeline stop verification."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
 
     training_service = importlib.import_module('services.training_service')
 
@@ -124,7 +124,7 @@ def test_cancel_via_service_cli_with_pipeline_stop_verification():
 
 def test_cancel_via_service_cli_pipeline_not_found():
     """Test cancelling when pipeline is not found in registry."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
 
     training_service = importlib.import_module('services.training_service')
 
@@ -178,7 +178,8 @@ def test_cancel_via_web_api_endpoint():
 
 def test_cancel_via_cloud_api_endpoint():
     """Test cancelling a training job via the cloud API endpoint."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
+
     from src.api.v1.endpoints import cloud as cloud_router_module
 
     # Mock Firestore client
@@ -227,7 +228,8 @@ def test_cancel_via_cloud_api_endpoint():
 
 def test_cancel_via_cloud_api_endpoint_pipeline_stop_failure():
     """Test cancelling via cloud API when pipeline stop fails."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
+
     from src.api.v1.endpoints import cloud as cloud_router_module
 
     # Mock Firestore client
@@ -265,7 +267,8 @@ def test_cancel_via_cloud_api_endpoint_pipeline_stop_failure():
 
 def test_cancel_via_cloud_api_endpoint_firestore_failure():
     """Test cancelling via cloud API when Firestore update fails."""
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
+
     from src.api.v1.endpoints import cloud as cloud_router_module
 
     # Mock Firestore client with update failure
@@ -295,9 +298,9 @@ def test_cancel_via_cloud_api_endpoint_firestore_failure():
 
 def test_training_cancellation_with_interrupted_error():
     """Test that InterruptedError is properly raised and handled during training cancellation."""
-    from unittest.mock import patch, MagicMock
-    import torch
+    from unittest.mock import MagicMock, patch
 
+    import torch
     # Create a minimal training setup
     from training_loop import Training
 
@@ -369,8 +372,9 @@ def test_training_cancellation_with_interrupted_error():
 
 def test_pipeline_cancellation_with_pending_stop():
     """Test that pipelines registered after cancellation request are immediately stopped."""
-    from unittest.mock import patch, MagicMock
-    from ../../../shared_libs/common.pipeline import Pipeline, stop_pipeline
+    from unittest.mock import MagicMock, patch
+
+    from shared_libs.common.pipeline import Pipeline, stop_pipeline
 
     # Mock pipeline components
     with patch('src.common.google_storage.get_storage') as mock_storage, \
@@ -410,8 +414,8 @@ def test_siamesenet_dino_can_download_and_initialize(tmp_path: Path):
     os.environ.setdefault('HF_HOME', str(tmp_path / 'hf_cache'))
 
     try:
-        from siamesenet_dino import SiameseNet
         import torch
+        from siamesenet_dino import SiameseNet
 
         net = SiameseNet()
         net.eval()
@@ -430,7 +434,7 @@ def test_siamesenet_dino_can_download_and_initialize(tmp_path: Path):
 def test_train_all_resnet_with_checkpoint_verification():
     """End-to-end test: ResNet training with 2 epochs and 2 datasets, verifying checkpoint creation."""
     import wandb
-    from ../../../shared_libs/config.all_config import wandb_config
+    from shared_libs.config.all_config import wandb_config
 
     # Ensure secrets for longer e2e tests
     setup_environment_secrets()
@@ -523,8 +527,9 @@ def test_train_all_resnet_with_checkpoint_verification():
 @pytest.mark.e2e
 def test_train_all_with_dino_memory_stable():
     """End-to-end test: DINO training with 1 epoch and single dataset, with memory stability assertions."""
-    import psutil
     import gc
+
+    import psutil
 
     setup_environment_secrets()
 

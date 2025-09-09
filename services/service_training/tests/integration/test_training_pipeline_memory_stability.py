@@ -3,18 +3,19 @@ Test suite for training pipeline memory stability and performance.
 Tests the comprehensive memory fixes implemented to resolve end-of-epoch memory spikes.
 """
 
-import os
 import gc
+import os
+from datetime import datetime
+from unittest.mock import MagicMock, patch
+
 import psutil
 import pytest
 import torch
-from unittest.mock import patch, MagicMock
-from datetime import datetime
-
-from train.train_pipeline import TrainPipeline
-from common.google_storage import get_storage, GCSPaths
 from config.all_config import training_config, wandb_config
+from train_pipeline import TrainPipeline
 from utils.env_secrets import setup_environment_secrets
+
+from common.google_storage import GCSPaths, get_storage
 
 
 @pytest.fixture
@@ -267,7 +268,7 @@ class TestTrainingPipelineMemoryStability:
 
     def test_memory_efficient_checkpoint_saving(self, mock_wandb_for_memory_test, memory_monitor):
         """Test that checkpoint saving doesn't cause memory spikes."""
-        from train.wandb_logger import WandbLogger
+        from wandb_logger import WandbLogger
 
         # Setup environment
         setup_environment_secrets()

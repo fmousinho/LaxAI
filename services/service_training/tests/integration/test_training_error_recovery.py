@@ -9,18 +9,19 @@ This test ensures that:
 5. Model loading errors are handled appropriately
 """
 
+import gc
+import time
+from contextlib import contextmanager
+from unittest.mock import MagicMock, Mock, patch
+
+import psutil
 import pytest
 import torch
-import gc
-import psutil
-import time
-from unittest.mock import MagicMock, patch, Mock
-from contextlib import contextmanager
-
-from train.training import Training
-from train.wandb_logger import WandbLogger, wandb_logger
 from config.all_config import training_config, wandb_config
+from training_loop import Training
 from utils.env_secrets import setup_environment_secrets
+
+from train.wandb_logger import WandbLogger, wandb_logger
 
 
 class TrainingErrorSimulator:
@@ -62,7 +63,7 @@ class TrainingErrorSimulator:
     def simulate_checkpoint_save_error():
         """Simulate checkpoint saving errors."""
         # Import the specific instance to mock it properly
-        from train.wandb_logger import wandb_logger
+        from wandb_logger import wandb_logger
         with patch.object(wandb_logger, 'save_checkpoint') as mock_save:
             mock_save.side_effect = RuntimeError("Simulated checkpoint save error")
             yield mock_save

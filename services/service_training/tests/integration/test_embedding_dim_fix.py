@@ -7,11 +7,12 @@ This script demonstrates:
 2. How the new method handles it by reading saved metadata
 """
 
+import os
+import sys
+from unittest.mock import MagicMock, Mock
+
 import torch
 import torch.nn as nn
-from unittest.mock import Mock, MagicMock
-import sys
-import os
 
 # Add the src directory to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
@@ -32,7 +33,7 @@ def test_model_loading_with_different_embedding_dims():
     """Test that model loading works when checkpoint has different embedding_dim"""
 
     # Import the SiameseNet class
-    from train.siamesenet import SiameseNet
+    from siamesenet import SiameseNet
 
     print("Testing model loading with embedding dimension mismatch...")
 

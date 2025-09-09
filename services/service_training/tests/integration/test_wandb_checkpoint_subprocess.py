@@ -1,15 +1,16 @@
 
 import os
-import uuid
 import time
+import uuid
 from pathlib import Path
+
 import pytest
 import torch
-import wandb
-
 from wandb_logger import WandbLogger
-from ../../../shared_libs/utils.env_secrets import setup_environment_secrets
-from ../../../shared_libs/config.all_config import wandb_config
+
+import wandb
+from shared_libs.config.all_config import wandb_config
+from shared_libs.utils.env_secrets import setup_environment_secrets
 
 # Ensure secrets are loaded for wandb communication
 setup_environment_secrets()
