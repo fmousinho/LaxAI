@@ -1,38 +1,45 @@
 #!/usr/bin/env python3
 """
-End-to-end workflow script for the LaxAI project.
+Legacy training script for LaxAI project.
 
-This script automates the following process:
-1. Finds all video files in a specified tenant's 'raw' directory in GCS.
-2. For each video, it runs the Data Preparation Pipeline.
-3. Upon successful data preparation, it identifies the generated training datasets.
-4. For each training dataset, it runs the Model Training Pipeline.
+⚠️  DEPRECATED: This module is deprecated and will be removed in a future version.
+   Please use the new modular approach:
+   - CLI: python -m cli.train_cli
+   - API: from workflows.training_workflow import TrainingWorkflow
+   - Programmatic: from workflows.training_workflow import train_workflow
+
+This script maintains backward compatibility but delegates to the new workflow system.
 """
 import argparse
 import json
 import logging
 import os
+import warnings
 from typing import Optional
 
-# Imports using relative imports since we're now in the src package
-from utils.env_secrets import setup_environment_secrets
-
-setup_environment_secrets()
 from config.logging_config import print_banner
 from parameter_registry import parameter_registry
 from utils.cpu_memory import clear_cpu_memory, log_comprehensive_memory_stats
-
-from common.google_storage import GCSPaths, get_storage
-from train.train_pipeline import TrainPipeline
+# Absolute imports
+from utils.env_secrets import setup_environment_secrets
+from workflows.training_workflow import TrainingWorkflow
 
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 
+# Setup environment
+setup_environment_secrets()
+
 # --- Configure Logging ---
-# Note: This script assumes logging is configured elsewhere (e.g., in config)
-# If not, uncomment the following lines for basic logging.
-# from config import logging_config
 logger = logging.getLogger(__name__)
+
+# Deprecation warning
+warnings.warn(
+    "train_all.py is deprecated. Use 'python -m cli.train_cli' for CLI or "
+    "'from workflows.training_workflow import TrainingWorkflow' for programmatic access.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 
 def train(tenant_id: str, 
@@ -47,7 +54,10 @@ def train(tenant_id: str,
           n_datasets_to_use: Optional[int] = None,
           eval_kwargs: Optional[dict] = None):
     """
-    Main function to orchestrate the data prep and training workflows.
+    Legacy training function - DEPRECATED.
+
+    This function maintains backward compatibility but delegates to the new
+    TrainingWorkflow class. New code should use TrainingWorkflow directly.
 
     Args:
         tenant_id: The tenant ID for GCS operations.
@@ -60,108 +70,111 @@ def train(tenant_id: str,
         model_kwargs: Dictionary of model parameters to pass to model constructor.
         pipeline_name: Unique name for the pipeline (used for cancellation).
         eval_kwargs: Dictionary of evaluation parameters to pass to evaluation pipeline.
+
+    Returns:
+        Dictionary containing training results (for backward compatibility).
     """
-    if wandb_tags is None:
-        wandb_tags = []
-    if training_kwargs is None:
-        training_kwargs = {}
-    if model_kwargs is None:
-        model_kwargs = {}
-    if eval_kwargs is None:
-        eval_kwargs = {}
+    warnings.warn(
+        "train_all.train() is deprecated. Use TrainingWorkflow class instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
 
-    logger.info(f"--- Starting End-to-End Workflow for Tenant: {tenant_id} ---")
-    logger.info(f"Training configuration: {training_kwargs}")
-    logger.info(f"Model configuration: {model_kwargs}")
+    logger.info(f"--- Starting Legacy Training Workflow for Tenant: {tenant_id} ---")
 
-    # 1. Find all videos in the raw directory
     try:
-        # Combine training_kwargs and model_kwargs for TrainPipeline
-        all_kwargs = {**training_kwargs, **model_kwargs, **eval_kwargs}
-
-        # Prevent duplicate pipeline_name if callers included it in
-        # training_kwargs (tests sometimes pass pipeline_name there).
-        # TrainPipeline receives pipeline_name explicitly below.
-        if 'pipeline_name' in all_kwargs:
-            logger.debug("Removing duplicate 'pipeline_name' from merged kwargs to avoid TypeError")
-            all_kwargs.pop('pipeline_name')
-        
-        # Allow callers (API) to provide a pipeline_name to register the pipeline
-        
-        train_pipeline = TrainPipeline(
-            tenant_id=tenant_id, 
-            verbose=verbose, 
+        # Create and execute new workflow
+        workflow = TrainingWorkflow(
+            tenant_id=tenant_id,
+            verbose=verbose,
             save_intermediate=save_intermediate,
+            custom_name=custom_name,
+            resume_from_checkpoint=resume_from_checkpoint,
+            wandb_tags=wandb_tags,
+            training_kwargs=training_kwargs,
+            model_kwargs=model_kwargs,
             pipeline_name=pipeline_name,
-            **all_kwargs
+            n_datasets_to_use=n_datasets_to_use,
+            eval_kwargs=eval_kwargs
         )
 
-        logger.info("Checking for available datasets..")
-        # Use Google Storage functions to list directories
-        storage_client = get_storage(tenant_id)
-       
-        path_finder = GCSPaths()
-        datasets_folder = path_finder.get_path("datasets_root")
-        if datasets_folder is None:
-            raise ValueError("datasets_root path not found in GCSPaths configuration.")
-        else:
-            datasets_folder = datasets_folder
-        datasets = storage_client.list_blobs(prefix=datasets_folder, delimiter='/', exclude_prefix_in_return=True)
-        datasets = list(datasets)  # Convert to list for easier processing
+        result = workflow.execute()
 
-        logger.info(f"Found {len(datasets)} dataset directories in GCS.")
+        # Convert new result format to legacy format for backward compatibility
+        legacy_result = {
+            "status": result["status"],
+            "datasets_found": result["datasets_found"],
+            "successful_runs": result["successful_runs"],
+            "total_runs": result["total_runs"],
+            "custom_name": result["custom_name"],
+            "training_results": result["training_results"]
+        }
 
-        # By default use all discovered datasets; tests may pass
-        # `n_datasets_to_use=1` to limit scope for fast runs.
-        N_DATASETS_TO_USE = n_datasets_to_use if n_datasets_to_use is not None else len(datasets)
+        # Add legacy fields if they exist in any training result
+        for training_result in result["training_results"]:
+            if "result" in training_result:
+                # Copy pipeline result to top level for backward compatibility
+                legacy_result.update(training_result["result"])
+                break
 
-        datasets_to_use = [dataset.rstrip('/') for dataset in datasets[0:N_DATASETS_TO_USE]]
+        logger.info("--- Legacy Training Workflow Finished ---")
 
-        # Run the training pipeline with all the provided arguments
-        train_results = train_pipeline.run(
-            dataset_name=datasets_to_use, 
-            custom_name=custom_name, 
-            resume_from_checkpoint=resume_from_checkpoint
-        )
-
-        if train_results.get("status") == "completed":
-            logger.info(f"Successfully completed training for dataset: {datasets_to_use}")
-        else:
-            logger.error(f"Training pipeline failed for dataset: {datasets_to_use}")
-            logger.error(f"Details: {json.dumps(train_results.get('errors'), indent=2)}")
-
-
-        logger.info("--- End-to-End Workflow Finished ---")
-        
         # Clean up memory after workflow completion
-        log_comprehensive_memory_stats("Workflow completion")
+        log_comprehensive_memory_stats("Legacy workflow completion")
         clear_cpu_memory(force=True)
 
-        # Return the pipeline results to callers (tests, API wrappers)
-        return train_results
+        return legacy_result
 
     except Exception as e:
-        logger.error(f"Error occurred during workflow: {e}")
-        logger.error(f"Details: {json.dumps(e.args, indent=2)}")
-        
+        logger.error(f"Error occurred during legacy workflow: {e}")
+
         # Clean up memory even on failure
         clear_cpu_memory(force=True)
-        
+
         # Surface exceptions to callers/tests
         raise
 
 
 
 def main():
+    """
+    Legacy CLI entry point - DEPRECATED.
 
+    This function redirects to the new CLI module for backward compatibility.
+    """
+    warnings.warn(
+        "train_all.py CLI is deprecated. Use 'python -m cli.train_cli' instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+
+    print("⚠️  This CLI is deprecated. Please use: python -m cli.train_cli")
+    print("Redirecting to new CLI...")
+
+    # Import and delegate to new CLI
+    try:
+        from cli.train_cli import main as new_main
+        new_main()
+    except ImportError as e:
+        print(f"❌ Failed to import new CLI: {e}")
+        print("Falling back to legacy CLI...")
+
+        # Fallback to legacy CLI if new one fails
+        _legacy_main()
+
+
+def _legacy_main():
+    """
+    Fallback legacy CLI implementation.
+    """
     print_banner()
-    
+
     # Create base parser with description
-    parser = argparse.ArgumentParser(description="Run the full LaxAI Data Prep and Training Workflow.")
-    
+    parser = argparse.ArgumentParser(description="Run the full LaxAI Data Prep and Training Workflow (LEGACY).")
+
     # Use parameter registry to add training/model arguments
     parser = parameter_registry.generate_cli_parser(parser)
-    
+
     # Add non-training specific arguments
     parser.add_argument("--tenant_id", type=str, default="tenant1", help="The tenant ID for GCS.")
     parser.add_argument("--frames", type=int, default=20, help="Number of frames to extract per video.")
@@ -171,13 +184,13 @@ def main():
     parser.add_argument("--resume_from_checkpoint", action="store_true", default=True, help="Resume training from checkpoint if available.")
     parser.add_argument("--wandb_tags", nargs="*", default=[], help="List of tags for wandb tracking (space-separated).")
     parser.add_argument("--n_datasets_to_use", type=int, default=None, help="Limit number of discovered datasets to use for training (top-level param).")
-    
+
     args = parser.parse_args()
 
     # Extract training and model kwargs using parameter registry
     training_kwargs = {}
     model_kwargs = {}
-    
+
     for param_name, param_def in parameter_registry.parameters.items():
         arg_value = getattr(args, param_name, None)
         if arg_value is not None:
@@ -202,9 +215,9 @@ def main():
         custom_name=args.custom_name,
         resume_from_checkpoint=args.resume_from_checkpoint,
         wandb_tags=args.wandb_tags,
-    training_kwargs=training_kwargs,
-    model_kwargs=model_kwargs,
-    n_datasets_to_use=args.n_datasets_to_use
+        training_kwargs=training_kwargs,
+        model_kwargs=model_kwargs,
+        n_datasets_to_use=args.n_datasets_to_use
     )
 
 if __name__ == "__main__":

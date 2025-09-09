@@ -8,6 +8,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
 from schemas.training import TrainingRequest, TrainingResponse, TrainingStatus
+from workflows.training_workflow import TrainingWorkflow
 
 router = APIRouter(prefix="/train", tags=["training"])
 
@@ -15,8 +16,8 @@ router = APIRouter(prefix="/train", tags=["training"])
 training_tasks: Dict[str, Dict[str, Any]] = {}
 
 
-def simulate_training_task(task_id: str, training_request: TrainingRequest):
-    """Simulate a training task running in the background."""
+def execute_training_task(task_id: str, training_request: TrainingRequest):
+    """Execute actual training using the new TrainingWorkflow."""
     try:
         # Update task status to running
         training_tasks[task_id].update({
@@ -25,33 +26,41 @@ def simulate_training_task(task_id: str, training_request: TrainingRequest):
             "current_epoch": 0,
             "updated_at": datetime.utcnow().isoformat()
         })
-        
-        # Simulate training progress
-        for epoch in range(1, 101):  # Simulate 100 epochs
-            # Simulate some work
-            import time
-            time.sleep(0.1)  # Very short sleep for demo
-            
-            # Update progress
-            training_tasks[task_id].update({
-                "progress": epoch,
-                "current_epoch": epoch,
-                "total_epochs": 100,
-                "loss": 1.0 - (epoch / 100.0) * 0.9,  # Decreasing loss
-                "updated_at": datetime.utcnow().isoformat()
-            })
-            
-            # Check if task was cancelled
-            if training_tasks[task_id]["status"] == "cancelled":
-                return
-        
-        # Mark as completed
+
+        # Extract parameters from request
+        training_kwargs = training_request.training_params or {}
+        model_kwargs = training_request.model_params or {}
+        eval_kwargs = training_request.eval_params or {}
+
+        # Create and execute training workflow
+        workflow = TrainingWorkflow(
+            tenant_id=getattr(training_request, 'tenant_id', 'tenant1'),
+            verbose=getattr(training_request, 'verbose', True),
+            save_intermediate=getattr(training_request, 'save_intermediate', True),
+            custom_name=training_request.experiment_name or f"api_training_{task_id}",
+            resume_from_checkpoint=getattr(training_request, 'resume_from_checkpoint', True),
+            wandb_tags=getattr(training_request, 'wandb_tags', []),
+            training_kwargs=training_kwargs,
+            model_kwargs=model_kwargs,
+            eval_kwargs=eval_kwargs,
+            pipeline_name=f"api_{task_id}",
+            n_datasets_to_use=getattr(training_request, 'n_datasets_to_use', None)
+        )
+
+        # Execute the workflow
+        result = workflow.execute()
+
+        # Update task with final results
         training_tasks[task_id].update({
-            "status": "completed",
+            "status": "completed" if result["successful_runs"] > 0 else "failed",
             "progress": 100,
+            "datasets_found": result["datasets_found"],
+            "successful_runs": result["successful_runs"],
+            "total_runs": result["total_runs"],
+            "training_results": result["training_results"],
             "updated_at": datetime.utcnow().isoformat()
         })
-        
+
     except Exception as e:
         # Mark as failed
         training_tasks[task_id].update({
@@ -91,7 +100,7 @@ async def start_training(
     }
     
     # Start training task in background
-    background_tasks.add_task(simulate_training_task, task_id, request)
+    background_tasks.add_task(execute_training_task, task_id, request)
     
     return TrainingResponse(
         task_id=task_id,
