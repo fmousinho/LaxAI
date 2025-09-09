@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 def test_checkpoint_naming_no_run():
     """Test checkpoint naming when no run is active."""
     try:
-        from train.wandb_logger import WandbLogger
+        from wandb_logger import WandbLogger
 
         wandb_logger = WandbLogger()
         wandb_logger.run = None
@@ -30,7 +30,7 @@ def test_checkpoint_naming_no_run():
 def test_checkpoint_naming_with_run():
     """Test checkpoint naming with an active run."""
     try:
-        from train.wandb_logger import WandbLogger
+        from wandb_logger import WandbLogger
 
         wandb_logger = WandbLogger()
 
@@ -53,7 +53,7 @@ def test_checkpoint_naming_with_run():
 def test_checkpoint_naming_sanitization():
     """Test checkpoint naming with special characters that need sanitization."""
     try:
-        from train.wandb_logger import WandbLogger
+        from wandb_logger import WandbLogger
 
         wandb_logger = WandbLogger()
 
@@ -78,7 +78,7 @@ def test_checkpoint_naming_sanitization():
 def test_checkpoint_naming_test_prefix():
     """Test checkpoint naming for test runs."""
     try:
-        from train.wandb_logger import WandbLogger
+        from wandb_logger import WandbLogger
 
         wandb_logger = WandbLogger()
 
