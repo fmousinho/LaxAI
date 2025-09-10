@@ -529,18 +529,7 @@ class WandbLogger:
                             logger.debug(f"Could not get collections for {artifact_type_obj.name}: {e}")
                             
                 except Exception as e:
-                    logger.debug(f"Could not enumerate artifact types: {e}")
-                    
-                    # Fallback to hardcoded common patterns if API enumeration fails
-                    common_model_names = [
-                        "test_collection", "test_model", "train.siamesenet_dino", 
-                        "train.siamesenet", "player_model", "checkpoint"
-                    ]
-                    
-                    for base_name in common_model_names:
-                        test_name = self._get_artifact_name(base_name)
-                        test_patterns.append((test_name, "model"))
-                        test_patterns.append((test_name, "model_checkpoint"))
+                    logger.error(f"Could not enumerate artifact types: {e}")
                 
                 # Remove duplicates
                 test_patterns = list(set(test_patterns))

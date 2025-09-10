@@ -447,7 +447,7 @@ def test_train_all_resnet_with_checkpoint_verification():
             resume_from_checkpoint=False,
             wandb_tags=["e2e", "resnet", "checkpoint_test"],
             training_kwargs={"num_epochs": 2, "batch_size": 8},
-            model_kwargs={"model_class_module": "train.siamesenet", "model_class_str": "SiameseNet"},
+            model_kwargs={"model_class_module": "siamesenet", "model_class_str": "SiameseNet"},
             n_datasets_to_use=2,
         )
 
@@ -533,7 +533,7 @@ def test_train_all_with_dino_memory_stable():
     gc.collect()
     initial_memory = process.memory_info().rss / 1024 / 1024  # MB
 
-    from services.service_training.src.train_all import train
+    from workflows.training_workflow import train_workflow as train
 
     try:
         results = train(
@@ -544,7 +544,7 @@ def test_train_all_with_dino_memory_stable():
             resume_from_checkpoint=False,
             wandb_tags=["e2e", "dino", "memory_stable"],
             training_kwargs={"num_epochs": 1, "batch_size": 4, "force_pretraining": True},
-            model_kwargs={"model_class_module": "train.siamesenet_dino", "model_class_str": "SiameseNet"},
+            model_kwargs={"model_class_module": "siamesenet_dino", "model_class_str": "SiameseNet"},
             n_datasets_to_use=1,
         )
 
@@ -573,7 +573,7 @@ def test_train_all_with_dino_memory_stable():
 
 def test_train_signature_has_n_datasets_to_use():
     """Test that the train function signature includes n_datasets_to_use parameter."""
-    from services.service_training.src.train_all import train
+    from workflows.training_workflow import train_workflow as train
     sig = inspect.signature(train)
     assert "n_datasets_to_use" in sig.parameters
 

@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from common.google_storage import GCSPaths, get_storage
 from config.logging_config import print_banner
 from parameter_registry import parameter_registry
+from scipy import datasets
 from train_pipeline import TrainPipeline
 from utils.cpu_memory import clear_cpu_memory, log_comprehensive_memory_stats
 # Absolute imports
@@ -80,28 +81,23 @@ class TrainingWorkflow:
         try:
             storage = get_storage(self.tenant_id)
             path_manager = GCSPaths()
-            tenant_path =path_manager.get_path(self.tenant_id)
+            dataset_path = path_manager.get_path("datasets_root")
 
-            # List all directories in the tenant's processed data path
-            processed_path = f"{tenant_path}/processed"
+    
             datasets = []
 
             try:
-                blobs = storage.list_blobs(processed_path)
-                dataset_dirs = set()
+                datasets = storage.list_blobs(
+                    prefix=dataset_path,
+                    delimiter='/',
+                    exclude_prefix_in_return=True
+                    )
+                datasets = [d.rstrip('/') for d in datasets]
 
-                for blob in blobs:
-                    if blob.name.endswith('/'):
-                        # Extract dataset directory name
-                        parts = blob.name.strip('/').split('/')
-                        if len(parts) >= 3:  # tenant/processed/dataset_name/
-                            dataset_dirs.add(parts[2])
-
-                datasets = list(dataset_dirs)
                 logger.info(f"Found {len(datasets)} datasets: {datasets}")
 
             except Exception as e:
-                logger.warning(f"Could not list datasets from {processed_path}: {e}")
+                logger.warning(f"Could not list datasets from {dataset_path}: {e}")
                 datasets = []
 
             # Limit datasets if specified
@@ -161,12 +157,22 @@ class TrainingWorkflow:
                         "error": str(e)
                     })
 
+            # Aggregate steps completed across all dataset runs
+            steps_completed_total = 0
+            for r in training_results:
+                try:
+                    steps_completed_total += int(r.get("result", {}).get("steps_completed", 0))
+                except Exception:
+                    # Non-standard result entry
+                    continue
+
             # Return summary
             return {
                 "status": "completed",
                 "datasets_found": len(datasets),
                 "successful_runs": successful_runs,
                 "total_runs": len(training_results),
+                "steps_completed": steps_completed_total,
                 "training_results": training_results,
                 "custom_name": self.custom_name
             }
@@ -208,7 +214,10 @@ class TrainingWorkflow:
             )
 
             # Execute the training
-            result = train_pipeline.train()
+            result = train_pipeline.run(
+                dataset_name=[dataset_name],
+                resume_from_checkpoint=self.resume_from_checkpoint,
+            )
 
             return {
                 "dataset": dataset_name,
