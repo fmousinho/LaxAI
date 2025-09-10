@@ -3,12 +3,12 @@
 Multi-Service Test Runner for LaxAI
 Runs tests across all services in the correct order:
 1.     #    # For cross-service imports, include all service src directories
-    all_service_src_paths = [str(Path(f"services/{s}/src").resolve()) for s in ['service-tracking', 'service-training', 'service-api', 'service-cloud'] if Path(f"services/{s}/src").exists()]
+    all_service_src_paths = [str(Path(f"services/{s}/src").resolve()) for s in ['service_tracking', 'service_training', 'service_cloud'] if Path(f"services/{s}/src").exists()]
     
     # Construct PYTHONPATH: shared_libs first, then root directory, then all service src directories
     python_path_parts = [shared_libs_path, root_path] + all_service_src_paths
     service_env["PYTHONPATH"] = ":".join(python_path_parts)ross-service imports, include all service src directories
-    all_service_src_paths = [str(Path(f"services/{s}/src").resolve()) for s in ['service-tracking', 'service-training', 'service-api', 'service-cloud'] if Path(f"services/{s}/src").exists()]
+    all_service_src_paths = [str(Path(f"services/{s}/src").resolve()) for s in ['service_tracking', 'service_training', 'service_cloud'] if Path(f"services/{s}/src").exists()]
     
     # Construct PYTHONPATH: shared_libs first, then root directory, then all service src directories
     python_path_parts = [shared_libs_path, root_path] + all_service_src_paths
@@ -20,9 +20,9 @@ Runs tests across all services in the correct order:
 
 Usage:
     python run_tests.py                           # Run all tests
-    python run_tests.py --service service-training # Run tests for specific service
+    python run_tests.py --service service_training # Run tests for specific service
     python run_tests.py --category unit           # Run only unit tests
-    python run_tests.py --service service-training --category integration  # Run integration tests for specific service
+    python run_tests.py --service service_training --category integration  # Run integration tests for specific service
     python run_tests.py --category performance    # Run only performance tests
     python run_tests.py --sv-only                 # Run only System Verification tests
 """
@@ -41,7 +41,7 @@ def parse_arguments():
 
     parser.add_argument(
         "--service",
-        choices=["service-tracking", "service-training", "service-api", "service-cloud"],
+        choices=["service_tracking", "service_training", "service_cloud"],
         help="Run tests for a specific service only"
     )
 
@@ -128,7 +128,7 @@ def run_service_tests(service_name, python_bin, category="all", verbose=False):
     shared_libs_path = str(Path(__file__).parent.resolve() / "shared_libs")
     
     # For cross-service imports, include all service directories
-    all_service_paths = [str(Path(f"services/{s}").resolve()) for s in ['service-tracking', 'service-training', 'service-api', 'service-cloud'] if Path(f"services/{s}").exists()]
+    all_service_paths = [str(Path(f"services/{s}").resolve()) for s in ['service_tracking', 'service_training', 'service_cloud'] if Path(f"services/{s}").exists()]
     
     # Construct PYTHONPATH: shared_libs first, then root directory, then src directory, then all service directories
     python_path_parts = [shared_libs_path, root_path, src_path] + all_service_paths
@@ -206,7 +206,7 @@ def main():
     # Get the Python executable
     python_bin = os.environ.get('PYTHON_EXECUTABLE', sys.executable)
 
-    all_services = ['service-tracking', 'service-training', 'service-api', 'service-cloud']
+    all_services = ['service_tracking', 'service_training', 'service_cloud']
 
     # Filter services based on arguments
     if args.service:

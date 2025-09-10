@@ -60,7 +60,7 @@ def switch_to_prod_config():
     """Switch back to production configuration"""
 def switch_to_test_config():
     """Switch all services to test configuration for faster local testing"""
-    services = ['service-tracking', 'service-training', 'service-api', 'service-cloud']
+    services = ['service_tracking', 'service_training', 'service_cloud']
     success_count = 0
     
     # Also handle root config if it exists
@@ -86,7 +86,7 @@ def switch_to_test_config():
 
 def switch_to_prod_config():
     """Switch all services back to production configuration"""
-    services = ['service-tracking', 'service-training', 'service-api', 'service-cloud']
+    services = ['service_tracking', 'service_training', 'service_cloud']
     success_count = 0
     
     # Handle root config
@@ -108,7 +108,7 @@ def switch_to_prod_config():
 
 def show_current_config():
     """Show current configuration status for all services"""
-    services = ['service-tracking', 'service-training', 'service-api', 'service-cloud']
+    services = ['service_tracking', 'service_training', 'service_cloud']
     
     print("📊 Multi-Service Configuration Status:")
     print("=" * 50)

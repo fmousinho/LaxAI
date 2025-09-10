@@ -18,7 +18,7 @@ This workspace is organized as a multi-service architecture to improve developme
 
 - **Purpose**: Model training and fine-tuning
 - **Key Files**:
-  - `scripts/train_all.py` - Main training script
+  - `scripts/train_workflow.py` - Main training script
   - Tests: `tests/train/`
 - **Debug Configs**:
   - `🧠 Train: Debug Training Script` - Debug training process
@@ -72,7 +72,7 @@ python -m pytest tests/track/ -v
 
 ```bash
 # Quick training run
-python src/scripts/train_all.py --tenant_id tenant1 --num_epochs 3
+python src/scripts/train_workflow.py --tenant_id tenant1 --num_epochs 3
 
 # Debug training with VSCode
 # Use "🧠 Train: Debug Training Script" configuration

@@ -18,13 +18,13 @@ def setup_test_paths():
     This is necessary when running tests from VSCode testing browser or other environments
     where the PYTHONPATH may not be properly configured.
     """
-    # Find the project root (assuming this file is in tests/conftest.py)
+    # Find the project root (assuming this file is in services/conftest.py)
     current_file = Path(__file__).resolve()
-    project_root = current_file.parent.parent  # Go up two levels from tests/
+    project_root = current_file.parent.parent  # Go up two levels from services/
 
     # Define important paths
     shared_libs_path = project_root / "shared_libs"
-    services_path = project_root / "services"
+    services_path = current_file.parent  # The services directory itself
 
     # Add paths to sys.path if not already present
     paths_to_add = [project_root, shared_libs_path, services_path]

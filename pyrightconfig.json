@@ -55,10 +55,9 @@
   "typeCheckingMode": "basic", // Or "strict", "off", depending on your preference
   "extraPaths": [
     "shared_libs",
-    "services/service-tracking/src",
-    "services/service-training/src",
-    "services/service-api/src",
-    "services/service-cloud/src"
+    "services/service_tracking/src",
+    "services/service_training/src",
+    "services/service_cloud/src"
   ], // Add paths for multi-service architecture
 
   "overrides": [

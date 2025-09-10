@@ -14,7 +14,7 @@ Quick instructions to run the e2e tests locally:
 
 3. Run the specific e2e test (this will use real GCP and wandb as the test expects):
 
-   python -m pytest tests/test_train_all_e2e.py::test_train_all_with_one_dataset -q
+   python -m pytest tests/test_training_workflow_e2e.py::test_training_workflow_with_one_dataset -q
 
 To run tests from VS Code Test Explorer:
 
@@ -23,5 +23,6 @@ To run tests from VS Code Test Explorer:
 - Click the refresh icon if tests are not discovered automatically.
 
 Notes:
+
 - The e2e test interacts with real external services (GCP, wandb). Make sure required credentials are available in your environment before running.
 - Common env vars: `WANDB_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS` (or run `gcloud auth application-default login`).

@@ -17,11 +17,11 @@ from unittest.mock import MagicMock, Mock, patch
 import psutil
 import pytest
 import torch
-from config.all_config import training_config, wandb_config
 from training_loop import Training
 
 from services.service_training.src.wandb_logger import (WandbLogger,
                                                         wandb_logger)
+from shared_libs.config.all_config import training_config, wandb_config
 from shared_libs.utils.env_secrets import setup_environment_secrets
 
 

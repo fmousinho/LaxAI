@@ -1,17 +1,16 @@
-LaxAI Training Service
-======================
+# LaxAI Training Service
 
 This repository provides an orchestrated training service for player re-identification and team classification.
 It supports both a CLI for batch workflows and a FastAPI web API for starting and managing training jobs.
 
 Highlights
- - End-to-end data preparation and training pipelines (dataprep → training → checkpointing)
- - WandB integration for experiment tracking and model artifact management
- - Hugging Face model support (e.g., DINOv3 backbone) with gated model token support
- - Affine-aware tracking utilities (AffineAwareByteTrack) to compensate camera motion
 
-Quickstart (local)
--------------------
+- End-to-end data preparation and training pipelines (dataprep → training → checkpointing)
+- WandB integration for experiment tracking and model artifact management
+- Hugging Face model support (e.g., DINOv3 backbone) with gated model token support
+- Affine-aware tracking utilities (AffineAwareByteTrack) to compensate camera motion
+
+## Quickstart (local)
 
 1. Create and activate a virtual environment and install requirements:
 
@@ -31,7 +30,7 @@ cp .env.example .env
 3. Run the CLI (example):
 
 ```bash
-PYTHONPATH=./src python src/scripts/train_all.py --tenant_id tenant1 --custom_name myrun --n_datasets_to_use 1
+PYTHONPATH=./src python src/scripts/train_workflow.py --tenant_id tenant1 --custom_name myrun --n_datasets_to_use 1
 ```
 
 4. Run the API (development):
@@ -42,15 +41,14 @@ PYTHONPATH=./src python src/main.py
 # Then use the API at http://localhost:8000
 ```
 
-CLI reference
--------------
+## CLI reference
 
-Primary script: `src/scripts/train_all.py`
+Primary script: `src/scripts/train_workflow.py`
 
 Key flags (run `--help` for the full list):
 
 ```
-usage: train_all.py [-h] [--num-epochs NUM_EPOCHS] [--batch-size BATCH_SIZE]
+usage: train_workflow.py [-h] [--num-epochs NUM_EPOCHS] [--batch-size BATCH_SIZE]
 										[--learning-rate LEARNING_RATE] [--margin MARGIN]
 										[--weight-decay WEIGHT_DECAY] [...]
 										[--tenant_id TENANT_ID] [--frames FRAMES]
@@ -85,8 +83,7 @@ options:
 												Limit number of discovered datasets to use for training (top-level param).
 ```
 
-API reference
--------------
+## API reference
 
 The FastAPI server exposes a small set of endpoints for starting and managing training jobs.
 
@@ -104,35 +101,32 @@ Example API payload (generated from parameter registry):
 
 ```json
 {
-	"tenant_id": "tenant1",
-	"verbose": false,
-	"custom_name": "api_run_20250825_152109_725eb37b",
-	"resume_from_checkpoint": true,
-	"wandb_tags": [
-		"api"
-	],
-	"training_params": {
-		"num_epochs": 50,
-		"batch_size": 64,
-		"learning_rate": 0.001,
-		"margin": 0.4,
-		"weight_decay": 0.0001,
-		"lr_scheduler_patience": 3,
-		"num_workers": 0,
-		"prefetch_factor": 2,
-		"embedding_dim": 512,
-		"dropout_rate": 0.2,
-		"input_height": 120,
-		"input_width": 80
-	},
-	"model_params": {}
+  "tenant_id": "tenant1",
+  "verbose": false,
+  "custom_name": "api_run_20250825_152109_725eb37b",
+  "resume_from_checkpoint": true,
+  "wandb_tags": ["api"],
+  "training_params": {
+    "num_epochs": 50,
+    "batch_size": 64,
+    "learning_rate": 0.001,
+    "margin": 0.4,
+    "weight_decay": 0.0001,
+    "lr_scheduler_patience": 3,
+    "num_workers": 0,
+    "prefetch_factor": 2,
+    "embedding_dim": 512,
+    "dropout_rate": 0.2,
+    "input_height": 120,
+    "input_width": 80
+  },
+  "model_params": {}
 }
 ```
 
 See `src/api/example_client.py` for a working Python client example.
 
-Configuration & Secrets
------------------------
+## Configuration & Secrets
 
 Required for normal operation:
 
@@ -146,15 +140,13 @@ Optional but recommended in some environments:
 
 For local development, create a `.env` file (copy from `.env.example`) and fill the values. The runtime will load secrets from the environment, then from `.env`, and finally (if `GOOGLE_CLOUD_PROJECT` is set) from Secret Manager.
 
-Troubleshooting
----------------
+## Troubleshooting
 
 - If the FastAPI app fails to import with a Secret error, ensure `WANDB_API_KEY` and `HUGGINGFACE_HUB_TOKEN` are present in your environment or `.env`.
 - WandB requires a 40-character API key. If using local dummy keys for testing, set `WANDB_MODE=offline` to avoid network verification.
 - If you want Secret Manager fallback, ensure `GOOGLE_CLOUD_PROJECT` and `GOOGLE_APPLICATION_CREDENTIALS` are set and the service account has `secretmanager.secretAccessor`.
 
-Development & Testing
----------------------
+## Development & Testing
 
 ### Running Tests
 
@@ -187,6 +179,7 @@ python switch_config.py --status
 ```
 
 The test configuration includes:
+
 - Smaller batch sizes (8 instead of 256)
 - Reduced DataLoader workers (0 for local testing)
 - Optimized prefetch settings
@@ -230,7 +223,6 @@ n_datasets_to_use=1  # Use only 1 dataset
 
 Create `.env.example` (already provided) and do not commit real secrets. Use CI secrets or Secret Manager for the real keys.
 
-Contributing
-------------
+## Contributing
 
 See `CONTRIBUTING.md` in the `documentation/` folder for guidelines.

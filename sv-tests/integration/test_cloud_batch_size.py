@@ -10,7 +10,7 @@ from typing import Any, Dict
 
 # Add src to path
 sys.path.insert(0, '/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI/src')
-sys.path.insert(0, '/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI/services/service-api/src')
+sys.path.insert(0, '/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI/services/service_training/src')
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -21,7 +21,7 @@ def test_batch_size_with_actual_dataset():
     import sys
 
     from config.parameter_registry import parameter_registry
-    sys.path.insert(0, '../../services/service-api/src')
+    sys.path.insert(0, '../../services/service_training/src')
     from train_pipeline import TrainPipeline
     from training_loop import Training
     from training_service import _convert_request_to_kwargs

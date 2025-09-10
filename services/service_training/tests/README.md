@@ -82,7 +82,7 @@ Tests in the `integration/` directory may use shared_libs components:
 - `shared_libs.config.*` - Configuration management
 - `shared_libs.common.*` - Common components
 
-**Important:** Integration tests should NOT interact with other services (service-api, service-cloud, etc.).
+**Important:** Integration tests should NOT interact with other services (service_cloud, service_tracking, etc.).
 
 ## Running All Tests
 

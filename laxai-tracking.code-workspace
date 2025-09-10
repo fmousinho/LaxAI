@@ -6,11 +6,11 @@
     },
     {
       "name": "Tracking Service",
-      "path": "./services/service-tracking"
+      "path": "./services/service_tracking"
     }
   ],
   "settings": {
-    "python.defaultInterpreterPath": "./services/service-tracking/.venv/bin/python",
+    "python.defaultInterpreterPath": "./services/service_tracking/.venv/bin/python",
     "python.testing.pytestEnabled": true,
     "python.testing.pytestArgs": ["tests/"],
     "python.testing.cwd": "${workspaceFolder:Tracking Service}",

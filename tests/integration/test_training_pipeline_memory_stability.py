@@ -11,10 +11,10 @@ from unittest.mock import MagicMock, patch
 import psutil
 import pytest
 import torch
-from config.all_config import training_config, wandb_config
 from train_pipeline import TrainPipeline
 
 from common.google_storage import GCSPaths, get_storage
+from shared_libs.config.all_config import training_config, wandb_config
 from shared_libs.utils.env_secrets import setup_environment_secrets
 
 
@@ -240,11 +240,11 @@ class TestTrainingPipelineMemoryStability:
         # Setup environment
         setup_environment_secrets()
 
-        # Test dataset discovery (simulating what train_all.py does)
+        # Test dataset discovery (simulating what training_workflow does)
         mock_datasets = ['dataset_001/', 'dataset_002/', 'dataset_003/']
         mock_gcs_client.list_blobs.return_value = mock_datasets
 
-        # Simulate n_datasets_to_use=1 logic from train_all.py
+        # Simulate n_datasets_to_use=1 logic from training_workflow
         datasets_folder = 'datasets'
         datasets = mock_gcs_client.list_blobs(prefix=datasets_folder, delimiter='/')
         datasets_to_use = [dataset.rstrip('/') for dataset in datasets[0:1]]  # n_datasets_to_use=1

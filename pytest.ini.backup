@@ -7,7 +7,6 @@ markers =
     e2e: mark a test as an end-to-end test that should run last
     service_tracking: mark a test as related to the tracking service
     service_training: mark a test as related to the training service
-    service_api: mark a test as related to the API service
     service_cloud: mark a test as related to the cloud service
 
 # Add test configuration for multi-service architecture

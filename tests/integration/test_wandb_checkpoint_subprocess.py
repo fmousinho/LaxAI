@@ -11,10 +11,9 @@ import torch
 
 warnings.filterwarnings("ignore", message=r".*The `Scope\.user` setter is deprecated.*", category=DeprecationWarning)
 
-from config.all_config import wandb_config
-
 import wandb
 from services.service_training.src.wandb_logger import WandbLogger
+from shared_libs.config.all_config import wandb_config
 from shared_libs.utils.env_secrets import setup_environment_secrets
 
 # Ensure secrets are loaded for wandb communication

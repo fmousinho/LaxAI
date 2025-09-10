@@ -8,10 +8,9 @@ This guide outlines how to migrate your existing LaxAI codebase to the new multi
 
 Your current structure has these main components:
 
-- `src/track/` → Should move to `services/service-tracking/src/`
-- `src/train/` → Should move to `services/service-training/src/`
-- `src/api/` → Should move to `services/service-api/src/`
-- `src/cloud/` → Should move to `services/service-cloud/src/`
+- `src/track/` → Should move to `services/service_tracking/src/`
+- `src/train/` → Should move to `services/service_training/src/`
+- `src/cloud/` → Should move to `services/service_cloud/src/`
 - `src/common/`, `src/config/`, `src/utils/` → Should move to `shared_libs/`
 
 ## Migration Steps
@@ -22,44 +21,44 @@ Your current structure has these main components:
 
    ```bash
    # Copy tracking-related code
-   cp -r src/track/* services/service-tracking/src/
-   cp -r modules/* services/service-tracking/src/  # Move modules to tracking service
+   cp -r src/track/* services/service_tracking/src/
+   cp -r modules/* services/service_tracking/src/  # Move modules to tracking service
 
    # Copy relevant tests
-   cp -r tests/track/* services/service-tracking/tests/
+   cp -r tests/track/* services/service_tracking/tests/
    ```
 
 2. **Training Service Migration**:
 
    ```bash
    # Copy training-related code
-   cp -r src/train/* services/service-training/src/
+   cp -r src/train/* services/service_training/src/
 
    # Copy relevant tests
-   cp -r tests/unit/test_*train* services/service-training/tests/
-   cp -r tests/integration/test_training* services/service-training/tests/
-   cp -r tests/performance/* services/service-training/tests/
+   cp -r tests/unit/test_*train* services/service_training/tests/
+   cp -r tests/integration/test_training* services/service_training/tests/
+   cp -r tests/performance/* services/service_training/tests/
    ```
 
 3. **API Service Migration**:
 
    ```bash
    # Copy API-related code
-   cp -r src/api/* services/service-api/src/
-   cp -r src/services/* services/service-api/src/  # Move service layer to API
+   cp -r src/api/* services/service_api/src/
+   cp -r src/services/* services/service_api/src/  # Move service layer to API
 
    # Copy relevant tests
-   cp -r tests/api/* services/service-api/tests/
+   cp -r tests/api/* services/service_api/tests/
    ```
 
 4. **Cloud Service Migration**:
 
    ```bash
    # Copy cloud-related code
-   cp -r src/cloud/* services/service-cloud/src/
+   cp -r src/cloud/* services/service_cloud/src/
 
    # Copy relevant scripts
-   cp -r scripts/* services/service-cloud/src/
+   cp -r scripts/* services/service_cloud/src/
    ```
 
 ### Phase 2: Shared Libraries
@@ -77,10 +76,10 @@ Your current structure has these main components:
 6. **Create Service Virtual Environments**:
    ```bash
    # For each service
-   cd services/service-tracking && python -m venv .venv
-   cd services/service-training && python -m venv .venv
-   cd services/service-api && python -m venv .venv
-   cd services/service-cloud && python -m venv .venv
+   cd services/service_tracking && python -m venv .venv
+   cd services/service_training && python -m venv .venv
+   cd services/service_api && python -m venv .venv
+   cd services/service_cloud && python -m venv .venv
    ```
 
 ### Phase 4: Import Path Updates
