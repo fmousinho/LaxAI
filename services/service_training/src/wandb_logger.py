@@ -14,11 +14,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import psutil
 import torch
-from utils.env_secrets import setup_environment_secrets
+
+from shared_libs.utils.env_secrets import setup_environment_secrets
 
 setup_environment_secrets()
 
-from config.all_config import wandb_config
+from shared_libs.config.all_config import wandb_config
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +27,6 @@ logger = logging.getLogger(__name__)
 import wandb
 
 WANDB_AVAILABLE = True
-
-# Suppress WandB Scope.user deprecation warning
-import warnings
-
-warnings.filterwarnings("ignore", message=r".*The `Scope\.user` setter is deprecated.*", category=DeprecationWarning)
 
 
 def monitor_memory(func: Callable) -> Callable:
@@ -226,7 +222,7 @@ class WandbLogger:
             frame = inspect.currentframe()
             while frame:
                 filename = frame.f_code.co_filename
-                if '/tests/' in filename or '/sv-tests/' in filename or filename.endswith('test.py') or filename.startswith('test_'):
+                if '/tests/' in filename or filename.endswith('test.py') or filename.startswith('test_'):
                     return True
                 frame = frame.f_back
         except Exception:
@@ -333,10 +329,17 @@ class WandbLogger:
                         device_str = str(next(model.parameters()).device)
                     except Exception:
                         device_str = device
-                    model.to(device)
+                    model.ensure_head_initialized(device=device_str)
+                else:
+                    dev = None
+                    try:
+                        dev = next(model.parameters()).device
+                    except Exception:
+                        dev = torch.device(device)
+                    model.to(dev)
                     model.eval()
                     with torch.no_grad():
-                        dummy = torch.zeros((1, 3, 224, 224), device=device)
+                        dummy = torch.zeros((1, 3, 224, 224), device=dev)
                         model(dummy)
             except Exception as e:
                 logger.warning(f"Could not initialize model head before loading state_dict: {e}")
@@ -629,6 +632,359 @@ class WandbLogger:
         logger.info(f"Started watching model with log frequency: {freq}")
 
     @monitor_memory
+    @requires_wandb_initialized
+    @safe_wandb_operation()
+    def save_checkpoint(self, epoch: int, model: Optional[torch.nn.Module] = None, 
+                       optimizer: Optional[torch.optim.Optimizer] = None,
+                       model_state_dict: Optional[Dict[str, Any]] = None,
+                       optimizer_state_dict: Optional[Dict[str, Any]] = None,
+                       loss: Optional[float] = None, 
+                       model_config: Optional[Dict[str, Any]] = None,
+                       **kwargs) -> Optional[str]:
+        """
+        Save training checkpoint to wandb artifacts for resumption purposes.
+        
+        Checkpoints are saved at the end of each epoch and contain:
+        - Model state_dict (for model weights)  
+        - Optimizer state_dict (for training state)
+        - Epoch number, loss, and metadata
+        
+        This is separate from save_model_to_registry() which saves the final 
+        production model only after successful training completion.
+        
+        Args:
+            epoch: Current epoch number
+            model: The model to save (preferred over state_dict for memory efficiency)
+            optimizer: The optimizer to save (preferred over state_dict for memory efficiency)
+            model_state_dict: Pre-computed model state dict (discouraged)
+            optimizer_state_dict: Pre-computed optimizer state dict (discouraged)
+            loss: Current loss value
+            model_config: Optional model configuration metadata
+            **kwargs: Additional metadata
+            
+        Returns:
+            Artifact reference string
+        """
+        # Normalize inputs
+        if model_state_dict is None and model is not None:
+            model_state_dict = model.state_dict()
+        if optimizer_state_dict is None and optimizer is not None:
+            optimizer_state_dict = optimizer.state_dict()
+
+        if model_state_dict is None:
+            raise ValueError("Either model or model_state_dict must be provided")
+        if optimizer_state_dict is None:
+            raise ValueError("Either optimizer or optimizer_state_dict must be provided")
+
+        # Get appropriate checkpoint name
+        checkpoint_name = self._get_checkpoint_name()
+        
+        # Create temp file for checkpoint (ensure it's properly closed)
+        with tempfile.NamedTemporaryFile(suffix=f'_epoch_{epoch}.pth', delete=False) as tmp_file:
+            checkpoint_path = tmp_file.name
+            # Close the file handle immediately to free resources
+            tmp_file.close()
+            
+        # Save checkpoint data with memory optimization
+        checkpoint_data = {
+            'epoch': epoch,
+            'model_state_dict': model_state_dict,
+            'optimizer_state_dict': optimizer_state_dict,
+            'loss': loss,
+            'timestamp': datetime.now().isoformat(),
+            'model_config': model_config or {}
+        }
+        
+        # Use torch.save with pickle protocol for better memory efficiency
+        torch.save(checkpoint_data, checkpoint_path, pickle_protocol=4)
+        
+        # Clear references to large objects to help GC
+        del checkpoint_data
+        gc.collect()
+        
+        # Schedule async upload and cleanup
+        if self._executor:
+            future = self._executor.submit(
+                self._trigger_checkpoint_upload_and_cleanup,
+                checkpoint_path,
+                checkpoint_name,
+                epoch,
+                loss,
+            )
+            self._pending_futures.append(future)
+
+            # Clean up completed futures more aggressively
+            self._cleanup_completed_futures()
+
+            logger.info(f"Scheduled async checkpoint upload for epoch {epoch}")
+            return f"{checkpoint_name}:latest"
+        else:
+            # Fallback to sync if executor unavailable
+            self._trigger_checkpoint_upload_and_cleanup(
+                checkpoint_path, checkpoint_name, epoch, loss
+            )
+            return f"{checkpoint_name}:latest"
+
+    def _cleanup_completed_futures(self):
+        """Iterate through pending futures and clean up any that are done."""
+        completed_futures = [f for f in self._pending_futures if f.done()]
+        for future in completed_futures:
+            try:
+                # Get result to ensure any exceptions are raised
+                future.result(timeout=0.1)
+            except (NameError, AttributeError, TypeError) as e:
+                # Critical errors indicate bugs - re-raise these
+                logger.error(f"Critical error in async operation: {e}")
+                raise
+            except Exception as e:
+                logger.debug(f"Async operation completed with error: {e}")
+            finally:
+                # Remove from list
+                if future in self._pending_futures:
+                    self._pending_futures.remove(future)
+        # Keep only non-completed futures
+        self._pending_futures = [f for f in self._pending_futures if not f.done()]
+
+    def _trigger_checkpoint_upload_and_cleanup(
+        self, checkpoint_path: str, checkpoint_name: str, epoch: int, loss: Optional[float]
+    ) -> None:
+        """
+        Orchestrates checkpoint upload via subprocess and then cleans up old artifacts.
+        This method is the target for the ThreadPoolExecutor.
+        """
+        try:
+            # Step 1: Upload the artifact in a separate process to isolate memory.
+            self._launch_checkpoint_subprocess(checkpoint_path, checkpoint_name)
+            logger.info(f"✅ Subprocess upload completed for epoch {epoch}")
+
+            # Step 2: Clean up old checkpoints in the main process.
+            self._cleanup_artifacts_by_type(
+                checkpoint_name, "model_checkpoint", keep_latest=self.checkpoint_retention_count
+            )
+
+            # Step 3: Periodic aggressive memory cleanup for long training runs.
+            self._checkpoint_count += 1
+            if self._checkpoint_count % self._memory_cleanup_interval == 0:
+                logger.info(
+                    f"🧹 Periodic memory cleanup after {self._checkpoint_count} checkpoints"
+                )
+                self._force_memory_cleanup()
+
+        except (NameError, AttributeError, TypeError) as e:
+            logger.error(f"Critical error during checkpoint orchestration (likely bug): {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to orchestrate checkpoint upload and cleanup: {e}")
+        finally:
+            # Always clean up the temp file, even if subprocess failed
+            try:
+                if os.path.exists(checkpoint_path):
+                    os.unlink(checkpoint_path)
+                    logger.debug(f"Cleaned up temp file: {checkpoint_path}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up temp file {checkpoint_path}: {e}")
+
+    def _launch_checkpoint_subprocess(self, checkpoint_path: str, checkpoint_name: str) -> None:
+        """
+        Launches a separate process to upload a checkpoint artifact to wandb.
+        This isolates the memory usage of the upload from the main training process.
+        """
+        if not self.run or not self.run.id:
+            raise RuntimeError("Wandb run is not initialized or has no ID.")
+
+        run_id = self.run.id
+        script_path = os.path.abspath(__file__)
+        python_executable = sys.executable
+
+        command = [
+            python_executable,
+            script_path,
+            "--upload-checkpoint",
+            "--run-id", run_id,
+            "--checkpoint-path", checkpoint_path,
+            "--checkpoint-name", checkpoint_name,
+            "--project", wandb_config.project,
+            "--entity", wandb_config.team,
+        ]
+
+        logger.info(f"Launching subprocess for checkpoint upload: {' '.join(command)}")
+
+        try:
+            # We use subprocess.run and capture output for better error diagnosis.
+            # This call is blocking within its thread, which is intended.
+            result = subprocess.run(
+                command,
+                check=True,  # Raises CalledProcessError if the command returns a non-zero exit code.
+                capture_output=True,
+                text=True,
+                env=os.environ,
+            )
+            logger.debug(f"Subprocess stdout: {result.stdout}")
+            if result.stderr:
+                logger.warning(f"Subprocess stderr: {result.stderr}")
+            
+            # Also log subprocess output at INFO level for Google Cloud Logger
+            if result.stdout.strip():
+                logger.info(f"Subprocess output: {result.stdout.strip()}")
+
+        except subprocess.CalledProcessError as e:
+            # Log detailed error information from the subprocess
+            error_message = (
+                f"Subprocess for checkpoint upload failed with exit code {e.returncode}.\n"
+                f"  Command: {' '.join(e.cmd)}\n"
+                f"  Stdout: {e.stdout}\n"
+                f"  Stderr: {e.stderr}"
+            )
+            logger.error(error_message)
+            # Don't re-raise the exception to avoid breaking training
+            # Just log the error and continue
+            return
+        except Exception as e:
+            logger.error(f"An unexpected error occurred while launching subprocess: {e}")
+            # Don't re-raise to avoid breaking training
+            return
+
+    @monitor_memory
+    def _upload_checkpoint_and_cleanup(self, checkpoint_path: str, checkpoint_name: str, epoch: int, loss: Optional[float]) -> None:
+        """
+        [DEPRECATED] This method is kept for reference but is replaced by the subprocess mechanism.
+        Upload checkpoint and clean up old versions.
+        """
+        try:
+ 
+            self.run.log_artifact(
+                artifact_or_path = checkpoint_path,
+                name = checkpoint_name,
+                type="model_checkpoint",
+                aliases = ['latest']
+            )  # Register artifact with the run
+            
+            logger.info(f"✅ Uploaded checkpoint for epoch {epoch}")
+            
+            # Clean up old checkpoints (keep only latest)
+            self._cleanup_artifacts_by_type(checkpoint_name, "model_checkpoint", keep_latest=self.checkpoint_retention_count)
+            
+            # Periodic aggressive cleanup for long training runs
+            self._checkpoint_count += 1
+            if self._checkpoint_count % self._memory_cleanup_interval == 0:
+                logger.info(f"🧹 Periodic memory cleanup after {self._checkpoint_count} checkpoints")
+                self._force_memory_cleanup()
+            
+        except (NameError, AttributeError, TypeError) as e:
+            # Critical errors that indicate bugs in the code - these should not be silently caught
+            logger.error(f"Critical error in checkpoint upload (likely bug): {e}")
+            raise  # Re-raise critical errors to fail fast and expose bugs
+            
+        except Exception as e:
+            # Handle expected wandb/network related errors
+            logger.error(f"Failed to upload checkpoint: {e}")
+            # For expected errors, we don't re-raise to avoid breaking training
+            # But we should still track these for monitoring
+        finally:
+            # Clean up temp file
+            try:
+                if os.path.exists(checkpoint_path):
+                    os.unlink(checkpoint_path)
+            except Exception:
+                pass
+            
+         
+
+    @monitor_memory
+    @requires_wandb_enabled
+    @safe_wandb_operation()
+    def load_checkpoint(self, artifact_name: Optional[str] = None, version: str = "latest") -> Optional[Dict[str, Any]]:
+        """
+        Load model checkpoint from wandb.
+        
+        Args:
+            artifact_name: Name of the checkpoint artifact (auto-detected if None)
+            version: Version of the artifact to load (default: "latest")
+            
+        Returns:
+            Checkpoint data dictionary or None if failed
+        """
+        if artifact_name is None:
+            artifact_name = self._get_checkpoint_name()
+            
+        artifact_path = self._construct_artifact_path(artifact_name, version)
+        
+        try:
+            artifact = self.wandb_api.artifact(artifact_path, type="model_checkpoint")
+            artifact_dir = artifact.download()
+        except Exception as e:
+            logger.info(f"Checkpoint {artifact_name}:{version} not found: {e}")
+            return None
+
+        # Find checkpoint file
+        checkpoint_files = [f for f in os.listdir(artifact_dir) if f.endswith('.pth')]
+        
+        if not checkpoint_files:
+            logger.error(f"No checkpoint files found in artifact {artifact_name}:{version}")
+            return None
+        
+        # Load the checkpoint
+        checkpoint_path = os.path.join(artifact_dir, checkpoint_files[0])
+        checkpoint_data = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+        
+        logger.info(f"✅ Loaded checkpoint: {artifact_name}:{version} (epoch {checkpoint_data.get('epoch', 'unknown')})")
+        return checkpoint_data
+
+    @monitor_memory
+    def resume_training_from_checkpoint(self, model: torch.nn.Module, optimizer: torch.optim.Optimizer, 
+                                      artifact_name: Optional[str] = None, version: str = "latest") -> int:
+        """
+        Resume training from a wandb checkpoint.
+        
+        Args:
+            model: Model to load state into
+            optimizer: Optimizer to load state into  
+            artifact_name: Name of the checkpoint artifact (auto-detected if None)
+            version: Version to load (default: "latest")
+            
+        Returns:
+            Starting epoch number for resuming training
+        """
+        checkpoint_data = self.load_checkpoint(artifact_name, version)
+        
+        if checkpoint_data is None:
+            logger.warning("Could not load checkpoint, starting training from epoch 1")
+            return 1
+        
+        try:
+            # Load model state
+            if isinstance(checkpoint_data, dict) and 'model_state_dict' in checkpoint_data:
+                state_dict = checkpoint_data['model_state_dict']
+            else:
+                state_dict = checkpoint_data
+
+            success, unexpected, missing, err = self._robust_load_state_dict(model, state_dict)
+            if not success:
+                logger.error(f"Failed to load model state: {err}")
+                return 1
+                
+            if unexpected:
+                logger.warning(f"Unexpected keys in checkpoint: {len(unexpected)} keys")
+            if missing:
+                logger.info(f"Missing keys in checkpoint: {len(missing)} keys")
+
+            # Load optimizer state
+            try:
+                if isinstance(checkpoint_data, dict) and 'optimizer_state_dict' in checkpoint_data:
+                    optimizer.load_state_dict(checkpoint_data['optimizer_state_dict'])
+            except Exception as e:
+                logger.warning(f"Failed to load optimizer state: {e}")
+
+            # Get starting epoch
+            start_epoch = checkpoint_data.get('epoch', 0) + 1 if isinstance(checkpoint_data, dict) else 1
+            logger.info(f"✅ Resumed training from epoch {start_epoch}")
+            return start_epoch
+
+        except Exception as e:
+            logger.error(f"Failed to resume from checkpoint: {e}")
+            return 1
+
+    @monitor_memory
     @requires_wandb_enabled
     @safe_wandb_operation()
     def load_model_from_registry(self, model_class, collection_name: str, 
@@ -750,7 +1106,7 @@ class WandbLogger:
         test_indicators = [
             'pytest' in sys.modules,
             'PYTEST_CURRENT_TEST' in os.environ,
-            hasattr(sys, '_getframe') and any('/tests/' in f.f_code.co_filename or '/sv-tests/' in f.f_code.co_filename
+            hasattr(sys, '_getframe') and any('/tests/' in f.f_code.co_filename 
                                             for f in (sys._getframe(i) for i in range(10)) 
                                             if f is not None),
             collection_name and any(indicator in collection_name.lower() 
@@ -826,108 +1182,6 @@ class WandbLogger:
         finally:
             # Clean up temp file
             if temp_path and os.path.exists(temp_path):
-                try:
-                    os.unlink(temp_path)
-                except Exception:
-                    pass
-
-    @monitor_memory
-    @requires_wandb_initialized
-    @safe_wandb_operation()
-    def save_checkpoint(self, epoch: int, model: Optional[torch.nn.Module] = None, optimizer: Optional[torch.optim.Optimizer] = None, 
-                       loss: Optional[float] = None, model_name: str = "", model_config: Optional[Dict[str, Any]] = None,
-                       model_state_dict: Optional[Dict[str, torch.Tensor]] = None, 
-                       optimizer_state_dict: Optional[Dict[str, Any]] = None,
-                       current_loss: Optional[float] = None) -> None:
-        """
-        Save training checkpoint to wandb.
-        
-        This saves the current training state for potential resumption.
-        Can accept either model/optimizer objects or their state_dicts.
-        
-        Args:
-            epoch: Current epoch number
-            model: PyTorch model to save (optional if model_state_dict provided)
-            optimizer: Optimizer with current state (optional if optimizer_state_dict provided)
-            loss: Current training loss (optional if current_loss provided)
-            model_name: Name/type of the model
-            model_config: Model configuration dictionary
-            model_state_dict: Pre-computed model state dict (alternative to model)
-            optimizer_state_dict: Pre-computed optimizer state dict (alternative to optimizer)
-            current_loss: Alternative parameter name for loss
-        """
-        try:
-            # Get checkpoint name
-            checkpoint_name = self.get_checkpoint_name()
-            
-            # Handle loss parameter (support both 'loss' and 'current_loss')
-            final_loss = loss if loss is not None else current_loss
-            
-            # Prepare checkpoint data
-            checkpoint_data = {
-                'epoch': epoch,
-                'model_name': model_name,
-                'model_config': model_config or {},
-                'timestamp': time.time()
-            }
-            
-            # Add loss if provided
-            if final_loss is not None:
-                checkpoint_data['loss'] = final_loss
-            
-            # Handle model state
-            if model_state_dict is not None:
-                checkpoint_data['model_state_dict'] = model_state_dict
-            elif model is not None:
-                checkpoint_data['model_state_dict'] = model.state_dict()
-            else:
-                raise ValueError("Either 'model' or 'model_state_dict' must be provided")
-            
-            # Handle optimizer state
-            if optimizer_state_dict is not None:
-                checkpoint_data['optimizer_state_dict'] = optimizer_state_dict
-            elif optimizer is not None:
-                checkpoint_data['optimizer_state_dict'] = optimizer.state_dict()
-            else:
-                raise ValueError("Either 'optimizer' or 'optimizer_state_dict' must be provided")
-            
-            # Create temporary file for checkpoint
-            import tempfile
-            with tempfile.NamedTemporaryFile(suffix='.pth', delete=False) as temp_file:
-                temp_path = temp_file.name
-                
-                # Save to temporary file
-                torch.save(checkpoint_data, temp_path)
-            
-            # Create wandb artifact
-            artifact = wandb.Artifact(
-                name=checkpoint_name,
-                type="model_checkpoint",
-                description=f"Training checkpoint for epoch {epoch}"
-            )
-            artifact.add_file(temp_path)
-            
-            # Log artifact
-            self.run.log_artifact(artifact, aliases=["latest", f"epoch_{epoch}"])
-            
-            logger.info(f"✅ Checkpoint saved: {checkpoint_name} (epoch {epoch})")
-            
-            # Schedule async cleanup of old checkpoints
-            if self._executor:
-                cleanup_future = self._executor.submit(
-                    self._cleanup_artifacts_by_type,
-                    checkpoint_name,
-                    "model_checkpoint", 
-                    self.checkpoint_retention_count
-                )
-                self._pending_futures.append(cleanup_future)
-                
-        except Exception as e:
-            logger.error(f"Failed to save checkpoint: {e}")
-            raise
-        finally:
-            # Clean up temp file
-            if 'temp_path' in locals() and os.path.exists(temp_path):
                 try:
                     os.unlink(temp_path)
                 except Exception:
@@ -1186,6 +1440,105 @@ class WandbLogger:
         except Exception as e:
             logger.warning(f"Error monitoring WandB processes: {e}")
             return 0
+
+    def _launch_checkpoint_subprocess(self, checkpoint_path: str, checkpoint_name: str) -> None:
+        """
+        Launches a separate process to upload a checkpoint artifact to wandb.
+        This isolates the memory usage of the upload from the main training process.
+        """
+        if not self.run or not self.run.id:
+            raise RuntimeError("Wandb run is not initialized or has no ID.")
+
+        run_id = self.run.id
+        script_path = os.path.abspath(__file__)
+        python_executable = sys.executable
+
+        command = [
+            python_executable,
+            script_path,
+            "--upload-checkpoint",
+            "--run-id", run_id,
+            "--checkpoint-path", checkpoint_path,
+            "--checkpoint-name", checkpoint_name,
+            "--project", wandb_config.project,
+            "--entity", wandb_config.team,
+        ]
+
+        logger.info(f"Launching subprocess for checkpoint upload: {' '.join(command)}")
+
+        try:
+            # We use subprocess.run and capture output for better error diagnosis.
+            # This call is blocking within its thread, which is intended.
+            result = subprocess.run(
+                command,
+                check=True,  # Raises CalledProcessError if the command returns a non-zero exit code.
+                capture_output=True,
+                text=True,
+                env=os.environ,
+            )
+            logger.debug(f"Subprocess stdout: {result.stdout}")
+            if result.stderr:
+                logger.warning(f"Subprocess stderr: {result.stderr}")
+            
+            # Also log subprocess output at INFO level for Google Cloud Logger
+            if result.stdout.strip():
+                logger.info(f"Subprocess output: {result.stdout.strip()}")
+
+        except subprocess.CalledProcessError as e:
+            # Log detailed error information from the subprocess
+            error_message = (
+                f"Subprocess for checkpoint upload failed with exit code {e.returncode}.\n"
+                f"  Command: {' '.join(e.cmd)}\n"
+                f"  Stdout: {e.stdout}\n"
+                f"  Stderr: {e.stderr}"
+            )
+            logger.error(error_message)
+            # Don't re-raise the exception to avoid breaking training
+            # Just log the error and continue
+            return
+        except Exception as e:
+            logger.error(f"An unexpected error occurred while launching subprocess: {e}")
+            # Don't re-raise to avoid breaking training
+            return
+
+    def _trigger_checkpoint_upload_and_cleanup(
+        self, checkpoint_path: str, checkpoint_name: str, epoch: int, loss: Optional[float]
+    ) -> None:
+        """
+        Orchestrates checkpoint upload via subprocess and then cleans up old artifacts.
+        This method is the target for the ThreadPoolExecutor.
+        """
+        try:
+            # Step 1: Upload the artifact in a separate process to isolate memory.
+            self._launch_checkpoint_subprocess(checkpoint_path, checkpoint_name)
+            logger.info(f"✅ Subprocess upload completed for epoch {epoch}")
+
+            # Step 2: Clean up old checkpoints in the main process.
+            self._cleanup_artifacts_by_type(
+                checkpoint_name, "model_checkpoint", keep_latest=self.checkpoint_retention_count
+            )
+
+            # Step 3: Periodic aggressive memory cleanup for long training runs.
+            self._checkpoint_count += 1
+            if self._checkpoint_count % self._memory_cleanup_interval == 0:
+                logger.info(
+                    f"🧹 Periodic memory cleanup after {self._checkpoint_count} checkpoints"
+                )
+                self._force_memory_cleanup()
+
+        except (NameError, AttributeError, TypeError) as e:
+            logger.error(f"Critical error during checkpoint orchestration (likely bug): {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to orchestrate checkpoint upload and cleanup: {e}")
+        finally:
+            # Always clean up the temp file, even if subprocess failed
+            try:
+                if os.path.exists(checkpoint_path):
+                    os.unlink(checkpoint_path)
+                    logger.debug(f"Cleaned up temp file: {checkpoint_path}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up temp file {checkpoint_path}: {e}")
 
 
 # Global instance

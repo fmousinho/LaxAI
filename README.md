@@ -30,7 +30,7 @@ cp .env.example .env
 3. Run the CLI (example):
 
 ```bash
-PYTHONPATH=./src python src/scripts/train_workflow.py --tenant_id tenant1 --custom_name myrun --n_datasets_to_use 1
+PYTHONPATH=./src python src/scripts/train_all.py --tenant_id tenant1 --custom_name myrun --n_datasets_to_use 1
 ```
 
 4. Run the API (development):
@@ -43,12 +43,12 @@ PYTHONPATH=./src python src/main.py
 
 ## CLI reference
 
-Primary script: `src/scripts/train_workflow.py`
+Primary script: `src/scripts/train_all.py`
 
 Key flags (run `--help` for the full list):
 
 ```
-usage: train_workflow.py [-h] [--num-epochs NUM_EPOCHS] [--batch-size BATCH_SIZE]
+usage: train_all.py [-h] [--num-epochs NUM_EPOCHS] [--batch-size BATCH_SIZE]
 										[--learning-rate LEARNING_RATE] [--margin MARGIN]
 										[--weight-decay WEIGHT_DECAY] [...]
 										[--tenant_id TENANT_ID] [--frames FRAMES]

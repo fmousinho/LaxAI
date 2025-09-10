@@ -56,7 +56,7 @@
       "type": "shell",
       "command": "python",
       "args": [
-        "src/scripts/train_workflow.py",
+        "src/scripts/train_all.py",
         "--tenant_id",
         "tenant1",
         "--custom_name",
@@ -101,7 +101,7 @@
       "options": {
         "cwd": "${workspaceFolder}",
         "env": {
-          "PYTHONPATH": "${workspaceFolder}/shared_libs:${workspaceFolder}/services/service_training/src"
+          "PYTHONPATH": "${workspaceFolder}/shared_libs:${workspaceFolder}/services/service-training/src"
         }
       },
       "problemMatcher": "$python"

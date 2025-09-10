@@ -71,8 +71,8 @@ def test_cancel_via_service_cli():
     # job store is shared.
     import os
     import sys
-    service_training_path = os.path.join(os.path.dirname(__file__), '../../services/service_training/src')
-    sys.path.insert(0, service_training_path)
+    service_api_path = os.path.join(os.path.dirname(__file__), '../../services/service-api/src')
+    sys.path.insert(0, service_api_path)
     import training_service
 
     # Also import the router module for API endpoint tests
@@ -100,7 +100,7 @@ def test_cancel_via_service_cli_with_pipeline_stop_verification():
     """Test cancelling a training job with actual pipeline stop verification."""
     import sys
     from unittest.mock import MagicMock, patch
-    sys.path.insert(0, '../../services/service_training/src')
+    sys.path.insert(0, '../../services/service-api/src')
     import training_service as training_service
 
     # Create a job
@@ -135,7 +135,7 @@ def test_cancel_via_service_cli_pipeline_not_found():
     """Test cancelling when pipeline is not found in registry."""
     import sys
     from unittest.mock import MagicMock, patch
-    sys.path.insert(0, '../../services/service_training/src')
+    sys.path.insert(0, '../../services/service-api/src')
     import training_service as training_service
 
     # Create a job
@@ -168,7 +168,7 @@ def test_cancel_via_service_cli_pipeline_not_found():
 def test_cancel_via_web_api_endpoint():
     """Test cancelling a training job via the web API endpoint."""
     import sys
-    sys.path.insert(0, '../../services/service_training/src')
+    sys.path.insert(0, '../../services/service-api/src')
     import training_service as training_service
 
     from services.service_training.src.endpoints import \
@@ -360,7 +360,7 @@ def test_siamesenet_dino_can_download_and_initialize(tmp_path: Path):
 
 @pytest.mark.slow
 @pytest.mark.e2e
-def test_training_workflow_resnet_with_checkpoint_verification():
+def test_train_all_resnet_with_checkpoint_verification():
     """End-to-end test: ResNet training with 2 epochs and 2 datasets, verifying checkpoint creation."""
     # Import config
     import os
@@ -465,7 +465,7 @@ def test_training_workflow_resnet_with_checkpoint_verification():
 
 @pytest.mark.slow
 @pytest.mark.e2e
-def test_training_workflow_with_dino_memory_stable():
+def test_train_all_with_dino_memory_stable():
     """End-to-end test: DINO training with 1 epoch and single dataset, with memory stability assertions."""
     import gc
 
@@ -528,11 +528,11 @@ def test_train_signature_has_n_datasets_to_use():
 
 def test_convert_request_to_kwargs_includes_top_level_n_datasets():
     """Test that request conversion includes top-level n_datasets parameter."""
-    # Import from service_training
+    # Import from service-api
     import os
     import sys
-    service_training_path = os.path.join(os.path.dirname(__file__), '../../services/service_training/src')
-    sys.path.insert(0, service_training_path)
+    service_api_path = os.path.join(os.path.dirname(__file__), '../../services/service-api/src')
+    sys.path.insert(0, service_api_path)
     from training_service import _convert_request_to_kwargs
 
     req = SimpleNamespace(

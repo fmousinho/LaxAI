@@ -32,7 +32,7 @@ def test_complete_batch_size_flow():
 
     # Step 2: Convert request to kwargs (service layer)
     import sys
-    sys.path.insert(0, '../../services/service_training/src')
+    sys.path.insert(0, '../../services/service-api/src')
     from training_service import _convert_request_to_kwargs
     kwargs = _convert_request_to_kwargs(api_request)
     print(f"2. Service Layer training_kwargs batch_size: {kwargs['training_kwargs']['batch_size']}")

@@ -16,7 +16,7 @@ if SHARED_LIBS_DIR not in sys.path:
 # This allows tests to import from service-specific modules
 SERVICES_DIR = os.path.join(ROOT, "services")
 if os.path.exists(SERVICES_DIR):
-    for service_name in ['service_training', 'service_tracking', 'service_cloud']:
+    for service_name in ['service-api', 'service-training', 'service-tracking', 'service-cloud']:
         service_src = os.path.join(SERVICES_DIR, service_name, "src")
         if os.path.exists(service_src) and service_src not in sys.path:
             sys.path.insert(0, service_src)

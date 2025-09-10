@@ -5,8 +5,9 @@
   "python.analysis.extraPaths": [
     "./shared_libs",
     "./services/service_training/src",
-    "./services/service_cloud/src",
-    "./services/service_tracking/src"
+    "./services/service-api/src",
+    "./services/service-cloud/src",
+    "./services/service-tracking/src"
   ],
   "python.analysis.autoImportCompletions": true,
   "python.analysis.typeCheckingMode": "basic",
@@ -44,25 +45,19 @@
 
   // Terminal Configuration
   "terminal.integrated.env.osx": {
-    "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/services/service_training/src:${workspaceFolder}/services/service_cloud/src:${workspaceFolder}/services/service_tracking/src:${workspaceFolder}/shared_libs"
+    "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/services/service_training/src:${workspaceFolder}/services/service-api/src:${workspaceFolder}/services/service-cloud/src:${workspaceFolder}/services/service-tracking/src:${workspaceFolder}/shared_libs"
   },
 
   // Python Testing Configuration for Multi-Service Setup
   "python.testing.pytestEnabled": true,
-  "python.testing.pytestArgs": [
-    "--config-file=${workspaceFolder}/pytest.ini",
-    "services/service_training/tests",
-    "services/service_tracking/tests",
-    "services/service_cloud/tests",
-    "sv-tests"
-  ],
+  "python.testing.pytestArgs": ["--config-file=${workspaceFolder}/pytest.ini"],
   "python.testing.cwd": "${workspaceFolder}",
   "python.testing.unittestEnabled": false,
   "python.testing.autoTestDiscoverOnSaveEnabled": true,
 
   // Environment Variables for Testing
   "python.testing.env": {
-    "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/shared_libs:${workspaceFolder}/services:${workspaceFolder}/services/service_training/src:${workspaceFolder}/services/service_cloud/src:${workspaceFolder}/services/service_tracking/src"
+    "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/services/service_training/src:${workspaceFolder}/services/service-api/src:${workspaceFolder}/services/service-cloud/src:${workspaceFolder}/services/service-tracking/src:${workspaceFolder}/shared_libs"
   },
 
   // Search Configuration

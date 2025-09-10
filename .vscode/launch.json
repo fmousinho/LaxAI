@@ -39,7 +39,7 @@
       "name": "🧠 Train: Debug Training Script",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/src/scripts/train_workflow.py",
+      "program": "${workspaceFolder}/src/scripts/train_all.py",
       "python": "${command:python.interpreterPath}",
       "args": [
         "--tenant_id",
@@ -64,11 +64,11 @@
       "request": "launch",
       "module": "pytest",
       "python": "${command:python.interpreterPath}",
-      "args": ["services/service_training/tests/", "-v", "--tb=short"],
+      "args": ["services/service-training/tests/", "-v", "--tb=short"],
       "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}/services/service_training",
+      "cwd": "${workspaceFolder}/services/service-training",
       "env": {
-        "PYTHONPATH": "${workspaceFolder}/shared_libs:${workspaceFolder}/services/service_training/src"
+        "PYTHONPATH": "${workspaceFolder}/shared_libs:${workspaceFolder}/services/service-training/src"
       }
     },
 

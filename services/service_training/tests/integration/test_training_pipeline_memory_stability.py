@@ -13,7 +13,7 @@ import pytest
 import torch
 from train_pipeline import TrainPipeline
 
-from common.google_storage import GCSPaths, get_storage
+from shared_libs.common.google_storage import GCSPaths, get_storage
 from shared_libs.config.all_config import training_config, wandb_config
 from shared_libs.utils.env_secrets import setup_environment_secrets
 
@@ -21,7 +21,7 @@ from shared_libs.utils.env_secrets import setup_environment_secrets
 @pytest.fixture
 def mock_gcs_client():
     """Mock GCS client to avoid actual cloud storage calls."""
-    with patch('common.google_storage.get_storage') as mock_get_storage:
+    with patch('shared_libs.common.google_storage.get_storage') as mock_get_storage:
         mock_client = MagicMock()
         mock_get_storage.return_value = mock_client
 
@@ -39,7 +39,7 @@ def mock_gcs_client():
 @pytest.fixture
 def mock_gcs_paths():
     """Mock GCS paths for testing."""
-    with patch('common.google_storage.GCSPaths') as mock_paths_class:
+    with patch('shared_libs.common.google_storage.GCSPaths') as mock_paths_class:
         mock_paths = MagicMock()
         mock_paths_class.return_value = mock_paths
 
@@ -152,8 +152,6 @@ class TestTrainingPipelineMemoryStability:
             'learning_rate': 0.001,
             'num_workers': 0,  # No multiprocessing for cleaner memory monitoring
             'n_datasets_to_use': 1,  # Single dataset mode
-            'model_class_module': 'siamesenet_dino',  # Use correct module name
-            'model_class_str': 'SiameseNet'
         }
 
         # Record memory before pipeline creation
@@ -173,13 +171,11 @@ class TestTrainingPipelineMemoryStability:
         with patch.object(pipeline, '_create_dataset') as mock_create_dataset:
             # Mock successful dataset creation
             mock_train_dataset = MagicMock()
-            mock_train_dataset.__len__ = MagicMock(return_value=100)  # Mock dataset length
             mock_val_dataset = MagicMock()
-            mock_val_dataset.__len__ = MagicMock(return_value=20)  # Mock dataset length
             mock_create_dataset.return_value = (mock_train_dataset, mock_val_dataset)
 
             # Mock training components
-            with patch('services.service_training.src.training.Training') as mock_training_class:
+            with patch('training_loop.Training') as mock_training_class:
                 mock_training = MagicMock()
                 mock_training_class.return_value = mock_training
 
@@ -191,7 +187,7 @@ class TestTrainingPipelineMemoryStability:
                 }
 
                 # Mock evaluation
-                with patch('services.service_training.src.evaluator.Evaluator') as mock_evaluator_class:
+                with patch('evaluator.ModelEvaluator') as mock_evaluator_class:
                     mock_evaluator = MagicMock()
                     mock_evaluator_class.return_value = mock_evaluator
 
@@ -244,11 +240,11 @@ class TestTrainingPipelineMemoryStability:
         # Setup environment
         setup_environment_secrets()
 
-        # Test dataset discovery (simulating what training_workflow does)
+        # Test dataset discovery (simulating what train_all.py does)
         mock_datasets = ['dataset_001/', 'dataset_002/', 'dataset_003/']
         mock_gcs_client.list_blobs.return_value = mock_datasets
 
-        # Simulate n_datasets_to_use=1 logic from training_workflow
+        # Simulate n_datasets_to_use=1 logic from train_all.py
         datasets_folder = 'datasets'
         datasets = mock_gcs_client.list_blobs(prefix=datasets_folder, delimiter='/')
         datasets_to_use = [dataset.rstrip('/') for dataset in datasets[0:1]]  # n_datasets_to_use=1
@@ -272,7 +268,7 @@ class TestTrainingPipelineMemoryStability:
 
     def test_memory_efficient_checkpoint_saving(self, mock_wandb_for_memory_test, memory_monitor):
         """Test that checkpoint saving doesn't cause memory spikes."""
-        from services.service_training.src.wandb_logger import WandbLogger
+        from wandb_logger import WandbLogger
 
         # Setup environment
         setup_environment_secrets()
@@ -351,9 +347,7 @@ class TestTrainingPipelineMemoryStability:
             tenant_id='tenant1',
             n_datasets_to_use=1,
             num_epochs=2,
-            verbose=False,
-            model_class_module='siamesenet_dino',
-            model_class_str='SiameseNet'
+            verbose=False
         )
 
         # This should either fail gracefully or skip the dataset

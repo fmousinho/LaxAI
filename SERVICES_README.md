@@ -6,9 +6,10 @@
 LaxAI/
 ├── .vscode/                    # VS Code workspace settings
 ├── services/                   # Individual microservices
-│   ├── service_tracking/       # Video processing and tracking
-│   ├── service_training/       # ML training and model ops
-│   └── service_cloud/         # Cloud functions and batch processing
+│   ├── service-tracking/       # Video processing and tracking
+│   ├── service-training/       # ML training and model ops
+│   ├── service-api/           # REST API endpoints
+│   └── service-cloud/         # Cloud functions and batch processing
 ├── shared_libs/               # Code shared between services
 │   ├── common/
 │   ├── config/
@@ -19,15 +20,19 @@ LaxAI/
 
 ## Services
 
-### Service Tracking
+### Service-Tracking
 
 Handles video processing and player tracking operations.
 
-### Service Training
+### Service-Training
 
 Handles model training, evaluation, and ML pipeline operations.
 
-### Service Cloud
+### Service-API
+
+Handles REST API endpoints and web interface operations.
+
+### Service-Cloud
 
 Handles cloud functions, batch processing, and distributed operations.
 
@@ -46,7 +51,7 @@ Each service is self-contained with its own:
 1. Navigate to the service you want to work on:
 
    ```bash
-   cd services/service_tracking
+   cd services/service-tracking
    ```
 
 2. Create and activate virtual environment:

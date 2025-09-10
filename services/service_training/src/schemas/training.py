@@ -1,166 +1,162 @@
-from pydantic import BaseModel, Field, create_model, ConfigDict
-from typing import Optional, Dict, Any, List
-from fastapi import HTTPException
-from config.parameter_registry import parameter_registry
-from config.all_config import api_config
+from __future__ import annotations
 
-def create_training_config_model():
-    """Dynamically create TrainingConfig model from parameter registry"""
+from typing import Any, Dict, List, Optional
+
+from parameter_registry import parameter_registry
+from pydantic import BaseModel, ConfigDict, Field
+
+
+def generate_example_from_config() -> Dict[str, Any]:
+    """Generate example values from the training configuration."""
+    
+    # Get example values from the configuration
+    example_data = {
+        "experiment_name": "example_training_run",
+        "description": "Example training request with configuration-based parameters"
+    }
+    
+    # Add training parameters with default values from parameter registry
+    training_params = {}
+    for param_name, param in parameter_registry.get_training_parameters().items():
+        # Use the parameter's default value or a sensible example
+        if param_name == "n_datasets_to_use":
+            training_params[param_name] = 2
+        elif param_name == "learning_rate":
+            training_params[param_name] = 0.001
+        elif param_name == "batch_size":
+            training_params[param_name] = 32
+        elif param_name == "epochs":
+            training_params[param_name] = 100
+        else:
+            # Use a generic default based on parameter type
+            if param.type.name == "INT":
+                training_params[param_name] = 1
+            elif param.type.name == "FLOAT":
+                training_params[param_name] = 0.1
+            elif param.type.name == "BOOL":
+                training_params[param_name] = False
+            elif param.type.name == "STR":
+                training_params[param_name] = "default_value"
+            elif param.type.name == "LIST_STR":
+                training_params[param_name] = ["example"]
+    example_data["training_params"] = training_params
+    
+    # Add model parameters with default values
+    model_params = {}
+    for param_name, param in parameter_registry.get_model_parameters().items():
+        if param.type.name == "INT":
+            model_params[param_name] = 512
+        elif param.type.name == "FLOAT":
+            model_params[param_name] = 0.1
+        elif param.type.name == "BOOL":
+            model_params[param_name] = True
+        elif param.type.name == "STR":
+            model_params[param_name] = "default"
+        elif param.type.name == "LIST_STR":
+            model_params[param_name] = ["example"]
+    example_data["model_params"] = model_params
+    
+    # Add eval parameters with default values
+    eval_params = {}
     try:
-        fields = parameter_registry.generate_pydantic_fields_for_training()
-        model = create_model(
-            'TrainingConfig',
-            __doc__="Training configuration parameters for model training.",
-            **fields
-        )
-        return model
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create training configuration from parameter registry: {str(e)}"
-        )
-
-def create_model_config_model():
-    """Dynamically create ModelConfig model from parameter registry"""
-    try:
-        fields = parameter_registry.generate_pydantic_fields_for_model()
-        model = create_model(
-            'ModelConfig', 
-            __doc__="Model configuration parameters. Do NOT use if you don't know what you are doing.",
-            **fields
-        )
-        return model
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create model configuration from parameter registry: {str(e)}"
-        )
+        for param_name, param in parameter_registry.eval_parameters.items():
+            if param.type.name == "INT":
+                eval_params[param_name] = 10
+            elif param.type.name == "FLOAT":
+                eval_params[param_name] = 0.5
+            elif param.type.name == "BOOL":
+                eval_params[param_name] = True
+            elif param.type.name == "STR":
+                eval_params[param_name] = "example"
+            elif param.type.name == "LIST_STR":
+                eval_params[param_name] = ["example"]
+    except AttributeError:
+        # If eval_parameters not available, use empty dict
+        pass
+    example_data["eval_params"] = eval_params
+    
+    return example_data
 
 
-TrainingConfig = create_training_config_model()
-ModelConfig = create_model_config_model()
+# Generate the example for use in model configuration
+EXAMPLE_REQUEST = generate_example_from_config()
 
-def create_eval_config_model():
-    """Dynamically create EvalConfig model from parameter registry"""
-    try:
-        from config.parameter_registry import parameter_registry
-        fields = parameter_registry.generate_pydantic_fields_for_eval()
-        model = create_model(
-            'EvalConfig',
-            __doc__="Evaluation configuration parameters.",
-            **fields
-        )
-        return model
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create eval configuration from parameter registry: {str(e)}"
-        )
 
-EvalConfig = create_eval_config_model()
+# Generate dynamic Pydantic models from parameter registry
+TrainingParamsModel = None
+ModelParamsModel = None
+EvalParamsModel = None
+
+try:
+    from pydantic import create_model
+    TrainingParamsModel = create_model(
+        "TrainingParams",
+        **parameter_registry.generate_pydantic_fields_for_training()
+    )
+    ModelParamsModel = create_model(
+        "ModelParams", 
+        **parameter_registry.generate_pydantic_fields_for_model()
+    )
+    EvalParamsModel = create_model(
+        "EvalParams",
+        **parameter_registry.generate_pydantic_fields_for_eval()
+    )
+except Exception:
+    # Fallback if dynamic model creation fails
+    pass
+
 
 class TrainingRequest(BaseModel):
-    """Request schema for training endpoint"""
-    tenant_id: str = Field(default="", description="Tenant identifier")
-    verbose: bool = Field(default=api_config.verbose, description="Enable verbose logging")
-    custom_name: str = Field(default="", description="Label used by WandB")
-    resume_from_checkpoint: bool = Field(default=api_config.resume_from_checkpoint, description="Resume from checkpoint if available")
-    wandb_tags: List[str] = Field(default=[], description="WandB tags for this run")
-    # Number of discovered datasets to use for the run. This is a top-level
-    # field (not part of the dynamic training config) so callers can control
-    # dataset selection without embedding it in training_params.
-    n_datasets_to_use: Optional[int] = Field(default=None, description="Limit number of discovered datasets to use for training")
-    # Training and model params are generated dynamically at runtime from the
-    # parameter registry. Use the generated Pydantic models so FastAPI/OpenAPI
-    # renders them in the UI and request bodies are validated into model objects.
-    training_params: Optional['TrainingConfig'] = None  #type: ignore[valid-type]
-    model_params: Optional['ModelConfig'] = None  #type: ignore[valid-type]
-    eval_params: Optional['EvalConfig'] = None  #type: ignore[valid-type]
+    """Training request model with dynamic parameter validation."""
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": EXAMPLE_REQUEST
+        }
+    )
+    
+    experiment_name: str = Field(
+        ..., 
+        description="Name of the training experiment"
+    )
+    description: Optional[str] = Field(
+        None,
+        description="Optional description of the training run"
+    )
+    
+    # Use Dict[str, Any] for flexibility with dynamic parameters
+    training_params: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Training-specific parameters"
+    )
+    model_params: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Model architecture parameters"  
+    )
+    eval_params: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Evaluation parameters"
+    )
+
 
 class TrainingResponse(BaseModel):
-    """Response schema for training endpoint"""
-    task_id: str = Field(description="Unique task identifier")
-    status: str = Field(description="Current status")
-    message: str = Field(description="Status message")
+    """Training response model."""
+    
+    task_id: str = Field(..., description="Unique identifier for the training task")
+    status: str = Field(..., description="Current status of the training task")
+    message: str = Field(..., description="Status message")
+    created_at: str = Field(..., description="Task creation timestamp")
 
-class TrainingProgress(BaseModel):
-    """Training progress tracking"""
-    task_id: str
-    status: str
-    current_epoch: Optional[int] = None
-    total_epochs: Optional[int] = None
-    current_loss: Optional[float] = None
-    elapsed_time: Optional[float] = None
-    estimated_time_remaining: Optional[float] = None
 
-class ErrorResponse(BaseModel):
-    """Error response schema"""
-    detail: str = Field(description="Error details")
-    error_type: str = Field(description="Type of error")
-
-def get_training_example() -> Dict[str, Any]:
-    """Get example training configuration with dynamic values from parameter registry"""
-    try:
-        example_config = {}
-        
-        # Get all parameter values from registry
-        for param_name, param_def in parameter_registry.parameters.items():
-            try:
-                value = parameter_registry.get_config_value(param_name)
-                if value is not None:
-                    example_config[param_name] = value
-            except Exception:
-                # If we can't get the value, the parameter registry will handle it
-                continue
-        
-        if not example_config:
-            raise HTTPException(
-                status_code=500,
-                detail="No configuration values available from parameter registry"
-            )
-        
-        return {
-            "tenant_id": "tenant1",
-            "verbose": api_config.verbose,
-            "custom_name": api_config.default_custom_name,
-            "resume_from_checkpoint": api_config.resume_from_checkpoint,
-            "wandb_tags": api_config.default_wandb_tags.copy(),
-            # Example payload should match field names used by the request
-            "training_params": example_config,
-            "model_params": {}
-        }
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to generate training example: {str(e)}"
-        )
-
-def get_parameter_documentation() -> Dict[str, Any]:
-    """Get complete parameter documentation from registry"""
-    try:
-        docs = {}
-        for param_name, param_def in parameter_registry.parameters.items():
-            docs[param_name] = {
-                "type": param_def.type.value,
-                "description": param_def.description,
-                "config_path": param_def.config_path,
-                "cli_name": param_def.cli_name,
-                "required": param_def.required
-            }
-            
-            # Add current config value if available
-            try:
-                value = parameter_registry.get_config_value(param_name)
-                if value is not None:
-                    docs[param_name]["current_value"] = value
-            except Exception:
-                docs[param_name]["current_value"] = "Not available"
-        
-        return docs
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to generate parameter documentation: {str(e)}"
-        )
+class TrainingStatus(BaseModel):
+    """Training status model."""
+    
+    task_id: str = Field(..., description="Unique identifier for the training task")
+    status: str = Field(..., description="Current status of the training task") 
+    progress: Optional[float] = Field(None, description="Training progress percentage (0-100)")
+    current_epoch: Optional[int] = Field(None, description="Current training epoch")
+    total_epochs: Optional[int] = Field(None, description="Total training epochs")
+    loss: Optional[float] = Field(None, description="Current training loss")
+    metrics: Optional[Dict[str, Any]] = Field(None, description="Training metrics")
+    logs: Optional[List[str]] = Field(None, description="Recent training logs")
+    updated_at: str = Field(..., description="Last update timestamp")

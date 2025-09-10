@@ -240,11 +240,11 @@ class TestTrainingPipelineMemoryStability:
         # Setup environment
         setup_environment_secrets()
 
-        # Test dataset discovery (simulating what training_workflow does)
+        # Test dataset discovery (simulating what train_all.py does)
         mock_datasets = ['dataset_001/', 'dataset_002/', 'dataset_003/']
         mock_gcs_client.list_blobs.return_value = mock_datasets
 
-        # Simulate n_datasets_to_use=1 logic from training_workflow
+        # Simulate n_datasets_to_use=1 logic from train_all.py
         datasets_folder = 'datasets'
         datasets = mock_gcs_client.list_blobs(prefix=datasets_folder, delimiter='/')
         datasets_to_use = [dataset.rstrip('/') for dataset in datasets[0:1]]  # n_datasets_to_use=1

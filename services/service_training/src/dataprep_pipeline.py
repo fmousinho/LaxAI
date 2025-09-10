@@ -47,7 +47,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import supervision as sv
-from augmentation import augment_images
 from config.all_config import (DetectionConfig, detection_config, model_config,
                                training_config)
 from PIL import Image
@@ -63,6 +62,7 @@ from common.detection import DetectionModel
 from common.google_storage import GCSPaths, get_storage
 from common.pipeline import Pipeline, PipelineStatus
 from common.pipeline_step import StepStatus
+from train.augmentation import augment_images
 
 logger = logging.getLogger(__name__)
 

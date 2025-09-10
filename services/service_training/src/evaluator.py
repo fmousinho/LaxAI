@@ -17,10 +17,11 @@ try:
 except ImportError:
     PSUTIL_AVAILABLE = False
 
-from config.all_config import evaluator_config, wandb_config
-from config.transforms import get_transforms
 from dataset import LacrossePlayerDataset
+from transforms import get_transforms
 from wandb_logger import wandb_logger
+
+from shared_libs.config.all_config import evaluator_config, wandb_config
 
 logger = logging.getLogger(__name__)
 

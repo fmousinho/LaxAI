@@ -4,9 +4,10 @@
   "python.analysis.diagnosticMode": "workspace",
   "python.analysis.extraPaths": [
     "./shared_libs",
-    "./services/service_tracking/src",
-    "./services/service_training/src",
-    "./services/service_cloud/src"
+    "./services/service-tracking/src",
+    "./services/service-training/src",
+    "./services/service-api/src",
+    "./services/service-cloud/src"
   ],
   "python.analysis.autoImportCompletions": true,
   "python.analysis.typeCheckingMode": "basic",
@@ -60,7 +61,7 @@
 
   // Terminal Configuration - Updated for Multi-Service
   "terminal.integrated.env.osx": {
-    "PYTHONPATH": "${workspaceFolder}/shared_libs:${workspaceFolder}/services/service_tracking/src:${workspaceFolder}/services/service_training/src:${workspaceFolder}/services/service_cloud/src"
+    "PYTHONPATH": "${workspaceFolder}/shared_libs:${workspaceFolder}/services/service-tracking/src:${workspaceFolder}/services/service-training/src:${workspaceFolder}/services/service-api/src:${workspaceFolder}/services/service-cloud/src"
   },
 
   // Search Configuration

@@ -14,7 +14,7 @@ Quick instructions to run the e2e tests locally:
 
 3. Run the specific e2e test (this will use real GCP and wandb as the test expects):
 
-   python -m pytest tests/test_training_workflow_e2e.py::test_training_workflow_with_one_dataset -q
+   python -m pytest tests/test_train_all_e2e.py::test_train_all_with_one_dataset -q
 
 To run tests from VS Code Test Explorer:
 

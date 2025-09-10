@@ -1,12 +1,12 @@
 import logging
-from typing import Tuple, Optional
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 
-from config.all_config import model_config, training_config
+from shared_libs.config.all_config import model_config, training_config
 
 logger = logging.getLogger(__name__)
 

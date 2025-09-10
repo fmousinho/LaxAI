@@ -10,10 +10,10 @@ from typing import Any, Dict
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
-from training_service import (cancel_job, create_job, get_job, list_jobs,
-                              start_job)
 
 from common.pipeline import get_active_pipelines
+from services.training_service import (cancel_job, create_job, get_job,
+                                       list_jobs, start_job)
 
 from ..schemas.training import (ErrorResponse, TrainingConfig,
                                 TrainingProgress, TrainingRequest,
