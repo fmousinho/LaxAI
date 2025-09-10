@@ -831,6 +831,108 @@ class WandbLogger:
                 except Exception:
                     pass
 
+    @monitor_memory
+    @requires_wandb_initialized
+    @safe_wandb_operation()
+    def save_checkpoint(self, epoch: int, model: Optional[torch.nn.Module] = None, optimizer: Optional[torch.optim.Optimizer] = None, 
+                       loss: Optional[float] = None, model_name: str = "", model_config: Optional[Dict[str, Any]] = None,
+                       model_state_dict: Optional[Dict[str, torch.Tensor]] = None, 
+                       optimizer_state_dict: Optional[Dict[str, Any]] = None,
+                       current_loss: Optional[float] = None) -> None:
+        """
+        Save training checkpoint to wandb.
+        
+        This saves the current training state for potential resumption.
+        Can accept either model/optimizer objects or their state_dicts.
+        
+        Args:
+            epoch: Current epoch number
+            model: PyTorch model to save (optional if model_state_dict provided)
+            optimizer: Optimizer with current state (optional if optimizer_state_dict provided)
+            loss: Current training loss (optional if current_loss provided)
+            model_name: Name/type of the model
+            model_config: Model configuration dictionary
+            model_state_dict: Pre-computed model state dict (alternative to model)
+            optimizer_state_dict: Pre-computed optimizer state dict (alternative to optimizer)
+            current_loss: Alternative parameter name for loss
+        """
+        try:
+            # Get checkpoint name
+            checkpoint_name = self.get_checkpoint_name()
+            
+            # Handle loss parameter (support both 'loss' and 'current_loss')
+            final_loss = loss if loss is not None else current_loss
+            
+            # Prepare checkpoint data
+            checkpoint_data = {
+                'epoch': epoch,
+                'model_name': model_name,
+                'model_config': model_config or {},
+                'timestamp': time.time()
+            }
+            
+            # Add loss if provided
+            if final_loss is not None:
+                checkpoint_data['loss'] = final_loss
+            
+            # Handle model state
+            if model_state_dict is not None:
+                checkpoint_data['model_state_dict'] = model_state_dict
+            elif model is not None:
+                checkpoint_data['model_state_dict'] = model.state_dict()
+            else:
+                raise ValueError("Either 'model' or 'model_state_dict' must be provided")
+            
+            # Handle optimizer state
+            if optimizer_state_dict is not None:
+                checkpoint_data['optimizer_state_dict'] = optimizer_state_dict
+            elif optimizer is not None:
+                checkpoint_data['optimizer_state_dict'] = optimizer.state_dict()
+            else:
+                raise ValueError("Either 'optimizer' or 'optimizer_state_dict' must be provided")
+            
+            # Create temporary file for checkpoint
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix='.pth', delete=False) as temp_file:
+                temp_path = temp_file.name
+                
+                # Save to temporary file
+                torch.save(checkpoint_data, temp_path)
+            
+            # Create wandb artifact
+            artifact = wandb.Artifact(
+                name=checkpoint_name,
+                type="model_checkpoint",
+                description=f"Training checkpoint for epoch {epoch}"
+            )
+            artifact.add_file(temp_path)
+            
+            # Log artifact
+            self.run.log_artifact(artifact, aliases=["latest", f"epoch_{epoch}"])
+            
+            logger.info(f"✅ Checkpoint saved: {checkpoint_name} (epoch {epoch})")
+            
+            # Schedule async cleanup of old checkpoints
+            if self._executor:
+                cleanup_future = self._executor.submit(
+                    self._cleanup_artifacts_by_type,
+                    checkpoint_name,
+                    "model_checkpoint", 
+                    self.checkpoint_retention_count
+                )
+                self._pending_futures.append(cleanup_future)
+                
+        except Exception as e:
+            logger.error(f"Failed to save checkpoint: {e}")
+            raise
+        finally:
+            # Clean up temp file
+            if 'temp_path' in locals() and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except Exception:
+                    pass
+
     def _extract_model_metadata(self, model: torch.nn.Module) -> Dict[str, Any]:
         """Extract metadata from model for artifact storage."""
         auto_meta = {}
