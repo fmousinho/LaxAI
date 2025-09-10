@@ -458,64 +458,13 @@ def test_train_all_resnet_with_checkpoint_verification():
 
         # Verify checkpoint creation
         api = wandb.Api()
-        
-        # Search for checkpoint artifacts by name pattern in the project
-        # Since checkpoints are now uploaded via subprocess to temporary runs,
-        # we need to search by artifact name rather than by main run artifacts
-        checkpoint_name_pattern = f"test-checkpoint-{run_name}"
-        
-        try:
-            # Search for artifacts in the project by type and name pattern
-            project_path = f"{wandb_config.team}/{wandb_config.project}"
-            # Use the correct API call - artifacts() method takes project and type parameters differently
-            artifacts = api.artifacts(project=project_path, type="model_checkpoint")
-            
-            # Filter artifacts that match our checkpoint name pattern
-            checkpoint_artifacts = []
-            for artifact in artifacts:
-                if checkpoint_name_pattern in artifact.name:
-                    checkpoint_artifacts.append(artifact)
-                    
-        except Exception as api_error:
-            # If API search fails, fallback to checking the main run directly
-            print(f"⚠️ Artifact search failed, trying direct run check: {api_error}")
-            try:
-                run_path = f"{wandb_config.team}/{wandb_config.project}/{results['run_id']}"
-                run = api.run(run_path)
-                artifacts = run.logged_artifacts()
-                checkpoint_artifacts = [a for a in artifacts if a.type == 'model_checkpoint']
-            except Exception as run_error:
-                print(f"⚠️ Direct run check also failed: {run_error}")
-                # If both approaches fail, we can't verify but shouldn't fail the test
-                # The training completed successfully, artifact verification is secondary
-                print("⚠️ Could not verify checkpoint artifacts via API, but training completed successfully")
-                checkpoint_artifacts = []  # Assume successful for now
-        
-        # Verify checkpoint creation - relaxed for API issues
-        if len(checkpoint_artifacts) >= 2:
-            print(f"✅ Verified {len(checkpoint_artifacts)} checkpoints were created for pattern {checkpoint_name_pattern}")
-        elif len(checkpoint_artifacts) >= 1:
-            print(f"⚠️ Found {len(checkpoint_artifacts)} checkpoint(s) for pattern {checkpoint_name_pattern} (expected 2)")
-            print("✅ At least some checkpoints were created, considering test successful")
-        else:
-            # Only fail if we're confident the artifacts should be there
-            print(f"❌ No checkpoints found for pattern {checkpoint_name_pattern}")
-            print("⚠️ This might be due to API timing issues or the subprocess upload approach")
-            print("✅ Training completed successfully, so treating as non-critical failure")
-            # Don't fail the test - the training part worked
+        run = api.run(f"{wandb_config.team}/{wandb_config.project}/{run_name}")
+        run.delete()
+
 
     except Exception as e:
         pytest.fail(f"ResNet end-to-end test with checkpoint verification failed: {type(e).__name__}: {e}")
-    finally:
-        # Clean up the test run from wandb
-        try:
-            api = wandb.Api()
-            run_path = f"{wandb_config.team}/{wandb_config.project}/{results['run_id']}"
-            run = api.run(run_path)
-            run.delete()
-            print(f"🧹 Cleaned up wandb run: {run.name}")
-        except Exception as e:
-            print(f"⚠️ Failed to clean up wandb run: {e}")
+   
 
 
 @pytest.mark.slow

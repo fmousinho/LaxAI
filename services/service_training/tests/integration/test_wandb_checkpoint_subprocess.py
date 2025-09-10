@@ -102,3 +102,14 @@ def test_checkpoint_subprocess_upload_e2e(wandb_logger_instance: WandbLogger, tm
                 print(f"🧹 Cleaned up wandb run: {run.name}")
             except Exception as e:
                 print(f"⚠️ Failed to clean up wandb run '{run_id}': {e}")
+
+        # Clean up test artifacts
+        try:
+            # Delete the test-siamesenet model artifact
+            artifact_path = f"{wandb_config.team}/{wandb_config.project}/test-siamesenet:latest"
+            artifact = api.artifact(artifact_path, type="model")
+            if artifact:
+                artifact.delete()
+                print(f"🧹 Cleaned up test model artifact: test-siamesenet")
+        except Exception as e:
+            print(f"⚠️ Failed to clean up test model artifact 'test-siamesenet': {e}")

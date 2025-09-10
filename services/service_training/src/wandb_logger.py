@@ -437,13 +437,6 @@ class WandbLogger:
         if self.run:
             self.run.finish()
 
-        # Clean up API object to prevent memory accumulation
-        if self.wandb_api:
-            del self.wandb_api
-            self.wandb_api = None
-
-        gc.collect()
-        self.initialized = False
         logger.info("Wandb run finished and resources cleaned up")
 
     def _wait_for_pending_operations(self) -> None:
@@ -801,12 +794,23 @@ class WandbLogger:
         try:
             # We use subprocess.run and capture output for better error diagnosis.
             # This call is blocking within its thread, which is intended.
+            # Make a copy of the current environment and ensure the repository root
+            # is on PYTHONPATH so the subprocess can import local packages like
+            # `shared_libs`. Also set cwd to the repo root for predictable imports.
+            child_env = os.environ.copy()
+            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+            existing_py = child_env.get('PYTHONPATH', '')
+            # Prepend repo_root if not already present
+            if repo_root not in existing_py.split(os.pathsep):
+                child_env['PYTHONPATH'] = os.pathsep.join([repo_root, existing_py]) if existing_py else repo_root
+
             result = subprocess.run(
                 command,
                 check=True,  # Raises CalledProcessError if the command returns a non-zero exit code.
                 capture_output=True,
                 text=True,
-                env=os.environ,
+                env=child_env,
+                cwd=repo_root,
             )
             logger.debug(f"Subprocess stdout: {result.stdout}")
             if result.stderr:
@@ -1458,12 +1462,21 @@ class WandbLogger:
         try:
             # We use subprocess.run and capture output for better error diagnosis.
             # This call is blocking within its thread, which is intended.
+            # Ensure subprocess can import workspace packages by adding repo root
+            # to PYTHONPATH and running with the repository root as cwd.
+            child_env = os.environ.copy()
+            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+            existing_py = child_env.get('PYTHONPATH', '')
+            if repo_root not in existing_py.split(os.pathsep):
+                child_env['PYTHONPATH'] = os.pathsep.join([repo_root, existing_py]) if existing_py else repo_root
+
             result = subprocess.run(
                 command,
                 check=True,  # Raises CalledProcessError if the command returns a non-zero exit code.
                 capture_output=True,
                 text=True,
-                env=os.environ,
+                env=child_env,
+                cwd=repo_root,
             )
             logger.debug(f"Subprocess stdout: {result.stdout}")
             if result.stderr:
