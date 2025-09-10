@@ -1,158 +1,184 @@
-"""
-Training API endpoint for LaxAI.
-"""
+"""Training API endpoints for LaxAI service."""
+
 import asyncio
-import logging
-import traceback
 import uuid
+from datetime import datetime
 from typing import Any, Dict
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from schemas.training import TrainingRequest, TrainingResponse, TrainingStatus
+from workflows.training_workflow import TrainingWorkflow
 
-from common.pipeline import get_active_pipelines
-from services.training_service import (cancel_job, create_job, get_job,
-                                       list_jobs, start_job)
+router = APIRouter(prefix="/train", tags=["training"])
 
-from ..schemas.training import (ErrorResponse, TrainingConfig,
-                                TrainingProgress, TrainingRequest,
-                                TrainingResponse)
-
-logger = logging.getLogger(__name__)
-
-# The service manages job storage now
-
-router = APIRouter()
+# In-memory storage for training tasks (in production, use a database)
+training_tasks: Dict[str, Dict[str, Any]] = {}
 
 
-# Request conversion is handled inside the service
+def execute_training_task(task_id: str, training_request: TrainingRequest):
+    """Execute actual training using the TrainingWorkflow."""
+    try:
+        # Update task status to running
+        training_tasks[task_id].update({
+            "status": "running",
+            "progress": 0,
+            "current_epoch": 0,
+            "updated_at": datetime.utcnow().isoformat()
+        })
+
+        # Extract parameters from request
+        training_kwargs = training_request.training_params or {}
+        model_kwargs = training_request.model_params or {}
+        eval_kwargs = training_request.eval_params or {}
+
+        # Create and execute training workflow
+        workflow = TrainingWorkflow(
+            tenant_id=getattr(training_request, 'tenant_id', 'tenant1'),
+            verbose=getattr(training_request, 'verbose', True),
+            save_intermediate=getattr(training_request, 'save_intermediate', True),
+            custom_name=training_request.experiment_name or f"api_training_{task_id}",
+            resume_from_checkpoint=getattr(training_request, 'resume_from_checkpoint', True),
+            wandb_tags=getattr(training_request, 'wandb_tags', []),
+            training_kwargs=training_kwargs,
+            model_kwargs=model_kwargs,
+            eval_kwargs=eval_kwargs,
+            pipeline_name=f"api_{task_id}",
+            n_datasets_to_use=getattr(training_request, 'n_datasets_to_use', None)
+        )
+
+        # Execute the workflow
+        result = workflow.execute()
+
+        # Update task with final results
+        training_tasks[task_id].update({
+            "status": "completed" if result["successful_runs"] > 0 else "failed",
+            "progress": 100,
+            "datasets_found": result["datasets_found"],
+            "successful_runs": result["successful_runs"],
+            "total_runs": result["total_runs"],
+            "training_results": result["training_results"],
+            "updated_at": datetime.utcnow().isoformat()
+        })
+
+    except Exception as e:
+        # Mark as failed
+        training_tasks[task_id].update({
+            "status": "failed",
+            "error": str(e),
+            "updated_at": datetime.utcnow().isoformat()
+        })
 
 
-# Background execution handled by service
-
-
-@router.post("/train", response_model=TrainingResponse)
+@router.post("/", response_model=TrainingResponse)
 async def start_training(
     request: TrainingRequest,
     background_tasks: BackgroundTasks
-):
-    """
-    Start a training job with the provided configuration.
-    
-    Returns a task ID that can be used to track progress.
-    """
-    try:
-        # Defer validation to the service layer so the API does not depend on
-        # schema internals directly. The service will raise on validation
-        # failure and we map that to a 422 below.
-        from services import training_service
-        try:
-            training_service.validate_training_params(request.training_params)
-        except Exception as ve:
-            raise HTTPException(status_code=422, detail=ErrorResponse(
-                detail=f"training_params validation failed: {ve}",
-                error_type="validation_error"
-            ).model_dump())
-        # Create job entry and get kwargs
-        task_id, kwargs = create_job(request)
+) -> TrainingResponse:
+    """Start a new training job."""
 
-        # Schedule the job via the service
-        start_job(task_id, kwargs, background_tasks)
+    # Generate unique task ID
+    task_id = str(uuid.uuid4())
 
-        logger.info(f"Started training task {task_id} for tenant {request.tenant_id}")
+    # Store task information
+    training_tasks[task_id] = {
+        "task_id": task_id,
+        "status": "queued",
+        "experiment_name": request.experiment_name,
+        "description": request.description,
+        "training_params": request.training_params,
+        "model_params": request.model_params,
+        "eval_params": request.eval_params,
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
+        "progress": None,
+        "current_epoch": None,
+        "total_epochs": None,
+        "loss": None,
+        "metrics": None,
+        "logs": []
+    }
 
-        return TrainingResponse(
-            status="accepted",
-            task_id=task_id,
-            message=f"Training job started with ID: {task_id}"
-        )
+    # Start training task in background
+    background_tasks.add_task(execute_training_task, task_id, request)
 
-    except Exception as e:
-        error_msg = f"Failed to start training: {str(e)}"
-        logger.error(error_msg)
-        logger.error(f"Error details: {traceback.format_exc()}")
-
-        raise HTTPException(
-            status_code=500,
-            detail=ErrorResponse(
-                detail=error_msg,
-                error_type="training_start_failed"
-            ).model_dump()
-        )
-
-
-@router.get("/train/{task_id}/status", response_model=TrainingResponse)
-async def get_training_status(task_id: str):
-    """
-    Get the status of a training job.
-    """
-    job = get_job(task_id)
-    if job is None:
-        raise HTTPException(
-            status_code=404,
-            detail=ErrorResponse(
-                detail=f"Training task {task_id} not found",
-                error_type="task_not_found"
-            ).model_dump()
-        )
     return TrainingResponse(
-        status=job["status"],
         task_id=task_id,
-        message=f"Training job {task_id} is {job['status']}"
+        status="queued",
+        message="Training job has been queued successfully",
+        created_at=training_tasks[task_id]["created_at"]
     )
 
 
-@router.get("/train/jobs", response_model=Dict[str, Any])
-async def list_training_jobs():
-    """
-    List all training jobs and their statuses.
-    """
-    jobs = list_jobs()
-    jobs_summary = {}
-    for task_id, job in jobs.items():
-        jobs_summary[task_id] = {
-            "status": job["status"],
-            "tenant_id": job["request"]["tenant_id"],
-            "custom_name": job["request"]["custom_name"],
-            "created_at": job["created_at"],
-            "progress_status": job["progress"]["status"],
-            "progress_message": job["progress"]["message"]
-        }
+@router.get("/{task_id}", response_model=TrainingStatus)
+async def get_training_status(task_id: str) -> TrainingStatus:
+    """Get the status of a training job."""
 
-    return {"total_jobs": len(jobs), "jobs": jobs_summary}
+    if task_id not in training_tasks:
+        raise HTTPException(status_code=404, detail="Training job not found")
+
+    task = training_tasks[task_id]
+
+    return TrainingStatus(
+        task_id=task_id,
+        status=task["status"],
+        progress=task.get("progress"),
+        current_epoch=task.get("current_epoch"),
+        total_epochs=task.get("total_epochs"),
+        loss=task.get("loss"),
+        metrics=task.get("metrics"),
+        logs=task.get("logs"),
+        updated_at=task["updated_at"]
+    )
 
 
-@router.delete("/train/{task_id}")
-async def cancel_training_job(task_id: str):
-    """
-    Cancel a training job using the pipeline control system.
-    """
-    job = get_job(task_id)
-    if job is None:
+@router.delete("/{task_id}")
+async def cancel_training(task_id: str) -> JSONResponse:
+    """Cancel a training job."""
+
+    if task_id not in training_tasks:
+        raise HTTPException(status_code=404, detail="Training job not found")
+
+    task = training_tasks[task_id]
+
+    if task["status"] == "completed":
         raise HTTPException(
-            status_code=404,
-            detail=ErrorResponse(
-                detail=f"Training task {task_id} not found",
-                error_type="task_not_found"
-            ).model_dump()
+            status_code=400,
+            detail=f"Cannot cancel training job in '{task['status']}' status"
         )
 
-    pipeline_stopped = cancel_job(task_id)
+    # Allow cancelling jobs that are running, queued, or failed
+    # Mark as cancelled
+    training_tasks[task_id].update({
+        "status": "cancelled",
+        "updated_at": datetime.utcnow().isoformat()
+    })
 
-    return {"message": f"Training job {task_id} cancelled", "pipeline_stopped": pipeline_stopped}
+    return JSONResponse(
+        content={
+            "message": "Training job cancelled successfully",
+            "task_id": task_id,
+            "status": "cancelled"
+        }
+    )
 
 
-@router.get("/train/pipelines", response_model=Dict[str, Any])
-async def list_active_pipelines():
-    """
-    List all currently active training pipelines.
-    """
-    active_pipelines = get_active_pipelines()
-    
+@router.get("/")
+async def list_training_jobs() -> Dict[str, Any]:
+    """List all training jobs."""
+
     return {
-        "total_active_pipelines": len(active_pipelines),
-        "pipelines": active_pipelines
+        "training_jobs": [
+            {
+                "task_id": task_id,
+                "experiment_name": task["experiment_name"],
+                "status": task["status"],
+                "created_at": task["created_at"],
+                "updated_at": task["updated_at"]
+            }
+            for task_id, task in training_tasks.items()
+        ],
+        "total": len(training_tasks)
     }
 
 

@@ -13,9 +13,9 @@ from contextlib import asynccontextmanager
 from typing import List
 
 import config.logging_config
+from endpoints.train import router as train_router
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import training
 
 # Fork safety fix - must be at the very beginning
 try:
@@ -90,7 +90,7 @@ def create_app() -> FastAPI:
 
     
     # Include routers
-    app.include_router(training.router)
+    app.include_router(train_router)
 
     return app
 

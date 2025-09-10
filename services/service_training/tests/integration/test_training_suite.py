@@ -21,7 +21,7 @@ from shared_libs.utils.env_secrets import setup_environment_secrets
 def test_cancel_via_web_api_endpoint():
     """Test cancelling a training job via the web API endpoint."""
     # Import the training router from service_training
-    from routers.training import router as training_router
+    from ..src.endpoints.train import router as training_router
 
     # Create a training job via the API
     training_request = {
@@ -134,7 +134,7 @@ def make_request_obj(tenant_id: str = "tenant1", n_datasets_to_use: Optional[int
 
 def test_cancel_via_service_cli():
     """Test cancelling a training job via the service CLI interface."""
-    from routers.training import router as train_router
+    from ..src.endpoints.train import router as train_router
 
     # Create FastAPI app and include the training router
     app = FastAPI()
@@ -182,7 +182,7 @@ def test_cancel_via_service_cli():
 def test_cancel_via_service_cli_with_pipeline_stop_verification():
     """Test cancelling a training job - the router handles cancellation in memory."""
     # Import the training router from service_training
-    from routers.training import router as training_router
+    from ..src.endpoints.train import router as training_router
 
     # Create a FastAPI app with the training router
     app = FastAPI()
@@ -220,7 +220,7 @@ def test_cancel_via_service_cli_with_pipeline_stop_verification():
 def test_cancel_via_service_cli_pipeline_not_found():
     """Test cancelling a training job - the router doesn't interact with pipelines."""
     # Import the training router from service_training
-    from routers.training import router as training_router
+    from ..src.endpoints.train import router as training_router
 
     # Create a FastAPI app with the training router
     app = FastAPI()
@@ -257,7 +257,7 @@ def test_cancel_via_service_cli_pipeline_not_found():
 
 def test_cancel_via_web_api_endpoint():
     """Test cancelling a training job via the web API endpoint."""
-    from routers.training import router as train_router_module
+    from ..src.endpoints.train import router as train_router_module
 
     app = FastAPI()
     app.include_router(train_router_module)
@@ -580,7 +580,8 @@ def test_train_signature_has_n_datasets_to_use():
 
 def test_convert_request_to_kwargs_includes_top_level_n_datasets():
     """Test that request conversion includes top-level n_datasets parameter."""
-    from services.service_training.src.training_service import _convert_request_to_kwargs
+    from services.service_training.src.training_service import \
+        _convert_request_to_kwargs
 
     req = SimpleNamespace(
         tenant_id="tenant1",

@@ -4,10 +4,10 @@ import os
 import traceback
 from typing import Any, Callable, Dict, List, Optional
 
+from config.transforms import get_transforms
 from dataset import LacrossePlayerDataset
 from evaluator import ModelEvaluator
 from training_loop import Training
-from transforms import get_transforms
 from wandb_logger import wandb_logger
 
 from shared_libs.common.google_storage import GCSPaths, get_storage

@@ -13,9 +13,9 @@ from typing import Dict, List, Optional, Union
 import numpy as np
 import torch
 import torchvision.transforms as transforms
+from config.transforms import get_transforms
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
-from transforms import get_transforms
 
 from shared_libs.config.all_config import training_config
 
