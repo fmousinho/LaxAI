@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 def test_checkpoint_naming_no_run():
     """Test checkpoint naming when no run is active."""
     try:
-        from train.wandb_logger import WandbLogger
+        from wandb_logger import WandbLogger
 
         wandb_logger = WandbLogger()
         wandb_logger.run = None
@@ -24,13 +24,13 @@ def test_checkpoint_naming_no_run():
         print(f'✅ Default checkpoint name (no run): {checkpoint_name}')
 
     except Exception as e:
-        pytest.skip(f"Could not test checkpoint naming: {e}")
+        pytest.fail(f"Could not test checkpoint naming: {e}")
 
 
 def test_checkpoint_naming_with_run():
     """Test checkpoint naming with an active run."""
     try:
-        from train.wandb_logger import WandbLogger
+        from wandb_logger import WandbLogger
 
         wandb_logger = WandbLogger()
 
@@ -47,13 +47,13 @@ def test_checkpoint_naming_with_run():
         print(f'✅ Checkpoint name with run: {checkpoint_name}')
 
     except Exception as e:
-        pytest.skip(f"Could not test checkpoint naming with run: {e}")
+        pytest.fail(f"Could not test checkpoint naming with run: {e}")
 
 
 def test_checkpoint_naming_sanitization():
     """Test checkpoint naming with special characters that need sanitization."""
     try:
-        from train.wandb_logger import WandbLogger
+        from wandb_logger import WandbLogger
 
         wandb_logger = WandbLogger()
 
@@ -72,13 +72,13 @@ def test_checkpoint_naming_sanitization():
         print(f'✅ Checkpoint name with sanitized run: {checkpoint_name}')
 
     except Exception as e:
-        pytest.skip(f"Could not test checkpoint naming sanitization: {e}")
+        pytest.fail(f"Could not test checkpoint naming sanitization: {e}")
 
 
 def test_checkpoint_naming_test_prefix():
     """Test checkpoint naming for test runs."""
     try:
-        from train.wandb_logger import WandbLogger
+        from wandb_logger import WandbLogger
 
         wandb_logger = WandbLogger()
 
@@ -95,4 +95,4 @@ def test_checkpoint_naming_test_prefix():
         print(f'✅ Test checkpoint name: {checkpoint_name}')
 
     except Exception as e:
-        pytest.skip(f"Could not test checkpoint naming for test runs: {e}")
+        pytest.fail(f"Could not test checkpoint naming for test runs: {e}")

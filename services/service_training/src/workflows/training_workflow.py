@@ -8,14 +8,13 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
+from common.google_storage import GCSPaths, get_storage
 from config.logging_config import print_banner
 from parameter_registry import parameter_registry
 from train_pipeline import TrainPipeline
 from utils.cpu_memory import clear_cpu_memory, log_comprehensive_memory_stats
 # Absolute imports
 from utils.env_secrets import setup_environment_secrets
-
-from common.google_storage import GCSPaths, get_storage
 
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
@@ -79,7 +78,7 @@ class TrainingWorkflow:
             List of dataset paths available for training.
         """
         try:
-            storage = get_storage()
+            storage = get_storage(self.tenant_id)
             path_manager = GCSPaths()
             tenant_path =path_manager.get_path(self.tenant_id)
 

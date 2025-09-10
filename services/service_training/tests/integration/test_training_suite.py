@@ -21,7 +21,7 @@ from shared_libs.utils.env_secrets import setup_environment_secrets
 def test_cancel_via_web_api_endpoint():
     """Test cancelling a training job via the web API endpoint."""
     # Import the training router from service_training
-    from ..src.endpoints.train import router as training_router
+    from endpoints.train import router as training_router
 
     # Create a training job via the API
     training_request = {
@@ -134,7 +134,7 @@ def make_request_obj(tenant_id: str = "tenant1", n_datasets_to_use: Optional[int
 
 def test_cancel_via_service_cli():
     """Test cancelling a training job via the service CLI interface."""
-    from ..src.endpoints.train import router as train_router
+    from endpoints.train import router as train_router
 
     # Create FastAPI app and include the training router
     app = FastAPI()
@@ -182,7 +182,7 @@ def test_cancel_via_service_cli():
 def test_cancel_via_service_cli_with_pipeline_stop_verification():
     """Test cancelling a training job - the router handles cancellation in memory."""
     # Import the training router from service_training
-    from ..src.endpoints.train import router as training_router
+    from endpoints.train import router as training_router
 
     # Create a FastAPI app with the training router
     app = FastAPI()
@@ -220,7 +220,7 @@ def test_cancel_via_service_cli_with_pipeline_stop_verification():
 def test_cancel_via_service_cli_pipeline_not_found():
     """Test cancelling a training job - the router doesn't interact with pipelines."""
     # Import the training router from service_training
-    from ..src.endpoints.train import router as training_router
+    from endpoints.train import router as training_router
 
     # Create a FastAPI app with the training router
     app = FastAPI()
@@ -257,7 +257,7 @@ def test_cancel_via_service_cli_pipeline_not_found():
 
 def test_cancel_via_web_api_endpoint():
     """Test cancelling a training job via the web API endpoint."""
-    from ..src.endpoints.train import router as train_router_module
+    from endpoints.train import router as train_router_module
 
     app = FastAPI()
     app.include_router(train_router_module)
@@ -434,7 +434,7 @@ def test_train_all_resnet_with_checkpoint_verification():
     # Ensure secrets for longer e2e tests
     setup_environment_secrets()
 
-    from services.service_training.src.train_all import train
+    from workflows.training_workflow import train_workflow as train
 
     run_name = f"e2e_resnet_checkpoint_test_{uuid.uuid4().hex[:8]}"
 

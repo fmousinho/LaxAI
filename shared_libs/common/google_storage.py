@@ -909,19 +909,25 @@ class GoogleStorageClient:
                 self.cap = None
 
 
-def get_storage(*args) -> GoogleStorageClient:
+def get_storage(tenant_id: str, credentials: Optional[service_account.Credentials] = None) -> GoogleStorageClient:
     """
     Get a Google Storage client instance.
 
     Args:
-        user_path: The user-specific path within the bucket (e.g., "tenant1/user123")
-        credentials: Optional credentials for authentication
+        tenant_id: The tenant identifier required (e.g., "tenant1"). This must be provided by the caller.
+        credentials: Optional google.auth.credentials for authentication.
 
     Returns:
         GoogleStorageClient: Configured Google Storage client instance
     """
 
-    return GoogleStorageClient(*args)
+    if not tenant_id:
+        raise TypeError(
+            "get_storage requires tenant_id as the first argument. "
+            "Call get_storage(tenant_id, ...) with a valid tenant id (e.g. 'tenant1')."
+        )
+
+    return GoogleStorageClient(tenant_id, credentials=credentials)
 
 
 ###########

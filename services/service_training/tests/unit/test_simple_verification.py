@@ -17,11 +17,6 @@ def test_string_operations():
     assert len(test_string) == 11
 
 
-@pytest.mark.integration
-def test_integration_placeholder():
-    """Placeholder for integration tests."""
-    # This test will be skipped until we set up proper integration testing
-    pytest.skip("Integration test placeholder - implement when ready")
 
 
 def test_environment_setup():
