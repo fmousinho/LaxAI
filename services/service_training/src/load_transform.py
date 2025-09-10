@@ -15,7 +15,7 @@ import os
 # Imports using relative imports since we're now in the src package
 from common.google_storage import get_storage
 from config.all_config import detection_config
-from train.dataprep_pipeline import DataPrepPipeline
+from dataprep_pipeline import DataPrepPipeline
 
 # IMPORTANT: Load environment variables and credentials FIRST
 # This must be imported before any modules that use GCS or WandB
