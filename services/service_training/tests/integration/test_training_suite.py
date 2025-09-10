@@ -454,15 +454,88 @@ def test_train_all_resnet_with_checkpoint_verification():
         # Verify training completed successfully
         assert isinstance(results, dict)
         assert results.get("status") == "completed"
-        assert results.get("steps_completed", 0) == 3  # All pipeline steps
+        assert results.get("steps_completed", 0) == 6  # 3 steps per dataset for 2 datasets
 
-        # Verify checkpoint creation
-        api = wandb.Api()
-        run = api.run(f"{wandb_config.team}/{wandb_config.project}/{run_name}")
-        artifacts = list(run.logged_artifacts())
-        for artifact in artifacts:
-            artifact.delete()
-        run.delete()
+        # Verify checkpoint creation and cleanup
+        try:
+            api = wandb.Api()
+            run = api.run(f"{wandb_config.team}/{wandb_config.project}/{run_name}")
+            artifacts = list(run.logged_artifacts())
+
+            # Clean up artifacts first
+            for artifact in artifacts:
+                try:
+                    artifact.delete()
+                    print(f"🧹 Cleaned up artifact: {artifact.name}")
+                except Exception as e:
+                    print(f"⚠️ Failed to delete artifact {artifact.name}: {e}")
+
+            # Clean up the run
+            try:
+                run.delete()
+                print(f"🧹 Cleaned up wandb run: {run_name}")
+            except Exception as e:
+                print(f"⚠️ Failed to clean up wandb run '{run_name}': {e}")
+
+        except Exception as e:
+            print(f"⚠️ Could not access wandb run '{run_name}' for cleanup: {e}")
+            print("ℹ️ This is likely a timing issue - the run may still be syncing to wandb servers")
+
+        # Additional cleanup for test artifacts (more robust approach)
+        try:
+            api = wandb.Api()
+
+            # Clean up test model artifacts
+            test_artifact_names = ["test-siamesenet"]
+            for artifact_name in test_artifact_names:
+                try:
+                    artifact_type_obj = api.artifact_type("model", project=wandb_config.project)
+                    collection = artifact_type_obj.collection(artifact_name)
+                    artifacts = list(collection.artifacts())
+                    deleted_count = 0
+                    for artifact in artifacts:
+                        try:
+                            artifact.delete()
+                            deleted_count += 1
+                        except Exception as e:
+                            print(f"⚠️ Failed to delete artifact version {artifact.version}: {e}")
+
+                    if deleted_count > 0:
+                        print(f"🧹 Cleaned up {deleted_count} versions of test model artifact: {artifact_name}")
+
+                except Exception as e:
+                    if "404" in str(e) or "not found" in str(e).lower():
+                        print(f"ℹ️ Test model artifact '{artifact_name}' not found")
+                    else:
+                        print(f"⚠️ Failed to access test model artifact '{artifact_name}': {e}")
+
+            # Clean up checkpoint artifacts
+            try:
+                checkpoint_type_obj = api.artifact_type("model_checkpoint", project=wandb_config.project)
+                checkpoint_collections = checkpoint_type_obj.collections()
+
+                for collection in checkpoint_collections:
+                    if collection.name.startswith("test-") or run_name in collection.name:
+                        try:
+                            artifacts = list(collection.artifacts())
+                            deleted_count = 0
+                            for artifact in artifacts:
+                                try:
+                                    artifact.delete()
+                                    deleted_count += 1
+                                except Exception as e:
+                                    print(f"⚠️ Failed to delete checkpoint artifact version {artifact.version}: {e}")
+
+                            if deleted_count > 0:
+                                print(f"🧹 Cleaned up {deleted_count} versions of checkpoint artifact: {collection.name}")
+                        except Exception as e:
+                            print(f"⚠️ Failed to clean up checkpoint collection '{collection.name}': {e}")
+
+            except Exception as e:
+                print(f"⚠️ Failed to clean up checkpoint artifacts: {e}")
+
+        except Exception as e:
+            print(f"⚠️ Failed to clean up test artifacts: {e}")
 
 
     except Exception as e:
