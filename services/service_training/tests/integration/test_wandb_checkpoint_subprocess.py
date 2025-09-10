@@ -105,11 +105,58 @@ def test_checkpoint_subprocess_upload_e2e(wandb_logger_instance: WandbLogger, tm
 
         # Clean up test artifacts
         try:
-            # Delete the test-siamesenet model artifact
-            artifact_path = f"{wandb_config.team}/{wandb_config.project}/test-siamesenet:latest"
-            artifact = api.artifact(artifact_path, type="model")
-            if artifact:
-                artifact.delete()
-                print(f"🧹 Cleaned up test model artifact: test-siamesenet")
+            # Clean up all test artifacts using the same logic as wandb_logger
+            test_artifact_names = ["test-siamesenet", "test-checkpoint"]  # Common test artifacts
+            
+            for artifact_name in test_artifact_names:
+                try:
+                    # Try to get the artifact collection first
+                    artifact_type_obj = api.artifact_type("model", project=wandb_config.project)
+                    collection = artifact_type_obj.collection(artifact_name)
+                    
+                    # Delete all versions in the collection
+                    artifacts = list(collection.artifacts())
+                    deleted_count = 0
+                    for artifact in artifacts:
+                        try:
+                            artifact.delete()
+                            deleted_count += 1
+                        except Exception as e:
+                            print(f"⚠️ Failed to delete artifact version {artifact.version}: {e}")
+                    
+                    if deleted_count > 0:
+                        print(f"🧹 Cleaned up {deleted_count} versions of test model artifact: {artifact_name}")
+                        
+                except Exception as e:
+                    if "404" in str(e) or "not found" in str(e).lower():
+                        print(f"ℹ️ Test model artifact '{artifact_name}' not found")
+                    else:
+                        print(f"⚠️ Failed to access test model artifact '{artifact_name}': {e}")
+                        
+            # Also clean up checkpoint artifacts
+            try:
+                checkpoint_type_obj = api.artifact_type("model_checkpoint", project=wandb_config.project)
+                checkpoint_collections = checkpoint_type_obj.collections()
+                
+                for collection in checkpoint_collections:
+                    if collection.name.startswith("test-"):
+                        try:
+                            artifacts = list(collection.artifacts())
+                            deleted_count = 0
+                            for artifact in artifacts:
+                                try:
+                                    artifact.delete()
+                                    deleted_count += 1
+                                except Exception as e:
+                                    print(f"⚠️ Failed to delete checkpoint artifact version {artifact.version}: {e}")
+                            
+                            if deleted_count > 0:
+                                print(f"🧹 Cleaned up {deleted_count} versions of test checkpoint artifact: {collection.name}")
+                        except Exception as e:
+                            print(f"⚠️ Failed to clean up test checkpoint collection '{collection.name}': {e}")
+                            
+            except Exception as e:
+                print(f"⚠️ Failed to clean up test checkpoint artifacts: {e}")
+                    
         except Exception as e:
-            print(f"⚠️ Failed to clean up test model artifact 'test-siamesenet': {e}")
+            print(f"⚠️ Failed to clean up test artifacts: {e}")

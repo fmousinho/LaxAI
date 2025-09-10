@@ -459,6 +459,9 @@ def test_train_all_resnet_with_checkpoint_verification():
         # Verify checkpoint creation
         api = wandb.Api()
         run = api.run(f"{wandb_config.team}/{wandb_config.project}/{run_name}")
+        artifacts = list(run.logged_artifacts())
+        for artifact in artifacts:
+            artifact.delete()
         run.delete()
 
 
