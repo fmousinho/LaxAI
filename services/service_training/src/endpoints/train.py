@@ -1,6 +1,7 @@
 """Training API endpoints for LaxAI service."""
 
 import asyncio
+import threading
 import uuid
 from datetime import datetime
 from typing import Any, Dict
@@ -55,6 +56,12 @@ def execute_training_task(task_id: str, training_request: TrainingRequest):
         # Map workflow status directly
         final_status = result.get("status", "completed")
 
+        # If the task was externally cancelled (status already set to 'cancelled'),
+        # don't overwrite with a later completed/failed status from the workflow.
+        current_task_status = training_tasks.get(task_id, {}).get("status")
+        if current_task_status == "cancelled":
+            return
+
         training_tasks[task_id].update({
             "status": final_status,
             "progress": 100 if final_status == "completed" else None,
@@ -84,7 +91,7 @@ def execute_training_task(task_id: str, training_request: TrainingRequest):
 @router.post("/", response_model=TrainingResponse)
 async def start_training(
     request: TrainingRequest,
-    background_tasks: BackgroundTasks
+    background_tasks: BackgroundTasks  # Kept for signature compatibility, not used directly now
 ) -> TrainingResponse:
     """Start a new training job."""
 
@@ -112,8 +119,12 @@ async def start_training(
         "pipeline_name": f"api_{task_id}"  # Store pipeline name for cancellation
     }
 
-    # Start training task in background
-    background_tasks.add_task(execute_training_task, task_id, request)
+    # Previous implementation used FastAPI BackgroundTasks. Under Starlette's TestClient
+    # the response isn't returned until background tasks finish, which blocked the API
+    # call for the entire (long) training duration and prevented issuing a cancel
+    # request from the tests. We switch to spawning a real daemon thread so the POST
+    # returns immediately and cancellation can be exercised concurrently.
+    threading.Thread(target=execute_training_task, args=(task_id, request), daemon=True).start()
 
     return TrainingResponse(
         task_id=task_id,

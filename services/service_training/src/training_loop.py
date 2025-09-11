@@ -560,6 +560,7 @@ class Training:
                         )
                         # Raise InterruptedError to trigger upstream cleanup logic
                         raise InterruptedError("Training cancelled by external request (mid-epoch)")
+                    
 
                     # Move tensors to device with non_blocking for async transfer
                     anchor = anchor.to(self.device, non_blocking=True)
@@ -610,31 +611,12 @@ class Training:
                     
                     # Establish memory baseline after first few batches of first epoch
                     # This accounts for model loading, optimizer state creation, and initial allocations
-                    if epoch == 0 and i == 4 and self.epoch_memory_baseline is None:  # After 5th batch of first epoch
+                    if epoch == 0 and i == 10 and self.epoch_memory_baseline is None:  # After 5th batch of first epoch
                         import psutil
                         process = psutil.Process()
                         self.epoch_memory_baseline = process.memory_info().rss / 1024 / 1024  # MB
                         logger.info(f"Memory baseline established after first 5 batches: {self.epoch_memory_baseline:.1f}MB")
                     
-                    # Aggressive batch-level memory cleanup every 50 batches
-                    if (i + 1) % 50 == 0:
-                        # Force garbage collection to clear accumulated Python objects
-                        gc.collect()
-                        
-                        # Clear GPU cache if available and memory usage is high
-                        if torch.cuda.is_available() and self.device.type == 'cuda':
-                            # Use smart GPU cache clearing with conservative approach
-                            self._smart_gpu_cache_clear(force=False, context=f"batch_{i+1}")
-                        
-                        # Log memory state every 200 batches (every 4 cleanup cycles)
-                        if (i + 1) % 200 == 0:
-                            try:
-                                import psutil
-                                process = psutil.Process()
-                                current_memory = process.memory_info().rss / 1024 / 1024  # MB
-                                logger.debug(f"Epoch {epoch + 1}, Batch {i + 1}: Memory = {current_memory:.1f}MB (after cleanup)")
-                            except Exception:
-                                pass
 
                 # Calculate and log training loss
                 epoch_train_loss = running_loss / ttl_batches if ttl_batches > 0 else 0.0
@@ -649,11 +631,6 @@ class Training:
                 epoch_mining_efficiency = running_mining_efficiency / ttl_batches if ttl_batches > 0 else 0.0
                 epoch_grad_norm = running_grad_norm / ttl_batches if ttl_batches > 0 else 0.0
                 
-                # Memory cleanup after training phase
-                # clear_cpu_memory()
-                # if torch.cuda.is_available():
-                #     torch.cuda.empty_cache()
-                # self.cpu_monitor.log_memory_stats(f"Epoch {epoch + 1} training complete")
 
                 # ========================================================================
                 # Validation Phase (if dataloader is provided)

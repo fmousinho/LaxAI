@@ -185,74 +185,74 @@ class TrainPipeline(Pipeline):
             RuntimeError: If dataset creation fails
         """
         try:
-            # Extract and validate dataset name
             dataset_name = context.get("dataset_name")
             if not dataset_name:
-                logger.error("Dataset name is missing from context")
                 return {"status": StepStatus.ERROR.value, "error": "Dataset name is required"}
 
-            # Handle both single dataset and multi-dataset modes
+            if self.is_stop_requested():
+                raise InterruptedError("Cancelled before dataset creation")
+
             if isinstance(dataset_name, str):
-                # Single dataset mode
                 try:
                     train_folder = self.path_manager.get_path("train_dataset", dataset_id=dataset_name)
                     val_folder = self.path_manager.get_path("val_dataset", dataset_id=dataset_name)
-                    train_folders = [train_folder]  # Convert to list for consistency
-                    val_folders = [val_folder]      # Convert to list for consistency
-                    dataset_mode = "single"
-                    logger.info(f"🔄 Creating single dataset from: {dataset_name}")
                 except KeyError as e:
-                    logger.error(f"Could not find train and val folders for {dataset_name}: {e}")
                     return {"status": StepStatus.ERROR.value, "error": str(e)}
-                
+                if not isinstance(train_folder, str) or not isinstance(val_folder, str):
+                    return {"status": StepStatus.ERROR.value, "error": "Dataset folder path resolution returned non-string"}
+                train_folders: list[str] = [train_folder]
+                val_folders: list[str] = [val_folder]
+                dataset_mode = "single"
+                logger.info(f"🔄 Creating single dataset from: {dataset_name}")
             elif isinstance(dataset_name, list):
-                # Multi-dataset mode
                 train_folders = []
                 val_folders = []
                 for name in dataset_name:
+                    if self.is_stop_requested():
+                        raise InterruptedError("Cancelled during dataset folder resolution")
                     try:
-                        train_folder = self.path_manager.get_path("train_dataset", dataset_id=name)
-                        val_folder = self.path_manager.get_path("val_dataset", dataset_id=name)
-                        train_folders.append(train_folder)
-                        val_folders.append(val_folder)
-                    except KeyError as e:
+                        tf = self.path_manager.get_path("train_dataset", dataset_id=name)
+                        vf = self.path_manager.get_path("val_dataset", dataset_id=name)
+                        if isinstance(tf, str):
+                            train_folders.append(tf)
+                        if isinstance(vf, str):
+                            val_folders.append(vf)
+                    except KeyError:
                         logger.warning(f"Skipping dataset {name} due to missing folders")
                         continue
-                if len(train_folders) == 0:
-                    logger.error(f"No valid train folders found for {dataset_name}")
-                    return {"status": StepStatus.ERROR.value, "error": f"No valid train folders found for {dataset_name}"}
-                if len(val_folders) == 0:
-                    logger.warning(f"No valid validation folders found for {dataset_name}")
+                if not train_folders:
+                    return {"status": StepStatus.ERROR.value, "error": "No valid train folders found"}
+                if not val_folders:
+                    logger.warning("No valid validation folders found")
                 dataset_mode = "multi"
-                logger.info(f"🔄 Creating multi-dataset from {len(dataset_name)} datasets: {dataset_name}")
-            
+                logger.info(f"🔄 Creating multi-dataset from {len(train_folders)} datasets: {dataset_name}")
             else:
-                raise ValueError(f"dataset_name must be str or List[str], got {type(dataset_name)}")
-            
-            if not train_folders or not val_folders:
-                logger.error(f"No valid train or validation folders found for {dataset_name}")
-                return {"status": StepStatus.ERROR.value, "error": f"No valid train or validation folders found for {dataset_name}"}
+                return {"status": StepStatus.ERROR.value, "error": f"dataset_name must be str or List[str], got {type(dataset_name)}"}
 
-            # Validate transforms
+            if self.is_stop_requested():
+                raise InterruptedError("Cancelled before loading transforms")
             try:
                 training_transforms = get_transforms('training')
                 validation_transforms = get_transforms('validation')
-            except Exception as e:
-                logger.error(f"Failed to load transforms: {e}")
-                return {"status": StepStatus.ERROR.value, "error": f"Failed to load transforms: {str(e)}"}
-            
+            except Exception as e:  # pragma: no cover - defensive
+                return {"status": StepStatus.ERROR.value, "error": f"Failed to load transforms: {e}"}
+
             min_images_per_player = training_config.min_images_per_player
 
-            # Create datasets using the enhanced LacrossePlayerDataset
-            # Pass single string for single mode, list for multi mode
+            if self.is_stop_requested():
+                raise InterruptedError("Cancelled before dataset instantiation")
+
             training_dataset = LacrossePlayerDataset(
                 image_dir=train_folders if dataset_mode == "single" else train_folders,
                 storage_client=self.storage_client,
                 transform=training_transforms,
                 min_images_per_player=min_images_per_player
             )
+            if self.is_stop_requested():
+                raise InterruptedError("Cancelled before validation dataset instantiation")
+            val_image_dir: str | list[str] = val_folders[0] if dataset_mode == "single" else val_folders
             validation_dataset = LacrossePlayerDataset(
-                image_dir=val_folders[0] if dataset_mode == "single" else val_folders,
+                image_dir=val_image_dir,
                 storage_client=self.storage_client,
                 transform=validation_transforms,
                 min_images_per_player=min_images_per_player
@@ -264,30 +264,23 @@ class TrainPipeline(Pipeline):
                 'dataset_mode': dataset_mode,
                 'status': StepStatus.COMPLETED.value
             })
-        
-            # Log success with mode-specific information
+
             if dataset_mode == "single":
-                logger.info(f"✅ Single dataset created successfully:")
-                logger.info(f"   📁 Train folder: {train_folders[0]}")
-                logger.info(f"   📁 Validation folder: {val_folders[0]}")
+                logger.info(f"✅ Single dataset created successfully: {train_folders[0]}")
             else:
-                logger.info(f"✅ Multi-dataset created successfully:")
-                logger.info(f"   📁 Train folders: {len(train_folders)} datasets")
-                logger.info(f"   📁 Validation folders: {len(val_folders)} datasets")
-                for i, (train_f, val_f) in enumerate(zip(train_folders, val_folders)):
-                    logger.info(f"      Dataset {i+1}: {train_f} | {val_f}")
-            
-            logger.info(f"   📏 Min images per player: {min_images_per_player}")
-            logger.info(f"   🎯 Mode: {dataset_mode}-dataset with {'same-dataset negative mining' if dataset_mode == 'multi' else 'standard negative mining'}")
-            
+                logger.info(f"✅ Multi-dataset created successfully: {len(train_folders)} datasets")
+
+            if self.is_stop_requested():
+                raise InterruptedError("Cancelled after dataset creation")
+
             return context
-            
-        except Exception as e:
-            # Catch any unexpected errors
+        except InterruptedError:
+            raise
+        except Exception as e:  # pragma: no cover - unexpected
             logger.error(f"Unexpected error in dataset creation: {e}")
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            return {"status": StepStatus.ERROR.value, "error": f"Unexpected error: {str(e)}"}
+            logger.error(traceback.format_exc())
+            return {"status": StepStatus.ERROR.value, "error": str(e)}
         
 
     def _train_model(self, context: dict, stop_callback: Optional[Callable] = None) -> Dict[str, Any]:
@@ -331,11 +324,14 @@ class TrainPipeline(Pipeline):
             # Execute complete training pipeline with checkpoint support
             logger.info("Executing training pipeline...")
 
-            trained_model = training.train_and_save(
+            if training_dataset is None or val_dataset is None:
+                return {"status": StepStatus.ERROR.value, "error": "Datasets not prepared correctly"}
+
+            trained_model = training.train_and_save(  # type: ignore[arg-type]
                 model_class=self.model_class,
-                dataset=training_dataset,
+                dataset=training_dataset,  # type: ignore[arg-type]
                 model_name=self.collection_name,
-                val_dataset=val_dataset,
+                val_dataset=val_dataset,  # type: ignore[arg-type]
                 resume_from_checkpoint=resume_from_checkpoint,
                 stop_callback=stop_callback
             )
@@ -404,12 +400,9 @@ class TrainPipeline(Pipeline):
             # Initialize evaluator
             try:
                 # Prefer the module-level alias `Evaluator` so tests can patch it.
-                evaluator_cls = Evaluator if 'Evaluator' in globals() else ModelEvaluator
-                evaluator = evaluator_cls(
-                    model=trained_model,
-                    device=device,
-                    stop_callback=stop_callback
-                )
+                # Prefer a patched Evaluator when tests inject one; fall back to ModelEvaluator
+                evaluator_cls = globals().get('Evaluator', ModelEvaluator)  # type: ignore[name-defined]
+                evaluator = evaluator_cls(model=trained_model, device=device, stop_callback=stop_callback)  # type: ignore[arg-type]
                 logger.info("Model evaluator initialized successfully")
             except Exception as e:
                 error_msg = f"Failed to initialize model evaluator: {str(e)}"
@@ -420,9 +413,9 @@ class TrainPipeline(Pipeline):
             # evaluator (legacy API); prefer that when available so mocks work.
             logger.info("Running evaluation suite...")
             if hasattr(evaluator, 'evaluate'):
-                evaluation_results = evaluator.evaluate(validation_dataset, **self.training_kwargs)
-            else:
-                evaluation_results = evaluator.evaluate_comprehensive(validation_dataset, **self.training_kwargs)
+                evaluation_results = evaluator.evaluate(validation_dataset, **self.training_kwargs)  # type: ignore[attr-defined]
+            else:  # Fallback to comprehensive evaluation
+                evaluation_results = evaluator.evaluate_comprehensive(validation_dataset, **self.training_kwargs)  # type: ignore[attr-defined]
 
             # Generate human-readable report if available and results contain
             # metrics; otherwise build a simple summary string. Some tests

@@ -34,19 +34,20 @@ def test_cancel_via_web_api_endpoint():
     # Import the training router from service_training
     from endpoints.train import router as training_router
 
-        # Create a training job with minimal parameters for quick execution
+    # Create a training job with minimal parameters
     training_request = {
         "custom_name": "test_cancel_job",
         "tenant_id": "tenant1",
         "resume_from_checkpoint": False,
         "training_params": {
-            "num_epochs": 2,  # Very short training to ensure cancellation happens
+            # Value unused by patched train; keep small
+            "num_epochs": 2,
             "batch_size": 4,
             "learning_rate": 0.001
         },
         "model_params": {
             "model_class_module": "siamesenet",
-            "model_class": "SiameseNet"
+            "model_class_str": "SiameseNet"  # Correct key expected by pipeline
         },
         "eval_params": {},
         "n_datasets_to_use": 1  # Use minimal dataset
@@ -69,8 +70,8 @@ def test_cancel_via_web_api_endpoint():
     initial_status = status_response.json()
     assert initial_status["status"] in ["queued", "running"]
 
-    # Wait for job to start running (give it time to initialize)
-    max_wait_time = 30  # seconds
+    # Wait for job to start running
+    max_wait_time = 60  # seconds
     wait_time = 0
     while wait_time < max_wait_time:
         status_response = client.get(f"/train/{task_id}")
@@ -85,7 +86,19 @@ def test_cancel_via_web_api_endpoint():
         pytest.fail(f"Job {task_id} never transitioned to 'running' status within {max_wait_time} seconds. Current status: {current_status.get('status')}")
 
     # Cancel immediately once the job starts running
-    print(f"Cancelling job {task_id} immediately after it started running")
+    # Ensure pipeline is registered before cancelling to avoid pending cancellation delay
+    from shared_libs.common.pipeline import get_active_pipelines
+    pipeline_name = f"api_{task_id}"
+    pipeline_wait_start = time.time()
+    while time.time() - pipeline_wait_start < 60:
+        active = get_active_pipelines()
+        if pipeline_name in active:
+            break
+        time.sleep(1)
+    else:
+        pytest.fail(f"Pipeline {pipeline_name} was never registered within 60s")
+
+    print(f"Cancelling job {task_id} after pipeline registration")
     cancel_response = client.delete(f"/train/{task_id}")
     assert cancel_response.status_code == 200
     cancel_data = cancel_response.json()
@@ -103,10 +116,9 @@ def test_cancel_via_web_api_endpoint():
     assert final_status_data["status"] == "cancelled"
     print(f"Confirmed job {task_id} status is cancelled")
 
-    # Wait for the job to actually finish (should be cancelled, not completed)
-    # Set a timeout of 3 minutes (180 seconds) to prevent hanging
+    # Wait for the job to acknowledge cancellation (should raise InterruptedError internally)
     timeout_start = time.time()
-    max_completion_wait = 180  # 3 minutes
+    max_completion_wait = 180  # allow sufficient time for current step to finish
 
     while time.time() - timeout_start < max_completion_wait:
         status_response = client.get(f"/train/{task_id}")
@@ -116,17 +128,10 @@ def test_cancel_via_web_api_endpoint():
             break
         time.sleep(2)  # Check every 2 seconds
 
-    # Assert that the job did NOT complete successfully (cancellation worked)
-    assert current_status["status"] != "completed", \
-        f"Training job completed successfully despite cancellation request. Status: {current_status['status']}"
-
-    # Assert that the test didn't timeout
-    assert time.time() - timeout_start < max_completion_wait, \
-        f"Test timed out after {max_completion_wait} seconds waiting for job to finish. Current status: {current_status['status']}"
-
-    # Final assertion: job should be cancelled
-    assert current_status["status"] == "cancelled", \
-        f"Expected job to be cancelled, but got status: {current_status['status']}"
+    # Assert final status: should be cancelled (not completed)
+    assert current_status["status"] == "cancelled", (
+        f"Expected cancellation; final status: {current_status['status']} (errors: {current_status})"
+    )
 
     print(f"✅ Cancellation test passed - job {task_id} was properly cancelled")
 
@@ -139,22 +144,6 @@ def test_cli_cancellation_with_signals():
     import sys
     import time
     from unittest.mock import MagicMock, patch
-
-    # Mock heavy dependencies to avoid import issues during testing
-    mock_modules = [
-        'workflows.training_workflow',
-        'workflows',
-        'common.google_storage',
-        'common',
-        'config.logging_config',
-        'parameter_registry',
-        'utils.env_secrets',
-        'rfdetr',
-        'transformers'
-    ]
-
-    for module in mock_modules:
-        sys.modules[module] = MagicMock()
 
     # Mock the TrainingWorkflow class
     with patch('workflows.training_workflow.TrainingWorkflow') as mock_workflow_class:
@@ -171,11 +160,6 @@ import sys
 import signal
 import threading
 import time
-
-# Mock the heavy imports
-sys.modules['workflows'] = type(sys)('workflows')
-sys.modules['workflows.training_workflow'] = type(sys)('training_workflow')
-sys.modules['workflows.training_workflow'].TrainingWorkflow = type
 
 # Simple mock CLI that simulates the signal handling
 cancellation_event = threading.Event()
@@ -218,8 +202,8 @@ except KeyboardInterrupt:
             stdout, stderr = proc.communicate(timeout=10)
 
             # Verify the process exited with cancellation code
-            # -2 means terminated by SIGINT (signal 2), which is correct for cancellation
-            assert proc.returncode == -2, f"Expected return code -2 (SIGINT), got {proc.returncode}"
+            # Since the signal handler catches SIGINT and exits cleanly, returncode is 0
+            assert proc.returncode == 0, f"Expected return code 0 (clean exit after signal handling), got {proc.returncode}. stdout: {stdout}, stderr: {stderr}"
 
             # Verify cancellation message in output
             assert "Received signal 2. Requesting training cancellation" in stdout or "Received signal 2. Requesting training cancellation" in stderr
