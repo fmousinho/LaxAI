@@ -48,6 +48,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import supervision as sv
 from augmentation import augment_images
+from common.background_mask import (BackgroundMaskDetector,
+                                    create_frame_generator_from_images)
+from common.detection import DetectionModel
+from common.google_storage import GCSPaths, get_storage
+from common.pipeline import Pipeline, PipelineStatus
+from common.pipeline_step import StepStatus
 from config.all_config import (DetectionConfig, detection_config, model_config,
                                training_config)
 from PIL import Image
@@ -56,13 +62,6 @@ from supervision.utils.image import crop_image
 from utils.id_generator import (create_aug_crop_id, create_crop_id,
                                 create_dataset_id, create_frame_id,
                                 create_run_id, create_video_id)
-
-from common.background_mask import (BackgroundMaskDetector,
-                                    create_frame_generator_from_images)
-from common.detection import DetectionModel
-from common.google_storage import GCSPaths, get_storage
-from common.pipeline import Pipeline, PipelineStatus
-from common.pipeline_step import StepStatus
 
 logger = logging.getLogger(__name__)
 
@@ -527,8 +526,10 @@ class DataPrepPipeline(Pipeline):
             # Generate structured video ID using ID generator
             video_guid = create_video_id()
             
-            video_folder = self.path_manager.get_path("imported_video", 
-                                                    video_id=video_guid).rstrip('/')
+            video_folder = self.path_manager.get_path("imported_video", video_id=video_guid)
+            if video_folder is None:
+                raise RuntimeError(f"Failed to generate video folder path for video_id: {video_guid}")
+            video_folder = video_folder.rstrip('/')
             
             imported_video_blob_name = f"{video_folder}/{video_guid}.mp4"
 
@@ -678,11 +679,12 @@ class DataPrepPipeline(Pipeline):
             parallel for efficiency. Failed uploads are logged but don't stop
             the pipeline.
         """
+
         all_detections = context.get("all_detections")
         frames_data = context.get("frames_data")
         video_guid = context.get("video_guid") 
-        frame_ids = context.get("frame_ids")
-        frames_guids = context.get("frames_guids")
+        frame_ids = context.get("frame_ids") or []
+        frames_guids = context.get("frames_guids") or []
 
         if not all_detections or not frames_data:
             logger.warning("No detection result or frames data found for crop extraction")
@@ -717,7 +719,6 @@ class DataPrepPipeline(Pipeline):
                     crops.append(crop_np)
                 
                 crops_by_frame.append(crops)
-
             # Second phase: Execute uploads in parallel
             failed_uploads, crops_uploaded = self._execute_parallel_operations(
                 upload_tasks, 
@@ -789,7 +790,7 @@ class DataPrepPipeline(Pipeline):
             for frame in crops_by_frame:
                 for crop in frame:
                       processed_crop = self.background_mask_detector.remove_background(
-                                crop_img, 
+                                crop, 
                                 input_format='RGB'
                             )
                       crop = processed_crop.copy()
