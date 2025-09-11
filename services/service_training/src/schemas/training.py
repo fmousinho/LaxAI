@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from parameter_registry import parameter_registry
 from pydantic import BaseModel, ConfigDict, Field
@@ -29,6 +29,7 @@ def generate_example_from_config() -> Dict[str, Any]:
                 raise ValueError(f"Failed to retrieve required training parameter '{param_name}' from config: {e}")
             # For optional parameters, include with None if config retrieval fails
             training_params[param_name] = None
+    
     example_data["training_params"] = training_params
     
     # Add model parameters with default values from config only
@@ -78,7 +79,9 @@ ModelParamsModel = None
 EvalParamsModel = None
 
 try:
-    from pydantic import create_model
+    from pydantic import ConfigDict, create_model
+
+    # Create the models without trying to add config for now
     TrainingParamsModel = create_model(
         "TrainingParams",
         **parameter_registry.generate_pydantic_fields_for_training()
@@ -91,7 +94,9 @@ try:
         "EvalParams",
         **parameter_registry.generate_pydantic_fields_for_eval()
     )
-except Exception:
+        
+except Exception as e:
+    print(f"Warning: Dynamic model creation failed: {e}")
     # Fallback if dynamic model creation fails
     pass
 
@@ -101,7 +106,14 @@ class TrainingRequest(BaseModel):
     
     model_config = ConfigDict(
         json_schema_extra={
-            "example": EXAMPLE_REQUEST
+            "example": {
+                "custom_name": "example_training_run",
+                "tenant_id": "tenant1",
+                "resume_from_checkpoint": False,
+                "training_params": EXAMPLE_REQUEST.get("training_params", {}),
+                "model_params": EXAMPLE_REQUEST.get("model_params", {}),
+                "eval_params": EXAMPLE_REQUEST.get("eval_params", {})
+            }
         }
     )
     
@@ -118,27 +130,18 @@ class TrainingRequest(BaseModel):
         description="Whether to resume from checkpoint if available"
     )
     
-    # Use proper nested models for API schema expansion
-    training_params: Optional[TrainingParamsModel] = Field(
-        default_factory=lambda: TrainingParamsModel() if TrainingParamsModel else None,
-        description="Training-specific parameters",
-        json_schema_extra={
-            "title": "Training Parameters"
-        }
+    # Use the actual dynamic models for proper schema generation
+    training_params: Optional[Any] = Field(
+        default=None,
+        description="Training-specific parameters"
     )
-    model_params: Optional[ModelParamsModel] = Field(
-        default_factory=lambda: ModelParamsModel() if ModelParamsModel else None,
-        description="Model architecture parameters",
-        json_schema_extra={
-            "title": "Model Parameters"
-        }
+    model_params: Optional[Any] = Field(
+        default=None,
+        description="Model architecture parameters"
     )
-    eval_params: Optional[EvalParamsModel] = Field(
-        default_factory=lambda: EvalParamsModel() if EvalParamsModel else None,
-        description="Evaluation parameters",
-        json_schema_extra={
-            "title": "Evaluation Parameters"
-        }
+    eval_params: Optional[Any] = Field(
+        default=None,
+        description="Evaluation parameters"
     )
 class TrainingResponse(BaseModel):
     """Training response model."""

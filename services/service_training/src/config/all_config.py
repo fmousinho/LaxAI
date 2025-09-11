@@ -3,11 +3,11 @@ Configuration classes for training and inference.
 Centralized location for all hyperparameters and configuration settings.
 """
 
-from dataclasses import dataclass, field
-from typing import Tuple, List, Optional
 import sys
-from datetime import datetime
 import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import List, Optional, Tuple
 
 
 def generate_unique_run_name() -> str:
@@ -87,7 +87,7 @@ class TrainingConfig:
     margin_decay_rate: float = 0.995  # Slower margin decay
     margin_change_threshold: float = 0.005  # More sensitive margin updates
     prefetch_factor: int = 4  # Increased prefetch for better GPU utilization
-    n_datasets_to_use: Optional[int] = None  # Number of datasets to use for training (None = use all)
+    n_datasets_to_use: Optional[int] = 0  # Number of datasets to use for training (0 = use all)
     # GPU memory management settings
     clear_memory_on_start: bool = True  # Clear GPU memory when training starts
     aggressive_memory_cleanup: bool = True  # Enable aggressive memory cleanup on errors

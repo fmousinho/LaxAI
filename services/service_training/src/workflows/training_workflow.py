@@ -104,7 +104,7 @@ class TrainingWorkflow:
                 datasets = []
 
             # Limit datasets if specified
-            if self.n_datasets_to_use and len(datasets) > self.n_datasets_to_use:
+            if self.n_datasets_to_use and 0 < self.n_datasets_to_use < len(datasets):
                 datasets = datasets[:self.n_datasets_to_use]
                 logger.info(f"Limited to {self.n_datasets_to_use} datasets: {datasets}")
 
