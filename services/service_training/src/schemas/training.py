@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from parameter_registry import parameter_registry
+from config.parameter_registry import parameter_registry
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -121,18 +121,25 @@ class TrainingRequest(BaseModel):
     # Use proper nested models for API schema expansion
     training_params: Optional[TrainingParamsModel] = Field(
         default_factory=lambda: TrainingParamsModel() if TrainingParamsModel else None,
-        description="Training-specific parameters"
+        description="Training-specific parameters",
+        json_schema_extra={
+            "title": "Training Parameters"
+        }
     )
     model_params: Optional[ModelParamsModel] = Field(
         default_factory=lambda: ModelParamsModel() if ModelParamsModel else None,
-        description="Model architecture parameters"  
+        description="Model architecture parameters",
+        json_schema_extra={
+            "title": "Model Parameters"
+        }
     )
     eval_params: Optional[EvalParamsModel] = Field(
         default_factory=lambda: EvalParamsModel() if EvalParamsModel else None,
-        description="Evaluation parameters"
+        description="Evaluation parameters",
+        json_schema_extra={
+            "title": "Evaluation Parameters"
+        }
     )
-
-
 class TrainingResponse(BaseModel):
     """Training response model."""
     

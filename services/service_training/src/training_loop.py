@@ -81,7 +81,7 @@ class Training:
         automatically validated. If any required hyperparameter is missing in both 
         kwargs and training_config, a ValueError will be raised.
         """
-        from parameter_registry import parameter_registry
+        from config.parameter_registry import parameter_registry
 
         # Clear GPU memory at start to recover from previous crashes
         if clear_memory_on_start:

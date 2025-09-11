@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from common.google_storage import GCSPaths, get_storage
 from config.logging_config import print_banner
-from parameter_registry import parameter_registry
+from config.parameter_registry import parameter_registry
 from scipy import datasets
 from train_pipeline import TrainPipeline
 from utils.cpu_memory import clear_cpu_memory, log_comprehensive_memory_stats
