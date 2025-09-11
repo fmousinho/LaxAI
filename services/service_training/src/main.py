@@ -3,7 +3,7 @@ Main FastAPI entry point for LaxAI.
 """
 import os
 
-from utils.env_secrets import setup_environment_secrets
+from shared_libs.utils.env_secrets import setup_environment_secrets
 
 setup_environment_secrets()
 

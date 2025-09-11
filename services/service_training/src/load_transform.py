@@ -12,10 +12,11 @@ import argparse
 import logging
 import os
 
-# Imports using relative imports since we're now in the src package
-from common.google_storage import get_storage
-from config.all_config import detection_config
 from dataprep_pipeline import DataPrepPipeline
+
+# Imports using relative imports since we're now in the src package
+from shared_libs.common.google_storage import get_storage
+from shared_libs.config.all_config import detection_config
 
 # IMPORTANT: Load environment variables and credentials FIRST
 # This must be imported before any modules that use GCS or WandB

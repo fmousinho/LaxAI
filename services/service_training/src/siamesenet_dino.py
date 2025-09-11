@@ -1,14 +1,13 @@
 import logging
 import os
-from typing import Tuple, Optional, Dict, cast
+from typing import Dict, Optional, Tuple, cast
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from config.all_config import model_config, training_config
 from huggingface_hub import login
 from transformers import AutoImageProcessor, AutoModel
-
-from config.all_config import model_config, training_config
 
 logger = logging.getLogger(__name__)
 

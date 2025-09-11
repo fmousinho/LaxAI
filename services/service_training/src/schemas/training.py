@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from config.parameter_registry import parameter_registry
+from parameter_registry import parameter_registry
 from pydantic import BaseModel, ConfigDict, Field
 
 

@@ -6,30 +6,14 @@ functions for the LaxAI system, providing a single point of access for all modul
 """
 
 # Import configuration instances and classes from all_config.py
-from .all_config import (
-    # Instances
-    model_config,
-    tracker_config,
-    training_config,
-    detection_config,
-    clustering_config,
-    player_config,
-    track_stitching_config,
-    transform_config,
-    background_mask_config,
-    debug_config,
-    # Classes
-    ModelConfig,
-    TrackerConfig,
-    TrainingConfig,
-    DetectionConfig,
-    ClusteringConfig,
-    PlayerConfig,
-    TrackStitchingConfig,
-    TransformConfig,
-    BackgroundMaskConfig,
-    DebugConfig
-)
+from .all_config import (BackgroundMaskConfig,  # Instances; Classes
+                         ClusteringConfig, DebugConfig, DetectionConfig,
+                         ModelConfig, PlayerConfig, TrackerConfig,
+                         TrackStitchingConfig, TrainingConfig, TransformConfig,
+                         background_mask_config, clustering_config,
+                         debug_config, detection_config, model_config,
+                         player_config, track_stitching_config, tracker_config,
+                         training_config, transform_config)
 
 # Lazily import transform-related functions and instances from transforms.py.
 # The transforms module imports heavy dependencies (OpenCV / torchvision).
@@ -83,7 +67,6 @@ def __dir__():
 
 # Import logging configuration (inferred from usage in dataprep_pipeline.py)
 from . import logging_config
-
 
 # Define the public API for the config package
 __all__ = [

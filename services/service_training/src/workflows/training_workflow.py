@@ -9,14 +9,16 @@ import os
 import threading
 from typing import Any, Dict, List, Optional
 
-from common.google_storage import GCSPaths, get_storage
 from config.logging_config import print_banner
-from config.parameter_registry import parameter_registry
+from parameter_registry import parameter_registry
 from scipy import datasets
 from train_pipeline import TrainPipeline
-from utils.cpu_memory import clear_cpu_memory, log_comprehensive_memory_stats
+
+from shared_libs.common.google_storage import GCSPaths, get_storage
+from shared_libs.utils.cpu_memory import (clear_cpu_memory,
+                                          log_comprehensive_memory_stats)
 # Absolute imports
-from utils.env_secrets import setup_environment_secrets
+from shared_libs.utils.env_secrets import setup_environment_secrets
 
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'

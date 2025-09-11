@@ -19,7 +19,7 @@ Key Features:
 Example:
     ```python
     from src.train.dataprep_pipeline import DataPrepPipeline
-    from config.all_config import detection_config
+    from shared_libs.config.all_config import detection_config
 
     # Initialize pipeline with background removal enabled
     pipeline = DataPrepPipeline(
@@ -47,21 +47,23 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import supervision as sv
-from augmentation import augment_images
-from common.background_mask import (BackgroundMaskDetector,
-                                    create_frame_generator_from_images)
-from common.detection import DetectionModel
-from common.google_storage import GCSPaths, get_storage
-from common.pipeline import Pipeline, PipelineStatus
-from common.pipeline_step import StepStatus
 from config.all_config import (DetectionConfig, detection_config, model_config,
                                training_config)
 from PIL import Image
 from supervision import Detections
 from supervision.utils.image import crop_image
-from utils.id_generator import (create_aug_crop_id, create_crop_id,
-                                create_dataset_id, create_frame_id,
-                                create_run_id, create_video_id)
+
+from shared_libs.common.background_mask import (
+    BackgroundMaskDetector, create_frame_generator_from_images)
+from shared_libs.common.detection import DetectionModel
+from shared_libs.common.google_storage import GCSPaths, get_storage
+from shared_libs.common.pipeline import Pipeline, PipelineStatus
+from shared_libs.common.pipeline_step import StepStatus
+from shared_libs.utils.id_generator import (create_aug_crop_id, create_crop_id,
+                                            create_dataset_id, create_frame_id,
+                                            create_run_id, create_video_id)
+
+from .augmentation import augment_images
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +139,7 @@ class DataPrepPipeline(Pipeline):
     Example:
         ```python
         from src.train.dataprep_pipeline import DataPrepPipeline
-        from config.all_config import detection_config
+        from shared_libs.config.all_config import detection_config
         
         # Initialize with background removal enabled
         pipeline = DataPrepPipeline(
@@ -200,7 +202,7 @@ class DataPrepPipeline(Pipeline):
         self.dataloader_workers = training_config.num_workers
         
         # Import transform_config to get the background removal setting
-        from config.all_config import transform_config
+        from .config.all_config import transform_config
 
         # Determine if grass mask should be enabled
         if enable_grass_mask is None:

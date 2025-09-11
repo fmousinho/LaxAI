@@ -12,10 +12,11 @@ import threading
 from typing import Optional
 
 from config.logging_config import print_banner
-from config.parameter_registry import parameter_registry
-# Absolute imports
-from utils.env_secrets import setup_environment_secrets
+from parameter_registry import parameter_registry
 from workflows.training_workflow import TrainingWorkflow
+
+# Absolute imports
+from shared_libs.utils.env_secrets import setup_environment_secrets
 
 # Setup environment
 setup_environment_secrets()
