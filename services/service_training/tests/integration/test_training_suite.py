@@ -473,11 +473,11 @@ def test_train_all_resnet_with_checkpoint_verification():
             model_kwargs={"model_class_module": "siamesenet", "model_class_str": "SiameseNet"},
             n_datasets_to_use=2,
         )
-
         # Verify training completed successfully
         assert isinstance(results, dict)
         assert results.get("status") == "completed"
-        assert results.get("steps_completed", 0) == 6  # 3 steps per dataset for 2 datasets
+        # Single pipeline now runs across multiple datasets; step count reflects pipeline's 3 core steps.
+        assert results.get("steps_completed", 0) == 3  # create_dataset, train_model, evaluate_model
 
         # Wait 10 seconds for wandb synchronization, then clean up all test artifacts
         import wandb
@@ -554,36 +554,24 @@ def test_train_all_resnet_with_checkpoint_verification():
 
         except Exception as e:
             print(f"⚠️ Failed to clean up test artifacts: {e}")
-
-            # Clean up checkpoint artifacts
+            # Attempt secondary checkpoint cleanup even if primary failed
             try:
                 checkpoint_type_obj = api.artifact_type("model_checkpoint", project=wandb_config.project)
                 checkpoint_collections = checkpoint_type_obj.collections()
-
                 for collection in checkpoint_collections:
                     if collection.name.startswith("test-") or run_name in collection.name:
                         try:
                             artifacts = list(collection.artifacts())
-                            deleted_count = 0
                             for artifact in artifacts:
                                 try:
                                     artifact.delete()
-                                    deleted_count += 1
                                     print(f"🧹 Cleaned up checkpoint artifact: {artifact.name}")
-                                except Exception as e:
-                                    print(f"⚠️ Failed to delete checkpoint artifact {artifact.name}: {e}")
-
-                            if deleted_count > 0:
-                                print(f"🧹 Cleaned up {deleted_count} checkpoint artifacts from collection: {collection.name}")
-                        except Exception as e:
-                            print(f"⚠️ Failed to clean up checkpoint collection '{collection.name}': {e}")
-
-            except Exception as e:
-                print(f"⚠️ Failed to clean up checkpoint artifacts: {e}")
-
-        except Exception as e:
-            print(f"⚠️ Failed to clean up test artifacts: {e}")
-
+                                except Exception as ce:
+                                    print(f"⚠️ Failed to delete checkpoint artifact {artifact.name}: {ce}")
+                        except Exception as ce_outer:
+                            print(f"⚠️ Failed to clean up checkpoint collection '{collection.name}': {ce_outer}")
+            except Exception as ck_err:
+                print(f"⚠️ Failed to clean up checkpoint artifacts: {ck_err}")
 
     except Exception as e:
         pytest.fail(f"ResNet end-to-end test with checkpoint verification failed: {type(e).__name__}: {e}")

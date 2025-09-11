@@ -1,9 +1,14 @@
-import numpy as np
-import pytest
+"""Helper classes and dummy datasets for training-related tests.
+
+Renamed from test_training.py to training_helpers.py to avoid pytest collecting
+two different modules named test_training (integration vs unit) which caused
+import file mismatch errors during test discovery.
+"""
+
+import numpy as np  # noqa: F401  (retained for potential future helpers)
 import torch
 
 from services.service_training.src.siamesenet import SiameseNet
-from services.service_training.src.training_loop import Training
 
 
 class DummyTripletDataset(torch.utils.data.Dataset):
@@ -40,12 +45,11 @@ class DummyEvalDataset(torch.utils.data.Dataset):
 
 class DummyModel(SiameseNet):
     """Wrapper around SiameseNet for testing with simplified parameters."""
-    
+
     def __init__(self, dim=4, emb_dim=2):
         # Initialize with test-friendly parameters
-        # Force consistent architecture for testing
         super().__init__(
             embedding_dim=emb_dim,
-            use_cbam=False,  # Disable CBAM for faster testing
+            use_cbam=False,
             dropout_rate=0.0
         )

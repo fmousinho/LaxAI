@@ -49,18 +49,20 @@ def execute_training_task(task_id: str, training_request: TrainingRequest):
             n_datasets_to_use=getattr(training_request, 'n_datasets_to_use', None)
         )
 
-        # Execute the workflow
+        # Execute the workflow (single pipeline)
         result = workflow.execute()
 
-        # Update task with final results
+        # Map workflow status directly
+        final_status = result.get("status", "completed")
+
         training_tasks[task_id].update({
-            "status": "completed" if result["successful_runs"] > 0 else "failed",
-            "progress": 100,
-            "datasets_found": result["datasets_found"],
-            "successful_runs": result["successful_runs"],
-            "total_runs": result["total_runs"],
-            "training_results": result["training_results"],
-            "run_guids": result.get("run_guids", []),  # Store run_guids for cancellation
+            "status": final_status,
+            "progress": 100 if final_status == "completed" else None,
+            "datasets_found": result.get("datasets_found", 0),
+            "steps_completed": result.get("steps_completed", 0),
+            "dataset_mode": result.get("dataset_mode"),
+            "run_guids": result.get("run_guids", []),
+            "pipeline_result": result.get("pipeline_result"),
             "updated_at": datetime.utcnow().isoformat()
         })
 

@@ -113,168 +113,106 @@ class TrainingWorkflow:
             raise
 
     def execute(self) -> Dict[str, Any]:
-        """
-        Execute the complete training workflow.
+        """Execute training using a SINGLE TrainPipeline over all datasets.
 
-        Returns:
-            Dictionary containing training results and metadata.
+        The previous implementation created one pipeline per dataset and aggregated
+        their results. The TrainPipeline already supports multi-dataset mode by
+        accepting a list of dataset names. We now:
+        - Discover all datasets (optionally truncated by n_datasets_to_use)
+        - Instantiate exactly one TrainPipeline whose pipeline_name (and external
+          identity) is self.pipeline_name
+        - Pass either a single dataset string or list of dataset strings to .run()
+        - Return a flattened summary without per-dataset training_results
         """
-        logger.info(f"--- Starting Training Workflow for Tenant: {self.tenant_id} ---")
+        logger.info(f"--- Starting Training Workflow (single-pipeline) Tenant: {self.tenant_id} ---")
         logger.info(f"Training configuration: {self.training_kwargs}")
         logger.info(f"Model configuration: {self.model_kwargs}")
 
         try:
-            # Discover available datasets
             datasets = self.discover_datasets()
-
             if not datasets:
                 logger.warning("No datasets found for training")
                 return {
                     "status": "completed",
                     "datasets_found": 0,
-                    "training_runs": [],
-                    "message": "No datasets available for training"
+                    "steps_completed": 0,
+                    "run_id": self.pipeline_name,
+                    "pipeline_name": self.pipeline_name,
+                    "run_guids": [],
+                    "message": "No datasets available for training",
+                    "custom_name": self.custom_name,
+                    "dataset_mode": "none"
                 }
 
-            # Execute training for each dataset
-            training_results = []
-            successful_runs = 0
+            dataset_mode = "multi" if len(datasets) > 1 else "single"
 
-            for dataset_name in datasets:
-                try:
-                    logger.info(f"Starting training for dataset: {dataset_name}")
+            # Merge kwargs for TrainPipeline (avoid duplicate pipeline_name)
+            all_kwargs = {**self.training_kwargs, **self.model_kwargs, **self.eval_kwargs}
+            all_kwargs.pop("pipeline_name", None)
 
-                    result = self._run_training_for_dataset(dataset_name)
-                    training_results.append(result)
-
-                    if result.get("status") == "success":
-                        successful_runs += 1
-
-                except InterruptedError:
-                    # Handle cancellation gracefully
-                    logger.info(f"Training cancelled during dataset {dataset_name}")
-                    training_results.append({
-                        "dataset": dataset_name,
-                        "status": "cancelled",
-                        "error": "Training cancelled by user request"
-                    })
-                    break  # Stop processing remaining datasets
-
-                except Exception as e:
-                    logger.error(f"Training failed for dataset {dataset_name}: {e}")
-                    training_results.append({
-                        "dataset": dataset_name,
-                        "status": "failed",
-                        "error": str(e)
-                    })
-
-            # Aggregate steps completed across all dataset runs
-            steps_completed_total = 0
-            run_guids = []
-            for r in training_results:
-                try:
-                    steps_completed_total += int(r.get("result", {}).get("steps_completed", 0))
-                except Exception:
-                    # Non-standard result entry
-                    continue
-                
-                # Collect run_guids for cancellation
-                if r.get("run_guid"):
-                    run_guids.append(r["run_guid"])
-
-            # Return summary
-            return {
-                "status": "completed",
-                "datasets_found": len(datasets),
-                "successful_runs": successful_runs,
-                "total_runs": len(training_results),
-                "steps_completed": steps_completed_total,
-                "training_results": training_results,
-                "run_guids": run_guids,  # Return all run_guids for cancellation
-                "custom_name": self.custom_name
-            }
-
-        except InterruptedError:
-            # Handle workflow-level cancellation
-            logger.info("Training workflow cancelled at top level")
-            return {
-                "status": "cancelled",
-                "datasets_found": 0,
-                "successful_runs": 0,
-                "total_runs": 0,
-                "steps_completed": 0,
-                "training_results": [],
-                "custom_name": self.custom_name,
-                "cancelled": True,
-                "error": "Training workflow cancelled by user request"
-            }
-        except Exception as e:
-            logger.error(f"Training workflow failed: {e}")
-            raise
-
-    def _run_training_for_dataset(self, dataset_name: str) -> Dict[str, Any]:
-        """
-        Run training pipeline for a specific dataset.
-
-        Args:
-            dataset_name: Name of the dataset to train on.
-
-        Returns:
-            Dictionary containing training result for this dataset.
-        """
-        try:
-            # Combine all kwargs for TrainPipeline
-            all_kwargs = {
-                **self.training_kwargs,
-                **self.model_kwargs,
-                **self.eval_kwargs
-            }
-
-            # Remove duplicate pipeline_name if present
-            if 'pipeline_name' in all_kwargs:
-                logger.debug("Removing duplicate 'pipeline_name' from merged kwargs")
-                all_kwargs.pop('pipeline_name')
-
-            # Create training pipeline
+            # Create single pipeline; override run_guid with external identity (task_id/pipeline_name)
+            pipeline_identity = self.pipeline_name or "training_run"
             train_pipeline = TrainPipeline(
                 tenant_id=self.tenant_id,
                 verbose=self.verbose,
                 save_intermediate=self.save_intermediate,
-                pipeline_name=f"{self.pipeline_name}_{dataset_name}",
+                pipeline_name=pipeline_identity,  # Also used as identity
+                run_guid=pipeline_identity,
                 **all_kwargs
             )
 
-            # Extract run_guid immediately after pipeline creation (before run())
-            pipeline_run_guid = train_pipeline.run_guid
-
-            # Execute the training (pipeline handles cancellation automatically)
-            result = train_pipeline.run(
-                dataset_name=[dataset_name],
-                resume_from_checkpoint=self.resume_from_checkpoint
+            # Execute once over all datasets (list or single item)
+            dataset_arg = datasets if dataset_mode == "multi" else datasets[0]
+            pipeline_result = train_pipeline.run(
+                dataset_name=dataset_arg,
+                resume_from_checkpoint=self.resume_from_checkpoint,
+                wandb_run_tags=self.wandb_tags,
+                custom_name=self.custom_name,
             )
 
+            status = pipeline_result.get("status", "unknown")
+            steps_completed = int(pipeline_result.get("steps_completed", 0))
+
             return {
-                "dataset": dataset_name,
-                "status": "success",
-                "result": result,
-                "run_guid": pipeline_run_guid  # Return the GUID for cancellation
+                "status": "completed" if status == "completed" else status,
+                "datasets_found": len(datasets),
+                "steps_completed": steps_completed,
+                "run_id": pipeline_identity,
+                "pipeline_name": pipeline_identity,
+                "run_guids": [train_pipeline.run_guid],  # type: ignore[attr-defined]
+                "custom_name": self.custom_name,
+                "dataset_mode": dataset_mode,
+                "pipeline_result": pipeline_result,
             }
 
         except InterruptedError:
-            # Handle cancellation during dataset training
-            logger.info(f"Dataset training cancelled for {dataset_name}")
+            logger.info("Training workflow cancelled (single-pipeline mode)")
             return {
-                "dataset": dataset_name,
                 "status": "cancelled",
-                "error": "Dataset training cancelled by user request"
+                "datasets_found": 0,
+                "steps_completed": 0,
+                "run_id": self.pipeline_name,
+                "pipeline_name": self.pipeline_name,
+                "run_guids": [self.pipeline_name],
+                "custom_name": self.custom_name,
+                "dataset_mode": "unknown",
+                "error": "Training workflow cancelled by user request"
             }
         except Exception as e:
-            logger.error(f"Training failed for dataset {dataset_name}: {e}")
+            logger.error(f"Training workflow failed: {e}")
             return {
-                "dataset": dataset_name,
                 "status": "failed",
+                "datasets_found": 0,
+                "steps_completed": 0,
+                "run_id": self.pipeline_name,
+                "pipeline_name": self.pipeline_name,
+                "run_guids": [self.pipeline_name],
+                "custom_name": self.custom_name,
+                "dataset_mode": "unknown",
                 "error": str(e)
             }
+
+    # Removed _run_training_for_dataset: single pipeline now handles all datasets.
 
 
 

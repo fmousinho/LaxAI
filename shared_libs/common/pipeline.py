@@ -136,6 +136,7 @@ class Pipeline:
         verbose: bool = False,
         save_intermediate: bool = False,
         pipeline_name: str = "default_name",
+        run_guid: Optional[str] = None,
     ):
         """
         Initialize the pipeline.
@@ -159,8 +160,8 @@ class Pipeline:
         self.save_intermediate = save_intermediate
         self.step_definitions = step_definitions
         self.pipeline_name = pipeline_name
-
-        self.run_guid = str(uuid.uuid4())
+        # Allow explicit run_guid override so external systems (API/task manager) can unify IDs.
+        self.run_guid = run_guid if run_guid else str(uuid.uuid4())
         self.run_folder = f"process/{pipeline_name}/run_{self.run_guid}"
         self.status = PipelineStatus.NOT_STARTED
 

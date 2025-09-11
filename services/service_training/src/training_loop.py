@@ -547,6 +547,20 @@ class Training:
                     if (i + 1) % BATCHES_PER_LOG_MSG == 0:
                         logger.info(f"Training Batch {i+1}/{ttl_batches}")
 
+                    # ------------------------------------------------------------------
+                    # Mid-epoch cancellation check
+                    # The web/API cancellation sets a stop flag on the Pipeline which
+                    # propagates here via stop_callback. Previously we only checked at
+                    # epoch boundaries, causing long waits for large epochs. We now
+                    # check every batch (fast) but still keep operations lightweight.
+                    # ------------------------------------------------------------------
+                    if stop_callback and stop_callback():
+                        logger.info(
+                            f"Training cancelled by stop_callback mid-epoch at epoch {epoch + 1}, batch {i + 1}"
+                        )
+                        # Raise InterruptedError to trigger upstream cleanup logic
+                        raise InterruptedError("Training cancelled by external request (mid-epoch)")
+
                     # Move tensors to device with non_blocking for async transfer
                     anchor = anchor.to(self.device, non_blocking=True)
                     positive = positive.to(self.device, non_blocking=True)
