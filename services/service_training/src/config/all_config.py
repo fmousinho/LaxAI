@@ -44,7 +44,7 @@ class ModelConfig:
     resnet_conv_padding: int = 1
     resnet_conv_bias: bool = False  # Whether to use bias in the first conv
     enable_grass_mask: bool = False  
-    model_class_module: str = "train.siamesenet_dino"  # Module where the model class is defined
+    model_class_module: str = "siamesenet_dino"  # Module where the model class is defined
     model_class_str: str = "SiameseNet"  # Name of the model class
 
     # ImageNet normalization values (for pretrained ResNet backbone)

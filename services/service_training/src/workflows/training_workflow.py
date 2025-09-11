@@ -103,10 +103,16 @@ class TrainingWorkflow:
                 logger.warning(f"Could not list datasets from {dataset_path}: {e}")
                 datasets = []
 
-            # Limit datasets if specified
-            if self.n_datasets_to_use and 0 < self.n_datasets_to_use < len(datasets):
+            # Limit datasets if specified (0 means use all datasets)
+            logger.info(f"n_datasets_to_use parameter: {self.n_datasets_to_use}")
+            if self.n_datasets_to_use and self.n_datasets_to_use > 0 and self.n_datasets_to_use < len(datasets):
+                original_count = len(datasets)
                 datasets = datasets[:self.n_datasets_to_use]
-                logger.info(f"Limited to {self.n_datasets_to_use} datasets: {datasets}")
+                logger.info(f"🎯 LIMITED: Reduced from {original_count} to {self.n_datasets_to_use} datasets: {datasets}")
+            elif self.n_datasets_to_use and self.n_datasets_to_use > 0:
+                logger.info(f"⚠️  Requested {self.n_datasets_to_use} datasets, but only {len(datasets)} available")
+            else:
+                logger.info(f"📋 Using all {len(datasets)} datasets (n_datasets_to_use={self.n_datasets_to_use})")
 
             return datasets
 

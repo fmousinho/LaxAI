@@ -1,6 +1,7 @@
 """Training API endpoints for LaxAI service."""
 
 import asyncio
+import logging
 import threading
 import uuid
 from datetime import datetime
@@ -12,6 +13,8 @@ from schemas.training import TrainingRequest, TrainingResponse, TrainingStatus
 from workflows.training_workflow import TrainingWorkflow
 
 from shared_libs.common.pipeline import stop_pipeline, stop_pipeline_by_guid
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/train", tags=["training"])
 
@@ -34,6 +37,10 @@ def execute_training_task(task_id: str, training_request: TrainingRequest):
         training_kwargs = training_request.training_params or {}
         model_kwargs = training_request.model_params or {}
         eval_kwargs = training_request.eval_params or {}
+        
+        # Extract n_datasets_to_use from training_params
+        n_datasets_to_use = training_kwargs.get('n_datasets_to_use', None)
+        logger.info(f"🎯 API received n_datasets_to_use: {n_datasets_to_use} (type: {type(n_datasets_to_use)})")
 
         # Create and execute training workflow
         workflow = TrainingWorkflow(
@@ -47,7 +54,7 @@ def execute_training_task(task_id: str, training_request: TrainingRequest):
             model_kwargs=model_kwargs,
             eval_kwargs=eval_kwargs,
             pipeline_name=f"api_{task_id}",
-            n_datasets_to_use=getattr(training_request, 'n_datasets_to_use', None)
+            n_datasets_to_use=n_datasets_to_use
         )
 
         # Execute the workflow (single pipeline)
