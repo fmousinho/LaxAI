@@ -43,10 +43,9 @@ class TrainingWorkflow:
                  model_kwargs: Optional[Dict[str, Any]] = None,
                  pipeline_name: Optional[str] = "default",
                  n_datasets_to_use: Optional[int] = None,
-                 eval_kwargs: Optional[Dict[str, Any]] = None,
-                 cancellation_event: Optional[threading.Event] = None):
+                 eval_kwargs: Optional[Dict[str, Any]] = None):
         """
-        Initialize the training workflow with cancellation support.
+        Initialize the training workflow.
 
         Args:
             tenant_id: The tenant ID for GCS operations.
@@ -60,7 +59,6 @@ class TrainingWorkflow:
             pipeline_name: Unique name for the pipeline.
             n_datasets_to_use: Limit number of datasets to use.
             eval_kwargs: Dictionary of evaluation parameters.
-            cancellation_event: Threading event for cancellation signaling.
         """
         self.tenant_id = tenant_id
         self.verbose = verbose
@@ -73,26 +71,6 @@ class TrainingWorkflow:
         self.pipeline_name = pipeline_name
         self.n_datasets_to_use = n_datasets_to_use
         self.eval_kwargs = eval_kwargs or {}
-        
-        # Cancellation support
-        self.cancellation_event = cancellation_event or threading.Event()
-        self._cancelled = False
-
-    def request_cancellation(self):
-        """Request cancellation of the training workflow."""
-        logger.info(f"TrainingWorkflow: Cancellation requested for {self.pipeline_name}")
-        self.cancellation_event.set()
-        self._cancelled = True
-
-    def is_cancelled(self) -> bool:
-        """Check if cancellation has been requested."""
-        return self.cancellation_event.is_set() or self._cancelled
-
-    def _check_cancellation(self):
-        """Check for cancellation and raise exception if cancelled."""
-        if self.is_cancelled():
-            logger.info(f"TrainingWorkflow: Cancellation detected, stopping workflow {self.pipeline_name}")
-            raise InterruptedError("Training workflow cancelled by user request")
 
     def discover_datasets(self) -> List[str]:
         """
@@ -136,7 +114,7 @@ class TrainingWorkflow:
 
     def execute(self) -> Dict[str, Any]:
         """
-        Execute the complete training workflow with cancellation support.
+        Execute the complete training workflow.
 
         Returns:
             Dictionary containing training results and metadata.
@@ -146,9 +124,6 @@ class TrainingWorkflow:
         logger.info(f"Model configuration: {self.model_kwargs}")
 
         try:
-            # Check for immediate cancellation
-            self._check_cancellation()
-
             # Discover available datasets
             datasets = self.discover_datasets()
 
@@ -167,9 +142,6 @@ class TrainingWorkflow:
 
             for dataset_name in datasets:
                 try:
-                    # Check cancellation before each dataset
-                    self._check_cancellation()
-                    
                     logger.info(f"Starting training for dataset: {dataset_name}")
 
                     result = self._run_training_for_dataset(dataset_name)
@@ -196,9 +168,6 @@ class TrainingWorkflow:
                         "error": str(e)
                     })
 
-            # Check cancellation before final aggregation
-            self._check_cancellation()
-
             # Aggregate steps completed across all dataset runs
             steps_completed_total = 0
             for r in training_results:
@@ -210,14 +179,13 @@ class TrainingWorkflow:
 
             # Return summary
             return {
-                "status": "completed" if not self.is_cancelled() else "cancelled",
+                "status": "completed",
                 "datasets_found": len(datasets),
                 "successful_runs": successful_runs,
                 "total_runs": len(training_results),
                 "steps_completed": steps_completed_total,
                 "training_results": training_results,
-                "custom_name": self.custom_name,
-                "cancelled": self.is_cancelled()
+                "custom_name": self.custom_name
             }
 
         except InterruptedError:
@@ -240,7 +208,7 @@ class TrainingWorkflow:
 
     def _run_training_for_dataset(self, dataset_name: str) -> Dict[str, Any]:
         """
-        Run training pipeline for a specific dataset with cancellation support.
+        Run training pipeline for a specific dataset.
 
         Args:
             dataset_name: Name of the dataset to train on.
@@ -249,9 +217,6 @@ class TrainingWorkflow:
             Dictionary containing training result for this dataset.
         """
         try:
-            # Check cancellation before starting dataset training
-            self._check_cancellation()
-
             # Combine all kwargs for TrainPipeline
             all_kwargs = {
                 **self.training_kwargs,
@@ -264,7 +229,7 @@ class TrainingWorkflow:
                 logger.debug("Removing duplicate 'pipeline_name' from merged kwargs")
                 all_kwargs.pop('pipeline_name')
 
-            # Create training pipeline with cancellation support
+            # Create training pipeline
             train_pipeline = TrainPipeline(
                 tenant_id=self.tenant_id,
                 verbose=self.verbose,
@@ -273,15 +238,10 @@ class TrainingWorkflow:
                 **all_kwargs
             )
 
-            # Add cancellation callback to pipeline
-            def cancellation_callback():
-                return self.is_cancelled()
-
-            # Execute the training with cancellation support
+            # Execute the training (pipeline handles cancellation automatically)
             result = train_pipeline.run(
                 dataset_name=[dataset_name],
-                resume_from_checkpoint=self.resume_from_checkpoint,
-                cancellation_callback=cancellation_callback
+                resume_from_checkpoint=self.resume_from_checkpoint
             )
 
             return {

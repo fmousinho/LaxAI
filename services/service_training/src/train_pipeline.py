@@ -47,8 +47,7 @@ class TrainPipeline(Pipeline):
         self.training_kwargs = training_kwargs
         
         # Add cancellation support
-        self.cancellation_callback = None
-
+        # Removed cancellation_callback as we now use base Pipeline cancellation
 
         step_definitions = {
             "create_dataset": {
@@ -85,7 +84,7 @@ class TrainPipeline(Pipeline):
             save_intermediate=save_intermediate
         )
 
-    def run(self, dataset_name: str | List[str], resume_from_checkpoint: bool = True, wandb_run_tags: Optional[List[str]] = None, custom_name: str = "run", cancellation_callback: Optional[Callable[[], bool]] = None) -> Dict[str, Any]:
+    def run(self, dataset_name: str | List[str], resume_from_checkpoint: bool = True, wandb_run_tags: Optional[List[str]] = None, custom_name: str = "run") -> Dict[str, Any]:
         """
         Execute the complete training pipeline for a given dataset.
 
@@ -94,13 +93,10 @@ class TrainPipeline(Pipeline):
             resume_from_checkpoint: Whether to check for and resume from an existing wandb checkpoint artifact.
             wandb_run_tags: Optional tags for the wandb run.
             custom_name: Custom name for the training run (used in wandb and logging).
-            cancellation_callback: Optional callback function to check if training should be cancelled.
 
         Returns:
             Dictionary with pipeline results and statistics.
         """
-        # Store the cancellation callback
-        self.cancellation_callback = cancellation_callback
         if wandb_config.enabled:
             # Initialize WandB with comprehensive configuration for the entire pipeline
             config = {
@@ -167,22 +163,6 @@ class TrainPipeline(Pipeline):
             wandb_logger.finish()
             # Re-raise to allow callers/tests to detect specific errors
             raise
-
-
-    def is_stop_requested(self) -> bool:
-        """
-        Check if a stop has been requested, including external cancellation callback.
-        """
-        # First check the base pipeline's stop request
-        if super().is_stop_requested():
-            return True
-
-        # Then check the external cancellation callback if provided
-        if self.cancellation_callback and self.cancellation_callback():
-            logger.debug("Training cancelled by external cancellation callback")
-            return True
-
-        return False
 
 
     def _create_dataset(self, context: dict) -> Dict[str, Any]:
