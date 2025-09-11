@@ -16,61 +16,46 @@ def generate_example_from_config() -> Dict[str, Any]:
         "resume_from_checkpoint": False
     }
     
-    # Add training parameters with default values from parameter registry
+        # Add training parameters with default values from config only
     training_params = {}
     for param_name, param in parameter_registry.get_training_parameters().items():
-        # Use the parameter's default value or a sensible example
-        if param_name == "n_datasets_to_use":
-            training_params[param_name] = 2
-        elif param_name == "learning_rate":
-            training_params[param_name] = 0.001
-        elif param_name == "batch_size":
-            training_params[param_name] = 32
-        elif param_name == "epochs":
-            training_params[param_name] = 100
-        else:
-            # Use a generic default based on parameter type
-            if param.type.name == "INT":
-                training_params[param_name] = 1
-            elif param.type.name == "FLOAT":
-                training_params[param_name] = 0.1
-            elif param.type.name == "BOOL":
-                training_params[param_name] = False
-            elif param.type.name == "STR":
-                training_params[param_name] = "default_value"
-            elif param.type.name == "LIST_STR":
-                training_params[param_name] = ["example"]
+        try:
+            # Get the actual default value from config
+            config_value = parameter_registry.get_config_value(param_name)
+            if config_value is not None:
+                training_params[param_name] = config_value
+            else:
+                raise ValueError(f"Required training parameter '{param_name}' not found in config at {param.config_path}")
+        except Exception as e:
+            raise ValueError(f"Failed to retrieve training parameter '{param_name}' from config: {e}")
     example_data["training_params"] = training_params
     
-    # Add model parameters with default values
+    # Add model parameters with default values from config only
     model_params = {}
     for param_name, param in parameter_registry.get_model_parameters().items():
-        if param.type.name == "INT":
-            model_params[param_name] = 512
-        elif param.type.name == "FLOAT":
-            model_params[param_name] = 0.1
-        elif param.type.name == "BOOL":
-            model_params[param_name] = True
-        elif param.type.name == "STR":
-            model_params[param_name] = "default"
-        elif param.type.name == "LIST_STR":
-            model_params[param_name] = ["example"]
+        try:
+            # Get the actual default value from config
+            config_value = parameter_registry.get_config_value(param_name)
+            if config_value is None:
+                raise ValueError(f"Required parameter '{param_name}' not found in config")
+            model_params[param_name] = config_value
+        except Exception as e:
+            raise ValueError(f"Failed to get config value for model parameter '{param_name}': {e}")
     example_data["model_params"] = model_params
     
-    # Add eval parameters with default values
+    # Add eval parameters with default values from config only
     eval_params = {}
     try:
         for param_name, param in parameter_registry.eval_parameters.items():
-            if param.type.name == "INT":
-                eval_params[param_name] = 10
-            elif param.type.name == "FLOAT":
-                eval_params[param_name] = 0.5
-            elif param.type.name == "BOOL":
-                eval_params[param_name] = True
-            elif param.type.name == "STR":
-                eval_params[param_name] = "example"
-            elif param.type.name == "LIST_STR":
-                eval_params[param_name] = ["example"]
+            try:
+                # Get the actual default value from config
+                config_value = parameter_registry.get_config_value(param_name)
+                if config_value is not None:
+                    eval_params[param_name] = config_value
+                else:
+                    raise ValueError(f"Required eval parameter '{param_name}' not found in config at {param.config_path}")
+            except Exception as e:
+                raise ValueError(f"Failed to retrieve eval parameter '{param_name}' from config: {e}")
     except AttributeError:
         # If eval_parameters not available, use empty dict
         pass
