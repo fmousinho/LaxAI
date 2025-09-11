@@ -23,10 +23,17 @@ from typing import Any, Dict, Optional
 import pytest
 import torch
 
+# Load environment secrets before running tests
+try:
+    from shared_libs.utils.env_secrets import setup_environment_secrets
+    setup_environment_secrets()
+except Exception as e:
+    print(f"Warning: Could not load environment secrets: {e}")
+
 
 def load_wandb_logger_module():
     """Load the WandB logger module dynamically."""
-    path = os.path.join('src', 'train', 'wandb_logger.py')
+    path = os.path.join('services', 'service_training', 'src', 'wandb_logger.py')
     spec = importlib.util.spec_from_file_location('wandb_logger_mod', path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Could not load spec from {path}")
