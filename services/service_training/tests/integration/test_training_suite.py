@@ -504,12 +504,13 @@ def test_train_all_resnet_with_checkpoint_verification():
                                                 # In wandb, we can use the API to remove aliases
                                                 if hasattr(artifact, 'aliases') and artifact.aliases:
                                                     try:
-                                                        # Try to remove aliases using the collection
-                                                        collection = artifact.collection()
+                                                        # Try to remove aliases
                                                         for alias in artifact.aliases[:]:  # Copy the list to avoid modification issues
                                                             try:
-                                                                # Remove alias by setting it to None or empty
-                                                                collection.set_aliases({alias: None})
+                                                                # Remove alias
+                                                                if alias in artifact.aliases:
+                                                                    artifact.aliases.remove(alias)
+                                                                    artifact.save()
                                                                 print(f"ℹ️ Removed alias '{alias}' from {artifact.name}")
                                                             except Exception as alias_error:
                                                                 print(f"⚠️ Failed to remove alias '{alias}' from {artifact.name}: {alias_error}")
@@ -572,6 +573,11 @@ def test_train_all_with_dino_memory_stable():
 
     setup_environment_secrets()
 
+    import time
+
+    import wandb
+    from shared_libs.config.all_config import wandb_config
+
     # Setup memory monitoring
     process = psutil.Process()
     gc.collect()
@@ -610,6 +616,91 @@ def test_train_all_with_dino_memory_stable():
         # Relaxed memory leak check - allow up to 500MB for full workflow (DINO + evaluation + checkpoints)
         # This accounts for legitimate memory usage in model loading, dataset processing, training, and evaluation
         assert memory_delta <= 500, f"Memory usage increased by {memory_delta:.1f}MB, within acceptable range"
+
+        # Wait 10 seconds for wandb synchronization, then clean up all test artifacts
+        print("⏳ Waiting 10 seconds for wandb synchronization...")
+        time.sleep(10)
+        print("✅ Finished waiting for wandb sync")
+
+        # Clean up all test artifacts that start with "test-"
+        try:
+            api = wandb.Api()
+            # Get all artifact types
+            artifact_types = api.artifact_types(project=wandb_config.project)
+            total_deleted = 0
+            for artifact_type in artifact_types:
+                try:
+                    # Get all collections for this artifact type
+                    collections = artifact_type.collections()
+                    for collection in collections:
+                        try:
+                            # Check if collection name starts with "test-"
+                            if collection.name.startswith("test-"):
+                                artifacts = list(collection.artifacts())
+                                for artifact in artifacts:
+                                    try:
+                                        # Try to delete the artifact directly
+                                        artifact.delete()
+                                        print(f"🧹 Cleaned up test artifact: {artifact.name}")
+                                        total_deleted += 1
+                                    except Exception as e:
+                                        error_msg = str(e).lower()
+                                        # If deletion failed due to alias, try to remove alias first
+                                        if "alias" in error_msg or "409" in str(e):
+                                            try:
+                                                print(f"⚠️ Artifact {artifact.name} has alias, attempting to remove alias and retry...")
+                                                # Try to remove aliases using the collection
+                                                if hasattr(artifact, 'aliases') and artifact.aliases:
+                                                    try:
+                                                        # Try to remove aliases by setting it to None or empty
+                                                        # In wandb, we can use the API to remove aliases
+                                                        for alias in artifact.aliases[:]:  # Copy the list to avoid modification issues
+                                                            try:
+                                                                # Remove alias by setting it to None or empty
+                                                                if alias in artifact.aliases:
+                                                                    artifact.aliases.remove(alias)
+                                                                    artifact.save()
+                                                                print(f"ℹ️ Removed alias '{alias}' from {artifact.name}")
+                                                            except Exception as alias_error:
+                                                                print(f"⚠️ Failed to remove alias '{alias}' from {artifact.name}: {alias_error}")
+                                                    except Exception as collection_error:
+                                                        print(f"⚠️ Failed to access collection for {artifact.name}: {collection_error}")
+                                                # Try to delete again after removing aliases
+                                                artifact.delete()
+                                                print(f"🧹 Cleaned up test artifact (after alias removal): {artifact.name}")
+                                                total_deleted += 1
+                                            except Exception as retry_error:
+                                                print(f"⚠️ Failed to delete test artifact {artifact.name} even after alias removal: {retry_error}")
+                                        else:
+                                            print(f"⚠️ Failed to delete test artifact {artifact.name}: {e}")
+                        except Exception as e:
+                            print(f"⚠️ Failed to access collection {collection.name}: {e}")
+                except Exception as e:
+                    print(f"⚠️ Failed to access artifact type {artifact_type.name}: {e}")
+            if total_deleted > 0:
+                print(f"🧹 Cleaned up {total_deleted} test artifacts total")
+            else:
+                print("ℹ️ No test artifacts found to clean up")
+        except Exception as e:
+            print(f"⚠️ Failed to clean up test artifacts: {e}")
+            # Attempt secondary checkpoint cleanup even if primary failed
+            try:
+                checkpoint_type_obj = api.artifact_type("model_checkpoint", project=wandb_config.project)
+                checkpoint_collections = checkpoint_type_obj.collections()
+                for collection in checkpoint_collections:
+                    if collection.name.startswith("test-") or "e2e_dino_1_epoch_single_dataset" in collection.name:
+                        try:
+                            artifacts = list(collection.artifacts())
+                            for artifact in artifacts:
+                                try:
+                                    artifact.delete()
+                                    print(f"🧹 Cleaned up checkpoint artifact: {artifact.name}")
+                                except Exception as ce:
+                                    print(f"⚠️ Failed to delete checkpoint artifact {artifact.name}: {ce}")
+                        except Exception as ce_outer:
+                            print(f"⚠️ Failed to clean up checkpoint collection '{collection.name}': {ce_outer}")
+            except Exception as ck_err:
+                print(f"⚠️ Failed to clean up checkpoint artifacts: {ck_err}")
 
     except Exception as e:
         pytest.fail(f"DINO end-to-end test failed: {type(e).__name__}: {e}")
