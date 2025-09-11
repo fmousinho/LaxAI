@@ -11,7 +11,7 @@ import torch
 
 
 def load_wandb_logger_module():
-    path = os.path.join('src', 'train', 'wandb_logger.py')
+    path = os.path.join('services', 'service_training', 'src', 'wandb_logger.py')
     spec = importlib.util.spec_from_file_location('wandb_logger_mod', path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
