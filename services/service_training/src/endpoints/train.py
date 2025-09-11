@@ -35,11 +35,11 @@ def execute_training_task(task_id: str, training_request: TrainingRequest, cance
 
         # Create and execute training workflow with cancellation support
         workflow = TrainingWorkflow(
-            tenant_id=getattr(training_request, 'tenant_id', 'tenant1'),
+            tenant_id=training_request.tenant_id,
             verbose=getattr(training_request, 'verbose', True),
             save_intermediate=getattr(training_request, 'save_intermediate', True),
-            custom_name=training_request.experiment_name or f"api_training_{task_id}",
-            resume_from_checkpoint=getattr(training_request, 'resume_from_checkpoint', True),
+            custom_name=training_request.custom_name,
+            resume_from_checkpoint=training_request.resume_from_checkpoint,
             wandb_tags=getattr(training_request, 'wandb_tags', []),
             training_kwargs=training_kwargs,
             model_kwargs=model_kwargs,
@@ -96,8 +96,9 @@ async def start_training(
     training_tasks[task_id] = {
         "task_id": task_id,
         "status": "queued",
-        "experiment_name": request.experiment_name,
-        "description": request.description,
+        "custom_name": request.custom_name,
+        "tenant_id": request.tenant_id,
+        "resume_from_checkpoint": request.resume_from_checkpoint,
         "training_params": request.training_params,
         "model_params": request.model_params,
         "eval_params": request.eval_params,
@@ -189,7 +190,8 @@ async def list_training_jobs() -> Dict[str, Any]:
         "training_jobs": [
             {
                 "task_id": task_id,
-                "experiment_name": task["experiment_name"],
+                "custom_name": task["custom_name"],
+                "tenant_id": task["tenant_id"],
                 "status": task["status"],
                 "created_at": task["created_at"],
                 "updated_at": task["updated_at"]

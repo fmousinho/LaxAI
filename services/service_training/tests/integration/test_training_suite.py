@@ -17,43 +17,39 @@ from fastapi.testclient import TestClient
 
 from shared_libs.utils.env_secrets import setup_environment_secrets
 
-
-import importlib
-import inspect
-import json
-import os
-import signal
-import subprocess
-import tempfile
-import time
-import uuid
-from pathlib import Path
-from types import SimpleNamespace
-from typing import Optional
-
-import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
-from shared_libs.utils.env_secrets import setup_environment_secrets
-
-
 # ---------------------
 # Core Cancellation Tests
 # ---------------------
 
 def test_cancel_via_web_api_endpoint():
     """Test cancelling a training job via the web API DELETE endpoint."""
+    import os
+    import sys
+    import time
+
+    # Add the service_training src path to sys.path for imports
+    service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
+    sys.path.insert(0, service_src_path)
+
     # Import the training router from service_training
     from endpoints.train import router as training_router
 
-    # Create a training job via the API
+        # Create a training job with minimal parameters for quick execution
     training_request = {
-        "experiment_name": "test_web_api_job",
-        "description": "Test job for web API cancellation",
-        "training_params": {"num_epochs": 10},
-        "model_params": {},
-        "eval_params": {}
+        "custom_name": "test_cancel_job",
+        "tenant_id": "tenant1",
+        "resume_from_checkpoint": False,
+        "training_params": {
+            "num_epochs": 2,  # Very short training to ensure cancellation happens
+            "batch_size": 4,
+            "learning_rate": 0.001
+        },
+        "model_params": {
+            "model_class_module": "siamesenet",
+            "model_class": "SiameseNet"
+        },
+        "eval_params": {},
+        "n_datasets_to_use": 1  # Use minimal dataset
     }
 
     app = FastAPI()
@@ -65,12 +61,31 @@ def test_cancel_via_web_api_endpoint():
     assert response.status_code == 200
     task_data = response.json()
     task_id = task_data["task_id"]
+    print(f"Started training job: {task_id}")
 
     # Verify job was created
     status_response = client.get(f"/train/{task_id}")
     assert status_response.status_code == 200
+    initial_status = status_response.json()
+    assert initial_status["status"] in ["queued", "running"]
 
-    # Cancel the job via DELETE endpoint
+    # Wait for job to start running (give it time to initialize)
+    max_wait_time = 30  # seconds
+    wait_time = 0
+    while wait_time < max_wait_time:
+        status_response = client.get(f"/train/{task_id}")
+        current_status = status_response.json()
+        if current_status["status"] == "running":
+            print(f"Job {task_id} is now running")
+            break
+        time.sleep(1)
+        wait_time += 1
+    else:
+        # If we didn't break, the job never started running
+        pytest.fail(f"Job {task_id} never transitioned to 'running' status within {max_wait_time} seconds. Current status: {current_status.get('status')}")
+
+    # Cancel immediately once the job starts running
+    print(f"Cancelling job {task_id} immediately after it started running")
     cancel_response = client.delete(f"/train/{task_id}")
     assert cancel_response.status_code == 200
     cancel_data = cancel_response.json()
@@ -79,16 +94,51 @@ def test_cancel_via_web_api_endpoint():
     assert cancel_data["task_id"] == task_id
     assert cancel_data["status"] == "cancelled"
     assert "cancelled successfully" in cancel_data["message"]
+    print(f"Job {task_id} cancelled successfully")
+
+    # Verify job status was updated to cancelled
+    final_status_response = client.get(f"/train/{task_id}")
+    assert final_status_response.status_code == 200
+    final_status_data = final_status_response.json()
+    assert final_status_data["status"] == "cancelled"
+    print(f"Confirmed job {task_id} status is cancelled")
+
+    # Wait for the job to actually finish (should be cancelled, not completed)
+    # Set a timeout of 3 minutes (180 seconds) to prevent hanging
+    timeout_start = time.time()
+    max_completion_wait = 180  # 3 minutes
+
+    while time.time() - timeout_start < max_completion_wait:
+        status_response = client.get(f"/train/{task_id}")
+        current_status = status_response.json()
+
+        if current_status["status"] in ["completed", "failed", "cancelled"]:
+            break
+        time.sleep(2)  # Check every 2 seconds
+
+    # Assert that the job did NOT complete successfully (cancellation worked)
+    assert current_status["status"] != "completed", \
+        f"Training job completed successfully despite cancellation request. Status: {current_status['status']}"
+
+    # Assert that the test didn't timeout
+    assert time.time() - timeout_start < max_completion_wait, \
+        f"Test timed out after {max_completion_wait} seconds waiting for job to finish. Current status: {current_status['status']}"
+
+    # Final assertion: job should be cancelled
+    assert current_status["status"] == "cancelled", \
+        f"Expected job to be cancelled, but got status: {current_status['status']}"
+
+    print(f"✅ Cancellation test passed - job {task_id} was properly cancelled")
 
 
 def test_cli_cancellation_with_signals():
     """Test cancelling a training job via the actual CLI with signal handling."""
-    import subprocess
-    import signal
-    import time
     import os
+    import signal
+    import subprocess
     import sys
-    from unittest.mock import patch, MagicMock
+    import time
+    from unittest.mock import MagicMock, patch
 
     # Mock heavy dependencies to avoid import issues during testing
     mock_modules = [
@@ -186,9 +236,6 @@ except KeyboardInterrupt:
             # Ensure process is cleaned up
             if proc.poll() is None:
                 proc.kill()
-
-
-def test_training_cancellation_with_interrupted_error():
 
 
 # Mock training service for testing

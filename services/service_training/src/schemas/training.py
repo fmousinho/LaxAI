@@ -11,8 +11,9 @@ def generate_example_from_config() -> Dict[str, Any]:
     
     # Get example values from the configuration
     example_data = {
-        "experiment_name": "example_training_run",
-        "description": "Example training request with configuration-based parameters"
+        "custom_name": "example_training_run",
+        "tenant_id": "",
+        "resume_from_checkpoint": False
     }
     
     # Add training parameters with default values from parameter registry
@@ -115,13 +116,17 @@ class TrainingRequest(BaseModel):
         }
     )
     
-    experiment_name: str = Field(
-        ..., 
-        description="Name of the training experiment"
+    custom_name: str = Field(
+        default="training_run",
+        description="Custom name for the training run"
     )
-    description: Optional[str] = Field(
-        None,
-        description="Optional description of the training run"
+    tenant_id: str = Field(
+        default="t",
+        description="Tenant identifier for the training job"
+    )
+    resume_from_checkpoint: bool = Field(
+        default=True,
+        description="Whether to resume from checkpoint if available"
     )
     
     # Use Dict[str, Any] for flexibility with dynamic parameters
