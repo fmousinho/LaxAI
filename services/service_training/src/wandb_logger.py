@@ -323,7 +323,7 @@ class WandbLogger:
         if any(k.startswith('backbone._head') for k in sd_keys) and model_backbone is not None and getattr(model_backbone, '_head', None) is None:
             logger.info("Checkpoint contains backbone._head keys; attempting to initialize head before loading state_dict")
             try:
-                if hasattr(model, 'ensure_head_initialized'):
+                if hasattr(model, 'ensure_head_initialized') and callable(getattr(model, 'ensure_head_initialized')):
                     # prefer model API
                     try:
                         device_str = str(next(model.parameters()).device)

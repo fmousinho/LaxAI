@@ -1200,6 +1200,11 @@ class DataPrepPipeline(Pipeline):
             logger.warning("No frames data for grass mask initialization")
             return {"status": StepStatus.ERROR.value, "error": "No frames data provided"}
         
+        # Additional safety check to ensure the detector is not None
+        if self.background_mask_detector is None:
+            logger.error("Background mask detector is None despite enable_grass_mask being True")
+            return {"status": StepStatus.ERROR.value, "error": "Background mask detector not initialized"}
+        
         try:
             logger.info(f"Initializing grass mask detector for video: {video_guid}")
             

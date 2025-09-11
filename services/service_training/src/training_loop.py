@@ -383,12 +383,14 @@ class Training:
             log_gpu_memory_stats("After moving model to device")
             
             # Enable backbone fine-tuning for DINOv3 models
-            if hasattr(self.model, 'enable_backbone_fine_tuning'):
+            if hasattr(self.model, 'enable_backbone_fine_tuning') and callable(getattr(self.model, 'enable_backbone_fine_tuning', None)):
                 try:
-                    self.model.enable_backbone_fine_tuning(unfreeze_layers=2)
+                    self.model.enable_backbone_fine_tuning(unfreeze_layers=2)  # pyright: ignore[reportCallIssue]
                     logger.info("Enabled backbone fine-tuning for DINOv3 model")
                 except Exception as e:
                     logger.warning(f"Could not enable backbone fine-tuning: {e}")
+            else:
+                logger.debug("enable_backbone_fine_tuning is not callable or not present on model")
             
             # Setup training components with improved loss function
             # Use TripletMarginLoss with distance weighting for better convergence
