@@ -129,17 +129,17 @@ class TrainingRequest(BaseModel):
         description="Whether to resume from checkpoint if available"
     )
     
-    # Use Dict[str, Any] for flexibility with dynamic parameters
-    training_params: Dict[str, Any] = Field(
-        default_factory=dict,
+    # Use proper nested models for API schema expansion
+    training_params: Optional[TrainingParamsModel] = Field(
+        default_factory=lambda: TrainingParamsModel() if TrainingParamsModel else None,
         description="Training-specific parameters"
     )
-    model_params: Dict[str, Any] = Field(
-        default_factory=dict,
+    model_params: Optional[ModelParamsModel] = Field(
+        default_factory=lambda: ModelParamsModel() if ModelParamsModel else None,
         description="Model architecture parameters"  
     )
-    eval_params: Dict[str, Any] = Field(
-        default_factory=dict,
+    eval_params: Optional[EvalParamsModel] = Field(
+        default_factory=lambda: EvalParamsModel() if EvalParamsModel else None,
         description="Evaluation parameters"
     )
 
