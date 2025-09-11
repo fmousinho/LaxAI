@@ -22,12 +22,13 @@ def generate_example_from_config() -> Dict[str, Any]:
         try:
             # Get the actual default value from config
             config_value = parameter_registry.get_config_value(param_name)
-            if config_value is not None:
-                training_params[param_name] = config_value
-            else:
-                raise ValueError(f"Required training parameter '{param_name}' not found in config at {param.config_path}")
+            # Include the parameter even if config_value is None (for optional parameters)
+            training_params[param_name] = config_value
         except Exception as e:
-            raise ValueError(f"Failed to retrieve training parameter '{param_name}' from config: {e}")
+            if param.required:
+                raise ValueError(f"Failed to retrieve required training parameter '{param_name}' from config: {e}")
+            # For optional parameters, include with None if config retrieval fails
+            training_params[param_name] = None
     example_data["training_params"] = training_params
     
     # Add model parameters with default values from config only
@@ -36,11 +37,13 @@ def generate_example_from_config() -> Dict[str, Any]:
         try:
             # Get the actual default value from config
             config_value = parameter_registry.get_config_value(param_name)
-            if config_value is None:
-                raise ValueError(f"Required parameter '{param_name}' not found in config")
+            # Include the parameter even if config_value is None (for optional parameters)
             model_params[param_name] = config_value
         except Exception as e:
-            raise ValueError(f"Failed to get config value for model parameter '{param_name}': {e}")
+            if param.required:
+                raise ValueError(f"Failed to retrieve required model parameter '{param_name}' from config: {e}")
+            # For optional parameters, include with None if config retrieval fails
+            model_params[param_name] = None
     example_data["model_params"] = model_params
     
     # Add eval parameters with default values from config only
@@ -50,12 +53,13 @@ def generate_example_from_config() -> Dict[str, Any]:
             try:
                 # Get the actual default value from config
                 config_value = parameter_registry.get_config_value(param_name)
-                if config_value is not None:
-                    eval_params[param_name] = config_value
-                else:
-                    raise ValueError(f"Required eval parameter '{param_name}' not found in config at {param.config_path}")
+                # Include the parameter even if config_value is None (for optional parameters)
+                eval_params[param_name] = config_value
             except Exception as e:
-                raise ValueError(f"Failed to retrieve eval parameter '{param_name}' from config: {e}")
+                if param.required:
+                    raise ValueError(f"Failed to retrieve required eval parameter '{param_name}' from config: {e}")
+                # For optional parameters, include with None if config retrieval fails
+                eval_params[param_name] = None
     except AttributeError:
         # If eval_parameters not available, use empty dict
         pass

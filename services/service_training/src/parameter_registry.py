@@ -4,10 +4,11 @@ This module provides a single source of truth for all parameters used across
 CLI arguments, API schemas, and training code.
 """
 
-from typing import Any, Dict, List, Optional
+import argparse
 from dataclasses import dataclass, field
 from enum import Enum
-import argparse
+from typing import Any, Dict, List, Optional
+
 from pydantic import Field
 
 
@@ -442,6 +443,13 @@ class ParameterRegistry:
                 type=ParameterType.FLOAT,
                 description="Percentage of dataset samples to be used for training (versus validation)",
                 config_path="training_config.train_ratio",
+            ),
+            ParameterDefinition(
+                name="n_datasets_to_use",
+                type=ParameterType.INT,
+                description="Number of datasets to use for training (optional)",
+                config_path="training_config.n_datasets_to_use",
+                required=False,
             ),
             ParameterDefinition(
                 name="wandb_project",
