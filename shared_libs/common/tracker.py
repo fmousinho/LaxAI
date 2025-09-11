@@ -632,10 +632,6 @@ class AffineAwareByteTrack(sv.ByteTrack):
 
         total_tracks = len(track_ids)
         for idx, tid in enumerate(track_ids, 1):
-            # Log progress every 5%
-            from shared_libs.utils import log_progress
-
-            log_progress(logger, "Embedding creation progress", idx, total_tracks)
 
             # ...existing code...
             crops = self.track_data[tid].crops

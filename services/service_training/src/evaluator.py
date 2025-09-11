@@ -239,7 +239,8 @@ class ModelEvaluator:
         logger.info(f"Using DataLoader with batch_size={batch_size}, num_workers={num_workers}, prefetch_factor={prefetch_factor}")
 
         # Ensure eval mode and no gradients
-        self.model.eval()
+        if self.model is not None:
+            self.model.eval()
         all_embeddings = []
         all_labels = []
         all_paths = []
@@ -276,6 +277,8 @@ class ModelEvaluator:
                 images = images.to(self.device, non_blocking=True)
 
                 # Forward pass
+                if self.model is None:
+                    raise ValueError("Model is not initialized. Cannot generate embeddings.")
                 embeddings = self.model(images)  # already normalized
 
                 # Move to CPU numpy and explicitly delete GPU tensors
@@ -525,12 +528,11 @@ class ModelEvaluator:
 
         # Build numpy arrays for threshold search
         if reservoir_scores:
-            import numpy as _np
-            scores_np = _np.array(reservoir_scores)
-            labels_np = _np.array(reservoir_labels)
+            scores_np = np.array(reservoir_scores)
+            labels_np = np.array(reservoir_labels)
         else:
-            scores_np = _np.array([])
-            labels_np = _np.array([])
+            scores_np = np.array([])
+            labels_np = np.array([])
 
         # Derive classification metrics via threshold search on the sampled pairs
         if scores_np.size > 0 and labels_np.size > 0 and labels_np.sum() > 0:
@@ -964,20 +966,16 @@ class ModelEvaluator:
         logger.info("Cleaning up evaluation resources")
         
         # Clear model reference
-        if hasattr(self, 'model'):
+        if hasattr(self, 'model') and self.model is not None:
             # Move model to CPU to free GPU memory
-            if torch.cuda.is_available() and str(self.model.device).startswith('cuda'):
+            if torch.cuda.is_available() and hasattr(self.model, 'device') and str(self.model.device).startswith('cuda'):
                 self.model = self.model.cpu()
                 torch.cuda.empty_cache()
             self.model = None
         
         # Clear any cached embeddings or large data structures
-        if hasattr(self, '_embedding_cache'):
-            self._embedding_cache.clear()
-        
-        # Force garbage collection
-        import gc
-        gc.collect()
+        # (No _embedding_cache used in this class, so nothing to clear here)
+    
         
         logger.info("Evaluation cleanup completed")
 
