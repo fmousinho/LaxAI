@@ -8,8 +8,9 @@ from typing import Any, Dict
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
 from schemas.training import TrainingRequest, TrainingResponse, TrainingStatus
-from shared_libs.common.pipeline import stop_pipeline
 from workflows.training_workflow import TrainingWorkflow
+
+from shared_libs.common.pipeline import stop_pipeline, stop_pipeline_by_guid
 
 router = APIRouter(prefix="/train", tags=["training"])
 
@@ -59,6 +60,7 @@ def execute_training_task(task_id: str, training_request: TrainingRequest):
             "successful_runs": result["successful_runs"],
             "total_runs": result["total_runs"],
             "training_results": result["training_results"],
+            "run_guids": result.get("run_guids", []),  # Store run_guids for cancellation
             "updated_at": datetime.utcnow().isoformat()
         })
 
@@ -162,9 +164,18 @@ async def cancel_training(task_id: str) -> JSONResponse:
         "updated_at": datetime.utcnow().isoformat()
     })
 
-    # Use pipeline-based cancellation
-    pipeline_name = task.get("pipeline_name", f"api_{task_id}")
-    stop_pipeline(pipeline_name)
+    # Use GUID-based cancellation for all active pipelines
+    run_guids = task.get("run_guids", [])
+    cancelled_count = 0
+    
+    for run_guid in run_guids:
+        if stop_pipeline_by_guid(run_guid):
+            cancelled_count += 1
+    
+    # Fallback to pipeline name if no GUIDs worked
+    if cancelled_count == 0:
+        pipeline_name = task.get("pipeline_name", f"api_{task_id}")
+        stop_pipeline(pipeline_name)
 
     return JSONResponse(
         content={

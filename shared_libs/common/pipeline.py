@@ -24,6 +24,8 @@ _active_pipelines: Dict[str, "Pipeline"] = {}
 _registry_lock = threading.Lock()
 # Pending cancellation requests for pipeline names that are not yet registered
 _pending_cancellations: set = set()
+# Secondary registry for lookup by run_guid
+_active_pipelines_by_guid: Dict[str, "Pipeline"] = {}
 
 
 class PipelineStatus(Enum):
@@ -72,6 +74,32 @@ def stop_pipeline(pipeline_name: str) -> bool:
                 f"PipelineRegistry: Queued pending cancellation for pipeline {pipeline_name} - will apply when registered"
             )
             return True
+
+
+def stop_pipeline_by_guid(run_guid: str) -> bool:
+    """
+    Stop a specific pipeline by its run_guid.
+
+    Args:
+        run_guid: GUID of the pipeline run to stop
+
+    Returns:
+        True if pipeline was found and stop initiated, False otherwise
+    """
+    logger.info(f"PipelineRegistry: Attempting to stop pipeline by GUID: {run_guid}")
+
+    with _registry_lock:
+        if run_guid in _active_pipelines_by_guid:
+            pipeline = _active_pipelines_by_guid[run_guid]
+            logger.info(f"PipelineRegistry: Found active pipeline {pipeline.pipeline_name} with GUID {run_guid}, requesting stop")
+            pipeline.request_stop()
+            logger.debug(f"PipelineRegistry: Stop request sent to pipeline {pipeline.pipeline_name}")
+            return True
+        else:
+            logger.warning(
+                f"PipelineRegistry: Pipeline with GUID {run_guid} not found in active registry"
+            )
+            return False
 
 
 def stop_all_pipelines() -> int:
@@ -149,7 +177,8 @@ class Pipeline:
         # Register this pipeline globally
         with _registry_lock:
             _active_pipelines[pipeline_name] = self
-            logger.info(f"PipelineRegistry: Registered pipeline: {pipeline_name}")
+            _active_pipelines_by_guid[self.run_guid] = self
+            logger.info(f"PipelineRegistry: Registered pipeline: {pipeline_name} (GUID: {self.run_guid})")
             # If there was a pending cancellation for this pipeline name, apply it now
             if pipeline_name in _pending_cancellations:
                 logger.info(
@@ -213,6 +242,9 @@ class Pipeline:
             if self.pipeline_name in _active_pipelines:
                 del _active_pipelines[self.pipeline_name]
                 logger.debug(f"Removed pipeline {self.pipeline_name} from registry")
+            if self.run_guid in _active_pipelines_by_guid:
+                del _active_pipelines_by_guid[self.run_guid]
+                logger.debug(f"Removed pipeline {self.pipeline_name} (GUID: {self.run_guid}) from GUID registry")
 
     def _log_step(self, step_name: str, message: str, level: str = "info"):
         """Log step message if verbose mode is enabled."""

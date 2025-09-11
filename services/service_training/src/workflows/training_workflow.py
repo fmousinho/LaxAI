@@ -170,12 +170,17 @@ class TrainingWorkflow:
 
             # Aggregate steps completed across all dataset runs
             steps_completed_total = 0
+            run_guids = []
             for r in training_results:
                 try:
                     steps_completed_total += int(r.get("result", {}).get("steps_completed", 0))
                 except Exception:
                     # Non-standard result entry
                     continue
+                
+                # Collect run_guids for cancellation
+                if r.get("run_guid"):
+                    run_guids.append(r["run_guid"])
 
             # Return summary
             return {
@@ -185,6 +190,7 @@ class TrainingWorkflow:
                 "total_runs": len(training_results),
                 "steps_completed": steps_completed_total,
                 "training_results": training_results,
+                "run_guids": run_guids,  # Return all run_guids for cancellation
                 "custom_name": self.custom_name
             }
 
@@ -238,6 +244,9 @@ class TrainingWorkflow:
                 **all_kwargs
             )
 
+            # Extract run_guid immediately after pipeline creation (before run())
+            pipeline_run_guid = train_pipeline.run_guid
+
             # Execute the training (pipeline handles cancellation automatically)
             result = train_pipeline.run(
                 dataset_name=[dataset_name],
@@ -248,7 +257,7 @@ class TrainingWorkflow:
                 "dataset": dataset_name,
                 "status": "success",
                 "result": result,
-                "pipeline_name": train_pipeline.pipeline_name
+                "run_guid": pipeline_run_guid  # Return the GUID for cancellation
             }
 
         except InterruptedError:
