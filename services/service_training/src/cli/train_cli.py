@@ -6,7 +6,9 @@ This module provides the CLI interface for running training workflows.
 """
 import argparse
 import logging
+import signal
 import sys
+import threading
 from typing import Optional
 
 from config.logging_config import print_banner
@@ -17,6 +19,15 @@ from workflows.training_workflow import TrainingWorkflow
 
 # Setup environment
 setup_environment_secrets()
+
+# Global cancellation event for signal handling
+cancellation_event = threading.Event()
+
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals by setting cancellation event."""
+    print(f"\n⏹️  Received signal {signum}. Requesting training cancellation...")
+    cancellation_event.set()
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -149,6 +160,10 @@ def main():
                 format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
             )
 
+        # Setup signal handlers for graceful cancellation
+        signal.signal(signal.SIGTERM, signal_handler)
+        signal.signal(signal.SIGINT, signal_handler)
+
         # Parse arguments and create workflow
         workflow_kwargs = parse_args_to_workflow_kwargs(args)
 
@@ -157,7 +172,8 @@ def main():
         if args.n_datasets_to_use:
             print(f"🎯 Limiting to {args.n_datasets_to_use} datasets")
 
-        # Execute workflow
+        # Execute workflow with cancellation support
+        workflow_kwargs['cancellation_event'] = cancellation_event
         workflow = TrainingWorkflow(**workflow_kwargs)
         result = workflow.execute()
 
@@ -183,6 +199,9 @@ def main():
         if result['status'] == 'completed' and result['successful_runs'] > 0:
             print("🎉 Training workflow completed successfully!")
             sys.exit(0)
+        elif result['status'] == 'cancelled':
+            print("⏹️  Training workflow was cancelled.")
+            sys.exit(130)
         else:
             print("⚠️  Training workflow completed with issues.")
             sys.exit(1)

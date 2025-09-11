@@ -6,6 +6,7 @@ by CLI, API, or other interfaces.
 """
 import logging
 import os
+import threading
 from typing import Any, Dict, List, Optional
 
 from common.google_storage import GCSPaths, get_storage
@@ -42,9 +43,10 @@ class TrainingWorkflow:
                  model_kwargs: Optional[Dict[str, Any]] = None,
                  pipeline_name: Optional[str] = "default",
                  n_datasets_to_use: Optional[int] = None,
-                 eval_kwargs: Optional[Dict[str, Any]] = None):
+                 eval_kwargs: Optional[Dict[str, Any]] = None,
+                 cancellation_event: Optional[threading.Event] = None):
         """
-        Initialize the training workflow.
+        Initialize the training workflow with cancellation support.
 
         Args:
             tenant_id: The tenant ID for GCS operations.
@@ -58,6 +60,7 @@ class TrainingWorkflow:
             pipeline_name: Unique name for the pipeline.
             n_datasets_to_use: Limit number of datasets to use.
             eval_kwargs: Dictionary of evaluation parameters.
+            cancellation_event: Threading event for cancellation signaling.
         """
         self.tenant_id = tenant_id
         self.verbose = verbose
@@ -70,6 +73,26 @@ class TrainingWorkflow:
         self.pipeline_name = pipeline_name
         self.n_datasets_to_use = n_datasets_to_use
         self.eval_kwargs = eval_kwargs or {}
+        
+        # Cancellation support
+        self.cancellation_event = cancellation_event or threading.Event()
+        self._cancelled = False
+
+    def request_cancellation(self):
+        """Request cancellation of the training workflow."""
+        logger.info(f"TrainingWorkflow: Cancellation requested for {self.pipeline_name}")
+        self.cancellation_event.set()
+        self._cancelled = True
+
+    def is_cancelled(self) -> bool:
+        """Check if cancellation has been requested."""
+        return self.cancellation_event.is_set() or self._cancelled
+
+    def _check_cancellation(self):
+        """Check for cancellation and raise exception if cancelled."""
+        if self.is_cancelled():
+            logger.info(f"TrainingWorkflow: Cancellation detected, stopping workflow {self.pipeline_name}")
+            raise InterruptedError("Training workflow cancelled by user request")
 
     def discover_datasets(self) -> List[str]:
         """
@@ -113,7 +136,7 @@ class TrainingWorkflow:
 
     def execute(self) -> Dict[str, Any]:
         """
-        Execute the complete training workflow.
+        Execute the complete training workflow with cancellation support.
 
         Returns:
             Dictionary containing training results and metadata.
@@ -123,6 +146,9 @@ class TrainingWorkflow:
         logger.info(f"Model configuration: {self.model_kwargs}")
 
         try:
+            # Check for immediate cancellation
+            self._check_cancellation()
+
             # Discover available datasets
             datasets = self.discover_datasets()
 
@@ -141,6 +167,9 @@ class TrainingWorkflow:
 
             for dataset_name in datasets:
                 try:
+                    # Check cancellation before each dataset
+                    self._check_cancellation()
+                    
                     logger.info(f"Starting training for dataset: {dataset_name}")
 
                     result = self._run_training_for_dataset(dataset_name)
@@ -149,6 +178,16 @@ class TrainingWorkflow:
                     if result.get("status") == "success":
                         successful_runs += 1
 
+                except InterruptedError:
+                    # Handle cancellation gracefully
+                    logger.info(f"Training cancelled during dataset {dataset_name}")
+                    training_results.append({
+                        "dataset": dataset_name,
+                        "status": "cancelled",
+                        "error": "Training cancelled by user request"
+                    })
+                    break  # Stop processing remaining datasets
+
                 except Exception as e:
                     logger.error(f"Training failed for dataset {dataset_name}: {e}")
                     training_results.append({
@@ -156,6 +195,9 @@ class TrainingWorkflow:
                         "status": "failed",
                         "error": str(e)
                     })
+
+            # Check cancellation before final aggregation
+            self._check_cancellation()
 
             # Aggregate steps completed across all dataset runs
             steps_completed_total = 0
@@ -168,22 +210,37 @@ class TrainingWorkflow:
 
             # Return summary
             return {
-                "status": "completed",
+                "status": "completed" if not self.is_cancelled() else "cancelled",
                 "datasets_found": len(datasets),
                 "successful_runs": successful_runs,
                 "total_runs": len(training_results),
                 "steps_completed": steps_completed_total,
                 "training_results": training_results,
-                "custom_name": self.custom_name
+                "custom_name": self.custom_name,
+                "cancelled": self.is_cancelled()
             }
 
+        except InterruptedError:
+            # Handle workflow-level cancellation
+            logger.info("Training workflow cancelled at top level")
+            return {
+                "status": "cancelled",
+                "datasets_found": 0,
+                "successful_runs": 0,
+                "total_runs": 0,
+                "steps_completed": 0,
+                "training_results": [],
+                "custom_name": self.custom_name,
+                "cancelled": True,
+                "error": "Training workflow cancelled by user request"
+            }
         except Exception as e:
             logger.error(f"Training workflow failed: {e}")
             raise
 
     def _run_training_for_dataset(self, dataset_name: str) -> Dict[str, Any]:
         """
-        Run training pipeline for a specific dataset.
+        Run training pipeline for a specific dataset with cancellation support.
 
         Args:
             dataset_name: Name of the dataset to train on.
@@ -192,6 +249,9 @@ class TrainingWorkflow:
             Dictionary containing training result for this dataset.
         """
         try:
+            # Check cancellation before starting dataset training
+            self._check_cancellation()
+
             # Combine all kwargs for TrainPipeline
             all_kwargs = {
                 **self.training_kwargs,
@@ -204,7 +264,7 @@ class TrainingWorkflow:
                 logger.debug("Removing duplicate 'pipeline_name' from merged kwargs")
                 all_kwargs.pop('pipeline_name')
 
-            # Create and run training pipeline
+            # Create training pipeline with cancellation support
             train_pipeline = TrainPipeline(
                 tenant_id=self.tenant_id,
                 verbose=self.verbose,
@@ -213,10 +273,15 @@ class TrainingWorkflow:
                 **all_kwargs
             )
 
-            # Execute the training
+            # Add cancellation callback to pipeline
+            def cancellation_callback():
+                return self.is_cancelled()
+
+            # Execute the training with cancellation support
             result = train_pipeline.run(
                 dataset_name=[dataset_name],
                 resume_from_checkpoint=self.resume_from_checkpoint,
+                cancellation_callback=cancellation_callback
             )
 
             return {
@@ -226,6 +291,14 @@ class TrainingWorkflow:
                 "pipeline_name": train_pipeline.pipeline_name
             }
 
+        except InterruptedError:
+            # Handle cancellation during dataset training
+            logger.info(f"Dataset training cancelled for {dataset_name}")
+            return {
+                "dataset": dataset_name,
+                "status": "cancelled",
+                "error": "Dataset training cancelled by user request"
+            }
         except Exception as e:
             logger.error(f"Training failed for dataset {dataset_name}: {e}")
             return {

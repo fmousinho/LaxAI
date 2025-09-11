@@ -1,6 +1,7 @@
 """Training API endpoints for LaxAI service."""
 
 import asyncio
+import threading
 import uuid
 from datetime import datetime
 from typing import Any, Dict
@@ -16,7 +17,7 @@ router = APIRouter(prefix="/train", tags=["training"])
 training_tasks: Dict[str, Dict[str, Any]] = {}
 
 
-def execute_training_task(task_id: str, training_request: TrainingRequest):
+def execute_training_task(task_id: str, training_request: TrainingRequest, cancellation_event: threading.Event):
     """Execute actual training using the TrainingWorkflow."""
     try:
         # Update task status to running
@@ -32,7 +33,7 @@ def execute_training_task(task_id: str, training_request: TrainingRequest):
         model_kwargs = training_request.model_params or {}
         eval_kwargs = training_request.eval_params or {}
 
-        # Create and execute training workflow
+        # Create and execute training workflow with cancellation support
         workflow = TrainingWorkflow(
             tenant_id=getattr(training_request, 'tenant_id', 'tenant1'),
             verbose=getattr(training_request, 'verbose', True),
@@ -44,22 +45,30 @@ def execute_training_task(task_id: str, training_request: TrainingRequest):
             model_kwargs=model_kwargs,
             eval_kwargs=eval_kwargs,
             pipeline_name=f"api_{task_id}",
-            n_datasets_to_use=getattr(training_request, 'n_datasets_to_use', None)
+            n_datasets_to_use=getattr(training_request, 'n_datasets_to_use', None),
+            cancellation_event=cancellation_event  # Pass the cancellation event
         )
 
         # Execute the workflow
         result = workflow.execute()
 
-        # Update task with final results
-        training_tasks[task_id].update({
-            "status": "completed" if result["successful_runs"] > 0 else "failed",
-            "progress": 100,
-            "datasets_found": result["datasets_found"],
-            "successful_runs": result["successful_runs"],
-            "total_runs": result["total_runs"],
-            "training_results": result["training_results"],
-            "updated_at": datetime.utcnow().isoformat()
-        })
+        # Check if cancelled before updating final status
+        if cancellation_event.is_set():
+            training_tasks[task_id].update({
+                "status": "cancelled",
+                "updated_at": datetime.utcnow().isoformat()
+            })
+        else:
+            # Update task with final results
+            training_tasks[task_id].update({
+                "status": "completed" if result["successful_runs"] > 0 else "failed",
+                "progress": 100,
+                "datasets_found": result["datasets_found"],
+                "successful_runs": result["successful_runs"],
+                "total_runs": result["total_runs"],
+                "training_results": result["training_results"],
+                "updated_at": datetime.utcnow().isoformat()
+            })
 
     except Exception as e:
         # Mark as failed
@@ -80,6 +89,9 @@ async def start_training(
     # Generate unique task ID
     task_id = str(uuid.uuid4())
 
+    # Create cancellation event for this task
+    cancellation_event = threading.Event()
+
     # Store task information
     training_tasks[task_id] = {
         "task_id": task_id,
@@ -96,11 +108,12 @@ async def start_training(
         "total_epochs": None,
         "loss": None,
         "metrics": None,
-        "logs": []
+        "logs": [],
+        "cancellation_event": cancellation_event  # Store the cancellation event
     }
 
     # Start training task in background
-    background_tasks.add_task(execute_training_task, task_id, request)
+    background_tasks.add_task(execute_training_task, task_id, request, cancellation_event)
 
     return TrainingResponse(
         task_id=task_id,
@@ -153,6 +166,11 @@ async def cancel_training(task_id: str) -> JSONResponse:
         "status": "cancelled",
         "updated_at": datetime.utcnow().isoformat()
     })
+
+    # Trigger the cancellation event if it exists
+    cancellation_event = task.get("cancellation_event")
+    if cancellation_event:
+        cancellation_event.set()
 
     return JSONResponse(
         content={

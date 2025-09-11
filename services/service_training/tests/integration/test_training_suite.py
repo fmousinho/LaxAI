@@ -141,12 +141,19 @@ def test_cancel_via_service_cli():
     app.include_router(train_router)
     client = TestClient(app)
 
-    # Create a training job via the API
+    # Create a training job with minimal configuration to avoid external dependencies
     training_request = {
         "experiment_name": "test_training_job",
         "description": "Test job for cancellation",
-        "training_params": {"num_epochs": 1},
-        "model_params": {},
+        "training_params": {
+            "num_epochs": 100,  # Long enough to allow cancellation
+            "learning_rate": 0.001,
+            "batch_size": 32
+        },
+        "model_params": {
+            "embedding_dim": 128,
+            "dropout_rate": 0.1
+        },
         "eval_params": {}
     }
 
@@ -165,7 +172,22 @@ def test_cancel_via_service_cli():
     status_data = status_response.json()
     assert status_data["task_id"] == task_id
 
-    # Cancel the job
+    # Wait for the job to start running (background task to begin)
+    import time
+    max_wait_time = 30  # seconds - increased timeout
+    wait_time = 0
+    while wait_time < max_wait_time:
+        status_response = client.get(f"/train/{task_id}")
+        status_data = status_response.json()
+        if status_data["status"] == "running":
+            break
+        time.sleep(0.5)
+        wait_time += 0.5
+    else:
+        # If we didn't break, the job never started running
+        pytest.fail(f"Job {task_id} never transitioned to 'running' status within {max_wait_time} seconds")
+
+    # Now cancel the job
     cancel_response = client.delete(f"/train/{task_id}")
     assert cancel_response.status_code == 200
     cancel_data = cancel_response.json()
@@ -202,6 +224,21 @@ def test_cancel_via_service_cli_with_pipeline_stop_verification():
     assert response.status_code == 200
     task_data = response.json()
     task_id = task_data["task_id"]
+
+    # Wait for the job to start running (background task to begin)
+    import time
+    max_wait_time = 10  # seconds
+    wait_time = 0
+    while wait_time < max_wait_time:
+        status_response = client.get(f"/train/{task_id}")
+        status_data = status_response.json()
+        if status_data["status"] == "running":
+            break
+        time.sleep(0.5)
+        wait_time += 0.5
+    else:
+        # If we didn't break, the job never started running
+        pytest.fail(f"Job {task_id} never transitioned to 'running' status within {max_wait_time} seconds")
 
     # Cancel the job
     cancel_response = client.delete(f"/train/{task_id}")
