@@ -137,6 +137,7 @@ class Pipeline:
         save_intermediate: bool = False,
         pipeline_name: str = "default_name",
         run_guid: Optional[str] = None,
+        excluded_serialization_keys: Optional[List[str]] = None,
     ):
         """
         Initialize the pipeline.
@@ -153,6 +154,7 @@ class Pipeline:
                 }
             verbose: Enable verbose logging (default: False)
             save_intermediate: Save intermediate results for each step (default: False)
+            excluded_serialization_keys: Optional list of keys to exclude from serialization when saving intermediate results (default: None, meaning no exclusions)
         """
 
         self.storage_client = storage_client
@@ -164,6 +166,7 @@ class Pipeline:
         self.run_guid = run_guid if run_guid else str(uuid.uuid4())
         self.run_folder = f"process/{pipeline_name}/run_{self.run_guid}"
         self.status = PipelineStatus.NOT_STARTED
+        self.excluded_serialization_keys = excluded_serialization_keys or []
 
         # Cancellation support
         self._stop_requested = False
@@ -291,14 +294,7 @@ class Pipeline:
                     filtered_data = {}
                     for key, value in data.items():
                         # Skip keys that contain large data or non-serializable objects
-                        if key in [
-                            "frames_data",
-                            "detections",
-                            "loaded_video",
-                            "crops_in_memory",
-                            "modified_crops_in_memory",
-                            "augmented_crops_in_memory",
-                        ]:
+                        if key in self.excluded_serialization_keys:
                             filtered_data[key] = f"<{key}_excluded_for_serialization>"
                         else:
                             filtered_data[key] = self._make_json_serializable(value)
@@ -479,7 +475,7 @@ class Pipeline:
         try:
             # Exclude non-serializable objects like models from context before saving
             context_to_save = dict(context)
-            for key in ["trained_model", "model", "evaluator", "optimizer", "loss_fn"]:
+            for key in self.excluded_serialization_keys + ["trained_model", "model", "evaluator", "optimizer", "loss_fn"]:
                 if key in context_to_save:
                     context_to_save[key] = f"<{key}_excluded_for_serialization>"
             serializable_context = self._make_json_serializable(context_to_save)
@@ -562,14 +558,7 @@ class Pipeline:
             result = {}
             for key, value in obj.items():
                 # Skip known problematic keys that contain large data or non-serializable objects
-                if key in [
-                    "frames_data",
-                    "detections",
-                    "loaded_video",
-                    "crops_in_memory",
-                    "modified_crops_in_memory",
-                    "augmented_crops_in_memory",
-                ]:
+                if key in self.excluded_serialization_keys:
                     result[key] = f"<{key}_excluded_for_serialization>"
                 else:
                     result[key] = self._make_json_serializable(value)

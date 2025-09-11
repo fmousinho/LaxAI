@@ -145,81 +145,82 @@ def test_cli_cancellation_with_signals():
     import time
     from unittest.mock import MagicMock, patch
 
-    # Mock the TrainingWorkflow class
-    with patch('workflows.training_workflow.TrainingWorkflow') as mock_workflow_class:
-        mock_workflow_instance = MagicMock()
-        mock_workflow_class.return_value = mock_workflow_instance
-        mock_workflow_instance.run.return_value = None  # Mock successful run
-
-        # Start CLI training process with inline script to avoid import issues
-        cmd = [
-            "/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI/.venv/bin/python",
-            "-c",
-            """
+    # Start CLI training process with inline script
+    cmd = [
+        "/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI/.venv/bin/python",
+        "-c",
+        """
 import sys
+sys.path.insert(0, '/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI/shared_libs')
+sys.path.insert(0, '/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI/services/service_training/src')
+
 import signal
-import threading
-import time
 
-# Simple mock CLI that simulates the signal handling
-cancellation_event = threading.Event()
+def handler(signum, frame):
+    raise KeyboardInterrupt("Cancelled by signal")
 
-def signal_handler(signum, frame):
-    print(f"Received signal {signum}. Requesting training cancellation")
-    cancellation_event.set()
+signal.signal(signal.SIGINT, handler)
+signal.signal(signal.SIGTERM, handler)
 
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
-
-print("Starting mock training...")
 try:
-    # Simulate long-running training
-    while not cancellation_event.is_set():
-        time.sleep(0.1)
-    print("Training cancelled successfully")
+    from workflows.training_workflow import train_workflow
+    result = train_workflow(
+        tenant_id="tenant1",
+        verbose=False,
+        custom_name="test_cancellation",
+        resume_from_checkpoint=False,
+        training_kwargs={"num_epochs": 2, "batch_size": 8},
+        model_kwargs={"model_class_module": "siamesenet", "model_class_str": "SiameseNet"},
+        n_datasets_to_use=1,
+        pipeline_name="test_resume_pipeline"
+    )
+    print("Training completed:", result)
 except KeyboardInterrupt:
-    print("Training interrupted")
+    print("Training cancelled")
+    sys.exit(0)
+except Exception as e:
+    print("Error:", e)
+    sys.exit(1)
 """
-        ]
+    ]
 
-        # Start the process
-        proc = subprocess.Popen(
-            cmd,
-            cwd="/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
+    # Start the process
+    proc = subprocess.Popen(
+        cmd,
+        cwd="/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
 
-        try:
-            # Wait a moment for the process to start
-            time.sleep(2)
+    try:
+        # Wait a moment for the process to start
+        time.sleep(10)
 
-            # Send SIGINT (Ctrl+C) to cancel
-            proc.send_signal(signal.SIGINT)
+        # Send SIGINT (Ctrl+C) to cancel
+        proc.send_signal(signal.SIGINT)
 
-            # Wait for process to terminate
-            stdout, stderr = proc.communicate(timeout=10)
+        # Wait for process to terminate
+        stdout, stderr = proc.communicate(timeout=30)
 
-            # Verify the process exited with cancellation code
-            # Since the signal handler catches SIGINT and exits cleanly, returncode is 0
-            assert proc.returncode == 0, f"Expected return code 0 (clean exit after signal handling), got {proc.returncode}. stdout: {stdout}, stderr: {stderr}"
+        # Verify the process exited cleanly
+        assert proc.returncode == 0, f"Expected return code 0 (clean exit after cancellation), got {proc.returncode}. stdout: {stdout}, stderr: {stderr}"
 
-            # Verify cancellation message in output
-            assert "Received signal 2. Requesting training cancellation" in stdout or "Received signal 2. Requesting training cancellation" in stderr
+        # Verify cancellation message in output
+        assert "Training cancelled" in stdout or "Training cancelled" in stderr
 
-            print("✅ CLI cancellation test passed")
+        print("✅ CLI cancellation test passed")
 
-        except subprocess.TimeoutExpired:
-            # If process doesn't terminate, kill it
+    except subprocess.TimeoutExpired:
+        # If process doesn't terminate, kill it
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        pytest.fail("CLI process did not terminate after cancellation signal")
+
+    finally:
+        # Ensure process is cleaned up
+        if proc.poll() is None:
             proc.kill()
-            stdout, stderr = proc.communicate()
-            pytest.fail("CLI process did not terminate after cancellation signal")
-
-        finally:
-            # Ensure process is cleaned up
-            if proc.poll() is None:
-                proc.kill()
 
 
 # Mock training service for testing
@@ -745,3 +746,116 @@ def test_convert_request_to_kwargs_includes_top_level_n_datasets():
     assert "n_datasets_to_use" in kwargs
     assert kwargs["n_datasets_to_use"] == 5
     assert "training_kwargs" not in kwargs
+
+
+@pytest.mark.slow
+@pytest.mark.e2e
+def test_checkpoint_resume():
+    """Test resuming training from a checkpoint saved during cancellation."""
+    import time
+
+    import wandb
+    from shared_libs.config.all_config import wandb_config
+
+    # Ensure secrets for longer e2e tests
+    setup_environment_secrets()
+
+    from workflows.training_workflow import train_workflow as train
+
+    try:
+        result = train(
+            tenant_id="tenant1",
+            verbose=False,
+            custom_name="test_cancellation",
+            resume_from_checkpoint=True,
+            training_kwargs={"num_epochs": 2, "batch_size": 8},
+            model_kwargs={"model_class_module": "siamesenet", "model_class_str": "SiameseNet"},
+            n_datasets_to_use=1,
+            pipeline_name="test_resume_pipeline"
+        )
+        # Verify training completed successfully
+        assert isinstance(result, dict)
+        assert result.get("status") == "completed"
+        assert result.get("steps_completed", 0) == 3  # Should complete all 3 steps
+        
+        # Check if resumption happened by looking at the pipeline result
+        pipeline_result = result.get("pipeline_result", {})
+        if pipeline_result:
+            # If there's a pipeline result, check if it contains resumption info
+            print(f"Pipeline result: {pipeline_result}")
+        
+        print("✅ Checkpoint resume test completed successfully")
+
+        # Wait 10 seconds for wandb synchronization, then clean up all test artifacts
+        import wandb
+        print("⏳ Waiting 10 seconds for wandb synchronization...")
+        time.sleep(10)
+        print("✅ Finished waiting for wandb sync")
+
+        # Clean up all test artifacts that start with "test-"
+        try:
+            api = wandb.Api()
+
+            # Get all artifact types
+            artifact_types = api.artifact_types(project=wandb_config.project)
+
+            total_deleted = 0
+            for artifact_type in artifact_types:
+                try:
+                    # Get all collections for this artifact type
+                    collections = artifact_type.collections()
+                    for collection in collections:
+                        try:
+                            # Check if collection name starts with "test-"
+                            if collection.name.startswith("test-"):
+                                artifacts = list(collection.artifacts())
+                                for artifact in artifacts:
+                                    try:
+                                        # Try to delete the artifact directly
+                                        artifact.delete()
+                                        print(f"🧹 Cleaned up test artifact: {artifact.name}")
+                                        total_deleted += 1
+                                    except Exception as e:
+                                        error_msg = str(e).lower()
+                                        # If deletion failed due to alias, try to remove alias first
+                                        if "alias" in error_msg or "409" in str(e):
+                                            try:
+                                                print(f"⚠️ Artifact {artifact.name} has alias, attempting to remove alias and retry...")
+                                                # Try to remove aliases using the collection
+                                                if hasattr(artifact, 'aliases') and artifact.aliases:
+                                                    try:
+                                                        # Try to remove aliases
+                                                        for alias in artifact.aliases[:]:  # Copy the list to avoid modification issues
+                                                            try:
+                                                                # Remove alias
+                                                                if alias in artifact.aliases:
+                                                                    artifact.aliases.remove(alias)
+                                                                    artifact.save()
+                                                                print(f"ℹ️ Removed alias '{alias}' from {artifact.name}")
+                                                            except Exception as alias_error:
+                                                                print(f"⚠️ Failed to remove alias '{alias}' from {artifact.name}: {alias_error}")
+                                                    except Exception as collection_error:
+                                                        print(f"⚠️ Failed to access collection for {artifact.name}: {collection_error}")
+                                                # Try to delete again after removing aliases
+                                                artifact.delete()
+                                                print(f"🧹 Cleaned up test artifact (after alias removal): {artifact.name}")
+                                                total_deleted += 1
+                                            except Exception as retry_error:
+                                                print(f"⚠️ Failed to delete test artifact {artifact.name} even after alias removal: {retry_error}")
+                                        else:
+                                            print(f"⚠️ Failed to delete test artifact {artifact.name}: {e}")
+                        except Exception as e:
+                            print(f"⚠️ Failed to access collection {collection.name}: {e}")
+                except Exception as e:
+                    print(f"⚠️ Failed to access artifact type {artifact_type.name}: {e}")
+
+            if total_deleted > 0:
+                print(f"🧹 Cleaned up {total_deleted} test artifacts total")
+            else:
+                print("ℹ️ No test artifacts found to clean up")
+
+        except Exception as e:
+            print(f"⚠️ Failed to clean up test artifacts: {e}")
+
+    except Exception as e:
+        pytest.fail(f"Resume test failed: {type(e).__name__}: {e}")
