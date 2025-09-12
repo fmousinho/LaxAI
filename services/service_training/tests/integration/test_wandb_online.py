@@ -1,6 +1,5 @@
 import importlib.util
 import os
-import tempfile
 import uuid
 
 import pytest
@@ -13,6 +12,13 @@ import torch
 def load_wandb_logger_module():
     path = os.path.join('services', 'service_training', 'src', 'wandb_logger.py')
     spec = importlib.util.spec_from_file_location('wandb_logger_mod', path)
+    if spec is None:
+        raise ImportError(f"Could not load spec for {path}")
+    if spec.loader is None:
+        raise ImportError(f"Could not load loader for {path}")
+    # Type assertions to help Pylance understand these are not None
+    assert spec is not None
+    assert spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -158,14 +164,11 @@ def cleanup_wandb_online_artifacts():
                                         else:
                                             print(f"⚠️ Failed to delete test artifact {artifact.name}: {e}")
 
-                                    except Exception as e:
-                                        print(f"⚠️ Failed to access collection {collection.name}: {e}")
-
                         except Exception as e:
-                            print(f"⚠️ Failed to access artifact type {artifact_type.name}: {e}")
+                            print(f"⚠️ Failed to access collection {collection.name}: {e}")
 
                 except Exception as e:
-                    print(f"⚠️ Failed to access artifact types: {e}")
+                    print(f"⚠️ Failed to access artifact type {artifact_type.name}: {e}")
 
             if total_deleted > 0:
                 print(f"🧹 Cleaned up {total_deleted} test artifacts total from online test suite")

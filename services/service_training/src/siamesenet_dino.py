@@ -1,13 +1,13 @@
 import logging
 import os
-from typing import Dict, Optional, Tuple, cast
+from typing import Optional, Tuple, cast
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from config.all_config import model_config, training_config
+from config.all_config import model_config
 from huggingface_hub import login
-from transformers import AutoImageProcessor, AutoModel
+from transformers import AutoModel
 
 logger = logging.getLogger(__name__)
 
@@ -202,12 +202,20 @@ class SiameseNet(nn.Module):
             if hasattr(self.backbone.backbone, 'stages'):
                 stages = self.backbone.backbone.stages
                 if hasattr(stages, '__len__') and hasattr(stages, '__getitem__'):
-                    num_stages = len(stages)
-                    for i in range(max(0, num_stages - unfreeze_layers), num_stages):
-                        if i < num_stages and hasattr(stages[i], 'parameters'):
-                            for param in stages[i].parameters():
-                                param.requires_grad = True
-                    logger.info(f"Unfroze last {min(unfreeze_layers, num_stages)} stages of DINOv3 backbone")
+                    # Type guard: ensure stages is a sequence-like object
+                    len_callable = callable(getattr(stages, '__len__', None))
+                    getitem_callable = callable(getattr(stages, '__getitem__', None))
+                    if not len_callable or not getitem_callable:
+                        logger.warning("Backbone stages attribute found but does not support expected interface")
+                    else:
+                        num_stages = len(stages)
+                        for i in range(max(0, num_stages - unfreeze_layers), num_stages):
+                            if i < num_stages:
+                                stage = stages[i]
+                                if hasattr(stage, 'parameters') and callable(getattr(stage, 'parameters', None)):
+                                    for param in stage.parameters():
+                                        param.requires_grad = True
+                        logger.info(f"Unfroze last {min(unfreeze_layers, num_stages)} stages of DINOv3 backbone")
                 else:
                     logger.warning("Backbone stages attribute found but does not support expected interface")
 
@@ -263,9 +271,12 @@ class SiameseNet(nn.Module):
             with torch.no_grad():
                 _ = self.backbone(x)
 
-        attn = self.backbone.get_attention_maps() if hasattr(self.backbone, 'get_attention_maps') else {} #type: ignore[call-arg]
+        attn = self.backbone.get_attention_maps() if hasattr(self.backbone, 'get_attention_maps') else {}
         if not attn:
-            logger.warning("No attention maps available from DINOv3 backbone (model may not expose internals).")
+            logger.warning(
+                "No attention maps available from DINOv3 backbone. "
+                "Model may not expose internals."
+            )
         return attn
 
     def ensure_head_initialized(self, device: str = "cpu", input_shape=(1, 3, 224, 224)) -> None:

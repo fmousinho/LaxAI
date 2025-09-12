@@ -1,10 +1,8 @@
-import importlib
 import inspect
 import json
 import os
 import signal
 import subprocess
-import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -211,6 +209,7 @@ except Exception as e:
 
         # Wait 10 seconds for wandb synchronization, then clean up all test artifacts
         import wandb
+        from shared_libs.config.all_config import wandb_config
         print("⏳ Waiting 10 seconds for wandb synchronization...")
         time.sleep(10)
         print("✅ Finished waiting for wandb sync")
@@ -397,6 +396,13 @@ def make_request_obj(tenant_id: str = "tenant1", n_datasets_to_use: Optional[int
 
 def test_training_cancellation_with_interrupted_error():
     """Test that InterruptedError is properly raised and handled during training cancellation."""
+    import os
+    import sys
+
+    # Add the service_training src path to sys.path for imports
+    service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
+    sys.path.insert(0, service_src_path)
+    
     from unittest.mock import MagicMock, patch
 
     import torch
@@ -504,6 +510,13 @@ def test_pipeline_cancellation_with_pending_stop():
 
 def test_siamesenet_dino_can_download_and_initialize(tmp_path: Path):
     """Integration test: ensure SiameseNet downloads DINOv3 from Hugging Face and initializes."""
+    import os
+    import sys
+
+    # Add the service_training src path to sys.path for imports
+    service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
+    sys.path.insert(0, service_src_path)
+    
     # Ensure environment secrets are set for the test run
     setup_environment_secrets()
 
@@ -532,6 +545,13 @@ def test_siamesenet_dino_can_download_and_initialize(tmp_path: Path):
 @pytest.mark.e2e
 def test_train_all_resnet_with_checkpoint_verification():
     """End-to-end test: ResNet training with 2 epochs and 2 datasets, verifying checkpoint creation."""
+    import os
+    import sys
+
+    # Add the service_training src path to sys.path for imports
+    service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
+    sys.path.insert(0, service_src_path)
+    
     import wandb
     from shared_libs.config.all_config import wandb_config
 
@@ -664,6 +684,13 @@ def test_train_all_resnet_with_checkpoint_verification():
 @pytest.mark.e2e
 def test_train_all_with_dino_memory_stable():
     """End-to-end test: DINO training with 1 epoch and single dataset, with memory stability assertions."""
+    import os
+    import sys
+
+    # Add the service_training src path to sys.path for imports
+    service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
+    sys.path.insert(0, service_src_path)
+    
     import gc
 
     import psutil
@@ -805,6 +832,13 @@ def test_train_all_with_dino_memory_stable():
 
 def test_train_signature_has_n_datasets_to_use():
     """Test that the train function signature includes n_datasets_to_use parameter."""
+    import os
+    import sys
+
+    # Add the service_training src path to sys.path for imports
+    service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
+    sys.path.insert(0, service_src_path)
+    
     from workflows.training_workflow import train_workflow as train
     sig = inspect.signature(train)
     
@@ -823,8 +857,14 @@ def test_train_signature_has_n_datasets_to_use():
 
 def test_convert_request_to_kwargs_includes_top_level_n_datasets():
     """Test that request conversion includes top-level n_datasets parameter."""
-    from services.service_training.src.training_service import \
-        _convert_request_to_kwargs
+    import os
+    import sys
+
+    # Add the service_training src path to sys.path for imports
+    service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
+    sys.path.insert(0, service_src_path)
+    
+    from training_service import _convert_request_to_kwargs
 
     req = SimpleNamespace(
         tenant_id="tenant1",
@@ -847,7 +887,19 @@ def test_convert_request_to_kwargs_includes_top_level_n_datasets():
 @pytest.mark.slow
 @pytest.mark.e2e
 def test_checkpoint_resume():
-    """Test resuming training from a checkpoint saved during cancellation."""
+    """Test that training works correctly when resume_from_checkpoint=True but no checkpoint exists.
+    
+    This test verifies that the resume functionality doesn't break normal training when
+    resume_from_checkpoint=True is set but no existing checkpoint is available to resume from.
+    In this case, training should start fresh and complete normally.
+    """
+    import os
+    import sys
+
+    # Add the service_training src path to sys.path for imports
+    service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
+    sys.path.insert(0, service_src_path)
+    
     import time
 
     import wandb
@@ -879,6 +931,11 @@ def test_checkpoint_resume():
         if pipeline_result:
             # If there's a pipeline result, check if it contains resumption info
             print(f"Pipeline result: {pipeline_result}")
+            
+            # Verify that no resumption occurred (since no checkpoint exists)
+            resumed_from_checkpoint = pipeline_result.get("resumed_from_checkpoint", False)
+            assert resumed_from_checkpoint == False, "Expected no resumption since no checkpoint should exist"
+            print("✅ Confirmed that training started fresh (no checkpoint resumption)")
         
         print("✅ Checkpoint resume test completed successfully")
 

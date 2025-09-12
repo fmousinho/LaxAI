@@ -39,6 +39,7 @@ Example:
     ```
 """
 
+import json
 import logging
 import os
 import random
@@ -627,8 +628,18 @@ class DataPrepPipeline(Pipeline):
             # Save detections - convert to JSON-serializable format
             detections_blob_name = f"{video_folder.rstrip('/')}/detections.json"
             single_detection_object = sv.Detections.merge(all_detections)
-
-            self.tenant_storage.upload_from_bytes(detections_blob_name, single_detection_object)
+            
+            # Serialize detections to JSON bytes
+            detections_dict = {
+                'xyxy': single_detection_object.xyxy.tolist() if single_detection_object.xyxy is not None else None,
+                'confidence': single_detection_object.confidence.tolist() if single_detection_object.confidence is not None else None,
+                'class_id': single_detection_object.class_id.tolist() if single_detection_object.class_id is not None else None,
+                'tracker_id': single_detection_object.tracker_id.tolist() if single_detection_object.tracker_id is not None else None,
+                'data': single_detection_object.data if hasattr(single_detection_object, 'data') else {}
+            }
+            detections_json = json.dumps(detections_dict).encode('utf-8')
+            
+            self.tenant_storage.upload_from_bytes(detections_blob_name, detections_json)
 
             logger.info(f"Player detection completed for frame id {frame_id} - {detections_count} detections found")
 
@@ -714,6 +725,10 @@ class DataPrepPipeline(Pipeline):
                                                            video_id=video_guid, 
                                                            frame_id=frame_guid)
                     
+                    if blob_path is None:
+                        logger.error(f"Failed to generate blob path for video {video_guid}, frame {frame_guid}")
+                        raise RuntimeError(f"Failed to generate blob path for video {video_guid}, frame {frame_guid}")
+                    
                     blob_name = f"{blob_path.rstrip('/')}/{file_name}"
 
                     # Add to upload tasks instead of uploading immediately
@@ -781,9 +796,13 @@ class DataPrepPipeline(Pipeline):
         crops_by_frame = context.get("crops_by_frame")
         video_guid = context.get("video_guid")
 
-        if not context.get("grass_mask_initialized"):
-            logger.error("Grass mask detector not initialized")
-            return {"status": StepStatus.ERROR.value, "error": "Grass mask detector not initialized"}
+        if not crops_by_frame:
+            logger.error("No crops by frame data found for background removal")
+            return {"status": StepStatus.ERROR.value, "error": "No crops by frame data provided"}
+        
+        if self.background_mask_detector is None:
+            logger.error("Background mask detector not initialized")
+            return {"status": StepStatus.ERROR.value, "error": "Background mask detector not initialized"}
         
         crops_processed = 0
 
@@ -840,6 +859,10 @@ class DataPrepPipeline(Pipeline):
         frames_guid = context.get("frames_guids")
         crops_by_frame = context.get("crops_by_frame")
 
+        if not crops_by_frame or not frames_guid:
+            logger.error("No crops by frame or frames GUID data found for augmentation")
+            return {"status": StepStatus.ERROR.value, "error": "No crops by frame or frames GUID data provided"}
+
         
         logger.info(f"Augmenting crops for {video_guid}")
 
@@ -858,6 +881,10 @@ class DataPrepPipeline(Pipeline):
                                                                video_id=video_guid, 
                                                                frame_id=frames_guid,
                                                                orig_crop_id=temp_crop_guid)
+                    if blob_path is None:
+                        logger.error(f"Failed to generate blob path for augmented crops: video {video_guid}, frame {frames_guid}, crop {temp_crop_guid}")
+                        raise RuntimeError(f"Failed to generate blob path for augmented crops: video {video_guid}, frame {frames_guid}, crop {temp_crop_guid}")
+                    
                     for aug_crop in aug_crops:
                         file_name = create_aug_crop_id(temp_crop_guid, n_aug_crops)
                         blob_name = f"{blob_path.rstrip('/')}/{file_name}"
@@ -926,15 +953,20 @@ class DataPrepPipeline(Pipeline):
             logger.warning("No augmented crops to create datasets from")
             return {"status": StepStatus.ERROR.value, "error": "No augmented crops available"}
         
+        if not frames_guids:
+            logger.error("No frames GUIDs found for dataset creation")
+            return {"status": StepStatus.ERROR.value, "error": "No frames GUIDs provided"}
+        
         try:
             logger.info(f"Creating training and validation sets for video {video_guid}")
 
             for frame_guid in frames_guids:
 
-                aug_crops_root = self.path_manager.get_path("augmented_crops_root", video_id=video_guid, frame_id=frame_guid).rstrip('/')
-                if not aug_crops_root:
+                aug_crops_root = self.path_manager.get_path("augmented_crops_root", video_id=video_guid, frame_id=frame_guid)
+                if aug_crops_root is None:
                     logger.error(f"No augmented crops root found for video {video_guid} at frame {frame_guid}")
                     raise RuntimeError(f"No augmented crops root found for video {video_guid} at frame {frame_guid}")
+                aug_crops_root = aug_crops_root.rstrip('/')
                 players = self.tenant_storage.list_blobs(prefix=aug_crops_root, delimiter='/', exclude_prefix_in_return=True)
                 players = list(players)  
                 random.shuffle(players)  
@@ -944,8 +976,17 @@ class DataPrepPipeline(Pipeline):
                 train_players = players[:n_train_players]
                 val_players = players[n_train_players:]
 
-                train_folder = self.path_manager.get_path("train_dataset", dataset_id=dataset_guid).rstrip('/')
-                val_folder = self.path_manager.get_path("val_dataset", dataset_id=dataset_guid).rstrip('/')
+                train_folder = self.path_manager.get_path("train_dataset", dataset_id=dataset_guid)
+                if train_folder is None:
+                    logger.error(f"Failed to generate train folder path for dataset {dataset_guid}")
+                    raise RuntimeError(f"Failed to generate train folder path for dataset {dataset_guid}")
+                train_folder = train_folder.rstrip('/')
+                
+                val_folder = self.path_manager.get_path("val_dataset", dataset_id=dataset_guid)
+                if val_folder is None:
+                    logger.error(f"Failed to generate val folder path for dataset {dataset_guid}")
+                    raise RuntimeError(f"Failed to generate val folder path for dataset {dataset_guid}")
+                val_folder = val_folder.rstrip('/')
 
 
                 move_tasks = []
@@ -1120,7 +1161,10 @@ class DataPrepPipeline(Pipeline):
             
             for frame_position in frame_positions:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, frame_position)
-                _, frame = cap.read()
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    logger.warning(f"Failed to read frame at position {frame_position}")
+                    continue
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) 
                 logger.debug(f"Processing frame {frame_position}")
                     # Generate structured frame ID
