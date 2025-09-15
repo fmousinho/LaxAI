@@ -455,9 +455,6 @@ def cleanup_wandb_artifacts():
                                         else:
                                             print(f"⚠️ Failed to delete test artifact {artifact.name}: {e}")
 
-                                    except Exception as e:
-                                        print(f"⚠️ Failed to access collection {collection.name}: {e}")
-
                         except Exception as e:
                             print(f"⚠️ Failed to access artifact type {artifact_type.name}: {e}")
 

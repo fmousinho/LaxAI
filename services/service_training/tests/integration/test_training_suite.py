@@ -30,7 +30,7 @@ def test_cancel_via_web_api_endpoint():
     sys.path.insert(0, service_src_path)
 
     # Import the training router from service_training
-    from endpoints.train import router as training_router
+    from endpoints.train import router as training_router  # type: ignore[import-untyped]
 
     # Create a training job with minimal parameters
     training_request = {
@@ -407,7 +407,7 @@ def test_training_cancellation_with_interrupted_error():
 
     import torch
     # Create a minimal training setup
-    from training_loop import Training
+    from training_loop import Training  # type: ignore[import-untyped]
 
     # Mock components to avoid actual training
     with patch('torch.optim.AdamW'), \
@@ -645,7 +645,7 @@ def test_siamesenet_dino_can_download_and_initialize(tmp_path: Path):
 
     try:
         import torch
-        from siamesenet_dino import SiameseNet
+        from siamesenet_dino import SiameseNet  # type: ignore[import-untyped]
 
         net = SiameseNet()
         net.eval()
@@ -676,7 +676,7 @@ def test_train_all_resnet_with_checkpoint_verification():
     # Ensure secrets for longer e2e tests
     setup_environment_secrets()
 
-    from workflows.training_workflow import train_workflow as train
+    from workflows.training_workflow import train_workflow as train. # type: ignore[import-untyped]
 
     run_name = f"e2e_resnet_checkpoint_test_{uuid.uuid4().hex[:8]}"
 
@@ -825,7 +825,7 @@ def test_train_all_with_dino_memory_stable():
     gc.collect()
     initial_memory = process.memory_info().rss / 1024 / 1024  # MB
 
-    from workflows.training_workflow import train_workflow as train
+    from workflows.training_workflow import train_workflow as train. # type: ignore[import-untyped]
 
     try:
         results = train(
@@ -957,7 +957,7 @@ def test_train_signature_has_n_datasets_to_use():
     service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
     sys.path.insert(0, service_src_path)
     
-    from workflows.training_workflow import train_workflow as train
+    from workflows.training_workflow import train_workflow as train. # type: ignore[import-untyped]
     sig = inspect.signature(train)
     
     # Check if **kwargs is present, allowing n_datasets_to_use to be passed dynamically
@@ -982,7 +982,7 @@ def test_convert_request_to_kwargs_includes_top_level_n_datasets():
     service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
     sys.path.insert(0, service_src_path)
     
-    from training_service import _convert_request_to_kwargs
+    from training_service import _convert_request_to_kwargs # type: ignore[import-untyped]
 
     req = SimpleNamespace(
         tenant_id="tenant1",
@@ -1026,7 +1026,7 @@ def test_checkpoint_resume():
     # Ensure secrets for longer e2e tests
     setup_environment_secrets()
 
-    from workflows.training_workflow import train_workflow as train
+    from workflows.training_workflow import train_workflow as train  # type: ignore[import-untyped]
 
     try:
         result = train(
