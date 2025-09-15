@@ -676,7 +676,7 @@ def test_train_all_resnet_with_checkpoint_verification():
     # Ensure secrets for longer e2e tests
     setup_environment_secrets()
 
-    from workflows.training_workflow import train_workflow as train. # type: ignore[import-untyped]
+    from workflows.training_workflow import train_workflow as train  # type: ignore[import-untyped]
 
     run_name = f"e2e_resnet_checkpoint_test_{uuid.uuid4().hex[:8]}"
 
@@ -825,7 +825,7 @@ def test_train_all_with_dino_memory_stable():
     gc.collect()
     initial_memory = process.memory_info().rss / 1024 / 1024  # MB
 
-    from workflows.training_workflow import train_workflow as train. # type: ignore[import-untyped]
+    from workflows.training_workflow import train_workflow as train  # type: ignore[import-untyped]
 
     try:
         results = train(
@@ -957,7 +957,7 @@ def test_train_signature_has_n_datasets_to_use():
     service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
     sys.path.insert(0, service_src_path)
     
-    from workflows.training_workflow import train_workflow as train. # type: ignore[import-untyped]
+    from workflows.training_workflow import train_workflow as train  # type: ignore[import-untyped]
     sig = inspect.signature(train)
     
     # Check if **kwargs is present, allowing n_datasets_to_use to be passed dynamically
