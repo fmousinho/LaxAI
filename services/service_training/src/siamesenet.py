@@ -173,7 +173,7 @@ class SiameseNet(nn.Module):
         num_ftrs = original_resnet.fc.in_features
 
         # Replace the final layer with our embedding layer including dropout
-        original_resnet.fc = nn.Sequential(
+        original_resnet.fc = nn.Sequential(  # type: ignore[assignment]
             nn.Dropout(self.dropout_rate),
             nn.Linear(num_ftrs, self.embedding_dim)
         )
@@ -258,29 +258,29 @@ class SiameseNet(nn.Module):
 
         x = self.backbone.layer1(x)
         if isinstance(self.backbone, ResNetWithCBAM) and 'layer1' in self.backbone.attention_layers and 'layer1' in self.backbone.cbam_modules:
-            channel_att = self.backbone.cbam_modules['layer1'].channel_attention(x)
-            spatial_att = self.backbone.cbam_modules['layer1'].spatial_attention(x * channel_att)
+            channel_att = self.backbone.cbam_modules['layer1'].channel_attention(x)  # type: ignore[operator]
+            spatial_att = self.backbone.cbam_modules['layer1'].spatial_attention(x * channel_att)  # type: ignore[operator]
             attention_maps['layer1'] = {'channel': channel_att, 'spatial': spatial_att}
             x = x * channel_att * spatial_att
             
         x = self.backbone.layer2(x)
         if isinstance(self.backbone, ResNetWithCBAM) and 'layer2' in self.backbone.attention_layers:
-            channel_att = self.backbone.cbam_modules['layer2'].channel_attention(x)
-            spatial_att = self.backbone.cbam_modules['layer2'].spatial_attention(x * channel_att)
+            channel_att = self.backbone.cbam_modules['layer2'].channel_attention(x)  # type: ignore[operator]
+            spatial_att = self.backbone.cbam_modules['layer2'].spatial_attention(x * channel_att)  # type: ignore[operator]
             attention_maps['layer2'] = {'channel': channel_att, 'spatial': spatial_att}
             x = x * channel_att * spatial_att
             
         x = self.backbone.layer3(x)
         if isinstance(self.backbone, ResNetWithCBAM) and 'layer3' in self.backbone.attention_layers:
-            channel_att = self.backbone.cbam_modules['layer3'].channel_attention(x)
-            spatial_att = self.backbone.cbam_modules['layer3'].spatial_attention(x * channel_att)
+            channel_att = self.backbone.cbam_modules['layer3'].channel_attention(x)  # type: ignore[operator]
+            spatial_att = self.backbone.cbam_modules['layer3'].spatial_attention(x * channel_att)  # type: ignore[operator]
             attention_maps['layer3'] = {'channel': channel_att, 'spatial': spatial_att}
             x = x * channel_att * spatial_att
             
         x = self.backbone.layer4(x)
         if isinstance(self.backbone, ResNetWithCBAM) and 'layer4' in self.backbone.attention_layers:
-            channel_att = self.backbone.cbam_modules['layer4'].channel_attention(x)
-            spatial_att = self.backbone.cbam_modules['layer4'].spatial_attention(x * channel_att)
+            channel_att = self.backbone.cbam_modules['layer4'].channel_attention(x)  # type: ignore[operator]
+            spatial_att = self.backbone.cbam_modules['layer4'].spatial_attention(x * channel_att)  # type: ignore[operator]
             attention_maps['layer4'] = {'channel': channel_att, 'spatial': spatial_att}
             x = x * channel_att * spatial_att
             
