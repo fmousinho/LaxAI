@@ -10,6 +10,7 @@ import random
 from .all_config import model_config, transform_config, detection_config, background_mask_config
 from typing import Optional, List, Tuple
 from PIL import Image
+from shared_libs.common.background_mask import BackgroundMaskDetector
 
 
 # Global background detector instance
@@ -56,7 +57,7 @@ def create_background_detector_from_images(images: List[np.ndarray]) -> 'Backgro
     # Create detector with configuration
     detector = BackgroundMaskDetector(
         frame_generator=frame_generator,
-        config=background_mask_config,
+        config=background_mask_config,  # type: ignore[arg-type]
         sample_frames=transform_config.background_detector_sample_frames,
         verbose=False
     )
@@ -165,7 +166,7 @@ class BackgroundRemovalTransform:
         
         # Convert back to PIL if input was PIL
         if was_pil:
-            return Image.fromarray(processed_image)
+            return Image.fromarray(processed_image)  # type: ignore[arg-type]
         else:
             return processed_image
 

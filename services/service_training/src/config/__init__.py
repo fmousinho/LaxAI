@@ -69,7 +69,7 @@ def __dir__():
 from . import logging_config
 
 # Define the public API for the config package
-__all__ = [
+__all__ = [  # type: ignore[reportUnsupportedDunderAll]
     # --- Configuration Instances ---
     'model_config',
     'tracker_config',
@@ -96,26 +96,26 @@ __all__ = [
     'DebugConfig',
 
     # --- Transform Functions and Classes (lazy-loaded) ---
-    'get_transforms',
-    'create_transforms_with_background_removal',
-    'BackgroundRemovalTransform',
-    'create_background_removal_transform',
-    'ensure_rgb_format',
-    'tensor_to_pil',
+    'get_transforms',  # type: ignore[reportUnsupportedDunderAll]
+    'create_transforms_with_background_removal',  # type: ignore[reportUnsupportedDunderAll]
+    'BackgroundRemovalTransform',  # type: ignore[reportUnsupportedDunderAll]
+    'create_background_removal_transform',  # type: ignore[reportUnsupportedDunderAll]
+    'ensure_rgb_format',  # type: ignore[reportUnsupportedDunderAll]
+    'tensor_to_pil',  # type: ignore[reportUnsupportedDunderAll]
 
     # --- Transform Constants ---
-    'TRANSFORMS',
-    'training_transforms',
-    'inference_transforms',
-    'validation_transforms',
-    'opencv_safe_transforms',
-    'opencv_safe_training_transforms',
+    'TRANSFORMS',  # type: ignore[reportUnsupportedDunderAll]
+    'training_transforms',  # type: ignore[reportUnsupportedDunderAll]
+    'inference_transforms',  # type: ignore[reportUnsupportedDunderAll]
+    'validation_transforms',  # type: ignore[reportUnsupportedDunderAll]
+    'opencv_safe_transforms',  # type: ignore[reportUnsupportedDunderAll]
+    'opencv_safe_training_transforms',  # type: ignore[reportUnsupportedDunderAll]
 
     # --- Background Removal Functions ---
-    'set_global_background_detector',
-    'get_global_background_detector',
-    'initialize_background_removal',
-    'is_background_removal_enabled',
-    'refresh_transform_instances',
-    'create_background_detector_from_images',
+    'set_global_background_detector',  # type: ignore[reportUnsupportedDunderAll]
+    'get_global_background_detector',  # type: ignore[reportUnsupportedDunderAll]
+    'initialize_background_removal',  # type: ignore[reportUnsupportedDunderAll]
+    'is_background_removal_enabled',  # type: ignore[reportUnsupportedDunderAll]
+    'refresh_transform_instances',  # type: ignore[reportUnsupportedDunderAll]
+    'create_background_detector_from_images',  # type: ignore[reportUnsupportedDunderAll]
 ]
