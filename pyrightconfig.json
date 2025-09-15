@@ -1,29 +1,86 @@
 {
-  "pythonVersion": "3.12", // Adjust to your project's Python version
+  "pythonVersion": "3.13", // Updated to match current Python version
   "pythonPlatform": "All",
-  "include": [
-    "."
-  ],
+  "include": ["services/*/src", "services/*/tests", "shared_libs", "tests"],
   "exclude": [
-    "**/node_modules",
+    "**/.git",
+    "**/.venv*",
     "**/__pycache__",
-    ".venv",
-    ".git"
+    "**/.pytest_cache",
+    "**/node_modules",
+    "**/.DS_Store",
+    "**/runs/**",
+    "**/notebooks/**",
+    "**/backup_removed_files/**",
+    "**/artifacts/**",
+    "**/wandb/**",
+    "**/data/**",
+    "**/models/**",
+    "**/analyse/reports/**",
+    "**/tools/token.json",
+    "**/tools/credentials.json",
+    "**/*.md",
+    "**/*.json",
+    "**/*.txt",
+    "**/*.yml",
+    "**/*.yaml",
+    "**/*.env*",
+    "**/*.log",
+    "**/*.csv",
+    "**/*.xml",
+    "**/*.html",
+    "**/*.css",
+    "**/*.js",
+    "**/*.ts",
+    "**/.file_cache/**",
+    "**/detections.json",
+    "**/tracks.json",
+    "**/*.pth",
+    "**/*.pt",
+    "**/*.ckpt",
+    "**/*.pkl",
+    "**/*.pickle",
+    "**/*.ipynb",
+    "**/*.jpg",
+    "**/*.jpeg",
+    "**/*.png",
+    "**/*.gif",
+    "**/*.bmp",
+    "**/*.tiff",
+    "**/*.mp4",
+    "**/*.avi",
+    "**/*.mov",
+    "**/*.mkv"
   ],
-  "typeCheckingMode": "basic", // Or "strict", "off", depending on your overall desire
-  "extraPaths": ["src", "."], // Add any paths Pylance needs to resolve imports
+  "typeCheckingMode": "basic", // Or "strict", "off", depending on your preference
+  "extraPaths": [
+    "shared_libs",
+    "services/service-tracking/src",
+    "services/service-training/src",
+    "services/service-api/src",
+    "services/service-cloud/src"
+  ], // Add paths for multi-service architecture
 
   "overrides": [
     {
-      "path": "rfdetr",  // Rules for the 'rfdetr' package (as it's untyped)
+      "path": "services/*/src/**",
+      "extraPaths": ["shared_libs"],
+      "pythonPlatform": "All"
+    },
+    {
+      "path": "shared_libs/**",
+      "typeCheckingMode": "strict" // Stricter checking for shared libraries
+    },
+    {
+      "path": "rfdetr", // Rules for the 'rfdetr' package (as it's untyped)
       "reportUnknownMemberType": "none",
       "reportUnknownVariableType": "none",
-      "reportAttributeAccessIssue": "none" 
+      "reportAttributeAccessIssue": "none"
       // The 'rfdetr' import is type-ignored, so these help manage related diagnostics.
     },
     {
       "path": "supervision", // Rules for the 'supervision' package
-      "reportPrivateImportUsage": "none" 
+      "reportPrivateImportUsage": "none"
     }
   ],
   "stubPath": ".vscode/PylanceStubs" // Optional: if you have stubs

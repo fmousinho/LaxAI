@@ -1,34 +1,164 @@
 {
-    // Use IntelliSense to learn about possible attributes.
-    // Hover to view descriptions of existing attributes.
-    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
-    "version": "0.2.0",
-    "configurations": [
-        
-        
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    // 🎯 TRACKING SERVICE CONFIGURATIONS
+    {
+      "name": "🎯 Track: Debug Pipeline",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/track/unverified_track_generator_pipeline.py",
+      "python": "${command:python.interpreterPath}",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/Users/fernandomousinho/Documents/Learning_to_Code/Vault/laxai-466119-fc03eb6bc2e0.json",
+        "GOOGLE_CLOUD_PROJECT": "laxai-466119"
+      },
+      "justMyCode": true
+    },
+    {
+      "name": "🎯 Track: Run Tests",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "python": "${command:python.interpreterPath}",
+      "args": ["tests/track/", "-v", "--tb=short"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      }
+    },
 
-        {
-            "name": "Debug laxai-train (Script)",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/src/scripts/train_all.py",
-            "python": "${command:python.interpreterPath}",
-            "args": [
-                "--tenant_id", "tenant1",
-                "--force_pretraining",
-                "--custom_name", "initial_fine_tune",
-                "--num_epochs", "50"
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}",
-            "env": {
-                "GOOGLE_APPLICATION_CREDENTIALS": "/Users/fernandomousinho/Documents/Learning_to_Code/Vault/laxai-466119-fc03eb6bc2e0.json",
-                "GOOGLE_CLOUD_PROJECT": "laxai-466119"
-            }
-        }
-       
-    ]
+    // 🧠 TRAINING SERVICE CONFIGURATIONS
+    {
+      "name": "🧠 Train: Debug Training Script",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/scripts/train_all.py",
+      "python": "${command:python.interpreterPath}",
+      "args": [
+        "--tenant_id",
+        "tenant1",
+        "--force_pretraining",
+        "--custom_name",
+        "debug_run",
+        "--num_epochs",
+        "5"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/Users/fernandomousinho/Documents/Learning_to_Code/Vault/laxai-466119-fc03eb6bc2e0.json",
+        "GOOGLE_CLOUD_PROJECT": "laxai-466119"
+      }
+    },
+    {
+      "name": "🧠 Train: Run Tests",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "python": "${command:python.interpreterPath}",
+      "args": ["services/service-training/tests/", "-v", "--tb=short"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}/services/service-training",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/shared_libs:${workspaceFolder}/services/service-training/src"
+      }
+    },
+
+    // 🌐 API SERVICE CONFIGURATIONS
+    {
+      "name": "🌐 API: Debug Server",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/api/v1/main.py",
+      "python": "${command:python.interpreterPath}",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/Users/fernandomousinho/Documents/Learning_to_Code/Vault/laxai-466119-fc03eb6bc2e0.json",
+        "GOOGLE_CLOUD_PROJECT": "laxai-466119"
+      }
+    },
+    {
+      "name": "🌐 API: Run Tests",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "python": "${command:python.interpreterPath}",
+      "args": ["tests/api/", "-v", "--tb=short"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      }
+    },
+
+    // ☁️ CLOUD SERVICE CONFIGURATIONS
+    {
+      "name": "☁️ Cloud: Debug Batch Processing",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/cloud/batch_processor.py",
+      "python": "${command:python.interpreterPath}",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/Users/fernandomousinho/Documents/Learning_to_Code/Vault/laxai-466119-fc03eb6bc2e0.json",
+        "GOOGLE_CLOUD_PROJECT": "laxai-466119"
+      }
+    },
+
+    // 🧪 TESTING CONFIGURATIONS
+    {
+      "name": "🧪 Test: Run All Tests",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "python": "${command:python.interpreterPath}",
+      "args": ["tests/", "-v", "--tb=short"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      }
+    },
+    {
+      "name": "🧪 Test: Debug Current File",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "python": "${command:python.interpreterPath}",
+      "args": ["${file}", "-v", "-s"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      }
+    },
+
+    // 📜 UTILITY CONFIGURATIONS
+    {
+      "name": "📜 Utility: Debug Current Python File",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "python": "${command:python.interpreterPath}",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/Users/fernandomousinho/Documents/Learning_to_Code/Vault/laxai-466119-fc03eb6bc2e0.json",
+        "GOOGLE_CLOUD_PROJECT": "laxai-466119"
+      }
+    }
+  ]
 }
-
-
-        

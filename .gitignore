@@ -1,24 +1,41 @@
-# Environment
-.venv312/
-.venv31211/
-.31211
-.env
+# Environment & Virtual Environments
+.venv*/
+.env*
+!.env.example
 
-model.pth
+# Service-specific virtual environments
+services/*/.venv/
+
+# Authentication & Credentials
+.auth/
 token.json
-results*
-.git/
 credentials.json
-debug*/
-runs/
-analyse/reports/
-notebooks/data/
-temp
+*.key
+*.pem
+
+# Model files & artifacts
+model.pth
+*.pth
+*.pt
+*.ckpt
+*.pkl
+*.pickle
 data/
 models/
 artifacts/
 wandb/
+
+# Results & Reports  
+results*
+debug*/
+runs/
+analyse/reports/
+notebooks/data/
 evaluation_results/
+temp/
+
+# Backup files from cleanup
+backup_removed_files/
 
 # Python cache files
 __pycache__/
@@ -28,7 +45,6 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
-
 # Build artifacts
 build/
 dist/
@@ -36,9 +52,12 @@ dist/
 .file_cache/
 
 # IDE / Editor specific
-.vscode/ # If you want to exclude VS Code settings
+.vscode/settings.json  # Allow workspace settings, exclude user settings
 
 # Log files
 *.log
 .coverage
-.gitignore
+
+# OS specific
+.DS_Store
+Thumbs.db
