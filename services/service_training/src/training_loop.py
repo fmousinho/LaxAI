@@ -332,11 +332,11 @@ class Training:
             raise ValueError(
                 f"Insufficient data for training! "
                 f"Dataset has {dataset_size} samples, but batch size is {self.batch_size}. "
-                f"This results in 0 batches. "
+                f"This results in 0 batches for {type} (drop_last={'True' if type == 'train' else 'False'}). "
                 f"Please either: "
                 f"1) Reduce batch_size to be smaller than dataset size, or "
                 f"2) Add more data to the dataset, or "
-                f"3) Use drop_last=False if you want to include the last incomplete batch"
+                f"3) For training, consider using a smaller batch_size"
             )
 
         # Log configuration
@@ -1423,7 +1423,7 @@ class Training:
             # Additional PyTorch internal cleanup
             if hasattr(torch, '_C') and hasattr(torch._C, '_cuda_clearCaches'):
                 try:
-                    torch._C._cuda_clearCaches()
+                    torch._C._cuda_clearCaches()  # type: ignore[attr-defined]
                 except Exception:
                     pass
             

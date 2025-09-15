@@ -208,6 +208,8 @@ class SiameseNet(nn.Module):
                     if not len_callable or not getitem_callable:
                         logger.warning("Backbone stages attribute found but does not support expected interface")
                     else:
+                        # Type cast to help Pylance understand this is a sized object
+                        stages = cast(list, stages)  # type: ignore
                         num_stages = len(stages)
                         for i in range(max(0, num_stages - unfreeze_layers), num_stages):
                             if i < num_stages:

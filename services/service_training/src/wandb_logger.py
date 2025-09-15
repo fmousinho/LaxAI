@@ -329,7 +329,7 @@ class WandbLogger:
                         device_str = str(next(model.parameters()).device)
                     except Exception:
                         device_str = device
-                    model.ensure_head_initialized(device=device_str)
+                    model.ensure_head_initialized(device=device_str)  # type: ignore
                 else:
                     dev = None
                     try:

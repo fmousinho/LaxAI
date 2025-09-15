@@ -1183,8 +1183,11 @@ class DataPrepPipeline(Pipeline):
                 frame_filename = f"{frame_guid}.jpg"
                 frame_blob_path = f"{frame_folder.rstrip('/')}/{frame_filename}"
 
+                # Encode frame to bytes for upload
+                _, encoded_frame = cv2.imencode('.jpg', cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+                frame_bytes = encoded_frame.tobytes()
 
-                success = self.tenant_storage.upload_from_bytes(frame_blob_path, frame)
+                success = self.tenant_storage.upload_from_bytes(frame_blob_path, frame_bytes)
 
                 if not success:
                     logger.error(f"Failed to upload {frame_guid} to storage path: {frame_blob_path}")

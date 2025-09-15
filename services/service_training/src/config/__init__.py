@@ -94,4 +94,28 @@ __all__ = [
     'TransformConfig',
     'BackgroundMaskConfig',
     'DebugConfig',
+
+    # --- Transform Functions and Classes (lazy-loaded) ---
+    'get_transforms',
+    'create_transforms_with_background_removal',
+    'BackgroundRemovalTransform',
+    'create_background_removal_transform',
+    'ensure_rgb_format',
+    'tensor_to_pil',
+
+    # --- Transform Constants ---
+    'TRANSFORMS',
+    'training_transforms',
+    'inference_transforms',
+    'validation_transforms',
+    'opencv_safe_transforms',
+    'opencv_safe_training_transforms',
+
+    # --- Background Removal Functions ---
+    'set_global_background_detector',
+    'get_global_background_detector',
+    'initialize_background_removal',
+    'is_background_removal_enabled',
+    'refresh_transform_instances',
+    'create_background_detector_from_images',
 ]
