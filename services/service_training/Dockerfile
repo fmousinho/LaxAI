@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for service_training
 # Stage 1: Base image with Python and system dependencies
-FROM python:3.11-slim as base
+FROM python:3.12-slim AS base
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Stage 2: Dependencies installation
-FROM base as dependencies
+FROM base AS dependencies
 
 # Copy shared libraries requirements first for better caching
 COPY shared_libs/requirements.txt /app/shared_libs/requirements.txt
@@ -37,7 +37,7 @@ RUN pip install --no-cache-dir -r shared_libs/requirements.txt
 RUN pip install --no-cache-dir -r services/service_training/requirements.txt
 
 # Stage 3: Application code
-FROM dependencies as application
+FROM dependencies AS application
 
 # Copy shared libraries
 COPY shared_libs/ /app/shared_libs/
@@ -73,7 +73,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Stage 4: Testing (optional, can be used for CI/CD)
-FROM application as testing
+FROM application AS testing
 
 # Install additional testing dependencies
 RUN pip install --no-cache-dir pytest-cov pytest-xdist
@@ -82,7 +82,7 @@ RUN pip install --no-cache-dir pytest-cov pytest-xdist
 # RUN python -m pytest tests/ -v
 
 # Final production stage
-FROM application as production
+FROM application AS production
 
 # Remove development dependencies and cleanup
 RUN pip uninstall -y pytest black flake8 || true
