@@ -243,7 +243,7 @@ class TrainPipeline(Pipeline):
                 raise InterruptedError("Cancelled before dataset instantiation")
 
             training_dataset = LacrossePlayerDataset(
-                image_dir=train_folders if dataset_mode == "single" else train_folders,
+                image_dir=train_folders[0] if dataset_mode == "single" else train_folders,
                 storage_client=self.storage_client,
                 transform=training_transforms,
                 min_images_per_player=min_images_per_player

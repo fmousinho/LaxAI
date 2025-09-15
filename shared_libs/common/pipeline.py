@@ -836,6 +836,10 @@ class Pipeline:
                         logger.warning(f"Failed to save checkpoint after step: {step_name}")
 
                 except Exception as e:
+                    # Re-raise InterruptedError to allow proper cancellation handling
+                    if isinstance(e, InterruptedError):
+                        raise
+                    
                     results["steps_failed"] += 1
                     error_msg = f"Step '{step_name}' failed: {str(e)}"
                     results["errors"].append(error_msg)

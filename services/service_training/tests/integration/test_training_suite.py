@@ -508,6 +508,124 @@ def test_pipeline_cancellation_with_pending_stop():
         # But the stop request should be set, which will cause cancellation when the pipeline runs
 
 
+@pytest.mark.integration
+def test_pipeline_status_saved_on_interruption():
+    """Test that pipeline status and progress are saved to checkpoint when interrupted mid-run."""
+    import json
+    import os
+    import sys
+    import threading
+    import time
+    from unittest.mock import MagicMock, patch
+
+    # Add the service_training src path to sys.path for imports
+    service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
+    sys.path.insert(0, service_src_path)
+
+    from shared_libs.common.google_storage import GoogleStorageClient
+    from shared_libs.common.pipeline import Pipeline, stop_pipeline
+
+    # Track uploaded files to verify checkpoint saving
+    uploaded_files = {}
+    checkpoint_saved = False
+    interruption_triggered = False
+
+    def mock_upload_from_string(blob_path, content):
+        """Mock storage upload that tracks checkpoint files."""
+        nonlocal checkpoint_saved
+        uploaded_files[blob_path] = content
+
+        # Mark checkpoint as saved if this is a checkpoint file
+        if '.checkpoint.json' in blob_path:
+            checkpoint_saved = True
+
+        return True
+
+    # Create a step that can be interrupted
+    def interruptible_step(context):
+        nonlocal interruption_triggered
+        # Simulate some work
+        time.sleep(0.1)
+
+        # Check if interruption should be triggered
+        if not interruption_triggered:
+            interruption_triggered = True
+            # Trigger interruption from another thread
+            threading.Thread(target=lambda: stop_pipeline("test_interruption_pipeline")).start()
+            time.sleep(0.05)  # Give time for stop request to be processed
+
+        return {"step_result": "completed", "data": [1, 2, 3]}
+
+    # Mock pipeline components
+    with patch('shared_libs.common.google_storage.get_storage') as mock_storage:
+        mock_client = MagicMock()
+        mock_client.upload_from_string = mock_upload_from_string
+        mock_storage.return_value = mock_client
+
+        # Create pipeline with multiple steps
+        step_definitions = {
+            "step1": {
+                "description": "First step",
+                "function": lambda ctx: {"result": "step1_done"}
+            },
+            "step2": {
+                "description": "Interruptible step",
+                "function": interruptible_step
+            },
+            "step3": {
+                "description": "This step should not run",
+                "function": lambda ctx: {"result": "step3_should_not_run"}
+            }
+        }
+
+        pipeline = Pipeline(
+            storage_client=mock_client,
+            step_definitions=step_definitions,
+            pipeline_name="test_interruption_pipeline",
+            verbose=True,
+            save_intermediate=True
+        )
+
+        # Run the pipeline - it should be interrupted during step2
+        try:
+            result = pipeline.run()
+        except Exception as e:
+            # Pipeline should complete with CANCELLED status, not raise exception
+            pytest.fail(f"Pipeline should not raise exception on interruption: {e}")
+
+        # Verify pipeline was cancelled
+        assert result["status"] == "cancelled"
+        assert "Pipeline cancelled" in str(result.get("errors", []))
+
+        # Verify checkpoint was saved
+        assert checkpoint_saved, "Checkpoint should have been saved during interruption"
+
+        # Find the checkpoint file
+        checkpoint_files = [path for path in uploaded_files.keys() if '.checkpoint.json' in path]
+        assert len(checkpoint_files) > 0, "Checkpoint file should exist"
+
+        checkpoint_path = checkpoint_files[0]
+        checkpoint_content = uploaded_files[checkpoint_path]
+        checkpoint_data = json.loads(checkpoint_content)
+
+        # Verify checkpoint contains interruption information
+        assert checkpoint_data["pipeline_name"] == "test_interruption_pipeline"
+        assert len(checkpoint_data["completed_steps"]) >= 1, "At least step1 should be completed"
+
+        # Verify step1 is completed but step2/step3 are not started (interrupted)
+        assert "step1" in checkpoint_data["completed_steps"]
+        assert "step2" not in checkpoint_data["completed_steps"]
+        assert "step3" not in checkpoint_data["completed_steps"]
+
+        # Verify pipeline summary shows correct step statuses
+        assert checkpoint_data["steps_summary"]["step1"]["status"] == "completed"
+        # step2 should remain "not_started" since it was interrupted before completion
+        assert checkpoint_data["steps_summary"]["step2"]["status"] == "not_started"
+        assert checkpoint_data["steps_summary"]["step3"]["status"] == "not_started"
+
+        print("✅ Pipeline interruption test passed - status correctly saved to checkpoint")
+
+
 def test_siamesenet_dino_can_download_and_initialize(tmp_path: Path):
     """Integration test: ensure SiameseNet downloads DINOv3 from Hugging Face and initializes."""
     import os

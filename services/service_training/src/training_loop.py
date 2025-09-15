@@ -325,6 +325,20 @@ class Training:
         else:
             raise ValueError(f"Invalid dataloader type: {type}. Use 'train' or 'val'.")
 
+        # Validate that we have at least 1 batch
+        active_dataloader = self.dataloader if type == 'train' else self.val_dataloader
+        if active_dataloader is not None and len(active_dataloader) == 0:
+            dataset_size = len(active_dataloader.dataset) if hasattr(active_dataloader.dataset, '__len__') else 'unknown'
+            raise ValueError(
+                f"Insufficient data for training! "
+                f"Dataset has {dataset_size} samples, but batch size is {self.batch_size}. "
+                f"This results in 0 batches. "
+                f"Please either: "
+                f"1) Reduce batch_size to be smaller than dataset size, or "
+                f"2) Add more data to the dataset, or "
+                f"3) Use drop_last=False if you want to include the last incomplete batch"
+            )
+
         # Log configuration
         active_dataloader = self.dataloader if type == 'train' else self.val_dataloader
         if active_dataloader is not None:
