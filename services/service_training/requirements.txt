@@ -1,0 +1,56 @@
+# Service Training Dependencies
+# Neural network frameworks
+torch>=2.0.0
+torchvision>=0.15.0
+transformers>=4.30.0
+huggingface-hub>=0.16.0
+
+# rfdetr and its common dependencies
+rfdetr>=0.1.0
+pycocotools>=2.0.7
+timm>=0.9.2
+matplotlib>=3.7.0
+seaborn>=0.12.2
+
+# Computer vision and image processing
+opencv-python>=4.8.0
+Pillow>=10.0.0
+supervision>=0.20.0
+
+# Web framework and API
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0
+
+# Machine learning and data science
+numpy>=1.24.0
+scikit-learn>=1.3.0
+scipy>=1.11.0
+
+# Experiment tracking and logging
+wandb>=0.15.0
+psutil>=5.9.0
+
+# Configuration and utilities
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+pyyaml>=6.0.0
+toml>=0.10.0
+python-dateutil>=2.8.0
+structlog>=23.1.0
+
+# Logging formatter
+python-json-logger>=2.0.7
+
+# Google Cloud dependencies (for storage)
+google-cloud-storage>=2.10.0
+google-cloud-secret-manager>=2.16.0
+
+# Development and testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+black>=23.0.0
+flake8>=6.0.0
+
+# Additional utilities that may be needed
+argparse-dataclass
+multiprocessing-logging
