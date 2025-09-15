@@ -19,7 +19,6 @@ from shared_libs.utils.cpu_memory import (CPUMemoryMonitor, clear_cpu_memory,
                                           cpu_memory_context,
                                           log_comprehensive_memory_stats)
 from shared_libs.utils.dataloader_memory import worker_init_fn
-from shared_libs.utils.evaluation_memory import log_evaluation_memory_usage
 from shared_libs.utils.gpu_memory import (GPUMemoryContext, clear_gpu_memory,
                                           log_gpu_memory_stats)
 
@@ -328,7 +327,13 @@ class Training:
         # Validate that we have at least 1 batch
         active_dataloader = self.dataloader if type == 'train' else self.val_dataloader
         if active_dataloader is not None and len(active_dataloader) == 0:
-            dataset_size = len(active_dataloader.dataset) if hasattr(active_dataloader.dataset, '__len__') else 'unknown'
+            # Safely get dataset size with proper type checking
+            dataset_size = 'unknown'
+            if hasattr(active_dataloader.dataset, '__len__'):
+                try:
+                    dataset_size = len(active_dataloader.dataset)  # type: ignore[arg-type]
+                except (TypeError, AttributeError):
+                    dataset_size = 'unknown'
             raise ValueError(
                 f"Insufficient data for training! "
                 f"Dataset has {dataset_size} samples, but batch size is {self.batch_size}. "
@@ -1031,8 +1036,6 @@ class Training:
             process = psutil.Process()
             memory_before_eval = process.memory_info().rss / 1024 / 1024  # MB
             logger.debug(f"Memory before evaluation: {memory_before_eval:.1f}MB")
-            
-            log_evaluation_memory_usage("Before validation evaluation", evaluator)
 
             try:
                 # Run the comprehensive evaluation (this also saves results to disk)
@@ -1101,8 +1104,6 @@ class Training:
                     logger.info(f"Evaluation memory usage: {memory_before_eval:.1f}MB → {memory_after_eval:.1f}MB (Δ{eval_memory_delta:+.1f}MB)")
             except Exception as memory_log_error:
                 logger.debug(f"Memory logging warning: {memory_log_error}")
-            
-            log_evaluation_memory_usage("After validation evaluation cleanup")
 
         # Additional cleanup of local variables
         try:

@@ -1179,6 +1179,10 @@ class DataPrepPipeline(Pipeline):
                                                         video_id=video_guid, 
                                                         frame_id=frame_guid)
                 
+                if frame_folder is None:
+                    logger.error(f"Failed to generate frame folder path for video {video_guid}, frame {frame_guid}")
+                    raise RuntimeError(f"Failed to generate frame folder path for video {video_guid}, frame {frame_guid}")
+                
                 # Save frame to Google Storage using structured path
                 frame_filename = f"{frame_guid}.jpg"
                 frame_blob_path = f"{frame_folder.rstrip('/')}/{frame_filename}"

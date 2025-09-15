@@ -160,6 +160,14 @@ class DINOv3Backbone(nn.Module):
         emb = self._head(feats)
         return emb
 
+    def get_attention_maps(self) -> dict:
+        """Return attention maps from the DINOv3 backbone if available.
+        
+        Note: DINOv3 models do not expose attention maps in this implementation.
+        This method exists for API compatibility with the ResNet-based SiameseNet.
+        """
+        return {}
+
 
 class SiameseNet(nn.Module):
     """Siamese network using a DINOv3 backbone.
@@ -262,24 +270,10 @@ class SiameseNet(nn.Module):
     def get_attention_maps(self, x: Optional[torch.Tensor] = None) -> dict:
         """Return attention maps from the backbone if available.
 
-        Note: capturing transformer attention internals is model-dependent. This
-        implementation is best-effort; if the underlying timm model exposes
-        attention maps/hooks they will be returned, otherwise an empty dict is
-        returned and a warning is logged.
+        Note: DINOv3 models do not expose attention maps in this implementation.
+        This method exists for API compatibility with the ResNet-based SiameseNet.
         """
-        # If an input was provided and the backbone hasn't registered hooks, try a forward pass
-        if x is not None:
-            # forward to populate any lazy structures
-            with torch.no_grad():
-                _ = self.backbone(x)
-
-        attn = self.backbone.get_attention_maps() if hasattr(self.backbone, 'get_attention_maps') else {}
-        if not attn:
-            logger.warning(
-                "No attention maps available from DINOv3 backbone. "
-                "Model may not expose internals."
-            )
-        return attn
+        return {}
 
     def ensure_head_initialized(self, device: str = "cpu", input_shape=(1, 3, 224, 224)) -> None:
         """
