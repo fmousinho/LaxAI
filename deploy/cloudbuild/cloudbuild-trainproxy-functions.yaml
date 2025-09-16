@@ -12,7 +12,7 @@ substitutions:
   _SERVICE_ACCOUNT: "googlebatch@${_GOOGLE_CLOUD_PROJECT}.iam.gserviceaccount.com"
   _FUNCTION_NAME: "laxai-training-proxy"
   _REGION: "us-central1"
-  _SOURCE_DIR: "services/service_cr_train_proxy"
+  _SOURCE_DIR: "services/service_cr_train_proxy/src"
 
 steps:
   - id: "deploy-cloud-function"
