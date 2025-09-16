@@ -1,11 +1,7 @@
 """API v1 schemas package."""
 
-from .training import (
-    TrainingRequest,
-    TrainingResponse,
-    TrainingStatus,
-    ErrorResponse
-)
+from .training import (ErrorResponse, TrainingRequest, TrainingResponse,
+                       TrainingStatus)
 
 __all__ = [
     "TrainingRequest",
