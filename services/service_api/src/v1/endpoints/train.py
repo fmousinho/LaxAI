@@ -1,7 +1,6 @@
-"""Training API endpoints for LaxAI API Service."""
-
 import json
 import logging
+import os
 import uuid
 from datetime import datetime
 
@@ -13,6 +12,8 @@ from ..schemas.training import TrainingRequest, TrainingResponse
 
 logger = logging.getLogger(__name__)
 
+JOB_NAME = "training-job"
+
 router = APIRouter(prefix="/train", tags=["training"])
 
 
@@ -20,8 +21,10 @@ class PubSubPublisher:
     """Pub/Sub publisher for training job requests."""
 
     def __init__(self):
-        self.project_id = "laxai-466119"  # Should come from env
-        self.topic_name = "training-jobs"
+        self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
+        if not self.project_id:
+            raise ValueError("GOOGLE_CLOUD_PROJECT environment variable not set")
+        self.topic_name = JOB_NAME
         self.publisher = pubsub_v1.PublisherClient()
         self.topic_path = self.publisher.topic_path(self.project_id, self.topic_name)
 
