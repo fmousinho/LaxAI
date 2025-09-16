@@ -44,12 +44,10 @@ COPY shared_libs/ /app/shared_libs/
 
 
 # Copy service training source code
-COPY services/service_training/ /app/services/service_training/
+COPY services/service_training/src/ /app/services/service_training/src/
 
 # Copy necessary root configuration files
 COPY config.toml /app/config.toml
-COPY pyrightconfig.json /app/pyrightconfig.json
-COPY pytest.ini /app/pytest.ini
 
 # Set PYTHONPATH globally for all users and entrypoints
 ENV PYTHONPATH=/app/shared_libs:/app/services/service_training/src
@@ -60,10 +58,10 @@ RUN chown -R appuser:appuser /app
 USER appuser
 
 # Working directory for the service
-WORKDIR /app
+WORKDIR /app/
 
 # Default command - can be overridden
-CMD ["python", "src/main.py"]
+CMD ["sh", "-c", "python services/service_training/src/main.py"]
 
 # Expose port if running as web service
 EXPOSE 8000
@@ -73,13 +71,13 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Stage 4: Testing (optional, can be used for CI/CD)
-FROM application AS testing
+# FROM application AS testing
 
-# Install additional testing dependencies
-RUN pip install --no-cache-dir pytest-cov pytest-xdist
+# # Install additional testing dependencies
+# RUN pip install --no-cache-dir pytest-cov pytest-xdist
 
-# Run tests (optional, uncomment if you want tests to run during build)
-# RUN python -m pytest tests/ -v
+# # Run tests (optional, uncomment if you want tests to run during build)
+# # RUN python -m pytest tests/ -v
 
 # Final production stage
 FROM application AS production

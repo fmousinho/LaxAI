@@ -108,7 +108,7 @@ class TrainingRequest(BaseModel):
         json_schema_extra={
             "example": {
                 "custom_name": "example_training_run",
-                "tenant_id": "tenant1",
+                "tenant_id": "",
                 "resume_from_checkpoint": False,
                 "training_params": EXAMPLE_REQUEST.get("training_params", {}),
                 "model_params": EXAMPLE_REQUEST.get("model_params", {}),

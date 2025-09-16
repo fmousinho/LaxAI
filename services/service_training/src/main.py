@@ -2,6 +2,10 @@
 Main FastAPI entry point for LaxAI.
 """
 import os
+import sys
+
+# Ensure shared_libs can be imported
+sys.path.insert(0, '/app')
 
 from shared_libs.utils.env_secrets import setup_environment_secrets
 
