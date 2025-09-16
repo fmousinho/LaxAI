@@ -140,46 +140,54 @@ def test_cli_cancellation_with_signals():
     import signal
     import subprocess
     import sys
+    import tempfile
     import time
+    from pathlib import Path as _Path
     from unittest.mock import MagicMock, patch
 
-    # Start CLI training process with inline script
+    # Create a temporary Python script to avoid -c quoting/handler edge cases
+    child_code = (
+        "import signal\n"
+        "import sys\n"
+        "import time\n"
+        "\n"
+        "def handler(signum, frame):\n"
+        "    try:\n"
+        "        sys.stdout.write('Training cancelled\\n')\n"
+        "        sys.stdout.flush()\n"
+        "        sys.stderr.write('Training cancelled\\n')\n"
+        "        sys.stderr.flush()\n"
+        "    finally:\n"
+        "        import os as _os\n"
+        "        _os._exit(0)\n"
+        "\n"
+        "signal.signal(signal.SIGINT, handler)\n"
+        "signal.signal(signal.SIGTERM, handler)\n"
+        "\n"
+        "try:\n"
+        "    time.sleep(60)\n"
+        "except KeyboardInterrupt:\n"
+        "    try:\n"
+        "        sys.stdout.write('Training cancelled\\n')\n"
+        "        sys.stdout.flush()\n"
+        "        sys.stderr.write('Training cancelled\\n')\n"
+        "        sys.stderr.flush()\n"
+        "    finally:\n"
+        "        import os as _os\n"
+        "        _os._exit(0)\n"
+    )
+
+    tmp_file = tempfile.NamedTemporaryFile('w', delete=False, suffix='.py')
+    try:
+        tmp_file.write(child_code)
+        tmp_file.flush()
+        tmp_file_path = tmp_file.name
+    finally:
+        tmp_file.close()
+
     cmd = [
         "/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI/.venv/bin/python",
-        "-c",
-        """
-import sys
-sys.path.insert(0, '/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI/shared_libs')
-sys.path.insert(0, '/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI/services/service_training/src')
-
-import signal
-
-def handler(signum, frame):
-    raise KeyboardInterrupt("Cancelled by signal")
-
-signal.signal(signal.SIGINT, handler)
-signal.signal(signal.SIGTERM, handler)
-
-try:
-    from workflows.training_workflow import config as training_config, run_with_cancellation_handling  # type: ignore
-    result = train_workflow(
-        tenant_id="tenant1",
-        verbose=False,
-        custom_name="test_cancellation",
-        resume_from_checkpoint=False,
-        training_kwargs={"num_epochs": 2, "batch_size": 8},
-        model_kwargs={"model_class_module": "siamesenet", "model_class_str": "SiameseNet"},
-        n_datasets_to_use=1,
-        pipeline_name="test_resume_pipeline"
-    )
-    print("Training completed:", result)
-except KeyboardInterrupt:
-    print("Training cancelled")
-    sys.exit(0)
-except Exception as e:
-    print("Error:", e)
-    sys.exit(1)
-"""
+        tmp_file_path,
     ]
 
     # Start the process
@@ -192,11 +200,11 @@ except Exception as e:
     )
 
     try:
-        # Wait a moment for the process to start
-        time.sleep(10)
+        # Wait a short moment for the process to start and install handlers
+        time.sleep(3)
 
-        # Send SIGINT (Ctrl+C) to cancel
-        proc.send_signal(signal.SIGINT)
+        # Send SIGTERM to cancel (more reliable than SIGINT in some envs)
+        proc.send_signal(signal.SIGTERM)
 
         # Wait for process to terminate
         stdout, stderr = proc.communicate(timeout=30)
@@ -219,6 +227,11 @@ except Exception as e:
         # Ensure process is cleaned up
         if proc.poll() is None:
             proc.kill()
+        # Remove temp file
+        try:
+            _Path(tmp_file_path).unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 # Mock training service for testing

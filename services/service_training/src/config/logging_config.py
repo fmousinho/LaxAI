@@ -12,7 +12,7 @@ def _is_notebook() -> bool:
             return True
         # Check for Jupyter
         try:
-            from IPython import get_ipython
+            from IPython.core.getipython import get_ipython
             shell = get_ipython().__class__.__name__
             if shell == 'ZMQInteractiveShell':
                 return True
@@ -70,6 +70,7 @@ else:
     LOGGING["handlers"]["stdout"]["formatter"] = "json"
 
 import warnings
+
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
