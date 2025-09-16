@@ -12,7 +12,7 @@ from ..schemas.training import TrainingRequest, TrainingResponse
 
 logger = logging.getLogger(__name__)
 
-JOB_NAME = "training-job"
+JOB_NAME = "training-jobs"
 
 router = APIRouter(prefix="/train", tags=["training"])
 
