@@ -85,7 +85,7 @@ class TrainingRequest(BaseModel):
         json_schema_extra = {
             "example": {
                 "custom_name": "my_training_run",
-                "tenant_id": "tenant1",
+                "tenant_id": "",
                 "resume_from_checkpoint": True,
                 "training_params": {
                     "num_epochs": 100,
@@ -94,14 +94,18 @@ class TrainingRequest(BaseModel):
                     "margin": 0.5,
                     "weight_decay": 0.0001,
                     "early_stopping_patience": 10,
-                    "train_ratio": 0.8
+                    "train_ratio": 0.8,
+                    "prefetch_factor": 2,
+                    "n_datasets_to_use": 10,
                 },
                 "model_params": {
                     "embedding_dim": 512,
                     "dropout_rate": 0.1,
                     "input_height": 224,
                     "input_width": 224,
-                    "enable_grass_mask": True
+                    "enable_grass_mask": True,
+                    "model_class_module": "siamesenet_dino",
+                    "model_class": "SiameseNet"
                 },
                 "eval_params": {
                     "number_of_workers": 4,
