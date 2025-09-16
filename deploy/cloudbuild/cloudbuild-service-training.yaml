@@ -4,24 +4,13 @@
 #                                                                          #
 ############################################################################
 
-# This Cloud Build file builds a Docker image, pushes it to Artifact
-# Registry, and optionally deploys it to a GPU-based Cloud Run Job.
+# This Cloud Build file builds a Docker image and pushes it to Artifact Registry.
 #
 # Usage:
-#   Full deployment (default): gcloud builds submit --config=cloudbuild-service-training.yaml
-#   Short deployment (build only): gcloud builds submit --config=cloudbuild-service-training.yaml --substitutions=_DEPLOY_MODE=short
-#
-# The DEPLOY_MODE substitution controls deployment behavior:
-#   - "full": Build image, setup Pub/Sub, and deploy Cloud Run Job
-#   - "short": Build and push image only (skip Pub/Sub setup and deployment)
-#
-# Note: Conditional steps are implemented using bash logic since the Cloud Build
-#       version doesn't support the 'condition' or 'when' fields.
+#   gcloud builds submit --config=deploy/cloudbuild/cloudbuild-service-training.yaml
 
 substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"
-  _SERVICE_ACCOUNT: "googlebatch@${_GOOGLE_CLOUD_PROJECT}.iam.gserviceaccount.com"
-  _DEPLOY_MODE: "short" # Can be "full" or "short"
 
 steps:
   # Build the service training image
