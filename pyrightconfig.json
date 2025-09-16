@@ -58,7 +58,8 @@
     "services/service-tracking/src",
     "services/service-training/src",
     "services/service-api/src",
-    "services/service-cloud/src"
+    "services/service-cloud/src",
+    "services/service_cr_train_proxy/src"
   ], // Add paths for multi-service architecture
 
   "overrides": [

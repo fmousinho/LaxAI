@@ -2,5 +2,9 @@
 # Minimal dependencies for Pub/Sub proxy service
 
 # Google Cloud Platform services
-google-cloud-pubsub>=2.18.0
-google-cloud-run>=0.10.0
+google-cloud-pubsub>=2.31.1
+google-cloud-run>=0.11.0
+
+# These are typically included as dependencies of google-cloud-pubsub
+google-api-core>=2.25.1
+protobuf>=6.32.1

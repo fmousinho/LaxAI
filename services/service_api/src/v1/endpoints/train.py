@@ -6,7 +6,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 from google.api_core.exceptions import GoogleAPIError
-from google.cloud import pubsub_v1
+from google.cloud import pubsub_v1. #type: ignore
 
 from ..schemas.training import TrainingRequest, TrainingResponse
 
