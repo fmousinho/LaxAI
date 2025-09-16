@@ -1,0 +1,60 @@
+############################################################################
+#                                                                          #
+#               SIMPLIFIED BUILDER FOR TRAINING PROXY SERVICE             #
+#                                                                          #
+############################################################################
+
+# This Cloud Build file builds a Docker image, pushes it to Artifact
+# Registry, and deploys it to a CPU-based Cloud Run service for the
+# training proxy that listens to Pub/Sub messages.
+
+substitutions:
+  _GOOGLE_CLOUD_PROJECT: "laxai-466119"
+  _SERVICE_ACCOUNT: "googlebatch@${_GOOGLE_CLOUD_PROJECT}.iam.gserviceaccount.com"
+  _WORK_DIR: "services/service_cr_train_proxy"
+
+steps:
+  - id: "build-and-tag-image"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-f"
+      - "${_WORK_DIR}/Dockerfile"
+      - "-t"
+      - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-train-proxy:latest"
+      - "--build-arg"
+      - "GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT}"
+      - "."
+
+  - id: "push-latest-image"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-train-proxy:latest"
+
+  - id: "deploy-to-cloud-run"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "gcloud"
+    args:
+      - "run"
+      - "deploy"
+      - "laxai-train-proxy"
+      - "--image=us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-train-proxy:latest"
+      - "--region=us-central1"
+      - "--cpu=1"
+      - "--memory=512Mi"
+      - "--min-instances=1" # Keep one instance running to listen for Pub/Sub
+      - "--max-instances=2"
+      - "--concurrency=1" # Pub/Sub messages are processed one at a time
+      - "--service-account=${_SERVICE_ACCOUNT}"
+      - "--set-env-vars=GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT},CLOUD_REGION=us-central1,PUBSUB_TOPIC=training-jobs,PUBSUB_SUBSCRIPTION=training-jobs-sub"
+      - "--no-allow-unauthenticated"
+      - "--quiet"
+
+images:
+  - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-train-proxy:latest"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: "3600s"
