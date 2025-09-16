@@ -1,0 +1,6 @@
+# Cloud Run Training Proxy Dependencies
+# Minimal dependencies for Pub/Sub proxy service
+
+# Google Cloud Platform services
+google-cloud-pubsub>=2.18.0
+google-cloud-run>=0.10.0
