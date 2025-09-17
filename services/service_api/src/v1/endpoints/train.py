@@ -6,13 +6,13 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 from google.api_core.exceptions import GoogleAPIError
-from google.cloud import pubsub_v1
+from google.cloud import pubsub_v1  # type: ignore
 
 from ..schemas.training import TrainingRequest, TrainingResponse
 
 logger = logging.getLogger(__name__)
 
-JOB_NAME = "training-job"
+JOB_NAME = "training-jobs"
 
 router = APIRouter(prefix="/train", tags=["training"])
 
@@ -33,6 +33,11 @@ class PubSubPublisher:
         # Generate unique task ID
         task_id = str(uuid.uuid4())
 
+        # Convert structured params to dictionaries for Pub/Sub message
+        training_params = request.training_params.dict(exclude_unset=True) if request.training_params else {}
+        model_params = request.model_params.dict(exclude_unset=True) if request.model_params else {}
+        eval_params = request.eval_params.dict(exclude_unset=True) if request.eval_params else {}
+
         # Create message data
         message_data = {
             "action": "create",
@@ -40,9 +45,9 @@ class PubSubPublisher:
             "custom_name": request.custom_name,
             "tenant_id": request.tenant_id,
             "resume_from_checkpoint": request.resume_from_checkpoint,
-            "training_params": request.training_params,
-            "model_params": request.model_params,
-            "eval_params": request.eval_params,
+            "training_params": training_params,
+            "model_params": model_params,
+            "eval_params": eval_params,
             "timestamp": datetime.utcnow().isoformat()
         }
 

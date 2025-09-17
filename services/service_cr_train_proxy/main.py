@@ -22,6 +22,7 @@ _TOPIC = "training-jobs"
 _SUBSCRIPTION = "training-jobs-sub"
 
 
+
 class TrainingJobProxy:
     """Proxy for handling training job requests via Pub/Sub."""
 
@@ -30,6 +31,7 @@ class TrainingJobProxy:
         self.region = os.getenv("CLOUD_REGION", "us-central1")
         self.topic_name = _TOPIC
         self.subscription_name = os.getenv("PUBSUB_SUBSCRIPTION", _SUBSCRIPTION)
+
 
         # Cloud Run client
         self.run_client = run_v1.JobsClient()

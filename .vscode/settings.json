@@ -7,11 +7,10 @@
     "./services/service_training/src",
     "./services/service-api/src",
     "./services/service-cloud/src",
-    "./services/service-tracking/src"
+    "./services/service-tracking/src",
+    "./services/service_cr_train_proxy/src"
   ],
   "python.analysis.autoImportCompletions": true,
-  "python.analysis.typeCheckingMode": "basic",
-
   // Environment Configuration
   "python.envFile": "${workspaceFolder}/.env",
 
@@ -45,7 +44,7 @@
 
   // Terminal Configuration
   "terminal.integrated.env.osx": {
-    "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/services/service_training/src:${workspaceFolder}/services/service-api/src:${workspaceFolder}/services/service-cloud/src:${workspaceFolder}/services/service-tracking/src:${workspaceFolder}/shared_libs"
+    "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/services/service_training/src:${workspaceFolder}/services/service-api/src:${workspaceFolder}/services/service-cloud/src:${workspaceFolder}/services/service-tracking/src:${workspaceFolder}/services/service_cr_train_proxy/src:${workspaceFolder}/shared_libs"
   },
 
   // Python Testing Configuration for Multi-Service Setup
