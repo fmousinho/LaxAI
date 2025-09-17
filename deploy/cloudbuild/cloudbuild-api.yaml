@@ -10,6 +10,7 @@
 substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"
   _SERVICE_ACCOUNT: "googlebatch@${_GOOGLE_CLOUD_PROJECT}.iam.gserviceaccount.com"
+  _WORK_DIR: "services/service_api"
 
 steps:
   - id: "build-and-tag-image"
@@ -17,7 +18,7 @@ steps:
     args:
       - "build"
       - "-f"
-      - "docker/thin_api/Dockerfile"
+      - "${_WORK_DIR}/Dockerfile"
       - "-t"
       - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-api:latest"
       - "--build-arg"
@@ -43,7 +44,9 @@ steps:
       - "--region=us-central1"
       - "--cpu=1"
       - "--memory=512Mi"
-      - "--max-instances=3"
+      - "--min-instances=0"
+      - "--cpu-throttling"
+      - "--max-instances=2"
       - "--timeout=300s"
       - "--concurrency=10"
       - "--service-account=${_SERVICE_ACCOUNT}"
@@ -58,4 +61,3 @@ options:
   logging: CLOUD_LOGGING_ONLY
 
 timeout: "3600s"
-

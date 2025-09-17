@@ -11,13 +11,15 @@ import os
 from typing import Any, Dict, Optional
 
 from google.api_core.exceptions import GoogleAPIError
-from google.cloud import pubsub_v1
-from google.cloud import run_v1
+from google.cloud import pubsub_v1, run_v1
 from google.protobuf import json_format
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+_TOPIC = "training-jobs"
+_SUBSCRIPTION = "training-jobs-sub"
 
 
 class TrainingJobProxy:
@@ -26,8 +28,8 @@ class TrainingJobProxy:
     def __init__(self):
         self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT", "laxai-466119")
         self.region = os.getenv("CLOUD_REGION", "us-central1")
-        self.topic_name = os.getenv("PUBSUB_TOPIC", "training-jobs")
-        self.subscription_name = os.getenv("PUBSUB_SUBSCRIPTION", "training-jobs-sub")
+        self.topic_name = _TOPIC
+        self.subscription_name = os.getenv("PUBSUB_SUBSCRIPTION", _SUBSCRIPTION)
 
         # Cloud Run client
         self.run_client = run_v1.JobsClient()
@@ -204,6 +206,36 @@ class TrainingJobProxy:
             # Still acknowledge to prevent infinite retries
             message.ack()
 
+    def process_message_data(self, message_data: Dict[str, Any]) -> None:
+        """Process a message data dictionary (used by Cloud Functions)."""
+        try:
+            # Validate required fields
+            if "action" not in message_data:
+                raise ValueError("Message must contain 'action' field")
+
+            action = message_data.get("action")
+            logger.info(f"Processing message with action: {action}")
+
+            if action == "create":
+                job_id = self.start_training_job(message_data)
+                logger.info(f"Started training job: {job_id}")
+
+            elif action == "cancel":
+                job_id = message_data.get("job_id")
+                if not job_id:
+                    logger.error("Cancel action requires 'job_id' field")
+                    return
+
+                self.cancel_training_job(job_id)
+                logger.info(f"Cancelled training job: {job_id}")
+
+            else:
+                logger.warning(f"Unknown action: {action}")
+
+        except Exception as e:
+            logger.error(f"Error processing message: {e}")
+            raise
+
     def run(self) -> None:
         """Run the Pub/Sub subscriber."""
         logger.info(f"Starting Pub/Sub subscriber for topic: {self.topic_name}")
@@ -225,11 +257,63 @@ class TrainingJobProxy:
             logger.info("Subscriber stopped")
 
 
-def main():
-    """Main entry point."""
-    proxy = TrainingJobProxy()
-    proxy.run()
+def process_pubsub_message(event, context):
+    """Cloud Functions entry point for processing Pub/Sub messages."""
+    import base64
+    import json
+    import logging
+    import os
+
+    # Configure logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
+    try:
+        # Decode the Pub/Sub message
+        if 'data' in event:
+            message_data = base64.b64decode(event['data']).decode('utf-8')
+            data = json.loads(message_data)
+        else:
+            logger.error("No data in Pub/Sub message")
+            return
+
+        # Create proxy instance and process message
+        proxy = TrainingJobProxy()
+        proxy.process_message_data(data)
+
+        logger.info("Successfully processed Pub/Sub message")
+
+    except Exception as e:
+        logger.error(f"Error processing Pub/Sub message: {e}")
+        raise  # Re-raise to mark function as failed
 
 
-if __name__ == "__main__":
-    main()
+def process_message_data(self, message_data: Dict[str, Any]) -> None:
+    """Process a message data dictionary (used by Cloud Functions)."""
+    try:
+        # Validate required fields
+        if "action" not in message_data:
+            raise ValueError("Message must contain 'action' field")
+
+        action = message_data.get("action")
+        logger.info(f"Processing message with action: {action}")
+
+        if action == "create":
+            job_id = self.start_training_job(message_data)
+            logger.info(f"Started training job: {job_id}")
+
+        elif action == "cancel":
+            job_id = message_data.get("job_id")
+            if not job_id:
+                logger.error("Cancel action requires 'job_id' field")
+                return
+
+            self.cancel_training_job(job_id)
+            logger.info(f"Cancelled training job: {job_id}")
+
+        else:
+            logger.warning(f"Unknown action: {action}")
+
+    except Exception as e:
+        logger.error(f"Error processing message: {e}")
+        raise
