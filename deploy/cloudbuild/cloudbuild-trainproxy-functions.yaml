@@ -9,7 +9,7 @@
 
 substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"
-  _SERVICE_ACCOUNT: "googlebatch@${_GOOGLE_CLOUD_PROJECT}.iam.gserviceaccount.com"
+  _SERVICE_ACCOUNT: "googlebatch@laxai-466119.iam.gserviceaccount.com"
   _FUNCTION_NAME: "laxai-training-proxy"
   _REGION: "us-central1"
   _SOURCE_DIR: "services/service_cr_train_proxy"
