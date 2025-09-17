@@ -5,6 +5,7 @@
 pyyaml>=6.0.0
 toml>=0.10.0
 python-dotenv>=1.0.0
+python-json-logger>=2.0.0
 
 # Utilities and helpers
 python-dateutil>=2.8.0
