@@ -56,7 +56,7 @@ class TrainingJobProxy:
         resources_config = payload.get("resources", {})
         cpu = resources_config.get("cpu", "4")
         memory = resources_config.get("memory", "16Gi")
-        gpu_count = resources_config.get("gpu_count", 0)  # Default to 0 GPUs
+        gpu_count = resources_config.get("gpu_count", 1)  # Default to 0 GPUs
         timeout_seconds = payload.get("timeout_seconds", 36000)  # 10 hours
 
         # Build command arguments
@@ -92,8 +92,7 @@ class TrainingJobProxy:
                 containers=[container],
                 timeout=f"{timeout_seconds}s",
                 max_retries=2,
-            ),
-            parallelism=1
+            )
         )
         return job_spec
 
