@@ -4,7 +4,7 @@
 # Configuration management
 pyyaml>=6.0.0
 toml>=0.10.0
-python-dotenv>=1.0.0
+python-dotenv>=1.0.0gcloud builds list --region=REGION --limit=5
 python-json-logger>=2.0.0
 
 # Utilities and helpers

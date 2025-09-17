@@ -11,8 +11,9 @@ import os
 from typing import Any, Dict, Optional
 
 from google.api_core.exceptions import GoogleAPIError
-from google.cloud import pubsub_v1, run_v1
+from google.cloud import pubsub_v1, run_v1  #type: ignore
 from google.protobuf import json_format
+from google.pubsub_v1.types import PubsubMessage
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -174,12 +175,12 @@ class TrainingJobProxy:
         except GoogleAPIError as e:
             logger.error(f"Failed to cancel training job {job_name}: {e}")
             raise
-
-    def process_message(self, message: pubsub_v1.types.PubsubMessage) -> None:
+    def process_message(self, message: PubsubMessage) -> None:
         """Process a Pub/Sub message."""
         try:
             # Parse message
             message_data = self.parse_message(message.data)
+            action = message_data.get("action")
             action = message_data.get("action")
 
             logger.info(f"Processing message with action: {action}")
@@ -242,7 +243,7 @@ class TrainingJobProxy:
         """Run the Pub/Sub subscriber."""
         logger.info(f"Starting Pub/Sub subscriber for topic: {self.topic_name}")
 
-        def callback(message: pubsub_v1.types.PubsubMessage) -> None:
+        def callback(message) -> None:
             self.process_message(message)
 
         # Subscribe to the topic
