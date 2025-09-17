@@ -26,6 +26,8 @@ build/
 artifacts/**
 data/**
 models/**
+backup_removed_files/**
+
 
 # Large model files
 *.pth
