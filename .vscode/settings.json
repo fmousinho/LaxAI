@@ -68,5 +68,7 @@
     "**/.pytest_cache": true,
     "**/wandb": true,
     "**/artifacts": true
-  }
+  },
+  "python-envs.defaultEnvManager": "ms-python.python:venv",
+  "python-envs.pythonProjects": []
 }
