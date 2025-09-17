@@ -20,7 +20,7 @@ from typing import Any, Dict
 from google.api_core.exceptions import GoogleAPIError, NotFound
 from google.cloud import pubsub_v1
 from google.cloud.run_v2 import JobsClient
-from google.cloud.run_v2.types import Job, RunJobRequest
+from google.cloud.run_v2.types import Job, TaskTemplate, Container, RunJobRequest
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -99,31 +99,29 @@ class TrainingJobProxy:
                 if value is not None:
                     args.append(f"--{key}={value}")
 
-        container = {
-            "image": self.image_uri,
-            "command": self.training_command,
-            "args": args,
-            "resources": {
-                "limits": {"cpu": cpu, "memory": memory},
-                "startup_cpu_boost": True,
-            },
+        resources = {
+            "limits": {"cpu": cpu, "memory": memory},
+            "startup_cpu_boost": True,
         }
 
         # Add GPU if requested
         if gpu_count > 0:
-            container["resources"]["limits"]["nvidia.com/gpu"] = str(gpu_count)
+            resources["limits"]["nvidia.com/gpu"] = str(gpu_count)
+
+        container = Container(
+            image=self.image_uri,
+            command=self.training_command,
+            args=args,
+            resources=resources,
+        )
 
         job_spec = Job(
-            template={
-                "template": {
-                    "task_count": 1,
-                    "template": {
-                        "containers": [container],
-                        "timeout": f"{timeout_seconds}s",
-                        "max_retries": 2, # Configure task-level retries
-                    },
-                }
-            }
+            template=TaskTemplate(
+                containers=[container],
+                timeout=f"{timeout_seconds}s",
+                max_retries=2,
+                parallelism=1
+            )
         )
         return job_spec
 

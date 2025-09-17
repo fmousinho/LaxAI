@@ -34,9 +34,9 @@ class PubSubPublisher:
         task_id = str(uuid.uuid4())
 
         # Convert structured params to dictionaries for Pub/Sub message
-        training_params = request.training_params.dict(exclude_unset=True) if request.training_params else {}
-        model_params = request.model_params.dict(exclude_unset=True) if request.model_params else {}
-        eval_params = request.eval_params.dict(exclude_unset=True) if request.eval_params else {}
+        training_params = request.training_params.model_dump(exclude_unset=True) if request.training_params else {}
+        model_params = request.model_params.model_dump(exclude_unset=True) if request.model_params else {}
+        eval_params = request.eval_params.model_dump(exclude_unset=True) if request.eval_params else {}
 
         # Create message data
         message_data = {
@@ -48,7 +48,7 @@ class PubSubPublisher:
             "training_params": training_params,
             "model_params": model_params,
             "eval_params": eval_params,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         }
 
         # Convert to JSON bytes
@@ -60,6 +60,7 @@ class PubSubPublisher:
             message_id = future.result()
 
             logger.info(f"Published training request {task_id} to Pub/Sub (message_id: {message_id})")
+            logger.info(f"Message data: {message_data}")
             return task_id
 
         except GoogleAPIError as e:
