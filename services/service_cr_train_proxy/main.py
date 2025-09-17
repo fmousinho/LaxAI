@@ -190,7 +190,7 @@ class TrainingJobProxy:
 
 
 # Only instantiate the proxy when needed, not at module level
-def process_pubsub_message(event):
+def process_pubsub_message(event, context):
     """Cloud Function entry point for processing Pub/Sub messages."""
     try:
         if 'data' not in event:
