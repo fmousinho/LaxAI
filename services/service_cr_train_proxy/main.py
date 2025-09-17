@@ -1,322 +1,213 @@
 """
-Pub/Sub Job Proxy for LaxAI Training Service.
+Pub/Sub to Cloud Run Job Proxy for the LaxAI Training Service.
 
-This proxy listens to Pub/Sub messages on the "training-jobs" topic and
-starts/cancels Google Cloud Run Jobs for training operations.
+This Cloud Function is triggered by messages on a Pub/Sub topic. It creates or
+cancels Google Cloud Run Jobs based on the message content.
+
+Required Environment Variables:
+    - GOOGLE_CLOUD_PROJECT: The GCP project ID.
+    - CLOUD_REGION: The region for Cloud Run Jobs (e.g., 'us-central1').
+    - JOB_DOCKER_IMAGE_URI: The full URI of the Docker image for the training job.
 """
 
+import base64
 import json
 import logging
 import os
-from typing import Any, Dict, Optional
+import uuid
+from typing import Any, Dict
 
-from google.api_core.exceptions import GoogleAPIError
-from google.cloud import pubsub_v1, run_v1  #type: ignore
-from google.protobuf import json_format
-from google.pubsub_v1.types import PubsubMessage
+from google.api_core.exceptions import GoogleAPIError, NotFound
+from google.cloud import pubsub_v1
+from google.cloud.run_v2 import JobsClient
+from google.cloud.run_v2.types import Job, RunJobRequest
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-_TOPIC = "training-jobs"
-_SUBSCRIPTION = "training-jobs-sub"
-
-
 
 class TrainingJobProxy:
-    """Proxy for handling training job requests via Pub/Sub."""
+    """Handles the logic for creating and canceling Cloud Run Jobs."""
 
     def __init__(self):
-        self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT", "laxai-466119")
-        self.region = os.getenv("CLOUD_REGION", "us-central1")
-        self.topic_name = _TOPIC
-        self.subscription_name = os.getenv("PUBSUB_SUBSCRIPTION", _SUBSCRIPTION)
-
-
-        # Cloud Run client
-        self.run_client = run_v1.JobsClient()
-
-        # Pub/Sub subscriber
-        self.subscriber = pubsub_v1.SubscriberClient()
-        self.subscription_path = self.subscriber.subscription_path(
-            self.project_id, self.subscription_name
+        """Initializes the proxy and its clients."""
+        # Required configuration from environment
+        self.project_id = os.environ["GOOGLE_CLOUD_PROJECT"]
+        self.region = os.environ["CLOUD_REGION"]
+        # Default image URI if not provided
+        self.image_uri = os.getenv(
+            "JOB_DOCKER_IMAGE_URI", 
+            f"{self.region}-docker.pkg.dev/{self.project_id}/laxai-repo/laxai-service-training:latest"
         )
-
-        # Job configuration
-        self.job_name = "laxai-training-job"
-        self.image_uri = f"{self.region}-docker.pkg.dev/{self.project_id}/laxai-repo/laxai-service-training:latest"
-
-        # Command to run the training CLI
+        
+        # Initialize Google Cloud clients
+        self.run_client = JobsClient()
+        self.parent = f"projects/{self.project_id}/locations/{self.region}"
+        
+        # Command to run inside the training job container
         self.training_command = [
             "python", "services/service_training/src/cli/train_cli.py"
         ]
 
-    def parse_message(self, message_data: bytes) -> Dict[str, Any]:
-        """Parse Pub/Sub message data."""
+    def _parse_message_payload(self, message_data: str) -> Dict[str, Any]:
+        """Parses and validates the JSON payload from a Pub/Sub message."""
         try:
-            data = json.loads(message_data.decode('utf-8'))
+            payload = json.loads(message_data)
+            action = payload.get("action")
 
-            # Validate required fields
-            if "action" not in data:
-                raise ValueError("Message must contain 'action' field")
+            if not action or action not in ["create", "cancel"]:
+                raise ValueError("Payload must contain a valid 'action' ('create' or 'cancel').")
 
-            if data["action"] not in ["create", "cancel"]:
-                raise ValueError(f"Unknown action: {data['action']}")
+            if action == "create" and "tenant_id" not in payload:
+                raise ValueError("A 'create' action requires a 'tenant_id'.")
 
-            if data["action"] == "create" and "tenant_id" not in data:
-                raise ValueError("Create action requires 'tenant_id' field")
-
-            if data["action"] == "cancel" and "job_id" not in data:
-                raise ValueError("Cancel action requires 'job_id' field")
-
-            return data
+            if action == "cancel" and "job_name" not in payload:
+                raise ValueError("A 'cancel' action requires a 'job_name'.")
+            
+            return payload
+        
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse message: {e}")
-            raise ValueError(f"Invalid JSON message: {e}")
+            logger.error(f"Failed to decode JSON message: {e}")
+            raise ValueError(f"Invalid JSON in message: {e}") from e
 
-    def create_job_request(self, message_data: Dict[str, Any]) -> run_v1.Job:
-        """Create a Cloud Run Job request from message data."""
 
-        # Extract parameters
-        tenant_id = message_data.get("tenant_id", "default")
-        custom_name = message_data.get("custom_name", "training_run")
-        training_params = message_data.get("training_params", {})
-        model_params = message_data.get("model_params", {})
-        eval_params = message_data.get("eval_params", {})
-        resume_from_checkpoint = message_data.get("resume_from_checkpoint", True)
+    def _build_job_spec(self, payload: Dict[str, Any]) -> Job:
+        """Constructs a Cloud Run Job object from the message payload."""
+        tenant_id = payload.get("tenant_id", "default")
+        custom_name = payload.get("custom_name", "training-run")
+        
+        # Allow resource configuration from the message, with sensible defaults
+        resources = payload.get("resources", {})
+        cpu = resources.get("cpu", "4")
+        memory = resources.get("memory", "16Gi")
+        gpu_count = resources.get("gpu_count", 1) # Default to 1 T4 GPU
+        
+        # Timeout in seconds, default to 10 hours
+        timeout_seconds = payload.get("timeout_seconds", 36000)
 
-        # Build container arguments
-        args = [
-            "--tenant_id", tenant_id,
-            "--custom_name", custom_name,
-        ]
-
-        if resume_from_checkpoint:
+        # Build container arguments from payload parameters
+        args = [f"--tenant_id={tenant_id}", f"--custom_name={custom_name}"]
+        
+        # Add boolean flags like --resume_from_checkpoint if they are true
+        if payload.get("resume_from_checkpoint", True):
             args.append("--resume_from_checkpoint")
+        
+        # Dynamically add other parameters
+        for param_group in ["training_params", "model_params", "eval_params"]:
+            for key, value in payload.get(param_group, {}).items():
+                if value is not None:
+                    args.append(f"--{key}={value}")
 
-        # Add training parameters
-        for key, value in training_params.items():
-            if value is not None:
-                args.extend([f"--{key}", str(value)])
-
-        # Add model parameters
-        for key, value in model_params.items():
-            if value is not None:
-                args.extend([f"--model_{key}", str(value)])
-
-        # Add eval parameters
-        for key, value in eval_params.items():
-            if value is not None:
-                args.extend([f"--eval_{key}", str(value)])
-
-        # Create job specification
-        job = run_v1.Job()
-        job.template.template.containers = [run_v1.Container()]
-        container = job.template.template.containers[0]
-        container.image = self.image_uri
-        container.command = self.training_command
-        container.args = args
-
-        # Set resource requirements
-        job.template.template.containers[0].resources.limits = {
-            "cpu": "4000m",
-            "memory": "16Gi",
-            "nvidia.com/gpu": "1"
+        container = {
+            "image": self.image_uri,
+            "command": self.training_command,
+            "args": args,
+            "resources": {
+                "limits": {"cpu": cpu, "memory": memory},
+                "startup_cpu_boost": True,
+            },
         }
 
-        # Set timeout (10 hours)
-        job.template.template.timeout.seconds = 36000
+        # Add GPU if requested
+        if gpu_count > 0:
+            container["resources"]["limits"]["nvidia.com/gpu"] = str(gpu_count)
 
-        return job
+        job_spec = Job(
+            template={
+                "template": {
+                    "task_count": 1,
+                    "template": {
+                        "containers": [container],
+                        "timeout": f"{timeout_seconds}s",
+                        "max_retries": 2, # Configure task-level retries
+                    },
+                }
+            }
+        )
+        return job_spec
 
-    def start_training_job(self, message_data: Dict[str, Any]) -> str:
-        """Start a training job in Cloud Run."""
+    def start_training_job(self, payload: Dict[str, Any]) -> str:
+        """Starts a training job in Cloud Run."""
+        custom_name = payload.get("custom_name", "training-run")
+        job_id = f"{custom_name}-{uuid.uuid4().hex[:8]}"
+
         try:
-            job = self.create_job_request(message_data)
+            job_spec = self._build_job_spec(payload)
+            
+            request = RunJobRequest(name=f"{self.parent}/jobs/{job_id}", overrides={})
+            # Note: For one-off runs, RunJob is often better than CreateJob + ExecuteJob
+            # It creates, runs, and optionally deletes the job. Here we create it.
+            # A better approach is to have a single "template" job and execute it.
+            # For this example, we create a unique job per request.
+            
+            created_job = self.run_client.create_job(parent=self.parent, job=job_spec, job_id=job_id)
+            logger.info(f"Successfully created training job: {created_job.name}")
+            
+            # Now run the job
+            operation = self.run_client.run_job(request=request)
+            logger.info(f"Running job... Waiting for it to complete. Operation: {operation.metadata.name}")
+            
+            # The run_job call is long-running. In a real scenario you might not wait.
+            # For a fire-and-forget proxy, you can just log the operation name and return.
+            # response = operation.result()
+            # logger.info(f"Job execution finished for: {response.name}")
 
-            # Generate unique job name
-            import uuid
-            custom_name = message_data.get("custom_name", "training_run")
-            job_id = f"{custom_name}-{uuid.uuid4().hex[:8]}"
-
-            # Create the job
-            request = run_v1.CreateJobRequest(
-                parent=f"projects/{self.project_id}/locations/{self.region}",
-                job=job,
-                job_id=job_id
-            )
-
-            operation = self.run_client.create_job(request)
-            response = operation.result()
-
-            logger.info(f"Created training job: {response.name}")
             return job_id
-
+        
         except GoogleAPIError as e:
-            if "already exists" in str(e):
-                logger.warning(f"Job {job_id} already exists, this might be a retry")
-                return job_id
-            logger.error(f"Failed to create training job: {e}")
+            logger.error(f"Failed to create or run training job {job_id}: {e}")
             raise
 
     def cancel_training_job(self, job_name: str) -> None:
-        """Cancel a running training job."""
+        """Cancels and deletes a Cloud Run Job."""
+        full_job_name = f"{self.parent}/jobs/{job_name}"
         try:
-            request = run_v1.DeleteJobRequest(
-                name=f"projects/{self.project_id}/locations/{self.region}/jobs/{job_name}"
-            )
-
-            operation = self.run_client.delete_job(request)
-            operation.result()
-
-            logger.info(f"Cancelled training job: {job_name}")
-
+            request = {"name": full_job_name}
+            operation = self.run_client.delete_job(request=request)
+            operation.result() # Wait for deletion to complete
+            logger.info(f"Successfully deleted training job: {job_name}")
+            
+        except NotFound:
+            logger.warning(f"Training job {job_name} not found. It may have already been deleted.")
         except GoogleAPIError as e:
-            logger.error(f"Failed to cancel training job {job_name}: {e}")
+            logger.error(f"Failed to delete training job {job_name}: {e}")
             raise
-    def process_message(self, message: PubsubMessage) -> None:
-        """Process a Pub/Sub message."""
-        try:
-            # Parse message
-            message_data = self.parse_message(message.data)
-            action = message_data.get("action")
-            action = message_data.get("action")
+    
+    def process_message(self, data: str):
+        """Processes the decoded Pub/Sub message data."""
+        payload = self._parse_message_payload(data)
+        action = payload["action"]
 
-            logger.info(f"Processing message with action: {action}")
-
-            if action == "create":
-                job_id = self.start_training_job(message_data)
-                logger.info(f"Started training job: {job_id}")
-
-            elif action == "cancel":
-                job_id = message_data.get("job_id")
-                if not job_id:
-                    logger.error("Cancel action requires 'job_id' field")
-                    return
-
-                self.cancel_training_job(job_id)
-                logger.info(f"Cancelled training job: {job_id}")
-
-            else:
-                logger.warning(f"Unknown action: {action}")
-
-            # Acknowledge the message immediately (as per requirements)
-            message.ack()
-
-        except Exception as e:
-            logger.error(f"Error processing message: {e}")
-            # Still acknowledge to prevent infinite retries
-            message.ack()
-
-    def process_message_data(self, message_data: Dict[str, Any]) -> None:
-        """Process a message data dictionary (used by Cloud Functions)."""
-        try:
-            # Validate required fields
-            if "action" not in message_data:
-                raise ValueError("Message must contain 'action' field")
-
-            action = message_data.get("action")
-            logger.info(f"Processing message with action: {action}")
-
-            if action == "create":
-                job_id = self.start_training_job(message_data)
-                logger.info(f"Started training job: {job_id}")
-
-            elif action == "cancel":
-                job_id = message_data.get("job_id")
-                if not job_id:
-                    logger.error("Cancel action requires 'job_id' field")
-                    return
-
-                self.cancel_training_job(job_id)
-                logger.info(f"Cancelled training job: {job_id}")
-
-            else:
-                logger.warning(f"Unknown action: {action}")
-
-        except Exception as e:
-            logger.error(f"Error processing message: {e}")
-            raise
-
-    def run(self) -> None:
-        """Run the Pub/Sub subscriber."""
-        logger.info(f"Starting Pub/Sub subscriber for topic: {self.topic_name}")
-
-        def callback(message) -> None:
-            self.process_message(message)
-
-        # Subscribe to the topic
-        streaming_pull_future = self.subscriber.subscribe(
-            self.subscription_path, callback=callback
-        )
-
-        logger.info(f"Listening for messages on {self.subscription_path}...")
-
-        try:
-            streaming_pull_future.result()
-        except KeyboardInterrupt:
-            streaming_pull_future.cancel()
-            logger.info("Subscriber stopped")
+        logger.info(f"Processing message with action: '{action}'")
+        
+        if action == "create":
+            job_id = self.start_training_job(payload)
+            logger.info(f"Initiated training job with ID: {job_id}")
+        elif action == "cancel":
+            job_name = payload["job_name"]
+            self.cancel_training_job(job_name)
 
 
-def process_pubsub_message(event, context):
-    """Cloud Functions entry point for processing Pub/Sub messages."""
-    import base64
-    import json
-    import logging
-    import os
-
-    # Configure logging
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)
-
+# Only instantiate the proxy when needed, not at module level
+def process_pubsub_message(event):
+    """Cloud Function entry point for processing Pub/Sub messages."""
     try:
-        # Decode the Pub/Sub message
-        if 'data' in event:
-            message_data = base64.b64decode(event['data']).decode('utf-8')
-            data = json.loads(message_data)
-        else:
-            logger.error("No data in Pub/Sub message")
+        if 'data' not in event:
+            logger.error("No 'data' field in the Pub/Sub message.")
             return
 
-        # Create proxy instance and process message
+        message_data = base64.b64decode(event['data']).decode('utf-8')
+        logger.info(f"Received message payload: {message_data}")
+        
+        # Instantiate proxy only when needed
         proxy = TrainingJobProxy()
-        proxy.process_message_data(data)
+        proxy.process_message(message_data)
+        
+        logger.info("Successfully processed Pub/Sub message.")
 
-        logger.info("Successfully processed Pub/Sub message")
-
-    except Exception as e:
+    except (ValueError, GoogleAPIError) as e:
         logger.error(f"Error processing Pub/Sub message: {e}")
-        raise  # Re-raise to mark function as failed
-
-
-def process_message_data(self, message_data: Dict[str, Any]) -> None:
-    """Process a message data dictionary (used by Cloud Functions)."""
-    try:
-        # Validate required fields
-        if "action" not in message_data:
-            raise ValueError("Message must contain 'action' field")
-
-        action = message_data.get("action")
-        logger.info(f"Processing message with action: {action}")
-
-        if action == "create":
-            job_id = self.start_training_job(message_data)
-            logger.info(f"Started training job: {job_id}")
-
-        elif action == "cancel":
-            job_id = message_data.get("job_id")
-            if not job_id:
-                logger.error("Cancel action requires 'job_id' field")
-                return
-
-            self.cancel_training_job(job_id)
-            logger.info(f"Cancelled training job: {job_id}")
-
-        else:
-            logger.warning(f"Unknown action: {action}")
-
-    except Exception as e:
-        logger.error(f"Error processing message: {e}")
+        # Re-raise the exception to signal failure to Cloud Functions,
+        # which will cause the message to be nack'd and retried.
         raise
