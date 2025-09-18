@@ -9,7 +9,7 @@ import os
 import threading
 from typing import Any, Dict, List, Optional
 
-from config.logging_config import print_banner
+from shared_libs.config.logging_config import print_banner
 from parameter_registry import parameter_registry
 from scipy import datasets
 from train_pipeline import TrainPipeline

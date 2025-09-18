@@ -11,7 +11,7 @@ import sys
 import threading
 from typing import Optional
 
-from config.logging_config import print_banner
+from shared_libs.config.logging_config import print_banner
 from parameter_registry import parameter_registry
 from workflows.training_workflow import TrainingWorkflow
 

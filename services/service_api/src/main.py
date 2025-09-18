@@ -15,7 +15,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import List
 
-import config.logging_config
+from shared_libs.config import logging_config
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 # Import API routers

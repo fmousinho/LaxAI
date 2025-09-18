@@ -2,6 +2,7 @@ import logging.config
 import sys
 import time
 import warnings
+import os
 
 LOGGING_LINE_SIZE = 110
 
@@ -78,6 +79,18 @@ warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 logging.config.dictConfig(LOGGING)
+
+# Setup Google Cloud Logging if in cloud environment
+if os.getenv('K_SERVICE') or os.getenv('GAE_ENV') or os.getenv('ENV_TYPE') == 'gcp':
+    try:
+        from google.cloud import logging as cloud_logging
+        # Setup Google Cloud Logging
+        client = cloud_logging.Client()
+        handler = client.get_default_handler()
+        logging.getLogger().addHandler(handler)
+    except ImportError:
+        # google-cloud-logging not available, continue with stdout logging
+        pass
 
 
 def print_banner() -> None:

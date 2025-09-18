@@ -16,7 +16,7 @@ import multiprocessing as mp
 from contextlib import asynccontextmanager
 from typing import List
 
-import config.logging_config
+from shared_libs.config import logging_config
 from endpoints.train import router as train_router
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

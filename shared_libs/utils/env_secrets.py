@@ -353,17 +353,16 @@ def setup_environment_secrets():
     2. Google Colab (with userdata API and Secret Manager fallback)
     3. Google Cloud Platform (with metadata service, default credentials, and Secret Manager)
     """
-    env_info = dict()
     try:
         if is_running_in_colab():
             set_google_application_credentials()
-            env_info["type"] = "colab"
+            os.environ["ENV_TYPE"] = "colab"
         elif is_running_in_gcp():
             verify_gcp_credentials()
-            env_info["type"] = "gcp"
+            os.environ["ENV_TYPE"] = "gcp"
         else:
             set_google_application_credentials()
-            env_info["type"] = "local"
+            os.environ["ENV_TYPE"] = "local"
 
         load_secrets(CONFIG.get("secrets", {}))
     except Exception as e:

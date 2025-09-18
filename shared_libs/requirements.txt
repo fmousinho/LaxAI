@@ -4,7 +4,7 @@
 # Configuration management
 pyyaml>=6.0.0
 toml>=0.10.0
-python-dotenv>=1.0.0gcloud builds list --region=REGION --limit=5
+python-dotenv>=1.0.0
 python-json-logger>=2.0.0
 
 # Utilities and helpers
@@ -12,6 +12,7 @@ python-dateutil>=2.8.0
 
 # Logging and monitoring
 structlog>=23.1.0
+google-cloud-logging>=3.0.0
 
 # Development dependencies (for shared lib testing)
 pytest>=7.4.0
