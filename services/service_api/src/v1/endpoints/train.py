@@ -84,7 +84,7 @@ async def start_training(request: TrainingRequest) -> TrainingResponse:
             task_id=task_id,
             status="queued",
             message="Training job has been queued successfully",
-            created_at=datetime.utcnow().isoformat()
+            created_at=datetime.now().isoformat()
         )
 
     except Exception as e:
@@ -113,7 +113,7 @@ async def cancel_training_job(task_id: str):
         message_data = {
             "action": "cancel",
             "job_id": task_id,  # This should match the job name created by the proxy
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         }
 
         # Convert to JSON bytes

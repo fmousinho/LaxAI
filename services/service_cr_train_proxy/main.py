@@ -1,13 +1,13 @@
 """
 Pub/Sub to Cloud Run Job Proxy for the LaxAI Training Service.
 
-This Cloud Function is triggered by messages on a Pub/Sub topic. It creates and
-executes Google Cloud Run Jobs based on the message content for training tasks.
+This Cloud Function is triggered by messages on a Pub/Sub topic. It executes the existing
+'laxai-service-training' Google Cloud Run Job (v2 API) with customized arguments based on
+the message content for training tasks.
 
-Required Environment Variables:
-    - GOOGLE_CLOUD_PROJECT: The GCP project ID.
-    - CLOUD_REGION: The region for Cloud Run Jobs (e.g., 'us-central1').
-    - JOB_DOCKER_IMAGE_URI: The full URI of the Docker image for the training job (optional, has default).
+Environment Variables:
+    - GOOGLE_CLOUD_PROJECT: Automatically populated by GCP with the project ID.
+    - CLOUD_REGION: Must be set manually (defaults to 'us-central1' if not provided).
 """
 
 import base64
@@ -19,45 +19,40 @@ from typing import Any, Dict
 
 from google.api_core.exceptions import GoogleAPIError, NotFound
 from google.cloud import pubsub_v1
-from google.cloud.run_v1 import JobsClient
-from google.cloud.run_v1.types import Job, TaskTemplate, Container, CreateJobRequest, DeleteJobRequest, ExecuteJobRequest
+from google.cloud.run_v2 import JobsClient
+from google.cloud.run_v2.types import Job, RunJobRequest, DeleteJobRequest
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+_JOB_NAME = "laxai-service-training"
+_CLOUD_REGION_DEFAULT = "us-central1"
 
 class TrainingJobProxy:
     """Handles the creation and execution of Cloud Run Jobs for training."""
 
     def __init__(self):
         """Initializes the proxy with GCP clients and configuration."""
+        # These are automatically populated by GCP
         self.project_id = os.environ["GOOGLE_CLOUD_PROJECT"]
-        self.region = os.environ["CLOUD_REGION"]
-        self.image_uri = os.getenv(
-            "JOB_DOCKER_IMAGE_URI",
-            f"{self.region}-docker.pkg.dev/{self.project_id}/laxai-repo/laxai-service-training:latest"
-        )
+
+        # CLOUD_REGION needs to be set manually in function configuration
+        self.region = os.environ.get("CLOUD_REGION", _CLOUD_REGION_DEFAULT)
 
         self.run_client = JobsClient()
         self.parent = f"projects/{self.project_id}/locations/{self.region}"
 
-        # Default training command
-        self.training_command = [
-            "python", "services/service_training/src/cli/train_cli.py"
-        ]
-
-    def _build_job_spec(self, payload: Dict[str, Any]) -> Job:
-        """Builds a Cloud Run Job specification from the payload."""
-        tenant_id = payload.get("tenant_id", "default")
+    def _build_run_request(self, payload: Dict[str, Any]) -> RunJobRequest:
+        """Builds a RunJobRequest for the existing laxai-service-training job with args overrides.
+        
+        This method leverages the pre-configured laxai-service-training job and only overrides
+        the container arguments to customize the training run.
+        """
+        tenant_id = payload.get("tenant_id")
+        if not tenant_id:
+            raise ValueError("tenant_id is required in the payload")
         custom_name = payload.get("custom_name", "training-run")
-
-        # Resource configuration with defaults
-        resources_config = payload.get("resources", {})
-        cpu = resources_config.get("cpu", "4")
-        memory = resources_config.get("memory", "16Gi")
-        gpu_count = resources_config.get("gpu_count", 1)  # Default to 0 GPUs
-        timeout_seconds = payload.get("timeout_seconds", 36000)  # 10 hours
 
         # Build command arguments
         args = [f"--tenant_id={tenant_id}", f"--custom_name={custom_name}"]
@@ -71,52 +66,35 @@ class TrainingJobProxy:
                 if value is not None:
                     args.append(f"--{key}={value}")
 
-        # Container resources
-        resources = {
-            "limits": {"cpu": cpu, "memory": memory},
-            "startup_cpu_boost": True,
-        }
-        if gpu_count > 0:
-            resources["limits"]["nvidia.com/gpu"] = str(gpu_count)
+        # Use the existing job with args override
+        job_name = f"{self.parent}/jobs/{_JOB_NAME}"
 
-        container = Container(
-            image=self.image_uri,
-            command=self.training_command,
-            args=args,
-            resources=resources,
-        )
-
-        # Job specification
-        job_spec = Job(
-            template=TaskTemplate(
-                containers=[container],
-                timeout=f"{timeout_seconds}s",
-                max_retries=2,
+        run_request = RunJobRequest(
+            name=job_name,
+            overrides=Job.Overrides(
+                task_count=1,  # Run single task
+                container_overrides=[
+                    Job.Overrides.ContainerOverride(
+                        args=args
+                    )
+                ]
             )
         )
-        return job_spec
+
+        return run_request
 
     def start_training_job(self, payload: Dict[str, Any]) -> str:
-        """Creates and executes a training job asynchronously."""
+        """Creates and executes a training job asynchronously using the existing laxai-service-training job."""
         custom_name = payload.get("custom_name", "training-run")
         job_id = f"{custom_name}-{uuid.uuid4().hex[:8]}"
 
         try:
-            job_spec = self._build_job_spec(payload)
+            # Build run request for existing job with args override
+            run_request = self._build_run_request(payload)
 
-            # Create the job
-            create_request = CreateJobRequest(
-                parent=self.parent,
-                job=job_spec,
-                job_id=job_id
-            )
-            created_job = self.run_client.create_job(request=create_request)
-            logger.info(f"Created training job: {created_job.name}")
-
-            # Execute the job asynchronously
-            execute_request = ExecuteJobRequest(name=created_job.name)
-            operation = self.run_client.execute_job(request=execute_request)
-            logger.info(f"Started execution of job: {job_id}, operation: {operation.operation.name}")
+            # Execute the existing job asynchronously with overrides
+            operation = self.run_client.run_job(request=run_request)
+            logger.info(f"Started execution of existing job 'laxai-service-training' with ID: {job_id}, operation: {operation.operation.name}")
 
             # Don't wait for completion - fire and forget
             return job_id
@@ -170,7 +148,21 @@ class TrainingJobProxy:
 
 
 def process_pubsub_message(event, context):
-    """Cloud Function entry point for Pub/Sub-triggered training jobs."""
+    """Cloud Function entry point for Pub/Sub-triggered training jobs.
+
+    Args:
+        event: Pub/Sub event data containing:
+            - data: Base64-encoded message payload
+            - attributes: Optional message attributes dict
+            - messageId: Unique message identifier
+            - publishTime: ISO 8601 timestamp
+            - orderingKey: For ordered messages (optional)
+        context: Event context containing:
+            - eventId: Unique event identifier
+            - timestamp: Event timestamp
+            - eventType: Event type (google.pubsub.topic.publish)
+            - resource: Resource information
+    """
     try:
         if 'data' not in event:
             logger.error("Missing 'data' in Pub/Sub event")
