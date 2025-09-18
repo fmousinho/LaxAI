@@ -11,10 +11,13 @@ import sys
 import threading
 from typing import Optional
 
+sys.path.insert(0, '/app')
+from shared_libs.config import logging_config
 from shared_libs.config.logging_config import print_banner
 from parameter_registry import parameter_registry
 from workflows.training_workflow import TrainingWorkflow
 
+logger = logging.getLogger(__name__)
 # Absolute imports
 from shared_libs.utils.env_secrets import setup_environment_secrets
 
