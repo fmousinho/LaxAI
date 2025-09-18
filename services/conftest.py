@@ -25,9 +25,10 @@ def setup_test_paths():
     # Define important paths
     shared_libs_path = project_root / "shared_libs"
     services_path = project_root / "services"
+    service_training_src_path = project_root / "services" / "service_training" / "src"
 
     # Add paths to sys.path if not already present
-    paths_to_add = [project_root, shared_libs_path, services_path]
+    paths_to_add = [project_root, shared_libs_path, services_path, service_training_src_path]
 
     for path in paths_to_add:
         if str(path) not in sys.path:

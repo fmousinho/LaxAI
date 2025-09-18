@@ -1,0 +1,254 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    // 🎯 TRACKING SERVICE TASKS
+    {
+      "label": "🎯 Track: Run Pipeline Tests",
+      "type": "shell",
+      "command": "python",
+      "args": ["-m", "pytest", "tests/track/", "-v", "--tb=short"],
+      "group": "test",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}/src"
+        }
+      },
+      "problemMatcher": ["$python"]
+    },
+    {
+      "label": "🎯 Track: Run Single Video Test",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "src/track/unverified_track_generator_pipeline.py",
+        "--video_path",
+        "test_video.mp4",
+        "--tenant_id",
+        "test_tenant"
+      ],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}/src",
+          "GOOGLE_APPLICATION_CREDENTIALS": "/Users/fernandomousinho/Documents/Learning_to_Code/Vault/laxai-466119-fc03eb6bc2e0.json",
+          "GOOGLE_CLOUD_PROJECT": "laxai-466119"
+        }
+      }
+    },
+
+    // 🧠 TRAINING SERVICE TASKS
+    {
+      "label": "🧠 Train: Quick Training Run",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "src/scripts/train_all.py",
+        "--tenant_id",
+        "tenant1",
+        "--custom_name",
+        "quick_test",
+        "--num_epochs",
+        "3"
+      ],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}/src",
+          "GOOGLE_APPLICATION_CREDENTIALS": "/Users/fernandomousinho/Documents/Learning_to_Code/Vault/laxai-466119-fc03eb6bc2e0.json",
+          "GOOGLE_CLOUD_PROJECT": "laxai-466119"
+        }
+      }
+    },
+    {
+      "label": "🧠 Train: Run Training Tests",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "-m",
+        "pytest",
+        "services/service-training/tests/",
+        "-v",
+        "--tb=short"
+      ],
+      "group": "test",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}/shared_libs:${workspaceFolder}/services/service-training/src"
+        }
+      },
+      "problemMatcher": "$python"
+    },
+
+    // 🌐 API SERVICE TASKS
+    {
+      "label": "🌐 API: Start Development Server",
+      "type": "shell",
+      "command": "python",
+      "args": ["src/api/v1/main.py"],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}/src",
+          "GOOGLE_APPLICATION_CREDENTIALS": "/Users/fernandomousinho/Documents/Learning_to_Code/Vault/laxai-466119-fc03eb6bc2e0.json",
+          "GOOGLE_CLOUD_PROJECT": "laxai-466119"
+        }
+      },
+      "isBackground": true
+    },
+    {
+      "label": "🌐 API: Run API Tests",
+      "type": "shell",
+      "command": "python",
+      "args": ["-m", "pytest", "tests/api/", "-v", "--tb=short"],
+      "group": "test",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}/src"
+        }
+      },
+      "problemMatcher": ["$python"]
+    },
+
+    // 🧪 GENERAL TESTING TASKS
+    {
+      "label": "🧪 Test: Run All Tests",
+      "type": "shell",
+      "command": "python",
+      "args": ["-m", "pytest", "tests/", "-v", "--tb=short"],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}/src"
+        }
+      },
+      "problemMatcher": ["$python"]
+    },
+    {
+      "label": "🧪 Test: Run Tests with Coverage",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "-m",
+        "pytest",
+        "tests/",
+        "--cov=src",
+        "--cov-report=html",
+        "--cov-report=term-missing"
+      ],
+      "group": "test",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}/src"
+        }
+      },
+      "problemMatcher": ["$python"]
+    },
+
+    // 🐳 DOCKER TASKS
+    {
+      "label": "🐳 Docker: Build Worker Image",
+      "type": "shell",
+      "command": "docker",
+      "args": [
+        "build",
+        "-f",
+        "docker/worker/Dockerfile",
+        "-t",
+        "laxai-worker:latest",
+        "."
+      ],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "🐳 Docker: Build API Image",
+      "type": "shell",
+      "command": "docker",
+      "args": [
+        "build",
+        "-f",
+        "docker/thin_api/Dockerfile",
+        "-t",
+        "laxai-api:latest",
+        "."
+      ],
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    }
+  ]
+}

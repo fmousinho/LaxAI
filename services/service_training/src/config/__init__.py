@@ -66,7 +66,7 @@ def __dir__():
     return sorted(list(base) + list(_TRANSFORM_EXPORTS))
 
 # Import logging configuration (inferred from usage in dataprep_pipeline.py)
-from . import logging_config
+from shared_libs.config import logging_config
 
 # Define the public API for the config package
 __all__ = [  # type: ignore[reportUnsupportedDunderAll]

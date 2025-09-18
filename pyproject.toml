@@ -1,0 +1,32 @@
+[tool.pytest.ini_options]
+# Specifies the minimum pytest version required.
+minversion = "6.0"
+
+# Defines the directories to search for tests.
+testpaths = [
+    "tests",
+    "sv-tests",
+    "services/service_training/tests",
+    "services/service_api/tests",
+    "services/service_tracking/tests",
+    "services/service_cr_train_proxy/tests"
+]
+
+# Glob patterns for test file discovery.
+python_files = "test_*.py"
+
+# Prefixes for test classes and functions.
+python_classes = "Test*"
+python_functions = "test_*"
+
+# Default command-line options for pytest.
+# -v for verbose, --tb=short for shorter tracebacks.
+addopts = "-v --tb=short"
+
+# Environment variables to be set during test runs.
+# This is a reliable way to set env vars without .env files.
+env = [
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1",
+    "GOOGLE_CLOUD_PROJECT=laxai-466119",
+    "PYTHONDONTWRITEBYTECODE=1"
+]

@@ -34,6 +34,7 @@ class Settings:
         self.host: str = os.getenv("HOST", "0.0.0.0")
         self.port: int = int(os.getenv("PORT", "8080"))
         self.reload: bool = os.getenv("RELOAD", "false").lower() == "true"
+        self.log_level: str = os.getenv("LOG_LEVEL", "info")
 
         # CORS settings
         self.cors_origins: List[str] = self._parse_cors_origins()
