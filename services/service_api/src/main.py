@@ -39,9 +39,6 @@ class Settings:
         self.cors_origins: List[str] = self._parse_cors_origins()
         self.cors_credentials: bool = os.getenv("CORS_CREDENTIALS", "true").lower() == "true"
 
-        # Log level
-        self.log_level: str = os.getenv("LOG_LEVEL", "info").lower()
-
     def _parse_cors_origins(self) -> List[str]:
         """Parse CORS origins from environment variable."""
         origins_env = os.getenv("CORS_ORIGINS", "*")
