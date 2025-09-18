@@ -71,14 +71,11 @@ class TrainingJobProxy:
 
         run_request = RunJobRequest(
             name=job_name,
-            overrides=Job.Overrides(
-                task_count=1,  # Run single task
-                container_overrides=[
-                    Job.Overrides.ContainerOverride(
-                        args=args
-                    )
-                ]
-            )
+            overrides={
+                "container_overrides": [{
+                    "args": args
+                }]
+            }
         )
 
         return run_request
@@ -122,22 +119,29 @@ class TrainingJobProxy:
         """Processes a decoded Pub/Sub message."""
         try:
             payload = json.loads(message_data)
+            logger.info(f"Parsed payload: {payload}")
+
             action = payload.get("action")
+            if not action:
+                raise ValueError("Action is required in the payload")
 
             if action not in ["create", "cancel"]:
                 raise ValueError(f"Invalid action: {action}")
 
             if action == "create":
-                if "tenant_id" not in payload:
+                tenant_id = payload.get("tenant_id")
+                if not tenant_id:
+                    logger.error(f"Missing tenant_id in payload. Available keys: {list(payload.keys())}")
                     raise ValueError("Create action requires tenant_id")
                 job_id = self.start_training_job(payload)
                 logger.info(f"Queued training job: {job_id}")
 
             elif action == "cancel":
-                if "job_name" not in payload:
+                job_name = payload.get("job_name")
+                if not job_name:
                     raise ValueError("Cancel action requires job_name")
-                self.cancel_training_job(payload["job_name"])
-                logger.info(f"Cancelled job: {payload['job_name']}")
+                self.cancel_training_job(job_name)
+                logger.info(f"Cancelled job: {job_name}")
 
         except (json.JSONDecodeError, ValueError) as e:
             logger.error(f"Invalid message format: {e}")
@@ -164,12 +168,15 @@ def process_pubsub_message(event, context):
             - resource: Resource information
     """
     try:
+        logger.info(f"Received event: {event}")
+        logger.info(f"Event keys: {list(event.keys()) if isinstance(event, dict) else 'Not a dict'}")
+
         if 'data' not in event:
             logger.error("Missing 'data' in Pub/Sub event")
             return
 
         message_data = base64.b64decode(event['data']).decode('utf-8')
-        logger.info(f"Processing Pub/Sub message: {message_data}")
+        logger.info(f"Decoded message data: {message_data}")
 
         proxy = TrainingJobProxy()
         proxy.process_message(message_data)
@@ -178,4 +185,6 @@ def process_pubsub_message(event, context):
 
     except Exception as e:
         logger.error(f"Error in process_pubsub_message: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise
