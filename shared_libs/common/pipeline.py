@@ -10,7 +10,7 @@ import json
 import logging
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
@@ -284,7 +284,7 @@ class Pipeline:
             if filename:
                 output_path = f"{base_path}/{step_name}_{filename}"
             else:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
                 output_path = f"{base_path}/{step_name}_{timestamp}.json"
 
             # Serialize the data
@@ -437,7 +437,7 @@ class Pipeline:
             {
                 "pipeline_name": self.pipeline_name,
                 "run_guid": self.run_guid,
-                "created_at": datetime.now().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
                 "verbose": self.verbose,
                 "save_intermediate": self.save_intermediate,
                 "steps": list(self.steps.keys()),
@@ -484,7 +484,7 @@ class Pipeline:
                 "pipeline_name": self.pipeline_name,
                 "run_guid": self.run_guid,
                 "run_folder": self.run_folder,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "completed_steps": completed_steps,
                 "context": serializable_context,
                 "steps_summary": {name: step.to_dict() for name, step in self.steps.items()},

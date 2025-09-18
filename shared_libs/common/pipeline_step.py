@@ -5,7 +5,7 @@ This module provides classes and enums for tracking the status, timing, and meta
 of individual steps in complex pipelines.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from enum import Enum
 
@@ -48,7 +48,7 @@ class PipelineStep:
     def start(self):
         """Mark step as started and record start time."""
         self.status = StepStatus.IN_PROGRESS
-        self.start_time = datetime.now()
+        self.start_time = datetime.now(timezone.utc)
 
     def complete(self, output_path: Optional[str] = None, metadata: Dict[str, Any] = {}):
         """
@@ -59,7 +59,7 @@ class PipelineStep:
             metadata: Additional metadata about the step execution
         """
         self.status = StepStatus.COMPLETED
-        self.end_time = datetime.now()
+        self.end_time = datetime.now(timezone.utc)
         self.output_path = output_path
         if metadata:
             self.metadata.update(metadata)
@@ -72,7 +72,7 @@ class PipelineStep:
             error_message: Description of the error that occurred
         """
         self.status = StepStatus.ERROR
-        self.end_time = datetime.now()
+        self.end_time = datetime.now(timezone.utc)
         self.error_message = error_message
 
     def skip(self, reason: str):
@@ -83,7 +83,7 @@ class PipelineStep:
             reason: Reason why the step was skipped
         """
         self.status = StepStatus.SKIPPED
-        self.end_time = datetime.now()
+        self.end_time = datetime.now(timezone.utc)
         self.error_message = reason
 
     @property

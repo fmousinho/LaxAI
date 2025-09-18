@@ -5,7 +5,7 @@ Tests the comprehensive memory fixes implemented to resolve end-of-epoch memory 
 
 import gc
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import psutil
@@ -95,7 +95,7 @@ def memory_monitor():
             gc.collect()
             current_memory = process.memory_info().rss / 1024 / 1024  # MB
             measurement = {
-                'timestamp': datetime.now(),
+                'timestamp': datetime.now(timezone.utc).isoformat(),
                 'memory_mb': current_memory,
                 'delta_mb': current_memory - (self.baseline_memory or 0),
                 'label': label

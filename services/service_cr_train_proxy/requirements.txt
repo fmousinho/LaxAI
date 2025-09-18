@@ -4,6 +4,9 @@
 # Google Cloud Platform services
 google-cloud-pubsub>=2.31.1
 google-cloud-run>=0.11.0
+google-cloud-firestore>=2.16.0
+google-cloud-run>=0.11.0
+
 
 # Core dependencies (included in Cloud Functions runtime)
 # google-api-core and protobuf are included in the Python 3.12 runtime

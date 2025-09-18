@@ -8,7 +8,7 @@ import tempfile
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -673,7 +673,7 @@ class WandbLogger:
             'model_state_dict': model_state_dict,
             'optimizer_state_dict': optimizer_state_dict,
             'loss': loss,
-            'timestamp': datetime.now().isoformat(),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
             'model_config': model_config or {}
         }
         

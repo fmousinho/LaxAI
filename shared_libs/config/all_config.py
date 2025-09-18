@@ -6,13 +6,13 @@ Centralized location for all hyperparameters and configuration settings.
 import sys
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
 
 def generate_unique_run_name() -> str:
     """Generate a unique run name with timestamp and short UUID"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     short_uuid = str(uuid.uuid4())[:8]
     return f"api_run_{timestamp}_{short_uuid}"
 
