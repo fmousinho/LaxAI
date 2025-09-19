@@ -93,12 +93,6 @@ class ParameterRegistry:
         """Generate argparse arguments for training parameters only"""
         return self._generate_cli_parser_for_params(self.training_parameters.values(), parser)
 
-    def generate_cli_parser_for_model(
-        self, parser: Optional[argparse.ArgumentParser] = None
-    ) -> argparse.ArgumentParser:
-        """Generate argparse arguments for model parameters only"""
-        return self._generate_cli_parser_for_params(self.model_parameters.values(), parser)
-
     def generate_cli_parser(
         self, parser: Optional[argparse.ArgumentParser] = None
     ) -> argparse.ArgumentParser:
@@ -185,44 +179,6 @@ class ParameterRegistry:
             raise ValueError(
                 f"Missing required hyperparameter '{param_name}' in kwargs and config."
             )
-
-    def generate_cli_parser(
-        self, parser: Optional[argparse.ArgumentParser] = None
-    ) -> argparse.ArgumentParser:
-        """Generate argparse arguments from parameter definitions"""
-        if parser is None:
-            parser = argparse.ArgumentParser()
-
-        for param in self.parameters.values():
-            kwargs = {"help": param.description, "dest": param.name, **param.cli_kwargs}
-
-            # Set type conversion
-            if param.type == ParameterType.FLOAT:
-                kwargs["type"] = float
-            elif param.type == ParameterType.INT:
-                kwargs["type"] = int
-            elif param.type == ParameterType.BOOL:
-                kwargs["action"] = (
-                    "store_true" if not kwargs.get("default", False) else "store_false"
-                )
-            elif param.type == ParameterType.LIST_STR:
-                kwargs["nargs"] = "+"
-                kwargs["type"] = str
-
-            # Add default from config if available
-            try:
-                default_value = self.get_config_value(param.name)
-                # Respect an explicit default provided via param.cli_kwargs
-                if "default" not in kwargs and default_value is not None:
-                    kwargs["default"] = default_value
-                    kwargs["help"] += f" (default: {default_value})"
-            except Exception:
-                if param.required:
-                    kwargs["required"] = True
-
-            parser.add_argument(param.cli_name or f"--{param.name}", **kwargs)
-
-        return parser
 
     def generate_pydantic_fields(self) -> Dict[str, Any]:
         """Generate Pydantic field definitions from parameter registry"""
