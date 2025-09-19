@@ -46,7 +46,8 @@ class TrainingWorkflow:
                  pipeline_name: Optional[str] = "default",
                  n_datasets_to_use: Optional[int] = None,
                  eval_kwargs: Optional[Dict[str, Any]] = None,
-                 task_id: Optional[str] = None):
+                 task_id: Optional[str] = None,
+                 cancellation_event: Optional[threading.Event] = None):
         """
         Initialize the training workflow.
 
@@ -63,6 +64,7 @@ class TrainingWorkflow:
             n_datasets_to_use: Limit number of datasets to use.
             eval_kwargs: Dictionary of evaluation parameters.
             task_id: Task ID for tracking this training run.
+            cancellation_event: Event for graceful cancellation handling.
         """
         self.tenant_id = tenant_id
         self.verbose = verbose
@@ -76,6 +78,7 @@ class TrainingWorkflow:
         self.n_datasets_to_use = n_datasets_to_use
         self.eval_kwargs = eval_kwargs or {}
         self.task_id = task_id
+        self.cancellation_event = cancellation_event
 
     def discover_datasets(self) -> List[str]:
         """
@@ -139,6 +142,21 @@ class TrainingWorkflow:
         logger.info(f"Training configuration: {self.training_kwargs}")
         logger.info(f"Model configuration: {self.model_kwargs}")
 
+        # Check for cancellation before starting
+        if self.cancellation_event and self.cancellation_event.is_set():
+            logger.info("Training cancelled before execution")
+            return {
+                "status": "cancelled",
+                "datasets_found": 0,
+                "steps_completed": 0,
+                "run_id": self.pipeline_name,
+                "pipeline_name": self.pipeline_name,
+                "run_guids": [],
+                "message": "Training cancelled before execution",
+                "custom_name": self.custom_name,
+                "dataset_mode": "none"
+            }
+
         try:
             datasets = self.discover_datasets()
             if not datasets:
@@ -174,6 +192,21 @@ class TrainingWorkflow:
 
             # Execute once over all datasets (list or single item)
             dataset_arg = datasets if dataset_mode == "multi" else datasets[0]
+            
+            # Check for cancellation before pipeline execution
+            if self.cancellation_event and self.cancellation_event.is_set():
+                logger.info("Training cancelled before pipeline execution")
+                return {
+                    "status": "cancelled",
+                    "datasets_found": len(datasets),
+                    "steps_completed": 0,
+                    "run_id": pipeline_identity,
+                    "pipeline_name": pipeline_identity,
+                    "run_guids": [],
+                    "message": "Training cancelled before pipeline execution",
+                    "custom_name": self.custom_name,
+                    "dataset_mode": dataset_mode
+                }
             
             # Add task_id to wandb tags if provided
             wandb_tags = self.wandb_tags.copy()
