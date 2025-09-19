@@ -5,6 +5,7 @@ CLI arguments, API schemas, and training code.
 """
 
 import argparse
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -97,12 +98,17 @@ class ParameterRegistry:
         self, parser: Optional[argparse.ArgumentParser] = None
     ) -> argparse.ArgumentParser:
         """Generate argparse arguments for all parameters (training, model, eval)"""
+        logger = logging.getLogger(__name__)
+        logger.info(f"Generating CLI parser with {len(self.training_parameters)} training, {len(self.model_parameters)} model, {len(self.eval_parameters)} eval parameters")
+        
         # Start with training parameters
         parser = self._generate_cli_parser_for_params(self.training_parameters.values(), parser)
         # Add model parameters
         parser = self._generate_cli_parser_for_params(self.model_parameters.values(), parser)
         # Add eval parameters
         parser = self._generate_cli_parser_for_params(self.eval_parameters.values(), parser)
+        
+        logger.info("CLI parser generation completed")
         return parser
 
     def generate_pydantic_fields_for_training(self) -> Dict[str, Any]:
@@ -249,6 +255,8 @@ class ParameterRegistry:
 
         # Track added arguments to detect duplicates
         added_args = set()
+        
+        logger.info(f"Adding {len(list(params))} parameters to CLI parser")
 
         for param in params:
             cli_name = param.cli_name or f"--{param.name.replace('_', '-')}"
@@ -278,10 +286,13 @@ class ParameterRegistry:
             try:
                 # Add argument
                 parser.add_argument(cli_name, **kwargs)
-                logger.debug(f"Added CLI argument '{cli_name}' for parameter '{param.name}'")
+                logger.debug(f"Added CLI argument: {cli_name} (dest: {param.name})")
             except argparse.ArgumentError as e:
                 logger.warning(f"Failed to add CLI argument '{cli_name}' for parameter '{param.name}': {e}")
                 continue
+            except Exception as e:
+                logger.error(f"Unexpected error adding CLI argument {cli_name}: {e}")
+                raise
 
         return parser
 

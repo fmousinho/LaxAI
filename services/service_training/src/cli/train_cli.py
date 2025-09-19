@@ -13,6 +13,7 @@ import threading
 from typing import Optional, List
 
 sys.path.insert(0, '/app')
+sys.path.insert(0, '/app/services/service_training/src')
 from shared_libs.config import logging_config
 from shared_libs.config.logging_config import print_banner
 from parameter_registry import parameter_registry
@@ -77,7 +78,14 @@ Examples:
     )
 
     # Use parameter registry to add training/model arguments
+    logger.info(f"Parameter registry has {len(parameter_registry.parameters)} total parameters")
+    logger.info(f"Training parameters: {list(parameter_registry.training_parameters.keys())}")
+    logger.info(f"Model parameters: {list(parameter_registry.model_parameters.keys())}")
+    logger.info(f"Eval parameters: {list(parameter_registry.eval_parameters.keys())}")
+    
     parser = parameter_registry.generate_cli_parser(parser)
+    
+    logger.info("CLI parser created with parameter registry arguments")
 
     # Add workflow-specific arguments
     parser.add_argument(
