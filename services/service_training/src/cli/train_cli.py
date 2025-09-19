@@ -45,29 +45,8 @@ def create_parser() -> argparse.ArgumentParser:
     """
     print_banner()
 
-    # Create a custom parser class that handles unrecognized arguments gracefully
-    class TolerantArgumentParser(argparse.ArgumentParser):
-        def parse_known_args(self, args=None, namespace=None):
-            """Parse known args and warn about unrecognized ones."""
-            try:
-                return super().parse_known_args(args, namespace)
-            except SystemExit:
-                # If parsing fails completely, try to extract what we can
-                logger.warning("Failed to parse some arguments. Attempting partial parsing...")
-                raise
-
-        def error(self, message):
-            """Override error to provide more helpful messages."""
-            if "unrecognized arguments:" in message:
-                unrecognized = message.split("unrecognized arguments:")[1].strip()
-                logger.warning(f"Unrecognized arguments detected: {unrecognized}")
-                logger.warning("These arguments will be ignored. Please check for typos or missing parameter definitions.")
-                # Don't exit, just warn
-                return
-            else:
-                super().error(message)
-
-    parser = TolerantArgumentParser(
+    # Create the standard ArgumentParser first
+    parser = argparse.ArgumentParser(
         description="LaxAI Training CLI - Run end-to-end training workflows.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
@@ -83,7 +62,15 @@ Examples:
     logger.info(f"Model parameters: {list(parameter_registry.model_parameters.keys())}")
     logger.info(f"Eval parameters: {list(parameter_registry.eval_parameters.keys())}")
     
+    print(f"🔧 About to generate CLI parser...")
     parser = parameter_registry.generate_cli_parser(parser)
+    print(f"🔧 CLI parser generated with parameter registry arguments")
+    
+    # Debug: Print all arguments that were added to the parser
+    print(f"🔍 Parser now has {len(parser._option_string_actions)} option string actions")
+    for option_string in sorted(parser._option_string_actions.keys()):
+        action = parser._option_string_actions[option_string]
+        print(f"   {option_string} -> {action.dest}")
     
     logger.info("CLI parser created with parameter registry arguments")
 
@@ -239,10 +226,23 @@ def main():
     Main CLI entry point.
     """
     try:
+        # Print all received arguments for debugging
+        print(f"🔍 Received CLI arguments: {sys.argv[1:]}")
+        
+        # Setup logging first
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        
         parser = create_parser()
         
         # Use parse_known_args to handle unrecognized arguments gracefully
         args, unknown_args = parser.parse_known_args()
+        
+        # Debug: Print what was parsed
+        print(f"✅ Parsed known args: {len(vars(args))} arguments")
+        print(f"⚠️  Unknown args: {unknown_args}")
         
         # Warn about unrecognized arguments
         if unknown_args:

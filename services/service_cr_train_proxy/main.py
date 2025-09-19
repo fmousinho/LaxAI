@@ -97,6 +97,7 @@ class TrainingJobProxy:
                     else:
                         arg_name = key
                     args.append(f"--{arg_name}={value}")
+                    logger.info(f"Added argument: --{arg_name}={value} (from {param_group}.{key})")
 
         # Use the existing job with args override
         job_name = f"{self.parent}/jobs/{_JOB_NAME}"

@@ -256,9 +256,11 @@ class ParameterRegistry:
         # Track added arguments to detect duplicates
         added_args = set()
         
-        logger.info(f"Adding {len(list(params))} parameters to CLI parser")
+        # Convert params to list to avoid consuming iterator multiple times
+        params_list = list(params)
+        logger.info(f"Adding {len(params_list)} parameters to CLI parser")
 
-        for param in params:
+        for param in params_list:
             cli_name = param.cli_name or f"--{param.name.replace('_', '-')}"
             
             # Check for duplicate arguments
@@ -286,7 +288,7 @@ class ParameterRegistry:
             try:
                 # Add argument
                 parser.add_argument(cli_name, **kwargs)
-                logger.debug(f"Added CLI argument: {cli_name} (dest: {param.name})")
+                logger.info(f"Successfully added CLI argument: {cli_name} (dest: {param.name})")
             except argparse.ArgumentError as e:
                 logger.warning(f"Failed to add CLI argument '{cli_name}' for parameter '{param.name}': {e}")
                 continue
@@ -294,6 +296,7 @@ class ParameterRegistry:
                 logger.error(f"Unexpected error adding CLI argument {cli_name}: {e}")
                 raise
 
+        logger.info(f"Successfully added {len(added_args)} CLI arguments")
         return parser
 
     def _generate_pydantic_fields_for_params(self, params) -> Dict[str, Any]:
