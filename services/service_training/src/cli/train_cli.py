@@ -104,6 +104,13 @@ Examples:
         help="Limit number of discovered datasets to use for training."
     )
 
+    parser.add_argument(
+        "--task_id",
+        type=str,
+        default=None,
+        help="Task ID for tracking this training run (used by proxy service)."
+    )
+
     return parser
 
 
@@ -143,7 +150,8 @@ def parse_args_to_workflow_kwargs(args: argparse.Namespace) -> dict:
         'wandb_tags': args.wandb_tags,
         'training_kwargs': training_kwargs,
         'model_kwargs': model_kwargs,
-        'n_datasets_to_use': args.n_datasets_to_use
+        'n_datasets_to_use': args.n_datasets_to_use,
+        'task_id': args.task_id
     }
 
     return workflow_kwargs

@@ -45,7 +45,8 @@ class TrainingWorkflow:
                  model_kwargs: Optional[Dict[str, Any]] = None,
                  pipeline_name: Optional[str] = "default",
                  n_datasets_to_use: Optional[int] = None,
-                 eval_kwargs: Optional[Dict[str, Any]] = None):
+                 eval_kwargs: Optional[Dict[str, Any]] = None,
+                 task_id: Optional[str] = None):
         """
         Initialize the training workflow.
 
@@ -61,6 +62,7 @@ class TrainingWorkflow:
             pipeline_name: Unique name for the pipeline.
             n_datasets_to_use: Limit number of datasets to use.
             eval_kwargs: Dictionary of evaluation parameters.
+            task_id: Task ID for tracking this training run.
         """
         self.tenant_id = tenant_id
         self.verbose = verbose
@@ -73,6 +75,7 @@ class TrainingWorkflow:
         self.pipeline_name = pipeline_name
         self.n_datasets_to_use = n_datasets_to_use
         self.eval_kwargs = eval_kwargs or {}
+        self.task_id = task_id
 
     def discover_datasets(self) -> List[str]:
         """
@@ -159,7 +162,7 @@ class TrainingWorkflow:
             all_kwargs.pop("pipeline_name", None)
 
             # Create single pipeline; override run_guid with external identity (task_id/pipeline_name)
-            pipeline_identity = self.pipeline_name or "training_run"
+            pipeline_identity = self.task_id or self.pipeline_name or "training_run"
             train_pipeline = TrainPipeline(
                 tenant_id=self.tenant_id,
                 verbose=self.verbose,
@@ -171,10 +174,16 @@ class TrainingWorkflow:
 
             # Execute once over all datasets (list or single item)
             dataset_arg = datasets if dataset_mode == "multi" else datasets[0]
+            
+            # Add task_id to wandb tags if provided
+            wandb_tags = self.wandb_tags.copy()
+            if self.task_id:
+                wandb_tags.append(f"task_id:{self.task_id}")
+            
             pipeline_result = train_pipeline.run(
                 dataset_name=dataset_arg,
                 resume_from_checkpoint=self.resume_from_checkpoint,
-                wandb_run_tags=self.wandb_tags,
+                wandb_run_tags=wandb_tags,
                 custom_name=self.custom_name,
             )
 

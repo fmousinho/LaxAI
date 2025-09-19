@@ -103,7 +103,7 @@ class TrainingRequest(BaseModel):
                     "dropout_rate": 0.1,
                     "input_height": 224,
                     "input_width": 224,
-                    "enable_grass_mask": True,
+                    "enable_grass_mask": False,
                     "model_class_module": "siamesenet_dino",
                     "model_class": "SiameseNet"
                 },
