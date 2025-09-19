@@ -31,8 +31,9 @@ def proxy():
     with patch("services.service_cr_train_proxy.main.JobsClient", MagicMock()), \
          patch("services.service_cr_train_proxy.main.firestore.Client", MagicMock()):
         proxy = TrainingJobProxy()
-    # Patch Firestore collection
-    proxy._runs_collection = DummyCollection()
+    # Patch Firestore collection with a MagicMock to match CollectionReference type
+    proxy._runs_collection = MagicMock(spec=["document"])
+    proxy._runs_collection.document.side_effect = DummyCollection().document
     # Patch run_client and operations_client
     proxy.run_client = MagicMock()
     proxy.run_client.run_job.return_value = MagicMock(
