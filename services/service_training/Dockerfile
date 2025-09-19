@@ -54,6 +54,13 @@ ENV PYTHONPATH=/app/shared_libs:/app/services/service_training/src
 
 # Create non-root user for security
 RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+# Create matplotlib config directory and give appuser permission
+RUN mkdir -p /home/appuser/.config/matplotlib && chown -R appuser:appuser /home/appuser
+
+# Create fontconfig cache directory and give appuser permission
+RUN mkdir -p /home/appuser/.cache/fontconfig && chown -R appuser:appuser /home/appuser/.cache
+
 RUN chown -R appuser:appuser /app
 USER appuser
 

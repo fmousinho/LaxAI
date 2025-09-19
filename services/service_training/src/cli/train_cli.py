@@ -124,16 +124,23 @@ def parse_args_to_workflow_kwargs(args: argparse.Namespace) -> dict:
     Returns:
         Dictionary of keyword arguments for TrainingWorkflow.
     """
-    # Extract training and model kwargs using parameter registry
+    # Extract training, model, and eval kwargs using parameter registry
     training_kwargs = {}
     model_kwargs = {}
+    eval_kwargs = {}
 
     for param_name, param_def in parameter_registry.parameters.items():
         arg_value = getattr(args, param_name, None)
         if arg_value is not None:
-            # Determine if it's a model parameter by checking config_path
+            # Determine parameter category by checking config_path
             if param_def.config_path.startswith('model_config'):
                 model_kwargs[param_name] = arg_value
+            elif param_def.config_path.startswith('evaluator_config'):
+                # Handle parameter name mapping for eval params
+                if param_name == "eval_prefetch_factor":
+                    eval_kwargs["prefetch_factor"] = arg_value
+                else:
+                    eval_kwargs[param_name] = arg_value
             else:  # training parameters
                 # Avoid elevating n_datasets_to_use into training_kwargs
                 if param_name == 'n_datasets_to_use':
@@ -150,6 +157,7 @@ def parse_args_to_workflow_kwargs(args: argparse.Namespace) -> dict:
         'wandb_tags': args.wandb_tags,
         'training_kwargs': training_kwargs,
         'model_kwargs': model_kwargs,
+        'eval_kwargs': eval_kwargs,
         'n_datasets_to_use': args.n_datasets_to_use,
         'task_id': args.task_id
     }

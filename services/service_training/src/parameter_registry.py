@@ -99,6 +99,18 @@ class ParameterRegistry:
         """Generate argparse arguments for model parameters only"""
         return self._generate_cli_parser_for_params(self.model_parameters.values(), parser)
 
+    def generate_cli_parser(
+        self, parser: Optional[argparse.ArgumentParser] = None
+    ) -> argparse.ArgumentParser:
+        """Generate argparse arguments for all parameters (training, model, eval)"""
+        # Start with training parameters
+        parser = self._generate_cli_parser_for_params(self.training_parameters.values(), parser)
+        # Add model parameters
+        parser = self._generate_cli_parser_for_params(self.model_parameters.values(), parser)
+        # Add eval parameters
+        parser = self._generate_cli_parser_for_params(self.eval_parameters.values(), parser)
+        return parser
+
     def generate_pydantic_fields_for_training(self) -> Dict[str, Any]:
         """Generate Pydantic field definitions for training parameters only"""
         return self._generate_pydantic_fields_for_params(self.training_parameters.values())
@@ -519,7 +531,7 @@ class ParameterRegistry:
                 config_path="evaluator_config.emb_batch_size",
             ),
             ParameterDefinition(
-                name="prefetch_factor",
+                name="eval_prefetch_factor",
                 type=ParameterType.INT,
                 description="Number of batches to prefetch for DataLoader",
                 config_path="evaluator_config.prefetch_factor",

@@ -89,7 +89,12 @@ class TrainingJobProxy:
         for param_group in ["training_params", "model_params", "eval_params"]:
             for key, value in payload.get(param_group, {}).items():
                 if value is not None:
-                    args.append(f"--{key}={value}")
+                    # Handle parameter name mapping for eval params
+                    if param_group == "eval_params" and key == "prefetch_factor":
+                        arg_name = "eval_prefetch_factor"
+                    else:
+                        arg_name = key
+                    args.append(f"--{arg_name}={value}")
 
         # Use the existing job with args override
         job_name = f"{self.parent}/jobs/{_JOB_NAME}"
