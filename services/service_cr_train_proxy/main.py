@@ -96,8 +96,11 @@ class TrainingJobProxy:
                         arg_name = "train_prefetch_factor"
                     else:
                         arg_name = key
-                    args.append(f"--{arg_name}={value}")
-                    logger.info(f"Added argument: --{arg_name}={value} (from {param_group}.{key})")
+                    
+                    # Convert underscores to dashes for CLI argument format
+                    cli_arg_name = arg_name.replace('_', '-')
+                    args.append(f"--{cli_arg_name}={value}")
+                    logger.info(f"Added argument: --{cli_arg_name}={value} (from {param_group}.{key})")
 
         # Use the existing job with args override
         job_name = f"{self.parent}/jobs/{_JOB_NAME}"

@@ -244,6 +244,10 @@ def main():
         print(f"✅ Parsed known args: {len(vars(args))} arguments")
         print(f"⚠️  Unknown args: {unknown_args}")
         
+        # Debug: Show a few of the parsed arguments
+        parsed_args = vars(args)
+        print(f"🔍 Sample parsed args: {list(parsed_args.keys())[:10]}...")
+        
         # Warn about unrecognized arguments
         if unknown_args:
             logger.warning(f"Unrecognized arguments detected: {' '.join(unknown_args)}")
