@@ -89,8 +89,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Final production stage
 FROM application AS production
 
-# Remove development dependencies and cleanup
-RUN pip uninstall -y pytest black flake8 || true
-
 # Optimize Python
 ENV PYTHONOPTIMIZE=1
