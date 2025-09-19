@@ -5,11 +5,12 @@ Command Line Interface for LaxAI Training.
 This module provides the CLI interface for running training workflows.
 """
 import argparse
+import difflib
 import logging
 import signal
 import sys
 import threading
-from typing import Optional
+from typing import Optional, List
 
 sys.path.insert(0, '/app')
 from shared_libs.config import logging_config
@@ -43,7 +44,29 @@ def create_parser() -> argparse.ArgumentParser:
     """
     print_banner()
 
-    parser = argparse.ArgumentParser(
+    # Create a custom parser class that handles unrecognized arguments gracefully
+    class TolerantArgumentParser(argparse.ArgumentParser):
+        def parse_known_args(self, args=None, namespace=None):
+            """Parse known args and warn about unrecognized ones."""
+            try:
+                return super().parse_known_args(args, namespace)
+            except SystemExit:
+                # If parsing fails completely, try to extract what we can
+                logger.warning("Failed to parse some arguments. Attempting partial parsing...")
+                raise
+
+        def error(self, message):
+            """Override error to provide more helpful messages."""
+            if "unrecognized arguments:" in message:
+                unrecognized = message.split("unrecognized arguments:")[1].strip()
+                logger.warning(f"Unrecognized arguments detected: {unrecognized}")
+                logger.warning("These arguments will be ignored. Please check for typos or missing parameter definitions.")
+                # Don't exit, just warn
+                return
+            else:
+                super().error(message)
+
+    parser = TolerantArgumentParser(
         description="LaxAI Training CLI - Run end-to-end training workflows.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
@@ -145,7 +168,11 @@ def parse_args_to_workflow_kwargs(args: argparse.Namespace) -> dict:
                 # Avoid elevating n_datasets_to_use into training_kwargs
                 if param_name == 'n_datasets_to_use':
                     continue
-                training_kwargs[param_name] = arg_value
+                # Handle parameter name mapping for training params
+                if param_name == "train_prefetch_factor":
+                    training_kwargs["prefetch_factor"] = arg_value
+                else:
+                    training_kwargs[param_name] = arg_value
 
     # Build workflow kwargs
     workflow_kwargs = {
@@ -165,13 +192,55 @@ def parse_args_to_workflow_kwargs(args: argparse.Namespace) -> dict:
     return workflow_kwargs
 
 
+def validate_and_suggest_args(unknown_args: List[str]) -> None:
+    """
+    Validate unknown arguments and provide helpful suggestions.
+    
+    Args:
+        unknown_args: List of unrecognized command line arguments
+    """
+    if not unknown_args:
+        return
+        
+    # Get all known parameter names for suggestions
+    known_params = set()
+    for param_name in parameter_registry.parameters.keys():
+        known_params.add(f"--{param_name}")
+        known_params.add(f"--{param_name.replace('_', '-')}")
+    
+    for unknown_arg in unknown_args:
+        if unknown_arg.startswith('--'):
+            arg_name = unknown_arg.split('=')[0]  # Handle --arg=value format
+            
+            # Look for close matches
+            from difflib import get_close_matches
+            suggestions = get_close_matches(arg_name, known_params, n=3, cutoff=0.6)
+            
+            if suggestions:
+                logger.warning(f"Unknown argument '{arg_name}'. Did you mean: {', '.join(suggestions)}?")
+            else:
+                # Check for common mistakes
+                if 'prefetch' in arg_name.lower():
+                    logger.warning(f"Unknown argument '{arg_name}'. Note: use --train-prefetch-factor for training or --eval-prefetch-factor for evaluation.")
+                else:
+                    logger.warning(f"Unknown argument '{arg_name}'. Check the parameter registry for available options.")
+
+
 def main():
     """
     Main CLI entry point.
     """
     try:
         parser = create_parser()
-        args = parser.parse_args()
+        
+        # Use parse_known_args to handle unrecognized arguments gracefully
+        args, unknown_args = parser.parse_known_args()
+        
+        # Warn about unrecognized arguments
+        if unknown_args:
+            logger.warning(f"Unrecognized arguments detected: {' '.join(unknown_args)}")
+            logger.warning("These arguments will be ignored. Please check for typos or missing parameter definitions.")
+            logger.info("Continuing with execution using recognized arguments only...")
 
         # Setup basic logging if not configured globally
         if not logging.getLogger().hasHandlers():

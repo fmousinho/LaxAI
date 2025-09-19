@@ -240,11 +240,26 @@ class ParameterRegistry:
     ) -> argparse.ArgumentParser:
         """Generate argparse arguments for a specific set of parameters"""
         import argparse
+        import logging
+        
+        logger = logging.getLogger(__name__)
 
         if parser is None:
             parser = argparse.ArgumentParser()
 
+        # Track added arguments to detect duplicates
+        added_args = set()
+
         for param in params:
+            cli_name = param.cli_name or f"--{param.name.replace('_', '-')}"
+            
+            # Check for duplicate arguments
+            if cli_name in added_args:
+                logger.warning(f"Duplicate CLI argument '{cli_name}' detected for parameter '{param.name}'. Ignoring second appearance.")
+                continue
+            
+            added_args.add(cli_name)
+            
             kwargs = {"help": param.description, "dest": param.name, **param.cli_kwargs}
 
             # Set type conversion
@@ -260,9 +275,13 @@ class ParameterRegistry:
                 kwargs["nargs"] = "+"
                 kwargs["type"] = str
 
-            # Add argument
-            cli_name = param.cli_name or f"--{param.name.replace('_', '-')}"
-            parser.add_argument(cli_name, **kwargs)
+            try:
+                # Add argument
+                parser.add_argument(cli_name, **kwargs)
+                logger.debug(f"Added CLI argument '{cli_name}' for parameter '{param.name}'")
+            except argparse.ArgumentError as e:
+                logger.warning(f"Failed to add CLI argument '{cli_name}' for parameter '{param.name}': {e}")
+                continue
 
         return parser
 
@@ -389,7 +408,7 @@ class ParameterRegistry:
                 config_path="training_config.min_images_per_player",
             ),
             ParameterDefinition(
-                name="prefetch_factor",
+                name="train_prefetch_factor",
                 type=ParameterType.INT,
                 description="Prefetch factor for data loading",
                 config_path="training_config.prefetch_factor",
