@@ -594,8 +594,8 @@ class TrackGeneratorPipeline(Pipeline):
                 if not cap.isOpened():
                     raise RuntimeError(f"Could not open video for resolution validation: {raw_video_path}")
                 
-                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
                 
                 if not self._validate_video_resolution(width, height):
                     raise RuntimeError(f"Video resolution {width}x{height} does not meet minimum requirements of {MIN_VIDEO_RESOLUTION[0]}x{MIN_VIDEO_RESOLUTION[1]}")
@@ -603,11 +603,14 @@ class TrackGeneratorPipeline(Pipeline):
             # Generate structured video ID using ID generator
             video_guid = create_video_id()
             
-            video_folder = self.path_manager.get_path("imported_video", 
-                                                    video_id=video_guid).rstrip('/')
+            path = self.path_manager.get_path("imported_video", 
+                                                    video_id=video_guid)
+            if path:
+                video_folder = path.rstrip('/')
+            else:
+                raise RuntimeError("Unable to determine video path")
             
             imported_video_blob_name = f"{video_folder}/{video_guid}.mp4"
-
 
             if not self.tenant_storage.move_blob(raw_video_path, imported_video_blob_name):
                 raise RuntimeError(f"Failed to move video from {raw_video_path} to {imported_video_blob_name}")
@@ -624,7 +627,7 @@ class TrackGeneratorPipeline(Pipeline):
             return context
 
         except Exception as e:
-            logger.error(f"Failed to import video {video_path}: {str(e)}")
+            logger.error(f"Failed to import video {raw_video_path}: {str(e)}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
     
     
@@ -711,7 +714,7 @@ class TrackGeneratorPipeline(Pipeline):
                     logger.error(f"Could not open video for detection: {video_blob_name}")
                     return {"status": StepStatus.ERROR.value, "error": f"Could not open video: {video_blob_name}"}
                 
-                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
                 logger.info(f"Processing {total_frames} frames for detection")
                 
                 # Seek to resume frame if resuming
@@ -720,7 +723,7 @@ class TrackGeneratorPipeline(Pipeline):
                     logger.info(f"Seeked to frame {resume_frame} for resume")
                 
                 frame_number = resume_frame if resume_frame > 0 else 0
-                previous_frame_rgb = None
+                previous_frame_rgb: np.ndarray
                 while True:
                     # Check for cancellation request
                     if self.is_stop_requested():

@@ -439,7 +439,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
     @staticmethod
     def calculate_affine_transform(
         prev_frame: np.ndarray, current_frame: np.ndarray
-    ) -> Optional[np.ndarray]:
+    ) -> np.ndarray:
         """
         Calculate the affine transformation matrix between two frames.
 
@@ -452,7 +452,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
             current_frame: The current video frame (BGR format)
 
         Returns:
-            A 2x3 affine transformation matrix if successful, otherwise None
+            A 2x3 affine transformation matrix if successful, otherwise returns an identity.
             (e.g., if not enough points are found for estimation).
         """
         prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
@@ -467,7 +467,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
             logger.warning(
                 "Could not calculate affine matrix because prev_pts is None (no good features found in previous frame)."
             )
-            return None
+            return AffineAwareByteTrack.get_identity_affine_matrix()
 
         # Calculate optical flow
         current_pts, status, err = cv2.calcOpticalFlowPyrLK(
@@ -482,7 +482,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
             logger.warning(
                 "Could not calculate affine matrix because current_pts or status is None after optical flow."
             )
-            return None
+            return AffineAwareByteTrack.get_identity_affine_matrix()
 
         # We need at least 3 points to estimate the affine transform
         if len(good_new) < 3:
@@ -490,7 +490,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
                 "Could not calculate affine matrix: not enough good points found after optical flow (found %d, need at least 3).",
                 len(good_new),
             )
-            return None
+            return AffineAwareByteTrack.get_identity_affine_matrix()
 
         # Estimate the affine transformation matrix
         # This matrix will map points from the prev_gray frame to the current_gray frame
@@ -500,7 +500,7 @@ class AffineAwareByteTrack(sv.ByteTrack):
             logger.warning(
                 "cv2.estimateAffine2D returned None, failed to estimate affine transform."
             )
-            return None
+            return AffineAwareByteTrack.get_identity_affine_matrix()
 
         # Ensure the affine matrix is float32
         m = m.astype(np.float32)
