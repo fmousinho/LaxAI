@@ -87,10 +87,22 @@ if os.getenv('K_SERVICE') or os.getenv('GAE_ENV') or os.getenv('ENV_TYPE') == 'g
         # Setup Google Cloud Logging
         client = cloud_logging.Client()
         handler = client.get_default_handler()
-        logging.getLogger().addHandler(handler)
+        
+        # In GCP, use only Google Cloud Logging to prevent duplication
+        LOGGING["loggers"][""] = {"handlers": [], "level": "INFO"}
+        logging.config.dictConfig(LOGGING)
+        
+        # Add the Google Cloud handler to the root logger
+        root_logger = logging.getLogger()
+        root_logger.addHandler(handler)
+        root_logger.setLevel(logging.INFO)
+        
     except ImportError:
         # google-cloud-logging not available, continue with stdout logging
         pass
+else:
+    # For local development, use stdout logging
+    logging.config.dictConfig(LOGGING)
 
 
 def print_banner() -> None:
