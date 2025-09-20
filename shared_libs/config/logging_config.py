@@ -94,8 +94,34 @@ if os.getenv('K_SERVICE') or os.getenv('GAE_ENV') or os.getenv('ENV_TYPE') == 'g
         
         # Add the Google Cloud handler to the root logger
         root_logger = logging.getLogger()
-        root_logger.addHandler(handler)
+        # Avoid duplicate handlers on reloads
+        if handler not in root_logger.handlers:
+            root_logger.addHandler(handler)
         root_logger.setLevel(logging.INFO)
+
+        # Ensure framework loggers (uvicorn/gunicorn/fastapi) propagate to root
+        # so their messages are captured by Cloud Logging handler.
+        framework_loggers = [
+            "uvicorn",
+            "uvicorn.error",
+            "uvicorn.access",
+            "uvicorn.asgi",
+            "uvicorn.lifespan",
+            "gunicorn",
+            "gunicorn.error",
+            "gunicorn.access",
+            "fastapi",
+        ]
+        for name in framework_loggers:
+            try:
+                lg = logging.getLogger(name)
+                # Remove existing stream handlers to avoid double stdout logging
+                lg.handlers = []
+                lg.propagate = True
+                lg.setLevel(logging.INFO)
+            except Exception:
+                # Be defensive—if a logger isn't present yet, skip
+                pass
         
     except ImportError:
         # google-cloud-logging not available, continue with stdout logging

@@ -50,10 +50,10 @@ def create_parser() -> argparse.ArgumentParser:
         description="LaxAI Training CLI - Run end-to-end training workflows.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  python -m cli.train_cli --tenant_id tenant1 --verbose
-  python -m cli.train_cli --tenant_id tenant1 --n_datasets_to_use 2 --custom_name my_training_run
-        """
+            Examples:
+            python -m cli.train_cli --tenant_id tenant1 --verbose
+            python -m cli.train_cli --tenant_id tenant1 --n_datasets_to_use 2 --custom_name my_training_run
+            """
     )
 
     # Use parameter registry to add training/model arguments
@@ -282,25 +282,26 @@ def main():
         print("\n" + "="*60)
         print("🏁 TRAINING WORKFLOW COMPLETED")
         print("="*60)
-        print(f"📈 Status: {result['status']}")
-        print(f"📁 Datasets found: {result['datasets_found']}")
-        print(f"✅ Successful runs: {result['successful_runs']}")
-        print(f"📊 Total runs: {result['total_runs']}")
+        print(f"📈 Status: {result.get('status', 'unknown')}")
+        print(f"📁 Datasets found: {result.get('datasets_found', 0)}")
+        print(f"✅ Successful runs: {result.get('successful_runs', 0)}")
+        print(f"📊 Total runs: {result.get('total_runs', 0)}")
 
-        if result['training_results']:
+        training_results = result.get('training_results') or []
+        if training_results:
             print("\n📋 Dataset Results:")
-            for training_result in result['training_results']:
+            for training_result in training_results:
                 status_icon = "✅" if training_result['status'] == 'success' else "❌"
                 print(f"  {status_icon} {training_result['dataset']}: {training_result['status']}")
 
-        print(f"\n🎯 Custom name: {result['custom_name']}")
+        print(f"\n🎯 Custom name: {result.get('custom_name', '')}")
         print("="*60)
 
         # Exit with appropriate code
-        if result['status'] == 'completed' and result['successful_runs'] > 0:
+        if result.get('status') == 'completed' and result.get('successful_runs', 0) > 0:
             print("🎉 Training workflow completed successfully!")
             sys.exit(0)
-        elif result['status'] == 'cancelled':
+        elif result.get('status') == 'cancelled':
             print("⏹️  Training workflow was cancelled.")
             sys.exit(130)
         else:

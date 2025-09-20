@@ -154,7 +154,11 @@ class TrainingWorkflow:
                 "run_guids": [],
                 "message": "Training cancelled before execution",
                 "custom_name": self.custom_name,
-                "dataset_mode": "none"
+                "dataset_mode": "none",
+                # Compatibility fields
+                "total_runs": 0,
+                "successful_runs": 0,
+                "training_results": [],
             }
 
         try:
@@ -170,7 +174,11 @@ class TrainingWorkflow:
                     "run_guids": [],
                     "message": "No datasets available for training",
                     "custom_name": self.custom_name,
-                    "dataset_mode": "none"
+                    "dataset_mode": "none",
+                    # Compatibility fields
+                    "total_runs": 0,
+                    "successful_runs": 0,
+                    "training_results": [],
                 }
 
             dataset_mode = "multi" if len(datasets) > 1 else "single"
@@ -222,6 +230,11 @@ class TrainingWorkflow:
 
             status = pipeline_result.get("status", "unknown")
             steps_completed = int(pipeline_result.get("steps_completed", 0))
+            steps_failed = int(pipeline_result.get("steps_failed", 0))
+
+            # Back-compat summary across (now single) run
+            total_runs = 1
+            successful_runs = 1 if (status.lower() == "completed" and steps_failed == 0) else 0
 
             return {
                 "status": "completed" if status == "completed" else status,
@@ -233,6 +246,10 @@ class TrainingWorkflow:
                 "custom_name": self.custom_name,
                 "dataset_mode": dataset_mode,
                 "pipeline_result": pipeline_result,
+                # Compatibility fields expected by CLI
+                "total_runs": total_runs,
+                "successful_runs": successful_runs,
+                "training_results": [],
             }
 
         except InterruptedError:
@@ -246,7 +263,11 @@ class TrainingWorkflow:
                 "run_guids": [self.pipeline_name],
                 "custom_name": self.custom_name,
                 "dataset_mode": "unknown",
-                "error": "Training workflow cancelled by user request"
+                "error": "Training workflow cancelled by user request",
+                # Compatibility fields
+                "total_runs": 0,
+                "successful_runs": 0,
+                "training_results": [],
             }
         except Exception as e:
             logger.error(f"Training workflow failed: {e}")
@@ -259,7 +280,11 @@ class TrainingWorkflow:
                 "run_guids": [self.pipeline_name],
                 "custom_name": self.custom_name,
                 "dataset_mode": "unknown",
-                "error": str(e)
+                "error": str(e),
+                # Compatibility fields
+                "total_runs": 0,
+                "successful_runs": 0,
+                "training_results": [],
             }
 
     # Removed _run_training_for_dataset: single pipeline now handles all datasets.
