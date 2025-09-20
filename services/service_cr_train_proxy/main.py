@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from google.api_core.exceptions import GoogleAPIError, NotFound
@@ -134,7 +135,6 @@ class TrainingJobProxy:
         custom_name = payload.get("custom_name", "training-run")
         job_id = f"{custom_name}-{uuid.uuid4().hex[:8]}"
 
-        import datetime
         try:
             # Build run request for existing job with args override
             run_request = self._build_run_request(payload)
@@ -151,7 +151,7 @@ class TrainingJobProxy:
             # Persist mapping task_id -> operation name (and metadata snapshot)
             task_id = payload.get("task_id")
             if task_id:
-                now = datetime.datetime.utcnow().isoformat() + "Z"
+                now = datetime.now(timezone.utc).isoformat() + "Z"
                 doc = {
                     "task_id": task_id,
                     "operation_name": op_name,
@@ -184,7 +184,7 @@ class TrainingJobProxy:
             task_id = payload.get("task_id")
             if task_id:
                 try:
-                    self._runs_collection.document(task_id).update({"status": "error", "error": str(e), "updated_at": datetime.datetime.utcnow().isoformat() + "Z"})
+                    self._runs_collection.document(task_id).update({"status": "error", "error": str(e), "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
                 except Exception:
                     pass
             raise
@@ -194,7 +194,6 @@ class TrainingJobProxy:
 
         This cancels the Long-Running Operation if available and updates the mapping status.
         """
-        import datetime
         try:
             doc_ref = self._runs_collection.document(task_id)
             doc = doc_ref.get()
@@ -207,20 +206,52 @@ class TrainingJobProxy:
                 logger.warning(f"No operation_name stored for task_id={task_id}; cannot cancel LRO")
                 return
 
-            # Access the operations client from the transport to cancel the operation
-            operations_client = self.run_client.transport.operations_client
+            # For Cloud Run jobs, cancellation is best-effort
+            # The operation might have already completed or the execution might not be cancellable
+            
             try:
-                operations_client.cancel_operation(name=op_name)
-                logger.info(f"Requested cancellation for operation {op_name} (task_id={task_id})")
-                doc_ref.update({"status": "cancelling", "updated_at": datetime.datetime.utcnow().isoformat() + "Z"})
+                # Get operation details to check status
+                operations_client = self.run_client.transport.operations_client
+                operation = operations_client.get_operation(name=op_name)
+                
+                # Check if operation is done
+                if operation.done:
+                    logger.info(f"Operation {op_name} is already completed (task_id={task_id})")
+                    doc_ref.update({"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
+                    return
+                
+                # Try to cancel the operation
+                try:
+                    operations_client.cancel_operation(name=op_name)
+                    logger.info(f"Requested cancellation for operation {op_name} (task_id={task_id})")
+                    doc_ref.update({"status": "cancelling", "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
+                except Exception as op_error:
+                    if "501" in str(op_error) or "Method not found" in str(op_error):
+                        logger.warning(f"Operation {op_name} cannot be cancelled (likely already completed or not cancellable): {op_error}")
+                        # Check operation status again
+                        try:
+                            updated_operation = operations_client.get_operation(name=op_name)
+                            if updated_operation.done:
+                                doc_ref.update({"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
+                            else:
+                                doc_ref.update({"status": "running", "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
+                        except Exception:
+                            doc_ref.update({"status": "unknown", "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
+                    else:
+                        raise op_error
+                        
             except Exception as ce:
                 logger.error(f"Error cancelling operation {op_name}: {ce}")
-                doc_ref.update({"status": "error", "error": str(ce), "updated_at": datetime.datetime.utcnow().isoformat() + "Z"})
+                # Don't re-raise the exception, just log it and update status
+                try:
+                    doc_ref.update({"status": "error", "error": str(ce), "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"Failed to cancel task_id={task_id}: {e}")
             # Try to update mapping with error
             try:
-                self._runs_collection.document(task_id).update({"status": "error", "error": str(e), "updated_at": datetime.datetime.utcnow().isoformat() + "Z"})
+                self._runs_collection.document(task_id).update({"status": "error", "error": str(e), "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
             except Exception:
                 pass
             raise

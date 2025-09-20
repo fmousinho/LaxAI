@@ -7,6 +7,7 @@ by CLI, API, or other interfaces.
 
 import logging
 import os
+import signal
 import sys
 import threading
 from typing import Any, Dict, List, Optional
@@ -88,6 +89,40 @@ class TrainingWorkflow:
                 logger.warning("google-cloud-firestore not available, status updates disabled")
             except Exception as e:
                 logger.error(f"Failed to initialize Firestore client: {e}")
+
+        # Set up signal handlers for external cancellation (e.g., Cloud Run job cancellation)
+        self._setup_signal_handlers()
+
+    def _setup_signal_handlers(self):
+        """Set up signal handlers for graceful cancellation."""
+        def signal_handler(signum, frame):
+            logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+            # Update Firestore status to cancelled if we have a task_id
+            if self.task_id and self.firestore_client:
+                try:
+                    self._update_firestore_status("cancelled", f"Cancelled by signal {signum}")
+                    logger.info(f"Updated Firestore status to cancelled for task_id: {self.task_id}")
+                except Exception as e:
+                    logger.error(f"Failed to update Firestore status on signal: {e}")
+            
+            # Set the cancellation event if it exists
+            if self.cancellation_event:
+                self.cancellation_event.set()
+                logger.info("Set cancellation event")
+            
+            # Stop any active pipelines
+            try:
+                from shared_libs.common.pipeline import stop_pipeline
+                if self.pipeline_name:
+                    stop_pipeline(self.pipeline_name)
+                    logger.info(f"Requested pipeline stop for: {self.pipeline_name}")
+            except Exception as e:
+                logger.error(f"Failed to stop pipeline: {e}")
+
+        # Register signal handlers
+        signal.signal(signal.SIGTERM, signal_handler)
+        signal.signal(signal.SIGINT, signal_handler)
+        logger.info("Signal handlers registered for graceful cancellation")
 
     def discover_datasets(self) -> List[str]:
         """
