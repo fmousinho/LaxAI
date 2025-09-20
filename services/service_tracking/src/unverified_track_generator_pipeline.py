@@ -86,7 +86,7 @@ import json
 import numpy as np
 import asyncio
 from typing import List, Dict, Any, Optional, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 
 import supervision as sv
 from supervision.utils.image import crop_image
@@ -739,14 +739,8 @@ class TrackGeneratorPipeline(Pipeline):
                         # Wait for any pending uploads to complete
                         if upload_tasks:
                             logger.info(f"Waiting for {len(upload_tasks)} pending upload tasks to complete before stopping...")
-                            asyncio.run(asyncio.gather(*upload_tasks))
-                        
-                        # Log crops uploaded before cancellation
-                        if all_crop_paths:
-                            gcs_urls = [f"gs://{self.tenant_storage.bucket_name}/{path}" for path in all_crop_paths]
-                            logger.info(f"Video {video_guid}: Pipeline stopped - {len(all_crop_paths)} crops uploaded before cancellation")
-                            logger.info(f"Video {video_guid}: Crop URLs before cancellation - {', '.join(gcs_urls)}")
-                        
+                            _ = asyncio.wait(upload_tasks, timeout=60)
+
                         # Return context with partial results
                         context.update({
                             "status": StepStatus.CANCELLED.value,
@@ -771,10 +765,12 @@ class TrackGeneratorPipeline(Pipeline):
                         
                     try:
                         # Convert BGR to RGB for model input
-                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) #type: ignore
                         
                         # Generate detections using the model
                         detections = self.detection_model.generate_detections(frame_rgb)
+                        if type(detections) is not sv.Detections:
+                            raise RuntimeError("Unrecognized detection type")
                         
                         if detections is None or len(detections) == 0:
                             logger.debug(f"Frame {frame_number}: No detections found")
@@ -811,7 +807,9 @@ class TrackGeneratorPipeline(Pipeline):
                     finally:
                         previous_frame_rgb = frame_rgb
                         # Set frame_index for all detections in this frame
-                        if len(detections) > 0:
+                        if type(detections) is not sv.Detections:
+                            raise RuntimeError("Unrecognized detection type")
+                        elif len(detections) > 0:
                             detections.data['frame_index'] = [frame_number] * len(detections)
                         else:
                             detections.data['frame_index'] = []
@@ -859,16 +857,8 @@ class TrackGeneratorPipeline(Pipeline):
             # Wait for all upload tasks to complete
             if upload_tasks:
                 logger.info(f"Waiting for {len(upload_tasks)} upload batches to complete...")
-                asyncio.run(asyncio.gather(*upload_tasks))
+                _ = asyncio.wait(upload_tasks, timeout=60)
                 logger.info("All crop upload batches completed")
-            
-            # Log all successful crop upload URLs
-            if all_crop_paths:
-                gcs_urls = [f"gs://{self.tenant_storage.bucket_name}/{path}" for path in all_crop_paths]
-                logger.info(f"Video {video_guid}: Total crops uploaded: {len(all_crop_paths)}")
-                logger.info(f"Video {video_guid}: All crop URLs - {', '.join(gcs_urls)}")
-            else:
-                logger.info(f"Video {video_guid}: No crops were uploaded")
             
             # Save detections - merge all frame detections
             detections_blob_name = f"{video_folder.rstrip('/')}/detections.json"
@@ -1000,11 +990,6 @@ class TrackGeneratorPipeline(Pipeline):
             if failed_uploads:
                 logger.warning(f"Batch {batch_counter}: Failed to upload {len(failed_uploads)} crops")
             
-            # Log GCS URLs for successful uploads
-            if successful_paths:
-                gcs_urls = [f"gs://{self.tenant_storage.bucket_name}/{path}" for path in successful_paths]
-                logger.info(f"Batch {batch_counter}: Crop URLs - {', '.join(gcs_urls)}")
-            
             return successful_paths
                 
         except Exception as e:
@@ -1109,7 +1094,7 @@ class TrackGeneratorPipeline(Pipeline):
         
         # Check contrast using standard deviation of grayscale image
         gray_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        contrast = np.std(gray_crop)
+        contrast = np.std(gray_crop)  #type: ignore
         
         # Low contrast threshold
         if contrast < self.MIN_CROP_CONTRAST:
