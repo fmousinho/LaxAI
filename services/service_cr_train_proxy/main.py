@@ -23,8 +23,9 @@ from google.cloud import firestore  # type: ignore
 from google.cloud.run_v2 import JobsClient
 from google.cloud.run_v2.types import Job, RunJobRequest, DeleteJobRequest
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Centralized logging configuration
+from shared_libs.config import logging_config  # noqa: F401
+
 logger = logging.getLogger(__name__)
 
 _JOB_NAME = "laxai-service-training"
