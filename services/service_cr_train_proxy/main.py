@@ -158,7 +158,7 @@ class TrainingJobProxy:
                     "execution_name": execution_name,
                     "job_name": _JOB_NAME,
                     "region": self.region,
-                    "status": "running",
+                    "status": "not_started",
                     "created_at": now,
                     "updated_at": now,
                     "error": None,

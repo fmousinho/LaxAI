@@ -10,7 +10,7 @@ import threading
 from typing import Any, Dict, List, Optional
 
 from shared_libs.common.google_storage import GCSPaths, get_storage
-from train_pipeline import TrainPipeline
+from ..train_pipeline import TrainPipeline
 
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
@@ -269,6 +269,10 @@ class TrainingWorkflow:
             wandb_tags = self.wandb_tags.copy()
             if self.task_id:
                 wandb_tags.append(f"task_id:{self.task_id}")
+
+            # Update status to running before starting training
+            if self.task_id:
+                self._update_firestore_status("running")
 
             pipeline_result = train_pipeline.run(
                 dataset_name=dataset_arg,
