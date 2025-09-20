@@ -99,8 +99,20 @@ class TrainingJobProxy:
                     
                     # Convert underscores to dashes for CLI argument format
                     cli_arg_name = arg_name.replace('_', '-')
-                    args.append(f"--{cli_arg_name}={value}")
-                    logger.info(f"Added argument: --{cli_arg_name}={value} (from {param_group}.{key})")
+                    
+                    # Handle boolean parameters as flags, not key=value pairs
+                    if isinstance(value, bool):
+                        if value:
+                            # For True boolean values, add the flag without value
+                            args.append(f"--{cli_arg_name}")
+                            logger.info(f"Added boolean flag: --{cli_arg_name} (from {param_group}.{key})")
+                        # For False boolean values, don't add the flag at all
+                        else:
+                            logger.info(f"Skipped boolean flag: --{cli_arg_name} (False value from {param_group}.{key})")
+                    else:
+                        # For non-boolean parameters, use key=value format
+                        args.append(f"--{cli_arg_name}={value}")
+                        logger.info(f"Added argument: --{cli_arg_name}={value} (from {param_group}.{key})")
 
         # Use the existing job with args override
         job_name = f"{self.parent}/jobs/{_JOB_NAME}"

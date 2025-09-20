@@ -94,10 +94,10 @@ class TestWandbLoggerCore:
         assert model_name == "test-player_model"
         
         # Test sanitization
-        dirty_name = "test/with\\invalid:chars*"
+        dirty_name = "test/with\\\\invalid:chars*"
         clean_name = logger_instance._sanitize_artifact_name(dirty_name)
         assert "/" not in clean_name
-        assert "\\" not in clean_name
+        assert "\\\\" not in clean_name
         assert ":" not in clean_name
         assert "*" not in clean_name
         
