@@ -1,21 +1,27 @@
+import logging
+import os
+import sys
+import threading
+from typing import Any, Dict, List, Optional
+
+# Ensure src directory is in path for absolute imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+from shared_libs.common.google_storage import GCSPaths, get_storage
+from train_pipeline import TrainPipeline
+
+# Enable MPS fallback for unsupported operations, as recommended by PyTorch.
+os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+
+logger = logging.getLogger(__name__)
+
+
 """
 Training workflow orchestration for LaxAI.
 
 This module contains the core training workflow logic that can be used
 by CLI, API, or other interfaces.
 """
-import logging
-import os
-import threading
-from typing import Any, Dict, List, Optional
-
-from shared_libs.common.google_storage import GCSPaths, get_storage
-from ..train_pipeline import TrainPipeline
-
-# Enable MPS fallback for unsupported operations, as recommended by PyTorch.
-os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
-
-logger = logging.getLogger(__name__)
 
 
 class TrainingWorkflow:
