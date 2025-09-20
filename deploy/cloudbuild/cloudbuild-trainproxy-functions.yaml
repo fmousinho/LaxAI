@@ -13,9 +13,26 @@ substitutions:
   _SERVICE_ACCOUNT: "laxai-466119@appspot.gserviceaccount.com"
   _FUNCTION_NAME: "laxai-training-proxy"
   _REGION: "us-central1"
-  _SOURCE_DIR: "services/service_cr_train_proxy"
 
 steps:
+  - id: "prepare-deployment"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        # Create clean deployment directory with only necessary files
+        mkdir -p /workspace/deployment
+        cd /workspace/deployment
+        
+        # Copy only the proxy service
+        cp -r ../services/service_cr_train_proxy/* ./
+        
+        # Copy only shared_libs
+        cp -r ../shared_libs ./
+        
+        echo "Prepared clean deployment with proxy + shared_libs only"
+
   - id: "deploy-cloud-function"
     name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     entrypoint: "gcloud"
@@ -25,7 +42,7 @@ steps:
       - "${_FUNCTION_NAME}"
       - "--region=${_REGION}"
       - "--runtime=python312"
-      - "--source=${_SOURCE_DIR}"
+      - "--source=/workspace/deployment"
       - "--entry-point=process_pubsub_message"
       - "--trigger-topic=training-jobs"
       - "--service-account=${_SERVICE_ACCOUNT}"
