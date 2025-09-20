@@ -9,16 +9,8 @@ import os
 import threading
 from typing import Any, Dict, List, Optional
 
-from shared_libs.config.logging_config import print_banner
-from parameter_registry import parameter_registry
-from scipy import datasets
-from train_pipeline import TrainPipeline
-
 from shared_libs.common.google_storage import GCSPaths, get_storage
-from shared_libs.utils.cpu_memory import (clear_cpu_memory,
-                                          log_comprehensive_memory_stats)
-# Absolute imports
-from shared_libs.utils.env_secrets import setup_environment_secrets
+from train_pipeline import TrainPipeline
 
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
@@ -80,6 +72,18 @@ class TrainingWorkflow:
         self.task_id = task_id
         self.cancellation_event = cancellation_event
 
+        # Initialize Firestore client for status updates if task_id is provided
+        self.firestore_client = None
+        if self.task_id:
+            try:
+                from google.cloud import firestore
+                self.firestore_client = firestore.Client()
+                logger.info(f"Initialized Firestore client for task_id: {self.task_id}")
+            except ImportError:
+                logger.warning("google-cloud-firestore not available, status updates disabled")
+            except Exception as e:
+                logger.error(f"Failed to initialize Firestore client: {e}")
+
     def discover_datasets(self) -> List[str]:
         """
         Find all available training datasets for the tenant.
@@ -92,39 +96,78 @@ class TrainingWorkflow:
             path_manager = GCSPaths()
             dataset_path = path_manager.get_path("datasets_root")
 
-    
-            datasets = []
+            available_datasets = []
 
             try:
-                datasets = storage.list_blobs(
+                available_datasets = storage.list_blobs(
                     prefix=dataset_path,
                     delimiter='/',
                     exclude_prefix_in_return=True
                     )
-                datasets = [d.rstrip('/') for d in datasets]
+                available_datasets = [d.rstrip('/') for d in available_datasets]
 
-                logger.info(f"Found {len(datasets)} datasets: {datasets}")
+                logger.info(f"Found {len(available_datasets)} datasets: {available_datasets}")
 
             except Exception as e:
                 logger.warning(f"Could not list datasets from {dataset_path}: {e}")
-                datasets = []
+                available_datasets = []
 
             # Limit datasets if specified (0 means use all datasets)
             logger.info(f"n_datasets_to_use parameter: {self.n_datasets_to_use}")
-            if self.n_datasets_to_use and self.n_datasets_to_use > 0 and self.n_datasets_to_use < len(datasets):
-                original_count = len(datasets)
-                datasets = datasets[:self.n_datasets_to_use]
-                logger.info(f"🎯 LIMITED: Reduced from {original_count} to {self.n_datasets_to_use} datasets: {datasets}")
+            if (self.n_datasets_to_use and self.n_datasets_to_use > 0 and
+                    self.n_datasets_to_use < len(available_datasets)):
+                original_count = len(available_datasets)
+                available_datasets = available_datasets[:self.n_datasets_to_use]
+                logger.info(
+                    f"🎯 LIMITED: Reduced from {original_count} to "
+                    f"{self.n_datasets_to_use} datasets: {available_datasets}"
+                )
             elif self.n_datasets_to_use and self.n_datasets_to_use > 0:
-                logger.info(f"⚠️  Requested {self.n_datasets_to_use} datasets, but only {len(datasets)} available")
+                logger.info(
+                    f"⚠️  Requested {self.n_datasets_to_use} datasets, but only "
+                    f"{len(available_datasets)} available"
+                )
             else:
-                logger.info(f"📋 Using all {len(datasets)} datasets (n_datasets_to_use={self.n_datasets_to_use})")
+                logger.info(
+                    f"📋 Using all {len(available_datasets)} datasets "
+                    f"(n_datasets_to_use={self.n_datasets_to_use})"
+                )
 
-            return datasets
+            return available_datasets
 
         except Exception as e:
             logger.error(f"Error discovering datasets: {e}")
             raise
+
+    def _update_firestore_status(self, status: str, error: Optional[str] = None) -> None:
+        """
+        Update the Firestore document with the final training status.
+
+        Args:
+            status: Final status (completed, error, cancelled)
+            error: Optional error message if status is error
+        """
+        if not self.firestore_client or not self.task_id:
+            return
+
+        try:
+            from datetime import datetime, timezone
+
+            doc_ref = self.firestore_client.collection("training_runs").document(self.task_id)
+
+            update_data = {
+                "status": status,
+                "updated_at": datetime.now(timezone.utc).isoformat() + "Z"
+            }
+
+            if error:
+                update_data["error"] = error
+
+            doc_ref.update(update_data)
+            logger.info(f"Updated Firestore status for task_id {self.task_id} to: {status}")
+
+        except Exception as e:
+            logger.error(f"Failed to update Firestore status for task_id {self.task_id}: {e}")
 
     def execute(self) -> Dict[str, Any]:
         """Execute training using a SINGLE TrainPipeline over all datasets.
@@ -145,7 +188,7 @@ class TrainingWorkflow:
         # Check for cancellation before starting
         if self.cancellation_event and self.cancellation_event.is_set():
             logger.info("Training cancelled before execution")
-            return {
+            result = {
                 "status": "cancelled",
                 "datasets_found": 0,
                 "steps_completed": 0,
@@ -160,12 +203,14 @@ class TrainingWorkflow:
                 "successful_runs": 0,
                 "training_results": [],
             }
+            self._update_firestore_status("cancelled")
+            return result
 
         try:
             datasets = self.discover_datasets()
             if not datasets:
                 logger.warning("No datasets found for training")
-                return {
+                result = {
                     "status": "completed",
                     "datasets_found": 0,
                     "steps_completed": 0,
@@ -180,6 +225,8 @@ class TrainingWorkflow:
                     "successful_runs": 0,
                     "training_results": [],
                 }
+                self._update_firestore_status("completed")
+                return result
 
             dataset_mode = "multi" if len(datasets) > 1 else "single"
 
@@ -200,11 +247,11 @@ class TrainingWorkflow:
 
             # Execute once over all datasets (list or single item)
             dataset_arg = datasets if dataset_mode == "multi" else datasets[0]
-            
+
             # Check for cancellation before pipeline execution
             if self.cancellation_event and self.cancellation_event.is_set():
                 logger.info("Training cancelled before pipeline execution")
-                return {
+                result = {
                     "status": "cancelled",
                     "datasets_found": len(datasets),
                     "steps_completed": 0,
@@ -215,12 +262,14 @@ class TrainingWorkflow:
                     "custom_name": self.custom_name,
                     "dataset_mode": dataset_mode
                 }
-            
+                self._update_firestore_status("cancelled")
+                return result
+
             # Add task_id to wandb tags if provided
             wandb_tags = self.wandb_tags.copy()
             if self.task_id:
                 wandb_tags.append(f"task_id:{self.task_id}")
-            
+
             pipeline_result = train_pipeline.run(
                 dataset_name=dataset_arg,
                 resume_from_checkpoint=self.resume_from_checkpoint,
@@ -236,8 +285,9 @@ class TrainingWorkflow:
             total_runs = 1
             successful_runs = 1 if (status.lower() == "completed" and steps_failed == 0) else 0
 
-            return {
-                "status": "completed" if status == "completed" else status,
+            final_status = "completed" if status == "completed" else status
+            result = {
+                "status": final_status,
                 "datasets_found": len(datasets),
                 "steps_completed": steps_completed,
                 "run_id": pipeline_identity,
@@ -251,10 +301,12 @@ class TrainingWorkflow:
                 "successful_runs": successful_runs,
                 "training_results": [],
             }
+            self._update_firestore_status(final_status)
+            return result
 
         except InterruptedError:
             logger.info("Training workflow cancelled (single-pipeline mode)")
-            return {
+            result = {
                 "status": "cancelled",
                 "datasets_found": 0,
                 "steps_completed": 0,
@@ -269,9 +321,11 @@ class TrainingWorkflow:
                 "successful_runs": 0,
                 "training_results": [],
             }
+            self._update_firestore_status("cancelled", "Training workflow cancelled by user request")
+            return result
         except Exception as e:
             logger.error(f"Training workflow failed: {e}")
-            return {
+            result = {
                 "status": "failed",
                 "datasets_found": 0,
                 "steps_completed": 0,
@@ -286,9 +340,10 @@ class TrainingWorkflow:
                 "successful_runs": 0,
                 "training_results": [],
             }
+            self._update_firestore_status("error", str(e))
+            return result
 
     # Removed _run_training_for_dataset: single pipeline now handles all datasets.
-
 
 
 def train_workflow(tenant_id: str, **kwargs):
