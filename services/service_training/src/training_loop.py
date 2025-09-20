@@ -2,6 +2,7 @@ import gc
 import logging
 import os
 from typing import Any, Callable, Dict, Optional
+from datetime import datetime, timezone
 
 import numpy as np
 import torch
@@ -224,7 +225,6 @@ class Training:
         
         try:
             # Collect additional metadata for reproducibility and traceability
-            import datetime, timezone
             import subprocess
             metadata = {
                 "device": str(self.device),
@@ -240,7 +240,7 @@ class Training:
                 "lr_scheduler_factor": self.lr_scheduler_factor,
                 "optimizer_type": "Adam",
                 "model_architecture": type(self.model).__name__ if self.model is not None else None,
-                "timestamp": datetime.datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "notes": getattr(self, 'notes', None),
             }
 
