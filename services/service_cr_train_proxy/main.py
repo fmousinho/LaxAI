@@ -21,8 +21,8 @@ from typing import Any, Dict, Optional
 from google.api_core.exceptions import GoogleAPIError, NotFound
 from google.cloud import pubsub_v1
 from google.cloud import firestore  # type: ignore
-from google.cloud.run_v2 import JobsClient
-from google.cloud.run_v2.types import Job, RunJobRequest, DeleteJobRequest
+from google.cloud.run_v2 import JobsClient, ExecutionsClient
+from google.cloud.run_v2.types import Job, RunJobRequest, DeleteJobRequest, CancelExecutionRequest, Execution
 
 # Centralized logging configuration
 from shared_libs.config import logging_config  # noqa: F401
@@ -59,6 +59,7 @@ class TrainingJobProxy:
 
         # Cloud Run Jobs client and resource parent path
         self.run_client = JobsClient()
+        self.executions_client = ExecutionsClient()
         self.parent = f"projects/{self.project_id}/locations/{self.region}"
 
         # Firestore client for mapping task_id -> operation/execution
@@ -130,10 +131,8 @@ class TrainingJobProxy:
 
         return run_request
 
-    def start_training_job(self, payload: Dict[str, Any]) -> str:
+    def start_training_job(self, payload: Dict[str, Any]) -> Optional[str]:
         """Creates and executes a training job asynchronously using the existing laxai-service-training job."""
-        custom_name = payload.get("custom_name", "training-run")
-        job_id = f"{custom_name}-{uuid.uuid4().hex[:8]}"
 
         try:
             # Build run request for existing job with args override
@@ -141,20 +140,18 @@ class TrainingJobProxy:
 
             # Execute the existing job asynchronously with overrides
             operation = self.run_client.run_job(request=run_request)
-            op_name: Optional[str] = getattr(getattr(operation, "operation", None), "name", None)
-            # Try to extract execution_name from operation metadata if available (optional)
-            execution_name = None
-            if hasattr(operation, "metadata") and hasattr(operation.metadata, "execution"):
-                execution_name = getattr(operation.metadata, "execution", None)
-            logger.info(f"Started execution of existing job 'laxai-service-training' with ID: {job_id}, operation: {op_name}, execution: {execution_name}")
-
-            # Persist mapping task_id -> operation name (and metadata snapshot)
+            if operation.metadata is not None:
+                execution_name = operation.metadata.name
+                logger.info(f"Started job - Execution Name: {execution_name}")
+            else:
+                execution_name = None
+                logger.error("Operation metadata is None; cannot extract execution name.")
+        
             task_id = payload.get("task_id")
             if task_id:
-                now = datetime.now(timezone.utc).isoformat() + "Z"
+                now = datetime.now(timezone.utc).isoformat()
                 doc = {
                     "task_id": task_id,
-                    "operation_name": op_name,
                     "execution_name": execution_name,
                     "job_name": _JOB_NAME,
                     "region": self.region,
@@ -165,34 +162,24 @@ class TrainingJobProxy:
                     "payload": {k: v for k, v in payload.items() if k != "eval_params"},
                 }
                 try:
-                    # Idempotent: only create if not exists
                     doc_ref = self._runs_collection.document(task_id)
                     if not doc_ref.get().exists:
                         doc_ref.set(doc)
-                        logger.info(f"Persisted run mapping for task_id={task_id} -> operation={op_name}")
+                        logger.info(f"Persisted run mapping for task_id={task_id} -> operation={execution_name}")
                     else:
                         logger.warning(f"Mapping for task_id={task_id} already exists; not overwriting")
                 except Exception as fe:
                     logger.error(f"Failed to persist run mapping for task_id={task_id}: {fe}")
 
-            # Don't wait for completion - fire and forget
-            return job_id
-
         except GoogleAPIError as e:
-            logger.error(f"Failed to start training job {job_id}: {e}")
-            # Update mapping with error if possible
-            task_id = payload.get("task_id")
-            if task_id:
-                try:
-                    self._runs_collection.document(task_id).update({"status": "error", "error": str(e), "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
-                except Exception:
-                    pass
+            logger.error(f"Failed to start training job: {e}")
             raise
+              
 
     def cancel_training_job(self, task_id: str) -> None:
-        """Cancel a running training task using persisted mapping (best-effort LRO cancel).
+        """Cancel a running training task using persisted mapping.
 
-        This cancels the Long-Running Operation if available and updates the mapping status.
+        Uses the execution_name stored in Firestore for direct cancellation.
         """
         try:
             doc_ref = self._runs_collection.document(task_id)
@@ -201,52 +188,34 @@ class TrainingJobProxy:
                 logger.warning(f"No mapping found for task_id={task_id}; nothing to cancel")
                 return
             data = doc.to_dict() or {}
-            op_name = data.get("operation_name")
-            if not op_name:
-                logger.warning(f"No operation_name stored for task_id={task_id}; cannot cancel LRO")
+            execution_name = data.get("execution_name")
+
+            logger.info(f"Cancellation attempt for task_id={task_id}: execution_name={execution_name}")
+
+            if not execution_name:
+                logger.warning(f"No execution_name stored for task_id={task_id}; cannot cancel directly")
+                logger.info(f"Stored data: {data}")
                 return
 
-            # For Cloud Run jobs, cancellation is best-effort
-            # The operation might have already completed or the execution might not be cancellable
-            
+            # Cancel the execution directly using the stored execution_name
             try:
-                # Get operation details to check status
-                operations_client = self.run_client.transport.operations_client
-                operation = operations_client.get_operation(name=op_name)
+                operation = self.executions_client.cancel_execution(name=execution_name)
+                results = operation.result()  # Wait for operation to complete
                 
-                # Check if operation is done
-                if operation.done:
-                    logger.info(f"Operation {op_name} is already completed (task_id={task_id})")
-                    doc_ref.update({"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
-                    return
+                logger.info(f"Successfully requested cancellation for execution {execution_name} (task_id={task_id})")
                 
-                # Try to cancel the operation
-                try:
-                    operations_client.cancel_operation(name=op_name)
-                    logger.info(f"Requested cancellation for operation {op_name} (task_id={task_id})")
-                    doc_ref.update({"status": "cancelling", "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
-                except Exception as op_error:
-                    if "501" in str(op_error) or "Method not found" in str(op_error):
-                        logger.warning(f"Operation {op_name} cannot be cancelled (likely already completed or not cancellable): {op_error}")
-                        # Check operation status again
-                        try:
-                            updated_operation = operations_client.get_operation(name=op_name)
-                            if updated_operation.done:
-                                doc_ref.update({"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
-                            else:
-                                doc_ref.update({"status": "running", "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
-                        except Exception:
-                            doc_ref.update({"status": "unknown", "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
-                    else:
-                        raise op_error
-                        
-            except Exception as ce:
-                logger.error(f"Error cancelling operation {op_name}: {ce}")
-                # Don't re-raise the exception, just log it and update status
-                try:
-                    doc_ref.update({"status": "error", "error": str(ce), "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
-                except Exception:
-                    pass
+                # Update status to indicate cancellation was requested
+                doc_ref.update({"status": "cancelled", "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
+                
+            except GoogleAPIError as cancel_error:
+                logger.error(f"Failed to cancel execution {execution_name}: {cancel_error}")
+                doc_ref.update({"status": "cancellation_failed", "error": str(cancel_error), "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
+                return  # Don't re-raise, just return to indicate cancellation attempt was made
+            except Exception as cancel_error:
+                logger.error(f"Unexpected error during cancellation of execution {execution_name}: {cancel_error}")
+                doc_ref.update({"status": "cancellation_failed", "error": str(cancel_error), "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
+                return  # Don't re-raise, just return to indicate cancellation attempt was made
+        
         except Exception as e:
             logger.error(f"Failed to cancel task_id={task_id}: {e}")
             # Try to update mapping with error
@@ -254,7 +223,7 @@ class TrainingJobProxy:
                 self._runs_collection.document(task_id).update({"status": "error", "error": str(e), "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
             except Exception:
                 pass
-            raise
+            # Don't re-raise the exception, just log it
 
     def process_message(self, message_data: str) -> None:
         """Processes a decoded Pub/Sub message."""
