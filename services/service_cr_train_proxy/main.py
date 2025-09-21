@@ -209,11 +209,11 @@ class TrainingJobProxy:
                 
             except GoogleAPIError as cancel_error:
                 logger.error(f"Failed to cancel execution {execution_name}: {cancel_error}")
-                doc_ref.update({"status": "cancellation_failed", "error": str(cancel_error), "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
+                doc_ref.update({"status": "error", "error": str(cancel_error), "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
                 return  # Don't re-raise, just return to indicate cancellation attempt was made
             except Exception as cancel_error:
                 logger.error(f"Unexpected error during cancellation of execution {execution_name}: {cancel_error}")
-                doc_ref.update({"status": "cancellation_failed", "error": str(cancel_error), "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
+                doc_ref.update({"status": "error", "error": str(cancel_error), "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
                 return  # Don't re-raise, just return to indicate cancellation attempt was made
         
         except Exception as e:
