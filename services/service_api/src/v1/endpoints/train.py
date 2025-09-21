@@ -3,12 +3,13 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
+from typing import List
 
 from fastapi import APIRouter, HTTPException
 from google.api_core.exceptions import GoogleAPIError
-from google.cloud import pubsub_v1  # type: ignore
+from google.cloud import pubsub_v1, firestore  # type: ignore
 
-from ..schemas.training import TrainingRequest, TrainingResponse
+from ..schemas.training import TrainingRequest, TrainingResponse, TrainingStatus
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +69,57 @@ class PubSubPublisher:
             raise HTTPException(status_code=500, detail=f"Failed to queue training job: {str(e)}")
 
 
-# Global publisher instance
+class TrainingStatusManager:
+    """Manages training job status queries from Firestore."""
+
+    def __init__(self):
+        self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
+        if not self.project_id:
+            raise ValueError("GOOGLE_CLOUD_PROJECT environment variable not set")
+        self.db = firestore.Client(project=self.project_id)
+        self._runs_collection = self.db.collection("training_runs")
+
+    def get_training_job_status(self, task_id: str) -> dict:
+        """Get status for a specific training job."""
+        try:
+            doc = self._runs_collection.document(task_id).get()
+            if not doc.exists:
+                return {"task_id": task_id, "status": "not_found", "error": "No training job found with this task_id."}
+            data = doc.to_dict() or {}
+            return data
+        except Exception as e:
+            logger.error(f"Error retrieving training job status for {task_id}: {e}")
+            return {"task_id": task_id, "status": "error", "error": str(e)}
+
+    def list_training_jobs(self, limit: int = 50) -> List[dict]:
+        """List all training jobs, ordered by creation time (newest first)."""
+        
+        # Validate limit parameter
+        if limit < 1:
+            limit = 1
+        elif limit > 100:
+            limit = 100
+            
+        try:
+            # Query Firestore for all training runs, ordered by created_at descending
+            query = self._runs_collection.order_by("created_at", direction=firestore.Query.DESCENDING).limit(limit)
+            docs = query.stream()
+
+            jobs = []
+            for doc in docs:
+                data = doc.to_dict() or {}
+                data["task_id"] = doc.id  # Add the document ID as task_id
+                jobs.append(data)
+
+            return jobs
+        except Exception as e:
+            logger.error(f"Error listing training jobs: {e}")
+            return []
+
+
+# Global instances
 publisher = PubSubPublisher()
+status_manager = TrainingStatusManager()
 
 
 @router.post("/", response_model=TrainingResponse)
@@ -93,20 +143,64 @@ async def start_training(request: TrainingRequest) -> TrainingResponse:
 
 
 @router.get("/")
-async def list_training_jobs():
-    """List all queued training jobs."""
+async def list_training_jobs(limit: int = 50):
+    """List all training jobs, ordered by creation time (newest first)."""
 
-    # Note: This is a simplified implementation
-    # In a real system, you might want to store job status in Firestore or similar
-    return {
-        "message": "Job listing not implemented in API service. Use training service for job status.",
-        "jobs": []
-    }
+    # Validate limit parameter
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
+
+    try:
+        jobs = status_manager.list_training_jobs(limit=limit)
+        return {
+            "jobs": jobs,
+            "count": len(jobs),
+            "limit": limit
+        }
+    except Exception as e:
+        logger.error(f"Error listing training jobs: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve training jobs")
+
+
+@router.get("/{task_id}", response_model=TrainingStatus)
+async def get_training_job_status(task_id: str):
+    """Get the status of a specific training job."""
+
+    # Validate task_id format (should be a valid UUID)
+    try:
+        uuid.UUID(task_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid task_id format. Must be a valid UUID.")
+
+    try:
+        status_data = status_manager.get_training_job_status(task_id)
+
+        # Check if job was not found
+        if status_data.get("status") == "not_found":
+            raise HTTPException(status_code=404, detail=f"Training job {task_id} not found")
+
+        # Check if there was an error retrieving status
+        if status_data.get("status") == "error":
+            raise HTTPException(status_code=500, detail=status_data.get("error", "Unknown error"))
+
+        return TrainingStatus(**status_data)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving training job status for {task_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve training job status")
 
 
 @router.delete("/{task_id}")
 async def cancel_training_job(task_id: str):
     """Cancel a training job by publishing a cancel message."""
+
+    # Validate task_id format (should be a valid UUID)
+    try:
+        uuid.UUID(task_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid task_id format. Must be a valid UUID.")
 
     try:
         # Create cancel message
