@@ -23,12 +23,25 @@ def _is_notebook() -> bool:
         return False
 
 
+def _is_gcp_environment() -> bool:
+    """Check if running in Google Cloud Platform environment."""
+    return (
+        os.getenv('K_SERVICE') is not None or  # Cloud Run
+        os.getenv('GAE_ENV') is not None or     # App Engine
+        os.getenv('ENV_TYPE') == 'gcp' or       # Custom GCP indicator
+        os.getenv('GOOGLE_CLOUD_PROJECT') is not None  # Any GCP service
+    )
+
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
         "json": {
             "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
+        },
+        "json_no_timestamp": {
+            "format": "%(levelname)s %(name)s %(message)s",
         },
         "pipe": {
             "format": "| %(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -45,9 +58,11 @@ LOGGING = {
     "loggers": {"": {"handlers": ["stdout"], "level": "INFO"}},
 }
 
-# Detect if running in a terminal (not piped/redirected) or a notebook
+# Detect environment and set appropriate formatter
 if sys.stdout.isatty() or _is_notebook():
     LOGGING["handlers"]["stdout"]["formatter"] = "pipe"
+elif _is_gcp_environment():
+    LOGGING["handlers"]["stdout"]["formatter"] = "json_no_timestamp"
 else:
     LOGGING["handlers"]["stdout"]["formatter"] = "json"
 
