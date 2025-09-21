@@ -199,7 +199,7 @@ class TrainingJobProxy:
 
             # Cancel the execution directly using the stored execution_name
             try:
-                operation = self.executions_client.cancel_execution(name=execution_name)
+                operation = self.executions_client.cancel_execution(name=execution_name, timeout=60)
                 results = operation.result()  # Wait for operation to complete
                 
                 logger.info(f"Successfully requested cancellation for execution {execution_name} (task_id={task_id})")
