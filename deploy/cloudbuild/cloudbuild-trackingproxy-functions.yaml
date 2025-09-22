@@ -1,0 +1,57 @@
+############################################################################
+#                                                                          #
+#               CLOUD FUNCTIONS BUILDER FOR TRACKING PROXY                #
+#                                                                          #
+############################################################################
+
+# This Cloud Build file deploys the tracking proxy as a Cloud Function
+# triggered by Pub/Sub messages. Much more cost-effective than always-on Cloud Run.
+
+substitutions:
+  _GOOGLE_CLOUD_PROJECT: "laxai-466119"
+  _SERVICE_ACCOUNT: "laxai-466119@appspot.gserviceaccount.com"
+  _FUNCTION_NAME: "laxai-tracking-proxy"
+  _REGION: "us-central1"
+
+steps:
+  - id: "prepare-deployment"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        # Create clean deployment directory with only necessary files
+        mkdir -p /workspace/deployment
+        cd /workspace/deployment
+
+        # Copy only the proxy service
+        cp -r ../services/service_cr_tracking_proxy/* ./
+
+        # Copy only shared_libs
+        cp -r ../shared_libs ./
+
+        echo "Prepared clean deployment with proxy + shared_libs only"
+
+  - id: "deploy-cloud-function"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "gcloud"
+    args:
+      - "functions"
+      - "deploy"
+      - "${_FUNCTION_NAME}"
+      - "--region=${_REGION}"
+      - "--runtime=python312"
+      - "--source=/workspace/deployment"
+      - "--entry-point=process_pubsub_message"
+      - "--trigger-topic=tracking-jobs"
+      - "--service-account=${_SERVICE_ACCOUNT}"
+      - "--set-env-vars=GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT},CLOUD_REGION=${_REGION}"
+      - "--memory=512MB"
+      - "--timeout=540s" # 9 minutes max for Cloud Functions
+      - "--max-instances=10"
+      - "--quiet"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: "1800s"

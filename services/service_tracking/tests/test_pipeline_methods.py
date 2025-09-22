@@ -237,3 +237,18 @@ class TestTrackGeneratorPipelineMethods:
         assert len(failed) == 1
         assert failed[0] == "task2"
         assert successful == 2
+
+    def test_workflow_instantiation(self):
+        """Test that the UnverifiedTrackGenerationWorkflow can be instantiated."""
+        from src.workflows.create_unverified_tracks import UnverifiedTrackGenerationWorkflow
+
+        workflow = UnverifiedTrackGenerationWorkflow(
+            tenant_id="test_tenant",
+            verbose=False,
+            custom_name="test_workflow"
+        )
+
+        assert workflow.tenant_id == "test_tenant"
+        assert workflow.verbose is False
+        assert workflow.custom_name == "test_workflow"
+        assert workflow.detection_config is not None

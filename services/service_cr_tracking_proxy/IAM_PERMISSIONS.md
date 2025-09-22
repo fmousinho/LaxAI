@@ -1,6 +1,6 @@
-# IAM Permissions for Cloud Function Training Proxy
+# IAM Permissions for Cloud Function Tracking Proxy
 
-The Cloud Function uses the `googlebatch` service account and requires the following permissions to execute training jobs and handle cancellation:
+The Cloud Function uses the service account and requires the following permissions to execute tracking jobs and handle cancellation:
 
 ## Required Permissions
 
@@ -30,10 +30,10 @@ Instead of individual permissions, use these predefined roles:
 
 1. **Cloud Run Developer**: `roles/run.developer`
    - Includes job execution and operation management permissions
-   
+
 2. **Cloud Datastore User**: `roles/datastore.user`
    - Includes Firestore read/write permissions
-   
+
 3. **Pub/Sub Subscriber**: `roles/pubsub.subscriber`
    - Includes message consumption permissions
 
@@ -42,22 +42,23 @@ Instead of individual permissions, use these predefined roles:
 ```bash
 # Set your project ID
 PROJECT_ID="laxai-466119"
+SERVICE_ACCOUNT="laxai-466119@appspot.gserviceaccount.com"
 
 # Grant Cloud Run Developer role
 gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:googlebatch@$PROJECT_ID.iam.gserviceaccount.com" \
+    --member="serviceAccount:$SERVICE_ACCOUNT" \
     --role="roles/run.developer" \
     --condition=None
 
 # Grant Cloud Datastore User role
 gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:googlebatch@$PROJECT_ID.iam.gserviceaccount.com" \
+    --member="serviceAccount:$SERVICE_ACCOUNT" \
     --role="roles/datastore.user" \
     --condition=None
 
 # Grant Pub/Sub Subscriber role (if not already granted)
 gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:googlebatch@$PROJECT_ID.iam.gserviceaccount.com" \
+    --member="serviceAccount:$SERVICE_ACCOUNT" \
     --role="roles/pubsub.subscriber" \
     --condition=None
 ```
@@ -71,12 +72,12 @@ After granting permissions, verify with:
 gcloud projects get-iam-policy $PROJECT_ID \
     --flatten="bindings[].members" \
     --format="table(bindings.role)" \
-    --filter="bindings.members:googlebatch@$PROJECT_ID.iam.gserviceaccount.com"
+    --filter="bindings.members:$SERVICE_ACCOUNT"
 ```
 
 ## Security Notes
 
 - These permissions are scoped to the project level
-- The `googlebatch` service account should only be used by Cloud Functions
+- The service account should only be used by Cloud Functions
 - Consider using Workload Identity Federation for production environments
 - Regularly audit and rotate service account keys if using key-based authentication
