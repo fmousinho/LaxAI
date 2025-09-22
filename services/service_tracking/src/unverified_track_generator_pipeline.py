@@ -83,10 +83,11 @@ Stop Pipeline Example:
 import logging
 import cv2
 import json
+from matplotlib.style import context
 import numpy as np
 import asyncio
 from typing import List, Dict, Any, Optional, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import supervision as sv
 from supervision.utils.image import crop_image
@@ -296,17 +297,17 @@ class TrackGeneratorPipeline(Pipeline):
         self.run_guid = create_run_id()
         self.run_folder = self.path_manager.get_path("run_data", run_id=self.run_guid)
 
-    def _execute_parallel_operations(self, 
-                                   tasks: List[Tuple] | List[str], 
-                                   operation_func, 
-                                   context_info: str = "") -> Tuple[List, int, List[str]]:
+    async def _execute_parallel_operations_async(self,
+                                               tasks: List[Tuple] | List[str],
+                                               operation_func,
+                                               context_info: str = "") -> Tuple[List, int]:
         """
-        Execute a list of operations in parallel using ThreadPoolExecutor.
-        
+        Execute a list of operations in parallel using asyncio.
+
         This method provides a generic interface for parallelizing storage operations
         such as uploads, downloads, moves, and deletions. It handles error collection,
-        provides comprehensive logging, and uses configurable worker limits.
-        
+        provides comprehensive logging, and uses configurable concurrency limits.
+
         Args:
             tasks (List[Tuple] | List[str]): List of task parameters. Can be:
                 - List of tuples for multi-parameter operations (e.g., (source, dest) for moves)
@@ -314,66 +315,72 @@ class TrackGeneratorPipeline(Pipeline):
             operation_func: Function to execute for each task. Should return bool indicating success.
                 Examples: self.tenant_storage.upload_from_bytes, self.tenant_storage.move_blob
             context_info (str): Additional context information for logging (e.g., "video_123 crops")
-            
+
         Returns:
             Tuple[List, int, List[str]]: Containing:
                 - List of failed operations (same format as input tasks)
                 - Integer count of successful operations
-                - List of successful blob paths (for upload operations)
-                
+
         Note:
-            Uses self.dataloader_workers to limit concurrency and prevent overwhelming
+            Uses asyncio.gather to limit concurrency and prevent overwhelming
             the storage service. Failed operations are logged but don't stop execution.
         """
         if not tasks:
-            return [], 0, []
-
-        # Check for cancellation request
-        if self.is_stop_requested():
-            logger.info(f"Stop requested, cancelling parallel {operation_func.__name__} operations")
-            return [], 0, []
+            return [], 0
 
         logger.info(f"Starting parallel {operation_func.__name__} of {len(tasks)} items{' for ' + context_info if context_info else ''}")
         failed_operations = []
-        successful_paths = []
-        
-        with ThreadPoolExecutor(max_workers=self.dataloader_workers) as executor:
-            # Submit tasks using the provided function
-            # For upload: operation_func(*task) - blob_name, data  
-            # For move: operation_func(*task) - source, destination
-            # For delete: operation_func(task) - blob_name (string)
-            future_to_task = {
-                executor.submit(operation_func, *task) if isinstance(task, tuple) else executor.submit(operation_func, task): task
-                for task in tasks
-            }
-            
-            # Process completed operations
-            for future in as_completed(future_to_task):
-                task = future_to_task[future]
-                
-                try:
-                    success = future.result()
-                    if success:
-                        # For upload tasks, extract the blob path (first element of tuple)
-                        if isinstance(task, tuple) and len(task) > 0:
-                            successful_paths.append(task[0])
-                        elif isinstance(task, str):
-                            successful_paths.append(task)
-                    else:
-                        failed_operations.append(task)
-                        logger.error(f"Failed to run {operation_func.__name__}({task}) for {context_info}")
-                except Exception as e:
-                    failed_operations.append(task)
-                    logger.error(f"Exception during {operation_func.__name__}({task}): {e}")
+
+        # Create async tasks for each operation
+        async def execute_single_task(task):
+            try:
+                # Run the synchronous operation in a thread pool
+                loop = asyncio.get_event_loop()
+                if isinstance(task, tuple):
+                    success = await loop.run_in_executor(None, operation_func, *task)
+                else:
+                    success = await loop.run_in_executor(None, operation_func, task)
+
+                if success:
+                   return True, task
+                else:
+                    return False, task  # (None, failed_task)
+            except Exception as e:
+                logger.error(f"Exception during {operation_func.__name__}({task}): {e}")
+                return False, task  # (None, failed_task)
+
+        # Execute all tasks concurrently, but limit concurrency
+        semaphore = asyncio.Semaphore(self.dataloader_workers)
+
+        async def execute_with_semaphore(task):
+            async with semaphore:
+                return await execute_single_task(task)
+
+        # Run all tasks
+        task_coroutines = [execute_with_semaphore(task) for task in tasks]
+        results = await asyncio.gather(*task_coroutines, return_exceptions=True)
+
+        # Process results
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Task failed with exception: {result}")
+                failed_operations.append(tasks[i])
+                continue
+            elif result is None or not isinstance(result, tuple):
+                logger.error(f"Task returned None result for {tasks[i]}")
+                failed_operations.append(tasks[i])
+                continue
+            elif result[0] is False:
+                failed_operations.append(tasks[i])
 
         successful_count = len(tasks) - len(failed_operations)
-        
+
         if failed_operations:
             logger.warning(f"Failed to {operation_func.__name__} {len(failed_operations)} out of {len(tasks)} items{' for ' + context_info if context_info else ''}")
 
         logger.info(f"Completed {successful_count} {operation_func.__name__} operations{' for ' + context_info if context_info else ''}")
 
-        return failed_operations, successful_count, successful_paths
+        return failed_operations, successful_count
 
     def run(self, video_path: str, resume_from_checkpoint: bool = True) -> Dict[str, Any]:
         """
@@ -396,7 +403,6 @@ class TrackGeneratorPipeline(Pipeline):
                 Defaults to True.
             
         Returns:
-            Returns:
             Dictionary containing pipeline execution results:
                 - status (str): Pipeline completion status ("completed", "error", "cancelled")
                 - run_guid (str): Unique identifier for this pipeline run
@@ -436,28 +442,6 @@ class TrackGeneratorPipeline(Pipeline):
             
             # Stop pipeline programmatically
             pipeline.stop()
-            ```
-                
-        Raises:
-            RuntimeError: If critical pipeline dependencies are missing
-            ValueError: If video_path is invalid or empty
-            
-        Example:
-            ```python
-            pipeline = TrackGeneratorPipeline(detection_config, "tenant1")
-            
-            # Process video from raw uploads folder
-            results = pipeline.run("raw_videos/game_footage.mp4")
-            
-            # Process video from specific tenant folder
-            results = pipeline.run("tenant1/uploads/championship_game.mp4")
-            
-            # Check results
-            if results["status"] == "completed":
-                print(f"Successfully processed video {results['video_guid']}")
-                print(f"Generated crops: {results['pipeline_summary']['total_crops']}")
-            else:
-                print(f"Pipeline failed: {results['errors']}")
             ```
             
         Note:
@@ -504,11 +488,11 @@ class TrackGeneratorPipeline(Pipeline):
             
             blob_names = self.tenant_storage.list_blobs(prefix=process_folder_path)
             if blob_names:
-                failed_deletes, successful_deletes, _ = self._execute_parallel_operations(
+                failed_deletes, successful_deletes = asyncio.run(self._execute_parallel_operations_async(
                     list(blob_names),
                     self.tenant_storage.delete_blob,
                     f"cleanup process folder {process_folder_path}"
-                )
+                ))
                 
                 if failed_deletes:
                     logger.warning(f"Failed to delete {len(failed_deletes)} temporary files from {process_folder_path}")
@@ -560,27 +544,9 @@ class TrackGeneratorPipeline(Pipeline):
 
     def _import_video(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Import a single video from the provided path into organized video folder.
+        Import video from raw path to structured GCS location.
         
-        This method validates the video resolution, then moves the raw video file from its 
-        original location to a structured GCS path within the tenant's storage area. It 
-        generates a unique video ID and organizes the file according to the configured path structure.
-        
-        Args:
-            context (Dict[str, Any]): Pipeline context containing:
-                - raw_video_path: The original GCS path of the video file
-                
-        Returns:
-            Dict[str, Any]: Updated context with import results:
-                - status: Step completion status
-                - video_guid: Generated unique identifier for the video
-                - video_folder: Structured GCS folder path for the video
-                - video_blob_name: Full GCS path to the imported video file
-                - error: Error message if import failed
-                
-        Raises:
-            RuntimeError: If the video file cannot be moved to the target location or 
-                         if video resolution doesn't meet minimum requirements (1920x1080)
+        Validates resolution and moves video to organized tenant folder.
         """
         raw_video_path = context.get("raw_video_path")
         if not raw_video_path:
@@ -630,32 +596,11 @@ class TrackGeneratorPipeline(Pipeline):
             logger.error(f"Failed to import video {raw_video_path}: {str(e)}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
     
-    
     def _get_detections_and_tracks(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Run player detection on all frames in the video using the model.
+        Run player detection and tracking on video frames.
         
-        This method processes every frame in the video through the detection model to identify
-        players. It uses supervision library for proper detection format and handles batch processing
-        with confidence filtering.
-        
-        Args:
-            context (Dict[str, Any]): Pipeline context containing:
-                - video_blob_name: GCS path to the imported video file
-                - video_guid: Unique identifier for the video being processed
-                - video_folder: GCS folder path for the video
-                
-        Returns:
-            Dict[str, Any]: Updated context with detection results:
-                - status: Step completion status
-                - detections_data: List of detection results for each frame
-                - total_detections: Total number of player detections found
-                - error: Error message if detection failed
-                
-        Note:
-            Detection results are saved to GCS in structured paths for use by
-            subsequent crop extraction steps. Empty detections are logged as warnings
-            but don't fail the pipeline.
+        Processes all frames with detection model and tracker, extracts crops asynchronously.
         """
         video_blob_name = context.get("video_blob_name")
         video_guid = context.get("video_guid")  
@@ -687,14 +632,11 @@ class TrackGeneratorPipeline(Pipeline):
             # Process all frames in the video
             detections_count = 0
             all_detections = []
-            crop_tasks = []  # Collect async crop processing tasks
-            current_batch = []  # Current batch of upload tasks
+            get_crop_tasks = []  # Collect async crop processing tasks
             upload_tasks = []  # Track concurrent upload tasks
             batch_counter = 0  # Track batch numbers for logging
             all_crop_paths = []  # Track all successful crop upload paths
-            
-            # Frame-level checkpoint configuration
-            CHECKPOINT_FRAME_INTERVAL = 100  # Save checkpoint every 100 frames
+           
             last_checkpoint_frame = -1
             
             # Check for frame-level resume information in context
@@ -709,6 +651,7 @@ class TrackGeneratorPipeline(Pipeline):
                 all_detections = resume_all_detections
                 all_crop_paths = resume_crop_paths
             
+         
             with self.tenant_storage.get_video_capture(video_blob_name) as cap:
                 if not cap.isOpened():
                     logger.error(f"Could not open video for detection: {video_blob_name}")
@@ -728,35 +671,12 @@ class TrackGeneratorPipeline(Pipeline):
                     # Check for cancellation request
                     if self.is_stop_requested():
                         logger.info(f"Stop requested during detection processing at frame {frame_number}/{total_frames}")
-                        
-                        # Process any remaining crops before stopping
-                        if crop_tasks:
-                            logger.info(f"Processing remaining {len(crop_tasks)} crop tasks before stopping...")
-                            batch_paths = asyncio.run(self._process_crop_batch(crop_tasks, upload_tasks, batch_counter, video_guid))
-                            if batch_paths:
-                                all_crop_paths.extend(batch_paths)
-                        
-                        # Wait for any pending uploads to complete
-                        if upload_tasks:
-                            logger.info(f"Waiting for {len(upload_tasks)} pending upload tasks to complete before stopping...")
-                            _ = asyncio.wait(upload_tasks, timeout=60)
-
-                        # Return context with partial results
-                        context.update({
-                            "status": StepStatus.CANCELLED.value,
-                            "all_detections": all_detections,
-                            "total_detections": detections_count,
-                            "crop_paths": all_crop_paths,
-                            "total_crops": len(all_crop_paths),
-                            "cancellation_reason": "Stop requested during detection processing",
-                            "resume_frame": frame_number,  # Include current frame for resume
-                            "resume_detections_count": detections_count,
-                            "resume_all_detections": all_detections,
-                            "resume_crop_paths": all_crop_paths,
-                            "video_guid": video_guid,
-                            "video_blob_name": video_blob_name,
-                            "video_folder": video_folder
-                        })
+                        update = self._graceful_stop(
+                            get_crop_tasks, upload_tasks, batch_counter, video_guid, 
+                            all_crop_paths, frame_number, detections_count, all_detections,
+                            video_blob_name, video_folder
+                        )
+                        context.update(update)
                         return context
                         
                     ret, frame = cap.read()
@@ -767,11 +687,9 @@ class TrackGeneratorPipeline(Pipeline):
                         # Convert BGR to RGB for model input
                         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) #type: ignore
                         
-                        # Generate detections using the model
                         detections = self.detection_model.generate_detections(frame_rgb)
                         if type(detections) is not sv.Detections:
                             raise RuntimeError("Unrecognized detection type")
-                        
                         if detections is None or len(detections) == 0:
                             logger.debug(f"Frame {frame_number}: No detections found")
                             detections = sv.Detections.empty()
@@ -789,15 +707,13 @@ class TrackGeneratorPipeline(Pipeline):
 
                         if frame_number % FRAME_SAMPLING_FOR_CROP == 0:
                             # Create async task for crop processing
-                            task = asyncio.create_task(self._async_get_crops(frame_rgb.copy(), detections, video_guid, frame_number))
-                            crop_tasks.append(task)
-                            
-                            # Check if we should process current batch
-                            if len(crop_tasks) >= CROP_BATCH_SIZE:
-                                batch_paths = asyncio.run(self._process_crop_batch(crop_tasks, upload_tasks, batch_counter, video_guid))
-                                if batch_paths:
-                                    all_crop_paths.extend(batch_paths)
-                                crop_tasks = []  # Reset for next batch
+                            task = asyncio.create_task(self._get_upload_list_for_frame(frame_rgb.copy(), detections, video_guid, frame_number))
+                            get_crop_tasks.append(task)
+
+                            if len(get_crop_tasks) >= CROP_BATCH_SIZE:
+                                task = asyncio.create_task(self._upload_crop_batch(get_crop_tasks, batch_counter))
+                                upload_tasks.append(task)
+                                get_crop_tasks = []  # Reset for next batch
                                 batch_counter += 1
 
                     except Exception as e:
@@ -827,9 +743,6 @@ class TrackGeneratorPipeline(Pipeline):
                             "resume_detections_count": detections_count,
                             "resume_all_detections": all_detections,
                             "resume_crop_paths": all_crop_paths,
-                            "video_guid": video_guid,
-                            "video_blob_name": video_blob_name,
-                            "video_folder": video_folder
                         }
                         
                         # Save checkpoint during step execution
@@ -847,18 +760,22 @@ class TrackGeneratorPipeline(Pipeline):
                         logger.info(f"Processed {frame_number}/{total_frames} frames, {detections_count} total detections")
             
             # Process any remaining crops in final batch
-            if crop_tasks:
-                logger.info(f"Processing final batch with {len(crop_tasks)} crop tasks...")
-                batch_paths = asyncio.run(self._process_crop_batch(crop_tasks, upload_tasks, batch_counter, video_guid))
-                if batch_paths:
-                    all_crop_paths.extend(batch_paths)
+            if len(get_crop_tasks) > 0:
+                final_upload_task = asyncio.create_task(self._upload_crop_batch(get_crop_tasks, batch_counter))
+                upload_tasks.append(final_upload_task)
                 batch_counter += 1
             
-            # Wait for all upload tasks to complete
+            # Wait for all upload tasks to complete and collect results
             if upload_tasks:
                 logger.info(f"Waiting for {len(upload_tasks)} upload batches to complete...")
-                _ = asyncio.wait(upload_tasks, timeout=60)
-                logger.info("All crop upload batches completed")
+                
+                # Wait for all upload batch tasks to complete
+                async def wait_for_uploads():
+                    await asyncio.gather(*upload_tasks)
+                
+                asyncio.run(wait_for_uploads())
+                
+                logger.info(f"All crop upload batches completed")
             
             # Save detections - merge all frame detections
             detections_blob_name = f"{video_folder.rstrip('/')}/detections.json"
@@ -913,71 +830,17 @@ class TrackGeneratorPipeline(Pipeline):
             logger.error(f"Critical error in player detection for video {video_guid}: {e}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
 
-    async def _process_crop_batch(self, crop_tasks, upload_tasks, batch_counter, video_guid):
-        """Process a batch of crop tasks and upload them concurrently.
-        
-        Returns:
-            List[str]: List of successful blob paths that were uploaded.
-        """
-        if not crop_tasks:
-            return []
-            
-        # Check for cancellation request
-        if self.is_stop_requested():
-            logger.info(f"Stop requested, skipping crop batch {batch_counter}")
-            return []
-            
-        logger.info(f"Processing crop batch {batch_counter} with {len(crop_tasks)} tasks...")
-        
-        try:
-            # Wait for crop processing tasks to complete
-            all_upload_tasks = await asyncio.gather(*crop_tasks)
-            
-            # Flatten the list of upload tasks
-            flat_upload_tasks = []
-            for task_list in all_upload_tasks:
-                if task_list:  # Check if task_list is not None
-                    flat_upload_tasks.extend(task_list)
-            
-            if flat_upload_tasks:
-                logger.info(f"Batch {batch_counter}: Uploading {len(flat_upload_tasks)} crops...")
-                
-                # Create upload task with concurrency control
-                upload_task = asyncio.create_task(
-                    self._upload_crop_batch(flat_upload_tasks, batch_counter, video_guid)
-                )
-                upload_tasks.append(upload_task)
-                
-                # Limit concurrent uploads to prevent overwhelming storage service
-                if len(upload_tasks) >= MAX_CONCURRENT_UPLOADS:
-                    logger.info(f"Reached max concurrent uploads ({MAX_CONCURRENT_UPLOADS}), waiting for some to complete...")
-                    # Wait for the oldest upload task to complete and collect its successful paths
-                    completed_task = await upload_tasks.pop(0)
-                    logger.debug("Completed one upload batch, continuing...")
-                    return completed_task if completed_task else []
-            else:
-                logger.debug(f"Batch {batch_counter}: No crops to upload")
-                
-        except Exception as e:
-            logger.error(f"Error processing crop batch {batch_counter}: {e}")
-            
-        return []
-
-    async def _upload_crop_batch(self, upload_tasks, batch_counter, video_guid):
+    async def _upload_crop_batch(self, get_crop_tasks: List[asyncio.Task], batch_counter: int):
         """Upload a batch of crops asynchronously.
         
         Returns:
             List[str]: List of successful blob paths that were uploaded.
         """
-        # Check for cancellation request
-        if self.is_stop_requested():
-            logger.info(f"Stop requested, skipping upload batch {batch_counter}")
-            return []
             
         try:
-            failed_uploads, successful_uploads, successful_paths = await asyncio.get_event_loop().run_in_executor(
-                None,
-                self._execute_parallel_operations,
+            upload_tasks = await asyncio.gather(*get_crop_tasks)
+
+            failed_uploads, successful_uploads = await self._execute_parallel_operations_async(
                 upload_tasks,
                 lambda task: self.tenant_storage.upload_from_bytes(
                     task[0], 
@@ -986,95 +849,69 @@ class TrackGeneratorPipeline(Pipeline):
                 f"upload batch {batch_counter}"
             )
             
-            logger.info(f"Batch {batch_counter}: Successfully uploaded {successful_uploads} crops")
+            logger.debug(f"Batch {batch_counter}: Successfully uploaded {successful_uploads} crops")
             if failed_uploads:
-                logger.warning(f"Batch {batch_counter}: Failed to upload {len(failed_uploads)} crops")
-            
-            return successful_paths
+                logger.error(f"Batch {batch_counter}: Failed to upload {len(failed_uploads)} crops") 
+            return
                 
         except Exception as e:
             logger.error(f"Error uploading crop batch {batch_counter}: {e}")
-            return []
+            return
 
-    async def _async_get_crops(self, frame, detections, video_guid: str, frame_number: int):
-        """Async wrapper for crop processing to enable concurrent processing."""
-        # Check for cancellation request
-        if self.is_stop_requested():
-            logger.debug(f"Stop requested, skipping crop processing for frame {frame_number}")
-            return []
-            
-        try:
-            logger.debug(f"Processing crops for frame {frame_number}")
-            
-            # Get upload tasks from synchronous method
-            upload_tasks = self._get_crops(frame, detections, video_guid)
-            
-            return upload_tasks
-            
-        except Exception as e:
-            logger.error(f"Error in async crop processing for frame {frame_number}: {e}")
-            return []
-
-    def _get_crops(self, frame, detections, video_guid: str):
+    def _get_crops(self, frame: np.ndarray, detections: sv.Detections) -> List[Tuple[int, np.ndarray]]:
         """
-        Extract high-quality crops from frame detections and save to unverified tracks GCS path.
+        Extract quality-filtered crops from frame detections.
         
-        This function processes detections from a frame, applies quality filters to discard
-        low-quality crops, and saves the remaining crops to the appropriate GCS path structure.
-        
-        Args:
-            frame: The frame image as numpy array
-            detections: Supervision Detections object for the frame
-            video_guid: Unique identifier for the video
-            
-        Returns:
-            List[Tuple[str, np.ndarray]]: List of (blob_path, crop_image) tuples for upload
+        Returns list of (track_id, crop_image) tuples for valid detections.
         """
-        upload_tasks = []
-        
-        if not isinstance(detections, sv.Detections):
-            logger.error("Invalid detections format - expected sv.Detections object")
-            return upload_tasks
+        res = []
+        for detection in detections:
+            crop = crop_image(frame, detection[0].astype(int))
+            if self._is_crop_quality_sufficient(crop):
+                crop_tuple = (detection[4], crop)  # (track_id, crop)
+                res.append(crop_tuple)
+        return res
+        # upload_tasks = []
 
-        # # Map detections to players using the new module
-        # detections = map_detections_to_players(detections)
+        # # # Map detections to players using the new module
+        # # detections = map_detections_to_players(detections)
 
-        track_detections = {}
-        for i, detection in enumerate(detections):
-            track_id = detection[4] if len(detection) > 4 else 0  # tracker_id is at index 4
-            if track_id not in track_detections:
-                track_detections[track_id] = []
-            track_detections[track_id].append((i, detection))
+        # track_detections = {}
+        # for i, detection in enumerate(detections):
+        #     track_id = detection[4] if len(detection) > 4 else 0  # tracker_id is at index 4
+        #     if track_id not in track_detections:
+        #         track_detections[track_id] = []
+        #     track_detections[track_id].append((i, detection))
         
-        # Process each track's detections
-        for track_id, track_det_list in track_detections.items():
-            for det_idx, detection in track_det_list:
-                try:
-                    # Extract crop from frame
-                    crop_np = crop_image(frame, detection[0].astype(int))
+        # # Process each track's detections
+        # for track_id, track_det_list in track_detections.items():
+        #     for det_idx, detection in track_det_list:
+        #         try:
+        #             # Extract crop from frame
+        #             crop_np = crop_image(frame, detection[0].astype(int))
                     
-                    # Apply quality filters
-                    if not self._is_crop_quality_sufficient(crop_np):
-                        logger.debug(f"Discarding low-quality crop for detection {det_idx} in track {track_id}")
-                        continue
+        #             # Apply quality filters
+        #             if not self._is_crop_quality_sufficient(crop_np):
+        #                 logger.debug(f"Discarding low-quality crop for detection {det_idx} in track {track_id}")
+        #                 continue
                     
-                    # Get frame_id from detection data if available, otherwise use index
-                    if detections.data and 'frame_index' in detections.data and isinstance(detections.data['frame_index'], (list, np.ndarray)):
-                        frame_id = detections.data['frame_index'][det_idx] if det_idx < len(detections.data['frame_index']) else str(det_idx)
-                    else:
-                        frame_id = str(det_idx)
+        #             # Get frame_id from detection data if available, otherwise use index
+        #             if detections.data and 'frame_index' in detections.data and isinstance(detections.data['frame_index'], (list, np.ndarray)):
+        #                 frame_id = detections.data['frame_index'][det_idx] if det_idx < len(detections.data['frame_index']) else str(det_idx)
+        #             else:
+        #                 frame_id = str(det_idx)
                     
-                    # Generate GCS path for unverified tracks using the path manager
-                    folder_path = self.path_manager.get_path("unverified_tracks", video_id=video_guid, track_id=track_id)
-                    blob_path = f"{folder_path}crop_{det_idx}_{frame_id}.jpg"
+        #             # Generate GCS path for unverified tracks using the path manager
+        #             folder_path = self.path_manager.get_path("unverified_tracks", video_id=video_guid, track_id=track_id)
+        #             blob_path = f"{folder_path}crop_{det_idx}_{frame_id}.jpg"
                     
-                    upload_tasks.append((blob_path, crop_np))
+        #             upload_tasks.append((blob_path, crop_np))
                     
-                except Exception as e:
-                    logger.error(f"Error extracting crop for detection {det_idx} in track {track_id}: {e}")
-                    continue
+        #         except Exception as e:
+        #             logger.error(f"Error extracting crop for detection {det_idx} in track {track_id}: {e}")
+        #             continue
         
-        return upload_tasks
+        # return upload_tasks
 
     def _is_crop_quality_sufficient(self, crop: np.ndarray) -> bool:
         """
@@ -1103,7 +940,6 @@ class TrackGeneratorPipeline(Pipeline):
         
         return True
 
-
     def _validate_video_resolution(self, width: int, height: int) -> bool:
         """
         Validate that video resolution complies with minimum requirements.
@@ -1117,3 +953,92 @@ class TrackGeneratorPipeline(Pipeline):
         """
 
         return (width >= MIN_VIDEO_RESOLUTION[0] and height >= MIN_VIDEO_RESOLUTION[1])
+
+    async def _get_upload_list_for_frame(
+            self, frame: np.ndarray, 
+            detections: sv.Detections, 
+            video_guid: str, 
+            frame_number: int) -> List[Tuple[str, np.ndarray]]:
+        """
+        Generate upload tasks for crops from a single frame.
+        
+        Returns list of (blob_path, crop_image) tuples for batch upload.
+        """
+        crop_tuples = self._get_crops(frame, detections)
+        upload_list = []
+        if len(crop_tuples) > 0:
+            for crop_tuple in crop_tuples:
+                crop_dir = self.path_manager.get_path("unverified_tracks", video_id=video_guid, track_id=crop_tuple[0])
+                if crop_dir is None:
+                    raise RuntimeError(f"Unable to determine crop directory for {video_guid}, track {crop_tuple[0]}")
+                crop_dir = crop_dir.rstrip('/') + '/'
+                crop_path = f"{crop_dir}crop_{frame_number}.jpg"
+                upload_list_tuple = (crop_path, crop_tuple[1])
+                upload_list.append(upload_list_tuple)
+
+            logger.debug(f"Generated upload list for frame {frame_number}: {upload_list}")
+        else:
+            logger.warning(f"No valid crops found for frame {frame_number}")
+            return upload_list
+
+        return upload_list
+
+    def _graceful_stop(self, crop_tasks, upload_tasks, batch_counter, video_guid, 
+                      all_crop_paths, frame_number, detections_count, all_detections,
+                      video_blob_name, video_folder) -> Dict[str, Any]:
+        """
+        Handle graceful pipeline shutdown during video processing.
+
+        Completes all pending crop extraction and upload tasks before stopping,
+        preventing data loss and enabling resume capability.
+
+        Args:
+            crop_tasks: Pending crop extraction tasks to complete
+            upload_tasks: Active upload batch tasks in progress
+            batch_counter: Current batch counter for logging
+            video_guid: Unique video identifier
+            all_crop_paths: Successfully uploaded crop paths
+            frame_number: Current frame where processing stopped
+            detections_count: Total detections found so far
+            all_detections: All detection results collected
+            video_blob_name: GCS path to video file
+            video_folder: GCS folder for video data
+
+        Returns:
+            Dict containing cancellation context with partial results for resume,
+            including status, detections, crop paths, and resume information.
+
+        Note:
+            Ensures no data loss by completing pending operations before cancellation.
+        """
+        logger.info("Initiating graceful stop of the pipeline...")
+        
+        if crop_tasks:
+            logger.info(f"Processing remaining {len(crop_tasks)} crop tasks before stopping...")
+            # Create a final upload batch task for remaining crops
+            final_upload_task = asyncio.create_task(self._upload_crop_batch(crop_tasks, batch_counter))
+            upload_tasks.append(final_upload_task)
+        
+        # Wait for any pending uploads to complete and collect results
+        if upload_tasks:
+            logger.info(f"Waiting for {len(upload_tasks)} pending upload tasks to complete before stopping...")
+            
+            async def wait_for_pending_uploads():
+                await asyncio.gather(*upload_tasks)
+            
+            asyncio.run(wait_for_pending_uploads())
+
+        # Return context with partial results
+        context_to_update = {
+            "status": StepStatus.CANCELLED.value,
+            "all_detections": all_detections,
+            "total_detections": detections_count,
+            "crop_paths": all_crop_paths,
+            "total_crops": len(all_crop_paths),
+            "cancellation_reason": "Stop requested during detection processing",
+            "resume_frame": frame_number,  # Include current frame for resume
+            "resume_detections_count": detections_count,
+            "resume_all_detections": all_detections,
+            "resume_crop_paths": all_crop_paths,
+        }
+        return context_to_update
