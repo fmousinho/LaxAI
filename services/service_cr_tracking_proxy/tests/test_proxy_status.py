@@ -1,7 +1,7 @@
 import pytest
 import os
 from unittest.mock import MagicMock, patch
-from services.service_cr_tracking_proxy.src.main import TrackingJobProxy
+from services.service_cr_tracking_proxy.main import TrackingJobProxy
 
 class DummyDoc:
     def __init__(self, exists, data=None):
@@ -28,9 +28,9 @@ class DummyCollection:
 def proxy():
     # Ensure GOOGLE_CLOUD_PROJECT is set for the test
     os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "dummy-project")
-    with patch("services.service_cr_tracking_proxy.src.main.JobsClient", MagicMock()), \
-         patch("services.service_cr_tracking_proxy.src.main.ExecutionsClient", MagicMock()), \
-         patch("services.service_cr_tracking_proxy.src.main.firestore.Client", MagicMock()):
+    with patch("services.service_cr_tracking_proxy.main.JobsClient", MagicMock()), \
+         patch("services.service_cr_tracking_proxy.main.ExecutionsClient", MagicMock()), \
+         patch("services.service_cr_tracking_proxy.main.firestore.Client", MagicMock()):
         proxy = TrackingJobProxy()
     # Patch Firestore collection with a MagicMock to match CollectionReference type
     proxy._runs_collection = MagicMock(spec=["document"])
