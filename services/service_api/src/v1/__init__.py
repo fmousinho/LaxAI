@@ -1,5 +1,12 @@
 """Version 1 API endpoints."""
 
-from .endpoints.train import router
+from fastapi import APIRouter
+from .endpoints.train import router as train_router
+from .endpoints.track import router as track_router
+
+# Create main v1 router that includes all endpoints
+router = APIRouter()
+router.include_router(train_router)
+router.include_router(track_router)
 
 __all__ = ["router"]

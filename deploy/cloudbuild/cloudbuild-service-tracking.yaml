@@ -1,0 +1,40 @@
+############################################################################
+#                                                                          #
+#              SIMPLIFIED BUILDER FOR SERVICE TRACKING                    #
+#                                                                          #
+############################################################################
+
+# This Cloud Build file builds a Docker image and pushes it to Artifact Registry.
+#
+# Usage:
+#   gcloud builds submit --config=deploy/cloudbuild/cloudbuild-service-tracking.yaml
+
+substitutions:
+  _GOOGLE_CLOUD_PROJECT: "laxai-466119"
+
+steps:
+  # Build the service tracking image
+  - id: "build-service-tracking-image"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-f"
+      - "services/service_tracking/Dockerfile"
+      - "-t"
+      - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-tracking:latest"
+      - "."
+
+  # Push the service tracking image
+  - id: "push-service-tracking-image"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-tracking:latest"
+
+images:
+  - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-tracking:latest"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: "3600s"

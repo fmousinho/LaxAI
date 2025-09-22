@@ -1,0 +1,21 @@
+# Service Tracking Dependencies
+# Computer vision and ML dependencies for track generation
+
+# Core ML/AI
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+opencv-python>=4.8.0
+supervision>=0.18.0
+matplotlib>=3.7.0
+
+# Google Cloud dependencies
+google-cloud-storage>=2.10.0
+google-cloud-firestore>=2.21.0
+
+# Video processing
+ffmpeg-python>=0.2.0
+
+# Utilities
+asyncio-mqtt>=0.13.0
+python-dotenv>=1.0.0
