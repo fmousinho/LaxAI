@@ -11,6 +11,9 @@ import logging
 import os
 import sys
 
+# Ensure shared_libs can be imported
+sys.path.insert(0, '/app')
+
 # Ensure src directory is in path for absolute imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
