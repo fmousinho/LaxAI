@@ -618,6 +618,17 @@ class TrackGeneratorPipeline(Pipeline):
             logger.error("No video blob name for player detection")
             return {"status": StepStatus.ERROR.value, "error": "No video blob name provided"}
         
+        # Run the async processing within a new event loop
+        return asyncio.run(self._process_video_frames_async(context))
+
+    async def _process_video_frames_async(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Async method to process video frames with proper event loop handling.
+        """
+        video_blob_name = context.get("video_blob_name")
+        video_guid = context.get("video_guid")
+        video_folder = context.get("video_folder")
+        
         if not video_guid:
             logger.error("No video GUID for player detection")
             return {"status": StepStatus.ERROR.value, "error": "No video GUID provided"}
@@ -651,8 +662,7 @@ class TrackGeneratorPipeline(Pipeline):
                 all_detections = resume_all_detections
                 all_crop_paths = resume_crop_paths
             
-         
-            with self.tenant_storage.get_video_capture(video_blob_name) as cap:
+            with self.tenant_storage.get_video_capture(video_blob_name or "") as cap:
                 if not cap.isOpened():
                     logger.error(f"Could not open video for detection: {video_blob_name}")
                     return {"status": StepStatus.ERROR.value, "error": f"Could not open video: {video_blob_name}"}
@@ -770,10 +780,7 @@ class TrackGeneratorPipeline(Pipeline):
                 logger.info(f"Waiting for {len(upload_tasks)} upload batches to complete...")
                 
                 # Wait for all upload batch tasks to complete
-                async def wait_for_uploads():
-                    await asyncio.gather(*upload_tasks)
-                
-                asyncio.run(wait_for_uploads())
+                await asyncio.gather(*upload_tasks)
                 
                 logger.info(f"All crop upload batches completed")
             
