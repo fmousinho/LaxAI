@@ -526,7 +526,7 @@ class TrackGeneratorPipeline(Pipeline):
             pipeline.stop()
             ```
         """
-        from common.pipeline import stop_pipeline
+        from shared_libs.common.pipeline import stop_pipeline
         return stop_pipeline(self.pipeline_name)
 
     def is_stopping(self) -> bool:

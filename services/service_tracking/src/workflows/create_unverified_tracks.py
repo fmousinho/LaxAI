@@ -132,8 +132,7 @@ class UnverifiedTrackGenerationWorkflow:
 
             try:
                 available_videos = storage.list_blobs(
-                    prefix=raw_videos_path,
-                    exclude_prefix_in_return=True
+                    prefix=raw_videos_path
                 )
                 logger.info(f"Raw list_blobs result: {list(available_videos)}")
                 # Filter for video files (common video extensions)
@@ -142,7 +141,6 @@ class UnverifiedTrackGenerationWorkflow:
                     v for v in available_videos
                     if any(v.lower().endswith(ext) for ext in video_extensions)
                 ]
-
                 logger.info(f"Found {len(available_videos)} videos in raw_videos: {available_videos}")
 
             except Exception as e:

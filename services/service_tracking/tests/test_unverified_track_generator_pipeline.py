@@ -104,7 +104,7 @@ class TestTrackGeneratorPipeline:
         mock_detection_class.side_effect = RuntimeError("Model load failed")
 
         # Verify exception is raised
-        with pytest.raises(RuntimeError, match="Detection model is required"):
+        with pytest.raises(RuntimeError, match="Training pipeline cannot continue without detection model"):
             TrackGeneratorPipeline(
                 config=mock_config,
                 tenant_id="test_tenant"
@@ -125,7 +125,7 @@ class TestTrackGeneratorPipeline:
         mock_tracker_class.side_effect = RuntimeError("Tracker init failed")
 
         # Verify exception is raised
-        with pytest.raises(RuntimeError, match="Tracker is required"):
+        with pytest.raises(RuntimeError, match="Training pipeline cannot continue without tracker"):
             TrackGeneratorPipeline(
                 config=mock_config,
                 tenant_id="test_tenant"
@@ -220,7 +220,7 @@ class TestTrackGeneratorPipeline:
         )
 
         # Mock the stop_pipeline function
-        with patch('unverified_track_generator_pipeline.stop_pipeline') as mock_stop_pipeline:
+        with patch('shared_libs.common.pipeline.stop_pipeline') as mock_stop_pipeline:
             mock_stop_pipeline.return_value = True
 
             result = pipeline.stop()
