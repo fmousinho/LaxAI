@@ -185,15 +185,20 @@ def test_cli_cancellation_with_signals():
     finally:
         tmp_file.close()
 
+    # Get the current workspace root dynamically
+    current_file = _Path(__file__).resolve()
+    workspace_root = current_file.parent.parent.parent.parent
+    venv_python = workspace_root / ".venv" / "bin" / "python"
+
     cmd = [
-        "/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI/.venv/bin/python",
+        str(venv_python),
         tmp_file_path,
     ]
 
     # Start the process
     proc = subprocess.Popen(
         cmd,
-        cwd="/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI",
+        cwd=str(workspace_root),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True

@@ -7,9 +7,12 @@ import logging
 import os
 import sys
 from typing import Any, Dict
+from pathlib import Path
 
-# Add src to path
-sys.path.insert(0, '/Users/fernandomousinho/Documents/Learning_to_Code/LaxAI/src')
+# Add correct service paths
+project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(project_root / "services" / "service_training" / "src"))
+sys.path.insert(0, str(project_root / "shared_libs"))
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -17,8 +20,8 @@ logger = logging.getLogger(__name__)
 
 def test_batch_size_with_actual_dataset():
     """Test batch size flow using the actual dataset and parameters."""
-    from config.parameter_registry import parameter_registry
-    from services.training_service import _convert_request_to_kwargs
+    from parameter_registry import parameter_registry
+    from training_service import _convert_request_to_kwargs
     from train_pipeline import TrainPipeline
     from training_loop import Training
 

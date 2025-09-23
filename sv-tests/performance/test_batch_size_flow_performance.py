@@ -6,7 +6,12 @@ This simulates the exact same flow as your Google Cloud setup.
 
 import sys
 import os
-sys.path.append('src')
+from pathlib import Path
+
+# Add correct service paths
+project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(project_root / "services" / "service_training" / "src"))
+sys.path.insert(0, str(project_root / "shared_libs"))
 
 def test_complete_batch_size_flow():
     """Test the complete batch size flow from API request to DataLoader."""
@@ -29,8 +34,8 @@ def test_complete_batch_size_flow():
 
     print(f"1. API Request batch_size: {api_request.training_params['batch_size']}")
 
-    # Step 2: Convert request to kwargs (service layer)
-    from src.services.training_service import _convert_request_to_kwargs
+        # Step 2: Convert API request to kwargs (same as endpoint)
+    from training_service import _convert_request_to_kwargs
     kwargs = _convert_request_to_kwargs(api_request)
     print(f"2. Service Layer training_kwargs batch_size: {kwargs['training_kwargs']['batch_size']}")
 

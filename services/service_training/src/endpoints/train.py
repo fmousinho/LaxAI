@@ -4,7 +4,7 @@ import asyncio
 import logging
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
@@ -30,7 +30,7 @@ def execute_training_task(task_id: str, training_request: TrainingRequest):
             "status": "running",
             "progress": 0,
             "current_epoch": 0,
-            "updated_at": datetime.utcnow().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         })
 
         # Extract parameters from request
@@ -77,21 +77,21 @@ def execute_training_task(task_id: str, training_request: TrainingRequest):
             "dataset_mode": result.get("dataset_mode"),
             "run_guids": result.get("run_guids", []),
             "pipeline_result": result.get("pipeline_result"),
-            "updated_at": datetime.utcnow().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         })
 
     except InterruptedError:
         # Handle cancellation
         training_tasks[task_id].update({
             "status": "cancelled",
-            "updated_at": datetime.utcnow().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         })
     except Exception as e:
         # Mark as failed
         training_tasks[task_id].update({
             "status": "failed",
             "error": str(e),
-            "updated_at": datetime.utcnow().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         })
 
 
@@ -115,8 +115,8 @@ async def start_training(
         "training_params": request.training_params,
         "model_params": request.model_params,
         "eval_params": request.eval_params,
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
         "progress": None,
         "current_epoch": None,
         "total_epochs": None,
@@ -181,7 +181,7 @@ async def cancel_training(task_id: str) -> JSONResponse:
     # Mark as cancelled in our task storage
     training_tasks[task_id].update({
         "status": "cancelled",
-        "updated_at": datetime.utcnow().isoformat()
+        "updated_at": datetime.now(timezone.utc).isoformat()
     })
 
     # Use GUID-based cancellation for all active pipelines

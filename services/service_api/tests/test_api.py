@@ -35,8 +35,9 @@ def test_list_training_jobs(client):
     response = client.get("/train/")
     assert response.status_code == 200
     data = response.json()
-    assert "message" in data
     assert "jobs" in data
+    assert "count" in data
+    assert "limit" in data
 
 
 def test_list_tracking_jobs(client):
