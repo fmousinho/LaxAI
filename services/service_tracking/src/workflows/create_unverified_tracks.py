@@ -120,13 +120,14 @@ class UnverifiedTrackGenerationWorkflow:
         try:
             storage = get_storage(self.tenant_id)
             path_manager = GCSPaths()
-            videos_root = path_manager.get_path("videos_root")
 
             available_videos = []
 
             try:
                 # Look for videos in the raw_videos directory
-                raw_videos_path = f"{videos_root}raw_videos/"
+                raw_videos_path = path_manager.get_path(
+                    "raw_videos", tenant_id=self.tenant_id
+                )
                 available_videos = storage.list_blobs(
                     prefix=raw_videos_path,
                     delimiter='/',
@@ -144,28 +145,6 @@ class UnverifiedTrackGenerationWorkflow:
             except Exception as e:
                 logger.warning(f"Could not list videos from {raw_videos_path}: {e}")
                 available_videos = []
-
-            # Also check uploads directory
-            try:
-                uploads_path = f"{videos_root}uploads/"
-                uploads_videos = storage.list_blobs(
-                    prefix=uploads_path,
-                    delimiter='/',
-                    exclude_prefix_in_return=True
-                )
-                # Filter for video files
-                video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.webm']
-                uploads_videos = [
-                    v for v in uploads_videos
-                    if any(v.lower().endswith(ext) for ext in video_extensions)
-                ]
-
-                if uploads_videos:
-                    logger.info(f"Found {len(uploads_videos)} videos in uploads: {uploads_videos}")
-                    available_videos.extend(uploads_videos)
-
-            except Exception as e:
-                logger.warning(f"Could not list videos from uploads: {e}")
 
             # Limit videos if specified
             if self.video_limit and self.video_limit > 0 and self.video_limit < len(available_videos):

@@ -35,9 +35,9 @@ def main():
                        help='Custom name for the track generation run')
     parser.add_argument('--verbose', action='store_true', default=True,
                        help='Enable verbose logging')
-    parser.add_argument('--save_intermediate', action='store_true', default=True,
+    parser.add_argument('--save-intermediate', action='store_true', default=True,
                        help='Save intermediate pipeline results to GCS')
-    parser.add_argument('--resume_from_checkpoint', action='store_true', default=True,
+    parser.add_argument('--resume-from-checkpoint', action='store_true', default=True,
                        help='Resume track generation from checkpoint if available')
     parser.add_argument('--video_limit', type=int, default=None,
                        help='Maximum number of videos to process (None for all)')
