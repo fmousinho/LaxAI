@@ -123,11 +123,12 @@ class UnverifiedTrackGenerationWorkflow:
 
             available_videos = []
 
+            # Look for videos in the raw_videos directory
+            raw_videos_path = path_manager.get_path(
+                "raw_data"
+            )
+
             try:
-                # Look for videos in the raw_videos directory
-                raw_videos_path = path_manager.get_path(
-                    "raw_videos", tenant_id=self.tenant_id
-                )
                 available_videos = storage.list_blobs(
                     prefix=raw_videos_path,
                     delimiter='/',
