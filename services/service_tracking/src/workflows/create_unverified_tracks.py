@@ -128,12 +128,14 @@ class UnverifiedTrackGenerationWorkflow:
                 "raw_data"
             )
 
+            logger.info(f"Looking for videos in GCS path: {raw_videos_path}")
+
             try:
                 available_videos = storage.list_blobs(
                     prefix=raw_videos_path,
-                    delimiter='/',
                     exclude_prefix_in_return=True
                 )
+                logger.info(f"Raw list_blobs result: {list(available_videos)}")
                 # Filter for video files (common video extensions)
                 video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.webm']
                 available_videos = [

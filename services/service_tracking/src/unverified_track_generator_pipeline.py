@@ -92,14 +92,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import supervision as sv
 from supervision.utils.image import crop_image
 
-from common.google_storage import get_storage, GCSPaths
-from common.detection import DetectionModel
-from common.pipeline_step import StepStatus
-from common.pipeline import Pipeline, PipelineStatus
+from shared_libs.common.google_storage import get_storage, GCSPaths
+from shared_libs.common.detection import DetectionModel
+from shared_libs.common.pipeline_step import StepStatus
+from shared_libs.common.pipeline import Pipeline, PipelineStatus
 from config.all_config import DetectionConfig, detection_config, model_config, training_config
 from utils.id_generator import create_video_id, create_run_id
-from common.tracker import AffineAwareByteTrack
-from common.track_to_player import map_detections_to_players
+from shared_libs.common.tracker import AffineAwareByteTrack
+from shared_libs.common.track_to_player import map_detections_to_players
 
 logger = logging.getLogger(__name__)
 

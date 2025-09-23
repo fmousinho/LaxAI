@@ -12,7 +12,7 @@ import numpy as np
 import cv2
 import supervision as sv
 
-from unverified_track_generator_pipeline import TrackGeneratorPipeline
+from src.unverified_track_generator_pipeline import TrackGeneratorPipeline
 from config.all_config import DetectionConfig
 from common.pipeline_step import StepStatus
 
@@ -240,7 +240,7 @@ class TestTrackGeneratorPipelineMethods:
 
     def test_workflow_instantiation(self):
         """Test that the UnverifiedTrackGenerationWorkflow can be instantiated."""
-        from src.workflows.create_unverified_tracks import UnverifiedTrackGenerationWorkflow
+        from workflows.create_unverified_tracks import UnverifiedTrackGenerationWorkflow
 
         workflow = UnverifiedTrackGenerationWorkflow(
             tenant_id="test_tenant",
