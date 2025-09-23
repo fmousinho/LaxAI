@@ -721,9 +721,10 @@ class TrackGeneratorPipeline(Pipeline):
                             get_crop_tasks.append(task)
 
                             if len(get_crop_tasks) >= CROP_BATCH_SIZE:
-                                task = asyncio.create_task(self._upload_crop_batch(get_crop_tasks, batch_counter))
-                                upload_tasks.append(task)
+                                logger.info(f"Processing batch {batch_counter} of crop uploads...")
+                                task = asyncio.create_task(self._upload_crop_batch(get_crop_tasks.copy(), batch_counter))
                                 get_crop_tasks = []  # Reset for next batch
+                                upload_tasks.append(task)
                                 batch_counter += 1
 
                     except Exception as e:
