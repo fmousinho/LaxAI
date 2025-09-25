@@ -9,7 +9,7 @@ import json
 import logging
 import os
 from collections import defaultdict
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 import numpy as np
 from supervision import (Detections, JSONSink, VideoInfo,
@@ -20,6 +20,138 @@ from shared_libs.common.tracker import AffineAwareByteTrack
 from shared_libs.config.all_config import detection_config
 
 logger = logging.getLogger(__name__)
+
+
+def _detections_to_summary_dict(merged: Detections, detections_list: List[Detections], extra_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Internal helper to build a canonical summary JSON dict for a merged Detections object.
+
+    The summary includes coordinate arrays plus optional frame_index (if present in data/metadata),
+    and total counts. This unifies previous ad-hoc dict constructions across pipelines.
+    """
+    # Frame indices: attempt to gather from each element's data['frame_index'] else metadata['frame_id']
+    frame_indices: List[int] = []
+    collected = False
+    try:
+        # If merged already has frame_index in data (preferred)
+        if merged.data and 'frame_index' in merged.data:
+            fi = merged.data.get('frame_index')
+            if isinstance(fi, (list, np.ndarray)):
+                frame_indices = list(fi)
+                collected = True
+    except Exception:  # pragma: no cover - defensive
+        pass
+
+    if not collected:
+        # Build by iterating original detections objects
+        for det in detections_list:
+            per_rows = len(det)
+            # Try data['frame_index'] row mapped
+            if per_rows == 0:
+                continue
+            row_frame_idx: Optional[int] = None
+            if det.data and 'frame_index' in det.data and isinstance(det.data['frame_index'], (list, np.ndarray)):
+                # Already row-level list
+                fi_list = det.data['frame_index']
+                if len(fi_list) == per_rows:
+                    frame_indices.extend([int(x) for x in fi_list])
+                    continue
+            # Fallback to metadata single frame id
+            if hasattr(det, 'metadata') and isinstance(det.metadata, dict) and 'frame_id' in det.metadata:
+                row_frame_idx = det.metadata.get('frame_id')
+            if row_frame_idx is not None:
+                frame_indices.extend([int(row_frame_idx)] * per_rows)
+
+    tracker_id_list = []
+    try:
+        if getattr(merged, 'tracker_id', None) is not None:
+            tracker_id_list = merged.tracker_id.tolist()  # type: ignore[attr-defined]
+    except Exception:  # pragma: no cover
+        tracker_id_list = []
+
+    summary: Dict[str, Any] = {
+        'xyxy': merged.xyxy.tolist() if merged.xyxy is not None else [],
+        'confidence': merged.confidence.tolist() if merged.confidence is not None else [],
+        'class_id': merged.class_id.tolist() if merged.class_id is not None else [],
+        'tracker_id': tracker_id_list,
+        'frame_index': frame_indices,
+        'data': merged.data if getattr(merged, 'data', None) else {},
+        'total_frames': len(detections_list),
+        'total_detections': len(merged),
+    }
+    if extra_metadata:
+        summary.update(extra_metadata)
+    return summary
+
+
+def save_all_detections(storage_client, blob_name: str, detections_list: List[Detections], extra_metadata: Optional[Dict[str, Any]] = None) -> bool:
+    """Serialize and upload a list of Detections objects as a single summary JSON.
+
+    Args:
+        storage_client: Object exposing upload_from_bytes(destination, bytes)
+        blob_name: Target blob path (should end with .json)
+        detections_list: List of sv.Detections across frames
+        extra_metadata: Optional additional key-values to append to summary
+
+    Returns:
+        bool: True if upload succeeded, False otherwise
+    """
+    try:
+        if not detections_list:
+            empty_summary = {
+                'xyxy': [], 'confidence': [], 'class_id': [], 'tracker_id': [],
+                'frame_index': [], 'data': {}, 'total_frames': 0, 'total_detections': 0
+            }
+            payload = json.dumps(empty_summary).encode('utf-8')
+            return storage_client.upload_from_bytes(blob_name, payload)
+
+        # Merge detections
+        merged = Detections.merge(detections_list)
+        summary = _detections_to_summary_dict(merged, detections_list, extra_metadata)
+        payload = json.dumps(summary).encode('utf-8')
+        return storage_client.upload_from_bytes(blob_name, payload)
+    except Exception as e:  # pragma: no cover - defensive logging
+        logger.error(f"Failed to save all detections to {blob_name}: {e}")
+        return False
+
+
+def load_all_detections_summary(summary_json: Dict[str, Any]) -> Detections:
+    """Load a merged summary JSON (created by save_all_detections) back into a Detections object.
+
+    Note: frame_index is preserved in the returned object's data as 'frame_index'.
+
+    Args:
+        summary_json: Parsed JSON dict from detections summary file
+
+    Returns:
+        Detections: Single merged detection object representing all rows.
+    """
+    try:
+        xyxy = np.array(summary_json.get('xyxy', []), dtype=np.float32) if summary_json.get('xyxy') else np.empty((0,4), dtype=np.float32)
+        class_id_raw = summary_json.get('class_id', [])
+        class_id = np.array(class_id_raw, dtype=int) if class_id_raw else None
+        confidence_raw = summary_json.get('confidence', [])
+        confidence = np.array(confidence_raw, dtype=np.float32) if confidence_raw else None
+        tracker_id_raw = summary_json.get('tracker_id', [])
+        tracker_id = np.array(tracker_id_raw, dtype=int) if tracker_id_raw else None
+        data_field = summary_json.get('data', {}) or {}
+        frame_index = summary_json.get('frame_index', [])
+        if frame_index:
+            data_field = dict(data_field)  # shallow copy
+            data_field['frame_index'] = frame_index
+        # Ensure data_field is a dict[str, list|ndarray]
+        if not isinstance(data_field, dict):
+            data_field = {}
+        det = Detections(
+            xyxy=xyxy,
+            class_id=class_id,
+            confidence=confidence,
+            tracker_id=tracker_id,
+            data=data_field
+        )
+        return det
+    except Exception as e:  # pragma: no cover
+        logger.error(f"Failed to load detections summary: {e}")
+        return Detections.empty()
 
 
 def process_frames(

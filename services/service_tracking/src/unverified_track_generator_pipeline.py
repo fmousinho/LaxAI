@@ -99,6 +99,7 @@ from shared_libs.common.pipeline import Pipeline, PipelineStatus
 from config.all_config import DetectionConfig, detection_config, model_config, training_config
 from utils.id_generator import create_video_id, create_run_id
 from shared_libs.common.tracker import AffineAwareByteTrack
+from shared_libs.common.detection_utils import save_all_detections
 from shared_libs.common.track_to_player import map_detections_to_players
 
 logger = logging.getLogger(__name__)
@@ -752,33 +753,9 @@ class TrackGeneratorPipeline(Pipeline):
                 
                 logger.info(f"All crop upload batches completed")
             
-            # Save detections - merge all frame detections
+            # Save detections using shared utility
             detections_blob_name = f"{video_folder.rstrip('/')}/detections.json"
-            
-            if all_detections:
-                # Merge all detections from all frames
-                merged_detections = sv.Detections.merge(all_detections)
-                # Convert to JSON-serializable format for storage
-                detections_data = {
-                    'xyxy': merged_detections.xyxy.tolist() if merged_detections.xyxy is not None else [],
-                    'confidence': merged_detections.confidence.tolist() if merged_detections.confidence is not None else [],
-                    'class_id': merged_detections.class_id.tolist() if merged_detections.class_id is not None else [],
-                    'frame_index': list(merged_detections.data.get('frame_index', [])) if merged_detections.data and 'frame_index' in merged_detections.data else [],
-                    'total_frames': len(all_detections),
-                    'total_detections': detections_count
-                }
-                
-            else:
-                logger.warning(f"No detections found for video {video_guid}")
-                detections_data = {
-                    'xyxy': [],
-                    'confidence': [],
-                    'class_id': [],
-                    'total_frames': 0,
-                    'total_detections': 0
-                }
-            
-            self.tenant_storage.upload_from_bytes(detections_blob_name, json.dumps(detections_data).encode('utf-8'))
+            save_all_detections(self.tenant_storage, detections_blob_name, all_detections, extra_metadata=None)
 
             logger.info(f"Player detection completed for video {video_guid} - {detections_count} detections found across {len(all_detections)} frames")
 

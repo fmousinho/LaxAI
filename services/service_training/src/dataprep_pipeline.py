@@ -52,6 +52,7 @@ from config.all_config import (DetectionConfig, detection_config, model_config,
                                training_config)
 from PIL import Image
 from supervision import Detections
+from shared_libs.common.detection_utils import save_all_detections
 from supervision.utils.image import crop_image
 
 from shared_libs.common.background_mask import (
@@ -625,21 +626,9 @@ class DataPrepPipeline(Pipeline):
                     raise RuntimeError(f"Failed to process frame {frame_id} for video {video_guid}: {e}")
                         
 
-            # Save detections - convert to JSON-serializable format
+            # Save detections using shared utility
             detections_blob_name = f"{video_folder.rstrip('/')}/detections.json"
-            single_detection_object = sv.Detections.merge(all_detections)
-            
-            # Serialize detections to JSON bytes
-            detections_dict = {
-                'xyxy': single_detection_object.xyxy.tolist() if single_detection_object.xyxy is not None else None,
-                'confidence': single_detection_object.confidence.tolist() if single_detection_object.confidence is not None else None,
-                'class_id': single_detection_object.class_id.tolist() if single_detection_object.class_id is not None else None,
-                'tracker_id': single_detection_object.tracker_id.tolist() if single_detection_object.tracker_id is not None else None,
-                'data': single_detection_object.data if hasattr(single_detection_object, 'data') else {}
-            }
-            detections_json = json.dumps(detections_dict).encode('utf-8')
-            
-            self.tenant_storage.upload_from_bytes(detections_blob_name, detections_json)
+            save_all_detections(self.tenant_storage, detections_blob_name, all_detections)
 
             logger.info(f"Player detection completed for frame id {frame_id} - {detections_count} detections found")
 
