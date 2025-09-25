@@ -382,43 +382,52 @@ class TrackGeneratorPipeline(Pipeline):
 
         return failed_operations, successful_count
 
-    def run(self, video_path: str, resume_from_checkpoint: bool = True) -> Dict[str, Any]:
+    def run(self, video_path: Optional[str], resume_from_checkpoint: bool = True) -> Dict[str, Any]:
         """
         Execute the complete data preparation pipeline for a single video.
         
         When resuming from a checkpoint, the pipeline loads the video path/blob name from the checkpoint context, not from the new video_path argument. If a different video_path is supplied, it is ignored and a warning is logged.
         """
-            if video_path is None and not resume_from_checkpoint:
-                return {"status": PipelineStatus.ERROR.value, "error": "No video path provided and no checkpoint video found."}
 
-        logger.info(f"Starting data preparation pipeline for video: {video_path}")
-
-        # Create initial context with the video path
-        context = {"raw_video_path": video_path}
-
-        # Call the base class run method with the initial context
-        # The base class now handles checkpoint functionality automatically
-        results = super().run(context, resume_from_checkpoint=resume_from_checkpoint)
-
-        # Add training-specific result formatting
-        context = results.get("context", {})
-
-        # If resuming from checkpoint, override video_path with checkpoint context if present
-        checkpoint_video_path = None
-        if resume_from_checkpoint and context.get("resume_frame") is not None:
-            # Try to get the video path/blob name from checkpoint context
+        # 1. If video_path is provided, use it
+        if video_path:
+            logger.info(f"Starting data preparation pipeline for video: {video_path}")
+            context = {"raw_video_path": video_path}
+            results = super().run(context, resume_from_checkpoint=resume_from_checkpoint)
+            context = results.get("context", {})
+            checkpoint_video_path = None
+            if resume_from_checkpoint and context.get("resume_frame") is not None:
+                if context.get("video_blob_name"):
+                    checkpoint_video_path = context["video_blob_name"]
+                elif context.get("raw_video_path"):
+                    checkpoint_video_path = context["raw_video_path"]
+                if checkpoint_video_path and checkpoint_video_path != video_path:
+                    logger.warning(f"Resuming from checkpoint: supplied video_path '{video_path}' is ignored. Using checkpoint video path '{checkpoint_video_path}' instead.")
+            resolved_video_path = checkpoint_video_path if checkpoint_video_path else video_path
+        else:
+            # 2. If not, use resume_from_checkpoint
+            if not resume_from_checkpoint:
+                logger.warning("No video_path provided and resume_from_checkpoint is False. Cannot proceed.")
+                return {"status": PipelineStatus.ERROR.value, "error": "No video path provided and resume_from_checkpoint is False."}
+            logger.info("No video_path provided. Attempting to resume from checkpoint...")
+            context = {}
+            results = super().run(context, resume_from_checkpoint=True)
+            context = results.get("context", {})
+            checkpoint_video_path = None
             if context.get("video_blob_name"):
                 checkpoint_video_path = context["video_blob_name"]
             elif context.get("raw_video_path"):
                 checkpoint_video_path = context["raw_video_path"]
-            if checkpoint_video_path and checkpoint_video_path != video_path:
-                logger.warning(f"Resuming from checkpoint: supplied video_path '{video_path}' is ignored. Using checkpoint video path '{checkpoint_video_path}' instead.")
-        
+            if not checkpoint_video_path:
+                logger.warning("resume_from_checkpoint is True but no video found in checkpoint context. Cannot proceed.")
+                return {"status": PipelineStatus.ERROR.value, "error": "resume_from_checkpoint is True but no video found in checkpoint context."}
+            resolved_video_path = checkpoint_video_path
+
         formatted_results = {
             "status": results["status"],
             "run_guid": results["run_guid"],
             "run_folder": results["run_folder"],
-            "video_path": checkpoint_video_path if checkpoint_video_path else video_path,
+            "video_path": resolved_video_path,
             "video_guid": context.get("video_guid", "unknown"),
             "video_folder": context.get("video_folder", "unknown"),
             "errors": results["errors"],
