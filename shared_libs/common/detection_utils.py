@@ -45,21 +45,44 @@ def _detections_to_summary_dict(merged: Detections, detections_list: List[Detect
         # Build by iterating original detections objects
         for det in detections_list:
             per_rows = len(det)
-            # Try data['frame_index'] row mapped
             if per_rows == 0:
                 continue
-            row_frame_idx: Optional[int] = None
+            # Priority 1: explicit per-row frame_index list
             if det.data and 'frame_index' in det.data and isinstance(det.data['frame_index'], (list, np.ndarray)):
-                # Already row-level list
                 fi_list = det.data['frame_index']
                 if len(fi_list) == per_rows:
-                    frame_indices.extend([int(x) for x in fi_list])
+                    frame_indices.extend([int(x) if x is not None else -1 for x in fi_list])
                     continue
-            # Fallback to metadata single frame id
-            if hasattr(det, 'metadata') and isinstance(det.metadata, dict) and 'frame_id' in det.metadata:
-                row_frame_idx = det.metadata.get('frame_id')
-            if row_frame_idx is not None:
-                frame_indices.extend([int(row_frame_idx)] * per_rows)
+            # Priority 2: single frame_id metadata replicated
+            frame_id_meta = None
+            if hasattr(det, 'metadata') and isinstance(det.metadata, dict):
+                frame_id_meta = det.metadata.get('frame_id')
+            if frame_id_meta is not None:
+                frame_indices.extend([int(frame_id_meta)] * per_rows)
+            else:
+                # Unknown frame indices: placeholder -1
+                frame_indices.extend([-1] * per_rows)
+
+    # Post-process: if any -1 or None placeholders remain, attempt second pass using metadata
+    if any(fi is None or fi == -1 for fi in frame_indices):
+        repaired: List[int] = []
+        iter_idx = 0
+        for det in detections_list:
+            per_rows = len(det)
+            if per_rows == 0:
+                continue
+            meta_frame = None
+            if hasattr(det, 'metadata') and isinstance(det.metadata, dict):
+                meta_frame = det.metadata.get('frame_id')
+            for j in range(per_rows):
+                current = frame_indices[iter_idx]
+                if (current is None or current == -1) and meta_frame is not None:
+                    repaired.append(int(meta_frame))
+                else:
+                    # If still unknown, fallback 0 to keep length consistent
+                    repaired.append(0 if current is None or current == -1 else int(current))
+                iter_idx += 1
+        frame_indices = repaired
 
     tracker_id_list = []
     try:
@@ -104,8 +127,46 @@ def save_all_detections(storage_client, blob_name: str, detections_list: List[De
             payload = json.dumps(empty_summary).encode('utf-8')
             return storage_client.upload_from_bytes(blob_name, payload)
 
-        # Merge detections
-        merged = Detections.merge(detections_list)
+        # Before merging, some sv.Detections implementations require identical data keys across
+        # all objects. Our tests deliberately remove frame_index on one object to verify fallback
+        # to metadata['frame_id']. We build a normalized list where each detection has the union
+        # of keys, filling missing keys with appropriate length placeholders.
+        try:
+            # Determine union of data keys (excluding metadata-only keys)
+            union_keys = set()
+            per_lengths: List[int] = []
+            for det in detections_list:
+                per_lengths.append(len(det))
+                if getattr(det, 'data', None):
+                    union_keys.update(det.data.keys())
+            # Ensure frame_index is preserved if present anywhere or if metadata will supply it
+            if 'frame_index' not in union_keys:
+                # We'll add it later from metadata fallback if needed
+                pass
+            normalized: List[Detections] = []
+            for det, row_len in zip(detections_list, per_lengths):
+                data_dict: Dict[str, Any] = {}
+                source_data = getattr(det, 'data', {}) or {}
+                for k in union_keys:
+                    if k in source_data:
+                        data_dict[k] = source_data[k]
+                    else:
+                        # Fill missing with list of Nones so lengths align; downstream consumers
+                        # ignore unknown data fields or Nones.
+                        data_dict[k] = [None] * row_len
+                # We'll handle frame_index separately after merging; remove conflicting keys
+                normalized.append(Detections(
+                    xyxy=det.xyxy,
+                    class_id=det.class_id,
+                    confidence=det.confidence,
+                    tracker_id=getattr(det, 'tracker_id', None),
+                    data=data_dict
+                ))
+            merged = Detections.merge(normalized)
+        except Exception as merge_err:  # pragma: no cover
+            logger.error(f"Normalization merge failed, fallback to naive merge attempt: {merge_err}")
+            merged = Detections.merge(detections_list)
+
         summary = _detections_to_summary_dict(merged, detections_list, extra_metadata)
         payload = json.dumps(summary).encode('utf-8')
         return storage_client.upload_from_bytes(blob_name, payload)

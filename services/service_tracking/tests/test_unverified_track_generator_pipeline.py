@@ -12,7 +12,7 @@ import numpy as np
 import cv2
 import supervision as sv
 
-from src.unverified_track_generator_pipeline import TrackGeneratorPipeline
+from services.service_tracking.src.unverified_track_generator_pipeline import TrackGeneratorPipeline
 from config.all_config import DetectionConfig
 from common.pipeline_step import StepStatus
 
@@ -61,10 +61,10 @@ class TestTrackGeneratorPipeline:
         paths.get_path.return_value = "fake/gcs/path"
         return paths
 
-    @patch('unverified_track_generator_pipeline.get_storage')
-    @patch('unverified_track_generator_pipeline.GCSPaths')
-    @patch('unverified_track_generator_pipeline.DetectionModel')
-    @patch('unverified_track_generator_pipeline.AffineAwareByteTrack')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.get_storage')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.GCSPaths')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.DetectionModel')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.AffineAwareByteTrack')
     def test_initialization_success(self, mock_tracker_class, mock_detection_class,
                                    mock_paths_class, mock_storage_func,
                                    mock_config, mock_detection_model, mock_tracker,
@@ -91,9 +91,9 @@ class TestTrackGeneratorPipeline:
         assert pipeline.tenant_storage == mock_storage
         assert pipeline.path_manager == mock_path_manager
 
-    @patch('unverified_track_generator_pipeline.get_storage')
-    @patch('unverified_track_generator_pipeline.GCSPaths')
-    @patch('unverified_track_generator_pipeline.DetectionModel')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.get_storage')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.GCSPaths')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.DetectionModel')
     def test_initialization_detection_model_failure(self, mock_detection_class,
                                                    mock_paths_class, mock_storage_func,
                                                    mock_config):
@@ -110,10 +110,10 @@ class TestTrackGeneratorPipeline:
                 tenant_id="test_tenant"
             )
 
-    @patch('unverified_track_generator_pipeline.get_storage')
-    @patch('unverified_track_generator_pipeline.GCSPaths')
-    @patch('unverified_track_generator_pipeline.DetectionModel')
-    @patch('unverified_track_generator_pipeline.AffineAwareByteTrack')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.get_storage')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.GCSPaths')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.DetectionModel')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.AffineAwareByteTrack')
     def test_initialization_tracker_failure(self, mock_tracker_class, mock_detection_class,
                                            mock_paths_class, mock_storage_func,
                                            mock_config, mock_detection_model):
@@ -156,11 +156,11 @@ class TestTrackGeneratorPipeline:
         assert result["status"] == "error"
         assert "No video path provided" in result["error"]
 
-    @patch('unverified_track_generator_pipeline.get_storage')
-    @patch('unverified_track_generator_pipeline.GCSPaths')
-    @patch('unverified_track_generator_pipeline.DetectionModel')
-    @patch('unverified_track_generator_pipeline.AffineAwareByteTrack')
-    @patch('unverified_track_generator_pipeline.create_run_id')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.get_storage')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.GCSPaths')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.DetectionModel')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.AffineAwareByteTrack')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.create_run_id')
     def test_run_calls_parent_pipeline(self, mock_create_run_id, mock_tracker_class,
                                       mock_detection_class, mock_paths_class,
                                       mock_storage_func, mock_config, mock_detection_model,
@@ -199,10 +199,10 @@ class TestTrackGeneratorPipeline:
             assert result["status"] == "completed"
             assert result["video_guid"] == "test_video_123"
 
-    @patch('unverified_track_generator_pipeline.get_storage')
-    @patch('unverified_track_generator_pipeline.GCSPaths')
-    @patch('unverified_track_generator_pipeline.DetectionModel')
-    @patch('unverified_track_generator_pipeline.AffineAwareByteTrack')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.get_storage')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.GCSPaths')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.DetectionModel')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.AffineAwareByteTrack')
     def test_stop_method(self, mock_tracker_class, mock_detection_class,
                         mock_paths_class, mock_storage_func,
                         mock_config, mock_detection_model, mock_tracker,
@@ -227,10 +227,10 @@ class TestTrackGeneratorPipeline:
             assert result is True
             mock_stop_pipeline.assert_called_once_with("unverified_tracks_pipeline")
 
-    @patch('unverified_track_generator_pipeline.get_storage')
-    @patch('unverified_track_generator_pipeline.GCSPaths')
-    @patch('unverified_track_generator_pipeline.DetectionModel')
-    @patch('unverified_track_generator_pipeline.AffineAwareByteTrack')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.get_storage')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.GCSPaths')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.DetectionModel')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.AffineAwareByteTrack')
     def test_is_stopping_method(self, mock_tracker_class, mock_detection_class,
                                mock_paths_class, mock_storage_func,
                                mock_config, mock_detection_model, mock_tracker,
@@ -254,7 +254,7 @@ class TestTrackGeneratorPipeline:
 
     def test_constants(self):
         """Test that pipeline constants are properly defined."""
-        from src.unverified_track_generator_pipeline import (
+        from services.service_tracking.src.unverified_track_generator_pipeline import (
             MIN_VIDEO_RESOLUTION,
             FRAME_SAMPLING_FOR_CROP,
             CROP_BATCH_SIZE,

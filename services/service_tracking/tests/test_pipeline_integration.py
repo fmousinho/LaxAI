@@ -12,7 +12,7 @@ import numpy as np
 import cv2
 import supervision as sv
 
-from src.unverified_track_generator_pipeline import TrackGeneratorPipeline
+from services.service_tracking.src.unverified_track_generator_pipeline import TrackGeneratorPipeline
 from config.all_config import DetectionConfig
 from common.pipeline_step import StepStatus
 
@@ -75,14 +75,14 @@ class TestTrackGeneratorPipelineIntegration:
 
     @pytest.fixture
     def pipeline(self, mock_config, mock_detection_model, mock_tracker,
-                mock_storage, mock_path_manager):
+                 mock_storage, mock_path_manager):
         """Create a TrackGeneratorPipeline instance with mocked dependencies."""
-        with patch('unverified_track_generator_pipeline.get_storage', return_value=mock_storage), \
-             patch('unverified_track_generator_pipeline.GCSPaths', return_value=mock_path_manager), \
-             patch('unverified_track_generator_pipeline.DetectionModel', return_value=mock_detection_model), \
-             patch('unverified_track_generator_pipeline.AffineAwareByteTrack', return_value=mock_tracker), \
-             patch('unverified_track_generator_pipeline.create_video_id', return_value='test_video_123'), \
-             patch('unverified_track_generator_pipeline.create_run_id', return_value='test_run_123'):
+        with patch('services.service_tracking.src.unverified_track_generator_pipeline.get_storage', return_value=mock_storage), \
+             patch('services.service_tracking.src.unverified_track_generator_pipeline.GCSPaths', return_value=mock_path_manager), \
+             patch('services.service_tracking.src.unverified_track_generator_pipeline.DetectionModel', return_value=mock_detection_model), \
+             patch('services.service_tracking.src.unverified_track_generator_pipeline.AffineAwareByteTrack', return_value=mock_tracker), \
+             patch('services.service_tracking.src.unverified_track_generator_pipeline.create_video_id', return_value='test_video_123'), \
+             patch('services.service_tracking.src.unverified_track_generator_pipeline.create_run_id', return_value='test_run_123'):
 
             pipeline = TrackGeneratorPipeline(
                 config=mock_config,
@@ -112,8 +112,8 @@ class TestTrackGeneratorPipelineIntegration:
         mock_storage.get_video_capture.return_value = mock_cap
 
         # Mock crop image function
-        with patch('unverified_track_generator_pipeline.crop_image') as mock_crop_image, \
-             patch('unverified_track_generator_pipeline.create_video_id', return_value='test_video_123'):
+        with patch('services.service_tracking.src.unverified_track_generator_pipeline.crop_image') as mock_crop_image, \
+             patch('services.service_tracking.src.unverified_track_generator_pipeline.create_video_id', return_value='test_video_123'):
             mock_crop = np.ones((100, 50, 3), dtype=np.uint8) * 128
             mock_crop_image.return_value = mock_crop
 

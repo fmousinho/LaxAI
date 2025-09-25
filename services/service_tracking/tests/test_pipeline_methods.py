@@ -12,7 +12,7 @@ import numpy as np
 import cv2
 import supervision as sv
 
-from src.unverified_track_generator_pipeline import TrackGeneratorPipeline
+from services.service_tracking.src.unverified_track_generator_pipeline import TrackGeneratorPipeline
 from config.all_config import DetectionConfig
 from common.pipeline_step import StepStatus
 
@@ -74,13 +74,13 @@ class TestTrackGeneratorPipelineMethods:
 
     @pytest.fixture
     def pipeline(self, mock_config, mock_detection_model, mock_tracker,
-                mock_storage, mock_path_manager):
+                 mock_storage, mock_path_manager):
         """Create a TrackGeneratorPipeline instance with mocked dependencies."""
-        with patch('unverified_track_generator_pipeline.get_storage', return_value=mock_storage), \
-             patch('unverified_track_generator_pipeline.GCSPaths', return_value=mock_path_manager), \
-             patch('unverified_track_generator_pipeline.DetectionModel', return_value=mock_detection_model), \
-             patch('unverified_track_generator_pipeline.AffineAwareByteTrack', return_value=mock_tracker), \
-             patch('unverified_track_generator_pipeline.training_config') as mock_training_config:
+        with patch('services.service_tracking.src.unverified_track_generator_pipeline.get_storage', return_value=mock_storage), \
+             patch('services.service_tracking.src.unverified_track_generator_pipeline.GCSPaths', return_value=mock_path_manager), \
+             patch('services.service_tracking.src.unverified_track_generator_pipeline.DetectionModel', return_value=mock_detection_model), \
+             patch('services.service_tracking.src.unverified_track_generator_pipeline.AffineAwareByteTrack', return_value=mock_tracker), \
+             patch('services.service_tracking.src.unverified_track_generator_pipeline.training_config') as mock_training_config:
 
             mock_training_config.num_workers = 4  # Set a reasonable value for testing
 
@@ -102,7 +102,7 @@ class TestTrackGeneratorPipelineMethods:
         assert pipeline._validate_video_resolution(1920, 1079) is False
         assert pipeline._validate_video_resolution(1919, 1080) is False
 
-    @patch('unverified_track_generator_pipeline.create_video_id')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.create_video_id')
     def test_import_video_success(self, mock_create_video_id, pipeline, mock_storage, mock_path_manager):
         """Test successful video import."""
         # Setup mocks
@@ -240,7 +240,7 @@ class TestTrackGeneratorPipelineMethods:
 
     def test_workflow_instantiation(self):
         """Test that the UnverifiedTrackGenerationWorkflow can be instantiated."""
-        from src.workflows.create_unverified_tracks import UnverifiedTrackGenerationWorkflow
+        from services.service_tracking.src.workflows.create_unverified_tracks import UnverifiedTrackGenerationWorkflow
 
         workflow = UnverifiedTrackGenerationWorkflow(
             tenant_id="test_tenant",
