@@ -96,7 +96,7 @@ from shared_libs.common.google_storage import get_storage, GCSPaths
 from shared_libs.common.detection import DetectionModel
 from shared_libs.common.pipeline_step import StepStatus
 from shared_libs.common.pipeline import Pipeline, PipelineStatus
-from config.all_config import DetectionConfig, detection_config, model_config, training_config
+from config.all_config import DetectionConfig, detection_config, model_config
 from utils.id_generator import create_video_id, create_run_id
 from shared_libs.common.tracker import AffineAwareByteTrack
 from shared_libs.common.detection_utils import save_all_detections
@@ -238,7 +238,7 @@ class TrackGeneratorPipeline(Pipeline):
         self.tenant_id = tenant_id
         self.video_capture = None
         self.delete_process_folder = delete_process_folder
-        self.dataloader_workers = training_config.num_workers
+        self.dataloader_workers = 2
         
         # Import transform_config to get the background removal setting
         from config.all_config import transform_config
@@ -753,8 +753,12 @@ class TrackGeneratorPipeline(Pipeline):
                 
                 logger.info(f"All crop upload batches completed")
             
-            # Save detections using shared utility
-            detections_blob_name = f"{video_folder.rstrip('/')}/detections.json"
+            # Save detections using shared utility in process_folder
+            process_folder_path = self.path_manager.get_path("process_folder", video_id=video_guid)
+            if process_folder_path:
+                detections_blob_name = f"{process_folder_path.rstrip('/')}/detections.json"
+            else:
+                raise RuntimeError("Unable to determine process folder path for detections")
             save_all_detections(self.tenant_storage, detections_blob_name, all_detections, extra_metadata=None)
 
             logger.info(f"Player detection completed for video {video_guid} - {detections_count} detections found across {len(all_detections)} frames")
