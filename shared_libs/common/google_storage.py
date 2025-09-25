@@ -453,11 +453,18 @@ class GoogleStorageClient:
             blob = self._bucket.blob(destination_blob_name)  # type:ignore
 
             if destination_blob_name.endswith(".jpg") or destination_blob_name.endswith(".jpeg"):
-                bgr_data = cv2.cvtColor(data, cv2.COLOR_RGB2BGR)  # type: ignore
                 content_type = content_type or "image/jpeg"
-                image_bytes = cv2.imencode(".jpg", bgr_data)[1].tobytes()
-                blob.upload_from_string(image_bytes, content_type=content_type)
-                return True
+                if isinstance(data, np.ndarray):
+                    bgr_data = cv2.cvtColor(data, cv2.COLOR_RGB2BGR)  # type: ignore
+                    image_bytes = cv2.imencode(".jpg", bgr_data)[1].tobytes()
+                    blob.upload_from_string(image_bytes, content_type=content_type)
+                    return True
+                elif isinstance(data, (bytes, bytearray)):
+                    blob.upload_from_string(data, content_type=content_type)
+                    return True
+                else:
+                    logger.error(f"Invalid image data type for {destination_blob_name}: {type(data)}")
+                    return False
 
             elif isinstance(data, Detections):
                 # Use JSONSink for proper serialization with a temporary file
@@ -595,7 +602,7 @@ class GoogleStorageClient:
             # Full destination path built by decorator
             blob = self._bucket.blob(destination_blob_name)  # type: ignore
             blob.upload_from_string(data)
-            logger.info(f"String data uploaded to {destination_blob_name}")
+            logger.debug(f"String data uploaded to {destination_blob_name}")
             return True
         except Exception as e:
             logger.error(f"Failed to upload string data: {e}")

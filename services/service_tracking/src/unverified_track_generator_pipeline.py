@@ -108,10 +108,10 @@ MIN_VIDEO_RESOLUTION = (1920, 1080)
 FRAME_SAMPLING_FOR_CROP = 15
 
 #: Batch size for crop processing and upload (reduce memory usage for long videos)
-CROP_BATCH_SIZE = 50
+CROP_BATCH_SIZE = 5
 
 #: Maximum concurrent upload tasks to prevent overwhelming storage service
-MAX_CONCURRENT_UPLOADS = 3
+MAX_CONCURRENT_UPLOADS = 5
 
 #: Interval for checkpoint saves (every N frames)
 CHECKPOINT_FRAME_INTERVAL = 100
@@ -200,8 +200,8 @@ class TrackGeneratorPipeline(Pipeline):
     """
     
     # Crop quality constants
-    MIN_CROP_WIDTH = 48
-    MIN_CROP_HEIGHT = 96
+    MIN_CROP_WIDTH = 10
+    MIN_CROP_HEIGHT = 20
     MIN_CROP_CONTRAST = 20.0
 
     def __init__(self, 
@@ -328,7 +328,7 @@ class TrackGeneratorPipeline(Pipeline):
         if not tasks:
             return [], 0
 
-        logger.info(f"Starting parallel {operation_func.__name__} of {len(tasks)} items{' for ' + context_info if context_info else ''}")
+        logger.debug(f"Starting parallel {operation_func.__name__} of {len(tasks)} items{' for ' + context_info if context_info else ''}")
         failed_operations = []
 
         # Create async tasks for each operation
@@ -386,93 +386,39 @@ class TrackGeneratorPipeline(Pipeline):
         """
         Execute the complete data preparation pipeline for a single video.
         
-        This is the main entry point for processing lacrosse videos stored in Google Cloud Storage.
-        The method orchestrates all pipeline stages and provides comprehensive error handling
-        and progress tracking.
-        
-        Args:
-            video_path: Relative GCS blob path to the video file to process within the tenant's 
-                storage bucket. Should NOT include the 'gs://' prefix or bucket name.
-                Examples:
-                - "raw_videos/game_footage.mp4"
-                - "uploads/2024/championship_game.mp4" 
-                - "tenant1/imported_videos/video_123.mp4"
-            resume_from_checkpoint: Whether to check for and resume from existing 
-                checkpoint data. If True, the pipeline will skip completed steps and resume
-                from the exact frame where processing was interrupted.
-                Defaults to True.
-            
-        Returns:
-            Dictionary containing pipeline execution results:
-                - status (str): Pipeline completion status ("completed", "error", "cancelled")
-                - run_guid (str): Unique identifier for this pipeline run
-                - run_folder (str): GCS path where run data is stored
-                - video_path (str): Original input video path
-                - video_guid (str): Generated unique video identifier
-                - video_folder (str): GCS path where video data is organized
-                - errors (List[str]): List of any errors encountered during processing
-                - pipeline_summary (Dict): Summary statistics for each pipeline stage
-                - resume_frame (int): Frame number where processing resumed from (if applicable)
-                
-        Raises:
-            RuntimeError: If critical pipeline dependencies are missing
-            ValueError: If video_path is invalid or empty
-            
-        Note:
-            The pipeline can be stopped gracefully using the stop() method or stop_pipeline() function.
-            When cancelled, the pipeline will save progress and return status "cancelled".
-            Frame-level checkpoints enable resuming from exactly where processing stopped.
-            
-        Example:
-            ```python
-            pipeline = TrackGeneratorPipeline(detection_config, "tenant1")
-            
-            # Process video from raw uploads folder
-            results = pipeline.run("raw_videos/game_footage.mp4")
-            
-            # Check if resumed from checkpoint
-            if results.get("resume_frame"):
-                print(f"Resumed processing from frame {results['resume_frame']}")
-            
-            if results["status"] == "completed":
-                print(f"Successfully processed video {results['video_guid']}")
-                print(f"Generated crops: {results['pipeline_summary']['total_crops']}")
-            elif results["status"] == "cancelled":
-                print(f"Pipeline was cancelled: {results['errors']}")
-            
-            # Stop pipeline programmatically
-            pipeline.stop()
-            ```
-            
-        Note:
-            - All video files must already be uploaded to Google Cloud Storage
-            - Video paths are relative to the configured GCS bucket
-            - The pipeline automatically handles temporary file cleanup if 
-              delete_process_folder is enabled
-            - All intermediate data is stored in structured GCS paths for easy 
-              organization and retrieval
+        When resuming from a checkpoint, the pipeline loads the video path/blob name from the checkpoint context, not from the new video_path argument. If a different video_path is supplied, it is ignored and a warning is logged.
         """
-        if not video_path:
-            return {"status": PipelineStatus.ERROR.value, "error": "No video path provided"}
+            if video_path is None and not resume_from_checkpoint:
+                return {"status": PipelineStatus.ERROR.value, "error": "No video path provided and no checkpoint video found."}
 
         logger.info(f"Starting data preparation pipeline for video: {video_path}")
 
         # Create initial context with the video path
         context = {"raw_video_path": video_path}
-        
+
         # Call the base class run method with the initial context
         # The base class now handles checkpoint functionality automatically
         results = super().run(context, resume_from_checkpoint=resume_from_checkpoint)
-        
+
         # Add training-specific result formatting
         context = results.get("context", {})
+
+        # If resuming from checkpoint, override video_path with checkpoint context if present
+        checkpoint_video_path = None
+        if resume_from_checkpoint and context.get("resume_frame") is not None:
+            # Try to get the video path/blob name from checkpoint context
+            if context.get("video_blob_name"):
+                checkpoint_video_path = context["video_blob_name"]
+            elif context.get("raw_video_path"):
+                checkpoint_video_path = context["raw_video_path"]
+            if checkpoint_video_path and checkpoint_video_path != video_path:
+                logger.warning(f"Resuming from checkpoint: supplied video_path '{video_path}' is ignored. Using checkpoint video path '{checkpoint_video_path}' instead.")
         
-        # Format results to match expected structure
         formatted_results = {
             "status": results["status"],
             "run_guid": results["run_guid"],
             "run_folder": results["run_folder"],
-            "video_path": video_path,
+            "video_path": checkpoint_video_path if checkpoint_video_path else video_path,
             "video_guid": context.get("video_guid", "unknown"),
             "video_folder": context.get("video_folder", "unknown"),
             "errors": results["errors"],
@@ -690,9 +636,13 @@ class TrackGeneratorPipeline(Pipeline):
                         return context
                         
                     ret, frame = cap.read()
-                    if not ret:
+                    if not ret or frame is None or not isinstance(frame, np.ndarray):
+                        if not ret or frame is None:
+                            logger.warning(f"Frame read failed or returned None at frame {frame_number}. Stopping processing.")
+                        else:
+                            logger.warning(f"Frame at {frame_number} is not a valid numpy array. Type: {type(frame)}")
                         break
-                        
+
                     try:
                         # Convert BGR to RGB for model input
                         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) #type: ignore
@@ -712,20 +662,28 @@ class TrackGeneratorPipeline(Pipeline):
                         else:
                             affine_matrix = self.tracker.calculate_affine_transform(previous_frame_rgb, frame_rgb)
 
-                        # Apply the affine transformation to the detections
-                        detections = self.tracker.update_with_transform(detections, affine_matrix, frame_rgb)
-
+                        detections = self.tracker.update_with_transform(detections, affine_matrix, frame_rgb)    
                         if frame_number % FRAME_SAMPLING_FOR_CROP == 0:
-                            # Create async task for crop processing
-                            task = asyncio.create_task(self._get_upload_list_for_frame(frame_rgb.copy(), detections, video_guid, frame_number))
-                            get_crop_tasks.append(task)
+                            # Create async task for crop processing (returns list of (blob_path, crop_image))
+                            get_crop_task = asyncio.create_task(
+                                self._get_upload_list_for_frame(frame_rgb.copy(), detections, video_guid, frame_number)
+                            )
+                            get_crop_tasks.append(get_crop_task)
+                            logger.debug(f"Crop task created (pending={len(get_crop_tasks)} in current batch) -> {get_crop_task}")
 
                             if len(get_crop_tasks) >= CROP_BATCH_SIZE:
-                                logger.info(f"Processing batch {batch_counter} of crop uploads...")
-                                task = asyncio.create_task(self._upload_crop_batch(get_crop_tasks.copy(), batch_counter))
-                                get_crop_tasks = []  # Reset for next batch
-                                upload_tasks.append(task)
+                                logger.info(f"Processing batch {batch_counter} of crop uploads (frame {frame_number})...")
+                                # Snapshot current tasks and reset collector immediately to avoid mutation during gather
+                                batch_frame_tasks = get_crop_tasks[:]
+                                get_crop_tasks.clear()
+                                upload_task = asyncio.create_task(
+                                    self._upload_crop_batch(batch_frame_tasks, batch_counter)
+                                )
+                                logger.debug(f"Upload batch task {upload_task} created for batch {batch_counter}")
+                                upload_tasks.append(upload_task)
                                 batch_counter += 1
+                                # Yield control so the newly created batch task can start
+                                await asyncio.sleep(0)
 
                     except Exception as e:
                         logger.error(f"Error processing frame {frame_number} for video {video_guid}: {e}")
@@ -838,33 +796,57 @@ class TrackGeneratorPipeline(Pipeline):
             logger.error(f"Critical error in player detection for video {video_guid}: {e}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
 
-    async def _upload_crop_batch(self, get_crop_tasks: List[asyncio.Task], batch_counter: int):
-        """Upload a batch of crops asynchronously.
-        
-        Returns:
-            List[str]: List of successful blob paths that were uploaded.
+    async def _upload_crop_batch(self, get_crop_tasks: List[asyncio.Task], batch_counter: int) -> List[str]:
         """
-            
-        try:
-            upload_tasks = await asyncio.gather(*get_crop_tasks)
+        Await frame-level crop tasks, flatten their results, and upload all crops.
 
+        Args:
+            get_crop_tasks: List of asyncio.Tasks, each resolving to List[(blob_path, crop_image)]
+            batch_counter: Batch index for logging
+
+        Returns:
+            List[str]: Successfully uploaded blob paths
+        """
+        uploaded_paths: List[str] = []
+        try:
+            logger.debug(f"[UPLOAD_BATCH] Entered batch {batch_counter} with {len(get_crop_tasks)} frame tasks")
+            # Wait for all frame crop extraction tasks
+            crop_results = await asyncio.gather(*get_crop_tasks)
+            logger.debug(f"[UPLOAD_BATCH] Batch {batch_counter} frame task gather complete")
+
+            # Flatten results (skip empty lists)
+            flat_crops = [item for sublist in crop_results if sublist for item in sublist]
+            logger.debug(f"[UPLOAD_BATCH] Batch {batch_counter} flattened to {len(flat_crops)} crops")
+
+            if not flat_crops:
+                logger.debug(f"[UPLOAD_BATCH] Batch {batch_counter} has no crops to upload")
+                return uploaded_paths
+
+            # Prepare tasks for parallel upload
             failed_uploads, successful_uploads = await self._execute_parallel_operations_async(
-                upload_tasks,
-                lambda task: self.tenant_storage.upload_from_bytes(
-                    task[0], 
-                    cv2.imencode('.jpg', cv2.cvtColor(task[1], cv2.COLOR_RGB2BGR))[1].tobytes()
+                flat_crops,
+                lambda blob_path, crop_img: self.tenant_storage.upload_from_bytes(
+                    blob_path,
+                    crop_img
                 ),
                 f"upload batch {batch_counter}"
             )
-            
-            logger.debug(f"Batch {batch_counter}: Successfully uploaded {successful_uploads} crops")
-            if failed_uploads:
-                logger.error(f"Batch {batch_counter}: Failed to upload {len(failed_uploads)} crops") 
-            return
-                
+
+            # Derive successful paths
+            if successful_uploads:
+                failed_set = set(failed_uploads)
+                for item in flat_crops:
+                    if item not in failed_set:
+                        uploaded_paths.append(item[0])
+
+            logger.debug(f"[UPLOAD_BATCH] Batch {batch_counter}: {len(uploaded_paths)} uploaded, {len(failed_uploads)} failed")
+
+            return uploaded_paths
+
         except Exception as e:
-            logger.error(f"Error uploading crop batch {batch_counter}: {e}")
-            return
+            logger.debug(f"[UPLOAD_BATCH] Exception in batch {batch_counter}: {e}")
+            logger.debug(e)
+            return uploaded_paths
 
     def _get_crops(self, frame: np.ndarray, detections: sv.Detections) -> List[Tuple[int, np.ndarray]]:
         """
@@ -873,11 +855,26 @@ class TrackGeneratorPipeline(Pipeline):
         Returns list of (track_id, crop_image) tuples for valid detections.
         """
         res = []
+        try:
+            num_detections = len(detections)
+        except Exception:
+            logger.error("Detections object is not iterable or invalid type.")
+            return []
+        if num_detections == 0:
+            logger.warning("No detections found for frame; skipping crop extraction.")
+        else:
+            logger.debug(f"Extracting crops from {num_detections} detections")
         for detection in detections:
             crop = crop_image(frame, detection[0].astype(int))
             if self._is_crop_quality_sufficient(crop):
                 crop_tuple = (detection[4], crop)  # (track_id, crop)
                 res.append(crop_tuple)
+        num_quality_crops = len(res)
+        if num_detections > 0:
+            discard_rate = 1 - (num_quality_crops / num_detections)
+            if discard_rate > 0.2:
+                logger.warning(f"Discarded {discard_rate*100:.1f}% of crops due to quality ({num_detections-num_quality_crops}/{num_detections})")
+            logger.debug(f"Extracted {num_quality_crops} quality crops from {num_detections} detections")
         return res
         # upload_tasks = []
 
@@ -934,7 +931,7 @@ class TrackGeneratorPipeline(Pipeline):
         # Check minimum size
         height, width = crop.shape[:2]
         if width < self.MIN_CROP_WIDTH or height < self.MIN_CROP_HEIGHT:
-            logger.debug(f"Crop too small: {width}x{height} (min: {self.MIN_CROP_WIDTH}x{self.MIN_CROP_HEIGHT})")
+            logger.info(f"Crop too small: {width}x{height} (min: {self.MIN_CROP_WIDTH}x{self.MIN_CROP_HEIGHT})")
             return False
         
         # Check contrast using standard deviation of grayscale image
@@ -943,7 +940,7 @@ class TrackGeneratorPipeline(Pipeline):
         
         # Low contrast threshold
         if contrast < self.MIN_CROP_CONTRAST:
-            logger.debug(f"Crop has low contrast: {contrast:.2f} < {self.MIN_CROP_CONTRAST}")
+            logger.info(f"Crop has low contrast: {contrast:.2f} < {self.MIN_CROP_CONTRAST}")
             return False
         
         return True
