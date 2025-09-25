@@ -335,16 +335,26 @@ class AffineAwareByteTrack(sv.ByteTrack):
                 w_w = w_x2 - w_x1
                 w_h = w_y2 - w_y1
 
-                if w_w <= 0 or w_h <= 0:  # Warped box is degenerate, skip update for this track
+                # Convert tensor values to scalars to avoid TracerWarning with boolean conversion
+                w_w_val = w_w.item() if isinstance(w_w, torch.Tensor) else w_w
+                w_h_val = w_h.item() if isinstance(w_h, torch.Tensor) else w_h
+                
+                if w_w_val <= 0 or w_h_val <= 0:  # Warped box is degenerate, skip update for this track
                     logger.debug(
                         f"Track {track.internal_track_id} warped to degenerate bbox: {warped_bbox_tlbr}. Skipping state update."
                     )
                     continue
 
-                new_cx = w_x1 + w_w / np.float32(2.0)
-                new_cy = w_y1 + w_h / np.float32(2.0)
-                new_a = w_w / w_h
-                new_h = w_h
+                # Convert tensor values to scalars for consistent arithmetic operations
+                w_x1_val = w_x1.item() if isinstance(w_x1, torch.Tensor) else w_x1
+                w_y1_val = w_y1.item() if isinstance(w_y1, torch.Tensor) else w_y1
+                w_w_val = w_w.item() if isinstance(w_w, torch.Tensor) else w_w
+                w_h_val = w_h.item() if isinstance(w_h, torch.Tensor) else w_h
+                
+                new_cx = w_x1_val + w_w_val / 2.0
+                new_cy = w_y1_val + w_h_val / 2.0
+                new_a = w_w_val / w_h_val
+                new_h = w_h_val
 
                 # Update positional components of track.mean
                 # track.mean is [cx, cy, a, h, vcx, vcy, va, vh]
