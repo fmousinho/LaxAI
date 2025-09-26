@@ -75,6 +75,8 @@ class DataPrepManager:
                 "detections_path",
                 video_id=process_folder
             )
+            if type(detections_path) is not str:
+                raise ValueError(f"Invalid detections path: {detections_path}")
 
             # Load detections from GCS
             detections_json_text = self.storage.download_as_string(detections_path)
@@ -188,3 +190,61 @@ class DataPrepManager:
             prefixes.append(prefix)
 
         return prefixes
+
+    def suspend_prep(self) -> bool:
+        """
+        Save the current stitcher graph state to GCS for later resumption.
+
+        Returns:
+            True if the graph was successfully saved, False otherwise
+        """
+        if self.stitcher is None:
+            logger.error("No active stitcher session to suspend")
+            return False
+
+        if self.current_process_folder is None:
+            logger.error("No current process folder set")
+            return False
+
+        import tempfile
+        import os
+
+        try:
+            # Create a temporary file for the graph
+            with tempfile.NamedTemporaryFile(mode='w+', suffix='.graphml', delete=False) as temp_file:
+                temp_filepath = temp_file.name
+
+            # Save the graph to the temporary file
+            success = self.stitcher.save_graph(temp_filepath, format="graphml")
+            if not success:
+                logger.error("Failed to save graph to temporary file")
+                os.unlink(temp_filepath)
+                return False
+
+            # Get the GCS path for the saved graph
+            gcs_path = self.path_manager.get_path(
+                "saved_graph",
+                video_id=self.current_process_folder
+            )
+
+            if gcs_path is None:
+                logger.error("Failed to generate GCS path for saved graph")
+                os.unlink(temp_filepath)
+                return False
+
+            # Upload the file to GCS
+            upload_success = self.storage.upload_from_file(gcs_path, temp_filepath)
+
+            # Clean up the temporary file
+            os.unlink(temp_filepath)
+
+            if upload_success:
+                logger.info(f"Successfully suspended prep session, graph saved to {gcs_path}")
+                return True
+            else:
+                logger.error("Failed to upload graph to GCS")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error suspending prep session: {e}")
+            return False

@@ -6,6 +6,7 @@ gcs:
     process_root: "process/"
     process_folder: "process/{video_id}/"
     detections_path: "process/{video_id}/detections.json"
+    saved_graph: "process/{video_id}/stitcher_graph.graphml"
     imported_video: "process/{video_id}/imported/"
     extracted_frames: "process/{video_id}/{frame_id}/"
     orig_crops: "process/{video_id}/{frame_id}/orig_crops/"
@@ -19,3 +20,4 @@ gcs:
     val_player_folder: "datasets/{dataset_id}/val/{orig_crop_id}"
     run_data: "runs/{run_id}/"
     unverified_tracks: "process/{video_id}/unverified_tracks/{track_id}/"
+    track_graphs: "process/{video_id}/track_graphs.gml"
