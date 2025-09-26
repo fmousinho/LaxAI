@@ -12,6 +12,13 @@ ENV PYTHONUNBUFFERED=1 \
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     curl \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libgthread-2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app directory
@@ -45,7 +52,8 @@ COPY services/service_dataprep /app/services/service_dataprep
 COPY config.toml /app/config.toml
 
 # Set PYTHONPATH globally for all users and entrypoints
-ENV PYTHONPATH=/app/shared_libs:/app/services/service_dataprep/src
+ENV PYTHONPATH=/app/shared_libs:/app/services/service_dataprep/src \
+    CONFIG_TOML_PATH=/app/config.toml
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash app \

@@ -53,7 +53,8 @@ COPY services/service_tracking/src/ /app/services/service_tracking/src/
 COPY config.toml /app/config.toml
 
 # Set PYTHONPATH globally for all users and entrypoints
-ENV PYTHONPATH=/app/shared_libs:/app/services/service_tracking/src
+ENV PYTHONPATH=/app/shared_libs:/app/services/service_tracking/src \
+    CONFIG_TOML_PATH=/app/config.toml
 
 # Create non-root user for security
 RUN groupadd -r appuser && useradd -r -g appuser appuser

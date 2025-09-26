@@ -22,4 +22,5 @@ python-dotenv>=1.0.0
 pyyaml>=6.0.0
 
 # Shared dependencies (detection utils, etc.)
-supervision>=0.18.0
+# supervision>=0.18.0  # Removed - using minimal Detections class instead
+# torchvision>=0.15.0  # Not used in service_dataprep
