@@ -51,7 +51,7 @@ steps:
       - "--max-instances=2"
       - "--timeout=900s"
       - "--concurrency=5"
-      - "--port=8081"
+      - "--port=8080"
       - "--service-account=${_SERVICE_ACCOUNT}"
       - "--set-env-vars=GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT},PYTHONUNBUFFERED=1"
       - "--no-allow-unauthenticated"

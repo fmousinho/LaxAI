@@ -8,6 +8,8 @@ import logging
 import os
 from typing import List
 
+import google.auth.transport.requests
+import google.oauth2.id_token
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 
@@ -33,8 +35,17 @@ class DataPrepClient:
     """HTTP client for communicating with service_dataprep."""
 
     def __init__(self):
-        self.base_url = os.getenv("SERVICE_DATAPREP_URL", "http://service_dataprep:8081")
-        self.client = httpx.AsyncClient(base_url=self.base_url, timeout=30.0)
+        # Use Google Cloud service-to-service discovery as primary method
+        # Cloud Run services can communicate using the service URL
+        project_id = os.getenv("GOOGLE_CLOUD_PROJECT", None)
+        if not project_id:
+            dataprep_service_url = f"http://service_dataprep.{project_id}.internal:8080"
+        else:
+            external_url = f"https://laxai-service-dataprep.a.run.app:8080"
+            dataprep_service_url = os.getenv("SERVICE_DATAPREP_URL", external_url)
+
+        self.base_url = dataprep_service_url
+        self.client = httpx.AsyncClient(base_url=dataprep_service_url, timeout=30.0)
 
     async def close(self):
         """Close the HTTP client."""
@@ -43,6 +54,21 @@ class DataPrepClient:
     async def _proxy_request(self, method: str, path: str, **kwargs) -> dict:
         """Proxy a request to service_dataprep."""
         try:
+            # Fetch Google Cloud ID token for authentication
+            auth_req = google.auth.transport.requests.Request()
+            id_token = google.oauth2.id_token.fetch_id_token(auth_req, self.base_url)
+            
+            # Prepare headers with Bearer token and content type
+            headers = {
+                "Authorization": f"Bearer {id_token}",
+                "Content-Type": "application/json"
+            }
+            
+            # Merge with any existing headers from kwargs (if provided)
+            if "headers" in kwargs:
+                headers.update(kwargs["headers"])
+            kwargs["headers"] = headers
+            
             url = f"/api/v1/dataprep{path}"
             response = await self.client.request(method, url, **kwargs)
             response.raise_for_status()
