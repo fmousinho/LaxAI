@@ -24,7 +24,7 @@ steps:
       - "-t"
       - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-dataprep:latest"
       - "--build-arg"
-      - "REQS=requirements-cloud.txt"
+      - "REQS=requirements.txt"
       - "--build-arg"
       - "GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT}"
       - "."
