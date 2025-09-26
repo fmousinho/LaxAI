@@ -86,7 +86,7 @@ class TrackStitcher:
         - Backward compatibility with boolean respond_bool() method
     """
 
-    def __init__(self, storage_client: Any, tracks_root_dir: str, detections: Detections, output_dir: str):
+    def __init__(self, tracks_root_dir: str, detections: Detections):
         """
         Initializes the TrackStitcher.
 
@@ -94,13 +94,9 @@ class TrackStitcher:
             tracks_root_dir (str): Path to the directory containing unverified track folders.
             supervision_data (Dict[int, Set[int]]): A dictionary mapping a frame number
                                                     to a set of track IDs present in that frame.
-            output_dir (str): Path to the directory where the final "player" folders will be created.
         """
         print("🚀 Initializing TrackStitcher...")
-        self.storage_client = storage_client
-        self.tracks_root_dir = Path(tracks_root_dir)
         self.detections = detections
-        self.output_dir = Path(output_dir)
 
         # 1. Pre-process supervision data for efficient lookups
         self._track_to_frames: Dict[int, np.ndarray] = self._invert_supervision_data(self.detections)
@@ -582,41 +578,39 @@ class TrackStitcher:
                 return component
         return {track_id}  # Isolated track
 
-    def visualize_graph(self, filename: str = "track_relationships.png", show_labels: bool = True):
-        """Create visual representation of track relationships."""
+    def visualize_graph(self, show_labels: bool = True):
+        """Create visual representation of track relationships and return as a PIL.Image object."""
         try:
             import matplotlib.pyplot as plt
             from matplotlib.lines import Line2D
             import matplotlib.cm as cm
-            
+            from io import BytesIO
+            from PIL import Image
+
             plt.figure(figsize=(15, 10))
-            
+
             # Create layout
             pos = nx.spring_layout(self.track_graph, k=3, iterations=50)
-            
+
             # Separate edges by type for different colors
             edge_colors = []
-            
             for u, v, data in self.track_graph.edges(data=True):
                 relationship = data.get('relationship', EdgeType.UNKNOWN)
-                
                 if relationship == EdgeType.SAME_PLAYER:
                     edge_colors.append('green')
                 elif relationship == EdgeType.DIFFERENT_PLAYER:
-                    edge_colors.append('red') 
+                    edge_colors.append('red')
                 elif relationship == EdgeType.TEMPORAL_CONFLICT:
                     edge_colors.append('orange')
                 elif relationship == EdgeType.SKIPPED:
                     edge_colors.append('purple')
                 else:
                     edge_colors.append('gray')
-            
+
             # Color nodes by connected component (same player group)
             components = self._get_connected_components()
             all_nodes = list(self.track_graph.nodes())
             node_colors = ['lightblue'] * len(all_nodes)
-            
-            # Use different colors for different components
             colors = ['red', 'blue', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
             if len(components) > 1:
                 for i, component in enumerate(components):
@@ -625,17 +619,15 @@ class TrackStitcher:
                         if track in all_nodes:
                             node_idx = all_nodes.index(track)
                             node_colors[node_idx] = color
-            
-            # Draw the graph
-            nx.draw(self.track_graph, pos, 
-                   node_color=node_colors,
-                   edge_color=edge_colors,
-                   with_labels=show_labels,
-                   node_size=300,
-                   font_size=8,
-                   font_weight='bold')
-            
-            # Add legend
+
+            nx.draw(self.track_graph, pos,
+                    node_color=node_colors,
+                    edge_color=edge_colors,
+                    with_labels=show_labels,
+                    node_size=300,
+                    font_size=8,
+                    font_weight='bold')
+
             legend_elements = [
                 Line2D([0], [0], color='green', lw=2, label='Same Player'),
                 Line2D([0], [0], color='red', lw=2, label='Different Player'),
@@ -644,28 +636,19 @@ class TrackStitcher:
                 Line2D([0], [0], color='gray', lw=2, linestyle=':', label='Unknown')
             ]
             plt.legend(handles=legend_elements, loc='upper right')
-            
             plt.title("Track Relationship Graph\n(Node colors represent player groups)")
             plt.tight_layout()
-            
-            # Save the plot
-            output_path = self.output_dir / filename
-            plt.savefig(str(output_path), dpi=300, bbox_inches='tight')
+
+            buf = BytesIO()
+            plt.savefig(buf, format='png', dpi=300, bbox_inches='tight')
             plt.close()
-            
-            print(f"📊 Graph visualization saved to: {output_path}")
-            
-            # Also print summary stats
-            progress = self.get_verification_progress()
-            print(f"📈 Progress: {progress['progress_percentage']}% complete")
-            print(f"   - {progress['current_player_groups']} current player groups")
-            print(f"   - {progress['verified_pairs']} manually verified pairs")
-            print(f"   - {progress['skipped_pairs']} skipped pairs")
-            print(f"   - {progress['temporal_conflicts']} auto-rejected pairs")
-            print(f"   - {progress['remaining_pairs']} pairs remaining")
-            print(f"   - Mode: {progress['verification_mode']}")
-            
+            buf.seek(0)
+            image = Image.open(buf)
+            return image
+
         except ImportError:
-            print("⚠️  Matplotlib not available. Install with: pip install matplotlib")
+            print("⚠️  Matplotlib or PIL not available. Install with: pip install matplotlib pillow")
+            return None
         except Exception as e:
             print(f"❌ Error creating visualization: {e}")
+            return None
