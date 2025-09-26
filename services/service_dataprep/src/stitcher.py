@@ -4,24 +4,7 @@ import logging
 import numpy as np
 import networkx as nx
 
-# Minimal Detections class to avoid supervision dependency
-class Detections:
-    """Minimal Detections class that mimics supervision.Detections interface."""
-    
-    def __init__(self, xyxy=None, mask=None, confidence=None, class_id=None, 
-                 tracker_id=None, data=None, metadata=None):
-        self.xyxy = xyxy
-        self.mask = mask
-        self.confidence = confidence
-        self.class_id = class_id
-        self.tracker_id = tracker_id
-        self.data = data or {}
-        self.metadata = metadata or {}
-    
-    @classmethod
-    def empty(cls):
-        return cls()
-
+from shared_libs.common.detection_format import Detections
 from shared_libs.config import logging_config  # Import logging configuration
 
 # Set up logger
