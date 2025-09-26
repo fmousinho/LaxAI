@@ -16,6 +16,8 @@ source_dirs = [
     "shared_libs",
     "services/service_api/src",
     "services/service_cr_train_proxy/src",
+    "services/service_dataprep",
+    "services/service_dataprep/src",
     "services/service_tracking/src",
     "services/service_training/src",
 ]

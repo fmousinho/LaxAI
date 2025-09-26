@@ -4,7 +4,7 @@ import networkx as nx
 from unittest.mock import Mock, patch
 from supervision import Detections
 
-from services.service_dataprep.stitcher import TrackStitcher, EdgeType
+from services.service_dataprep.src.stitcher import TrackStitcher, EdgeType
 
 
 class TestTrackStitcher:
