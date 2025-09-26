@@ -33,7 +33,7 @@ class Settings:
         self.app_version: str = "1.0.0"
         self.debug: bool = os.getenv("DEBUG", "false").lower() == "true"
         self.host: str = os.getenv("HOST", "0.0.0.0")
-        self.port: int = int(os.getenv("PORT", "8081"))  # Different port from service_api
+        self.port: int = int(os.getenv("PORT", "8080"))  
         self.reload: bool = os.getenv("RELOAD", "false").lower() == "true"
         self.log_level: str = os.getenv("LOG_LEVEL", "info")
 
