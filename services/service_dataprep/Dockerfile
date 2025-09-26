@@ -41,6 +41,12 @@ COPY shared_libs /app/shared_libs
 # Copy service code
 COPY services/service_dataprep /app/services/service_dataprep
 
+# Copy necessary root configuration files
+COPY config.toml /app/config.toml
+
+# Set PYTHONPATH globally for all users and entrypoints
+ENV PYTHONPATH=/app/shared_libs:/app/services/service_dataprep/src
+
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash app \
     && chown -R app:app /app
