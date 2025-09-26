@@ -32,8 +32,9 @@ from google.cloud import storage
 from google.cloud.exceptions import Forbidden, NotFound
 from google.cloud.storage import Blob
 from google.oauth2 import service_account
-from supervision import Detections, JSONSink
+from shared_libs.common.detection_serialization import serialize_detections
 
+from shared_libs.common.detection_format import Detections
 from shared_libs.config.all_config import google_storage_config
 
 logger = logging.getLogger(__name__)
@@ -467,19 +468,10 @@ class GoogleStorageClient:
                     return False
 
             elif isinstance(data, Detections):
-                # Use JSONSink for proper serialization with a temporary file
-                with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as temp_file:
-
-                    # Use JSONSink to serialize the Detection object
-                    json_sink = JSONSink(temp_file.name)
-                    with json_sink as sink:
-                        sink.append(data)
-
-                    # Read the serialized JSON data
-                    with open(temp_file.name, "r") as f:
-                        json_string = f.read()
-                        blob.upload_from_string(json_string, content_type="application/json")
-                        return True
+                # Serialize detections using lightweight helper (no supervision dependency)
+                json_string = serialize_detections(data)
+                blob.upload_from_string(json_string, content_type="application/json")
+                return True
 
             elif destination_blob_name.endswith(".json"):
                 json_bytes = json.dumps(data).encode("utf-8")
