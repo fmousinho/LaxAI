@@ -149,12 +149,16 @@ class DataPrepManager:
                 group1_prefixes = self._get_group_track_prefixes(group1_id)
                 group2_prefixes = self._get_group_track_prefixes(group2_id)
 
+                progress_info = self.stitcher.get_verification_progress()
+
                 return {
                     "status": "pending_verification",
                     "group1_id": group1_id,
                     "group2_id": group2_id,
                     "group1_prefixes": group1_prefixes,
-                    "group2_prefixes": group2_prefixes
+                    "group2_prefixes": group2_prefixes,
+                    "total_pairs": progress_info["total_pairs"],
+                    "verified_pairs": progress_info["verified_pairs"],
                 }
             else:
                 if not self.save_graph():
