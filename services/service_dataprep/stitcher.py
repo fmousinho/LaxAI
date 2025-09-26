@@ -2,7 +2,6 @@ import os
 import shutil
 from pathlib import Path
 from typing import Dict, List, Set, Optional, Tuple, Any
-from collections import defaultdict
 from enum import Enum
 import numpy as np
 import networkx as nx
@@ -76,9 +75,6 @@ class TrackStitcher:
         print(f"Skipped pairs: {progress['skipped_pairs']}")
         
         stitcher.visualize_graph("verification_progress.png")
-        
-        # Finalize and organize files
-        stitcher.finalize_and_move_files()
         ```
     
     Key Features:
@@ -109,11 +105,8 @@ class TrackStitcher:
         # 1. Pre-process supervision data for efficient lookups
         self._track_to_frames: Dict[int, np.ndarray] = self._invert_supervision_data(self.detections)
         
-        # 2. Discover all tracks and their image file paths using detections-derived track IDs
+        # 2. Discover all track IDs using detections-derived track IDs
         all_track_ids = sorted(self._track_to_frames.keys())
-        self._track_images: Dict[int, List[Path]] = {
-            tid: sorted(list((self.tracks_root_dir / str(tid)).glob('*'))) for tid in all_track_ids
-        }
         print(f"✅ Found {len(all_track_ids)} tracks (from detections).")
 
         # 3. Initialize player groups. Initially, each track is its own group.
@@ -259,20 +252,17 @@ class TrackStitcher:
                     self._record_group_verification(group1_id, group2_id, EdgeType.TEMPORAL_CONFLICT)
                     self._j += 1
                     continue
-                
+
                 # We have a candidate pair for manual verification.
                 self._last_proposed_pair = (group1_id, group2_id)
-                
-                group1_paths = [p for tid in self.player_groups[group1_id] for p in self._track_images[tid]]
-                group2_paths = [p for tid in self.player_groups[group2_id] for p in self._track_images[tid]]
-                
+
                 return {
                     "status": "pending_verification",
                     "mode": "normal",
-                    "group1": {"id": group1_id, "image_paths": group1_paths},
-                    "group2": {"id": group2_id, "image_paths": group2_paths}
+                    "group1_id": group1_id,
+                    "group2_id": group2_id
                 }
-            
+
             # Move to the next primary group to compare
             self._i += 1
             self._j = self._i + 1 # Reset secondary group
@@ -354,48 +344,44 @@ class TrackStitcher:
     def _get_skipped_pair_for_verification(self) -> Dict[str, Any]:
         """Get the next skipped pair for re-verification."""
         skipped_pairs = self.get_skipped_pairs()
-        
+
         if not skipped_pairs:
             return {"status": "complete", "message": "✅ All skipped pairs have been processed."}
-        
+
         # Get the first skipped pair
         group1_id, group2_id = skipped_pairs[0]
         self._last_proposed_pair = (group1_id, group2_id)
-        
-        group1_paths = [p for tid in self.player_groups[group1_id] for p in self._track_images[tid]]
-        group2_paths = [p for tid in self.player_groups[group2_id] for p in self._track_images[tid]]
-        
+
         return {
             "status": "pending_verification",
             "mode": "skipped_only",
-            "group1": {"id": group1_id, "image_paths": group1_paths},
-            "group2": {"id": group2_id, "image_paths": group2_paths},
+            "group1_id": group1_id,
+            "group2_id": group2_id,
             "context": f"Previously skipped pair ({len(skipped_pairs)} skipped pairs remaining)"
         }
 
     def _get_second_pass_pair(self) -> Dict[str, Any]:
         """Get pairs for second pass verification (enhanced context for skipped pairs)."""
         skipped_pairs = self.get_skipped_pairs()
-        
+
         if not skipped_pairs:
             return {"status": "complete", "message": "✅ All skipped pairs have been resolved."}
-        
+
         # For now, same as skipped_only but with enhanced context messaging
         group1_id, group2_id = skipped_pairs[0]
         self._last_proposed_pair = (group1_id, group2_id)
-        
-        group1_paths = [p for tid in self.player_groups[group1_id] for p in self._track_images[tid]]
-        group2_paths = [p for tid in self.player_groups[group2_id] for p in self._track_images[tid]]
-        
+
         # Get context about what groups these have been merged with
         group1_context = self._get_group_context(group1_id)
         group2_context = self._get_group_context(group2_id)
-        
+
         return {
             "status": "pending_verification",
             "mode": "second_pass",
-            "group1": {"id": group1_id, "image_paths": group1_paths, "context": group1_context},
-            "group2": {"id": group2_id, "image_paths": group2_paths, "context": group2_context},
+            "group1_id": group1_id,
+            "group2_id": group2_id,
+            "group1_context": group1_context,
+            "group2_context": group2_context,
             "message": f"Second pass: Enhanced context available ({len(skipped_pairs)} skipped pairs remaining)"
         }
 
