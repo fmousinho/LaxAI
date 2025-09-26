@@ -1,5 +1,6 @@
 import pytest
 import numpy as np
+import networkx as nx
 from unittest.mock import Mock, patch
 from supervision import Detections
 
@@ -23,10 +24,7 @@ class TestTrackStitcher:
     @pytest.fixture
     def stitcher(self, mock_detections):
         """Create a TrackStitcher instance for testing."""
-        return TrackStitcher(
-            tracks_root_dir="/fake/path",
-            detections=mock_detections
-        )
+        return TrackStitcher(detections=mock_detections)
 
     def test_initialization(self, stitcher, mock_detections):
         """Test that TrackStitcher initializes correctly."""
@@ -283,3 +281,47 @@ class TestTrackStitcher:
         merged_group = min(group1, group2)
         context = stitcher._get_group_context(merged_group)
         assert "original tracks" in context
+
+    def test_get_graph(self, stitcher):
+        """Test getting access to the underlying graph."""
+        graph = stitcher.get_graph()
+        assert isinstance(graph, nx.Graph)
+        assert graph.number_of_nodes() == 4  # 4 tracks
+        assert graph.has_node(1)
+        assert graph.has_node(2)
+
+    def test_save_graph(self, stitcher, tmp_path):
+        """Test saving graph to different formats."""
+        # Test GraphML format
+        graphml_path = tmp_path / "test_graph.graphml"
+        result = stitcher.save_graph(str(graphml_path), "graphml")
+        assert result is True
+        assert graphml_path.exists()
+
+        # Test JSON format
+        json_path = tmp_path / "test_graph.json"
+        result = stitcher.save_graph(str(json_path), "json")
+        assert result is True
+        assert json_path.exists()
+
+        # Test invalid format
+        result = stitcher.save_graph(str(tmp_path / "test.invalid"), "invalid")
+        assert result is False
+
+    def test_export_graph_data(self, stitcher):
+        """Test exporting graph data as dictionary."""
+        data = stitcher.export_graph_data()
+
+        assert "nodes" in data
+        assert "edges" in data
+        assert "player_groups" in data
+        assert "player_groups_dict" in data
+        assert "metadata" in data
+
+        assert len(data["nodes"]) == 4  # 4 tracks
+        assert data["metadata"]["total_tracks"] == 4
+        assert data["metadata"]["player_count"] == 4  # Initially each track is its own player
+
+        # Check that edges include temporal conflicts
+        edge_types = [edge["relationship"] for edge in data["edges"]]
+        assert "temporal_conflict" in edge_types

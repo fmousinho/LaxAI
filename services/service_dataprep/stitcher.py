@@ -85,7 +85,7 @@ class TrackStitcher:
         - Visualization returns PIL.Image objects for flexible display/saving
     """
 
-    def __init__(self, tracks_root_dir: str, detections: Detections):
+    def __init__(self, detections: Detections):
         """
         Initializes the TrackStitcher.
 
@@ -658,3 +658,98 @@ class TrackStitcher:
         except Exception as e:
             print(f"❌ Error creating visualization: {e}")
             return None
+
+    def get_graph(self) -> nx.Graph:
+        """
+        Get access to the underlying NetworkX graph for external analysis or saving.
+
+        Returns:
+            NetworkX Graph object containing track relationships.
+        """
+        return self.track_graph
+
+    def save_graph(self, filepath: str, format: str = "graphml") -> bool:
+        """
+        Save the track relationship graph to a file.
+
+        Args:
+            filepath: Path where to save the graph file.
+            format: File format - "graphml" (default), "gml", "pickle", "json", etc.
+
+        Returns:
+            True if save was successful, False otherwise.
+        """
+        try:
+            if format.lower() == "graphml":
+                # Create a copy with string relationship values for GraphML compatibility
+                graph_copy = self.track_graph.copy()
+                for u, v, data in graph_copy.edges(data=True):
+                    if 'relationship' in data and isinstance(data['relationship'], EdgeType):
+                        data['relationship'] = data['relationship'].value
+                nx.write_graphml(graph_copy, filepath)
+            elif format.lower() == "gml":
+                # Create a copy with string relationship values for GML compatibility
+                graph_copy = self.track_graph.copy()
+                for u, v, data in graph_copy.edges(data=True):
+                    if 'relationship' in data and isinstance(data['relationship'], EdgeType):
+                        data['relationship'] = data['relationship'].value
+                nx.write_gml(graph_copy, filepath)
+            elif format.lower() == "pickle":
+                import pickle
+                with open(filepath, 'wb') as f:
+                    pickle.dump(self.track_graph, f)
+            elif format.lower() == "json":
+                # Convert to node-link format for JSON, handling Enum serialization
+                graph_data = nx.node_link_data(self.track_graph)
+                # Convert Enum values to strings for JSON serialization
+                for link in graph_data.get('links', []):
+                    if 'relationship' in link and isinstance(link['relationship'], EdgeType):
+                        link['relationship'] = link['relationship'].value
+                import json
+                with open(filepath, 'w') as f:
+                    json.dump(graph_data, f, indent=2)
+            else:
+                print(f"❌ Unsupported format: {format}. Supported: graphml, gml, pickle, json")
+                return False
+
+            print(f"✅ Graph saved to {filepath} in {format} format")
+            return True
+
+        except Exception as e:
+            print(f"❌ Error saving graph: {e}")
+            return False
+
+    def export_graph_data(self) -> Dict[str, Any]:
+        """
+        Export graph data as a dictionary for serialization or external processing.
+
+        Returns:
+            Dictionary containing nodes, edges, and metadata.
+        """
+        # Get connected components (player groups)
+        components = self._get_connected_components()
+
+        # Convert edges to serializable format
+        edges_data = []
+        for u, v, data in self.track_graph.edges(data=True):
+            edges_data.append({
+                'track1': u,
+                'track2': v,
+                'relationship': data.get('relationship', EdgeType.UNKNOWN).value
+            })
+
+        # Convert components to serializable format
+        components_data = [sorted(list(comp)) for comp in components]
+
+        return {
+            'nodes': list(self.track_graph.nodes()),
+            'edges': edges_data,
+            'player_groups': components_data,
+            'player_groups_dict': {min(group): sorted(list(group)) for group in components_data},
+            'metadata': {
+                'total_tracks': self.track_graph.number_of_nodes(),
+                'total_relationships': len(edges_data),
+                'player_count': len(components),
+                'verification_mode': self._verification_mode
+            }
+        }
