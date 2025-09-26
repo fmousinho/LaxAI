@@ -18,69 +18,71 @@ class TrackStitcher:
     Manages the semi-automated process of stitching player tracks together.
 
     This class provides an API to get pairs of unverified track groups for manual
-    verification and handles the merging and file organization based on user input.
-    
+    verification and handles the merging based on user input. It uses a graph-based
+    approach to track relationships between track groups.
+
     Supports a progressive refinement workflow where unclear pairs can be skipped
     during the first pass and revisited with enhanced context in a second pass.
-    
+
     Example Usage:
         ```python
         # Initialize stitcher
         stitcher = TrackStitcher(
-            storage_client=storage_client,
             tracks_root_dir="/path/to/tracks",
-            detections=detections_obj,
-            output_dir="/path/to/output"
+            detections=detections_obj
         )
-        
+
         # First pass - skip unclear pairs
         while True:
             result = stitcher.get_pair_for_verification()
-            
+
             if result["status"] == "pending_verification":
-                # Display images from result["group1"]["image_paths"] 
-                # and result["group2"]["image_paths"] to user
-                
+                # Display images for result["group1_id"] and result["group2_id"]
+                # (retrieve images externally based on group IDs)
+
                 # Get user decision
                 decision = input("Are these the same player? (same/different/skip): ")
                 stitcher.respond(decision)
-                
+
             elif result["status"] == "second_pass_ready":
                 print(f"First pass complete! {result['skipped_count']} pairs skipped")
                 break
             elif result["status"] == "complete":
                 print("All verification complete!")
                 break
-        
+
         # Second pass - revisit skipped pairs with enhanced context
         if stitcher.start_second_pass():
             while True:
                 result = stitcher.get_pair_for_verification()
-                
+
                 if result["status"] == "pending_verification":
                     print(f"Context for group1: {result['group1'].get('context', 'N/A')}")
                     print(f"Context for group2: {result['group2'].get('context', 'N/A')}")
-                    
+
                     decision = input("Same player? (same/different/skip): ")
                     stitcher.respond(decision)
                 elif result["status"] == "complete":
                     break
-        
+
         # Monitor progress and visualize relationships
         progress = stitcher.get_verification_progress()
         print(f"Progress: {progress['progress_percentage']}% complete")
         print(f"Skipped pairs: {progress['skipped_pairs']}")
-        
-        stitcher.visualize_graph("verification_progress.png")
+
+        # Get visualization as PIL Image
+        graph_image = stitcher.visualize_graph()
+        graph_image.save("verification_progress.png")
         ```
-    
+
     Key Features:
         - Skip unclear pairs without blocking progress: respond("skip")
         - Progressive refinement with enhanced context in second pass
         - Graph-based relationship tracking and visualization
         - Automatic temporal conflict detection
         - Rich progress analytics and inconsistency detection
-        - Backward compatibility with boolean respond_bool() method
+        - Returns group IDs only (image handling is external)
+        - Visualization returns PIL.Image objects for flexible display/saving
     """
 
     def __init__(self, tracks_root_dir: str, detections: Detections):
@@ -89,8 +91,7 @@ class TrackStitcher:
 
         Args:
             tracks_root_dir (str): Path to the directory containing unverified track folders.
-            supervision_data (Dict[int, Set[int]]): A dictionary mapping a frame number
-                                                    to a set of track IDs present in that frame.
+            detections (Detections): Detections object containing track information.
         """
         print("🚀 Initializing TrackStitcher...")
         self.detections = detections
@@ -208,8 +209,8 @@ class TrackStitcher:
 
         Returns:
             A dictionary with the status and data. Possible statuses:
-            - 'pending_verification': User input is needed. 'group1' and 'group2' keys
-                                      contain lists of image paths.
+            - 'pending_verification': User input is needed. 'group1_id' and 'group2_id' keys
+                                      contain the group IDs for external image retrieval.
             - 'complete': All possible pairs have been verified.
             - 'second_pass_ready': Normal pass complete, ready for second pass.
         """
@@ -576,7 +577,15 @@ class TrackStitcher:
         return {track_id}  # Isolated track
 
     def visualize_graph(self, show_labels: bool = True):
-        """Create visual representation of track relationships and return as a PIL.Image object."""
+        """
+        Create visual representation of track relationships and return as a PIL.Image object.
+
+        Args:
+            show_labels: Whether to show track IDs as node labels in the graph.
+
+        Returns:
+            PIL.Image object containing the graph visualization, or None if visualization fails.
+        """
         try:
             import matplotlib.pyplot as plt
             from matplotlib.lines import Line2D
