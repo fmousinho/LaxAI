@@ -157,6 +157,8 @@ class DataPrepManager:
                     "group2_prefixes": group2_prefixes
                 }
             else:
+                if not self.save_graph():
+                    logger.warning("Failed to save graph after completing verification")
                 return result
 
         except Exception as e:
@@ -213,15 +215,15 @@ class DataPrepManager:
 
         return prefixes
 
-    def suspend_prep(self) -> bool:
+    def save_graph(self) -> bool:
         """
-        Save the current stitcher graph state to GCS for later resumption.
+        Save the current stitcher graph state to GCS.
 
         Returns:
             True if the graph was successfully saved, False otherwise
         """
         if self.stitcher is None:
-            logger.error("No active stitcher session to suspend")
+            logger.error("No active stitcher session to save")
             return False
 
         if self.current_process_folder is None:
@@ -261,12 +263,21 @@ class DataPrepManager:
             os.unlink(temp_filepath)
 
             if upload_success:
-                logger.info(f"Successfully suspended prep session, graph saved to {gcs_path}")
+                logger.info(f"Successfully saved graph to {gcs_path}")
                 return True
             else:
                 logger.error("Failed to upload graph to GCS")
                 return False
 
         except Exception as e:
-            logger.error(f"Error suspending prep session: {e}")
+            logger.error(f"Error saving graph: {e}")
             return False
+
+    def suspend_prep(self) -> bool:
+        """
+        Save the current stitcher graph state to GCS for later resumption.
+
+        Returns:
+            True if the graph was successfully saved, False otherwise
+        """
+        return self.save_graph()
