@@ -38,10 +38,13 @@ class DataPrepClient:
         # Use Google Cloud service-to-service discovery as primary method
         # Cloud Run services can communicate using the service URL
         project_id = os.getenv("GOOGLE_CLOUD_PROJECT", None)
+        service_name = os.getenv("SERVICE_DATAPREP_NAME", "laxai-service-dataprep")
+        port = os.getenv("SERVICE_DATAPREP_PORT", "8080")
+        
         if not project_id:
-            dataprep_service_url = f"http://service_dataprep.{project_id}.internal:8080"
+            dataprep_service_url = f"http://{service_name}.{project_id}.internal:{port}"
         else:
-            external_url = f"https://laxai-service-dataprep.a.run.app:8080"
+            external_url = f"https://{service_name}.a.run.app:{port}"
             dataprep_service_url = os.getenv("SERVICE_DATAPREP_URL", external_url)
 
         self.base_url = dataprep_service_url
