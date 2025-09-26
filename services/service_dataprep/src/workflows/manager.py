@@ -273,6 +273,67 @@ class DataPrepManager:
             logger.error(f"Error saving graph: {e}")
             return False
 
+    def save_graph_image(self) -> bool:
+        """
+        Generate and save a visual representation of the track relationship graph to GCS.
+
+        Returns:
+            True if the graph image was successfully saved, False otherwise
+        """
+        if self.stitcher is None:
+            logger.error("No active stitcher session to visualize")
+            return False
+
+        if self.current_process_folder is None:
+            logger.error("No current process folder set")
+            return False
+
+        import tempfile
+        import os
+
+        try:
+            # Generate the visualization image
+            image = self.stitcher.visualize_graph()
+            if image is None:
+                logger.error("Failed to generate graph visualization")
+                return False
+
+            # Create a temporary file for the image
+            with tempfile.NamedTemporaryFile(mode='w+b', suffix='.jpg', delete=False) as temp_file:
+                temp_filepath = temp_file.name
+
+            # Save the PIL image to the temporary file
+            image.save(temp_filepath, format='JPEG', quality=95)
+            image.close()  # Free memory
+
+            # Get the GCS path for the graph image
+            gcs_path = self.path_manager.get_path(
+                "track_graph_image",
+                video_id=self.current_process_folder
+            )
+
+            if gcs_path is None:
+                logger.error("Failed to generate GCS path for graph image")
+                os.unlink(temp_filepath)
+                return False
+
+            # Upload the file to GCS
+            upload_success = self.storage.upload_from_file(gcs_path, temp_filepath)
+
+            # Clean up the temporary file
+            os.unlink(temp_filepath)
+
+            if upload_success:
+                logger.info(f"Successfully saved graph visualization to {gcs_path}")
+                return True
+            else:
+                logger.error("Failed to upload graph image to GCS")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error saving graph image: {e}")
+            return False
+
     def suspend_prep(self) -> bool:
         """
         Save the current stitcher graph state to GCS for later resumption.

@@ -21,3 +21,4 @@ gcs:
     run_data: "runs/{run_id}/"
     unverified_tracks: "process/{video_id}/unverified_tracks/{track_id}/"
     track_graphs: "process/{video_id}/track_graphs.gml"
+    track_graph_image: "process/{video_id}/track_graph.jpg"
