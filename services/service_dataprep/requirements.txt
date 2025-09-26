@@ -1,0 +1,25 @@
+# Service DataPrep Dependencies
+# API service for track stitching verification workflows
+
+# Web framework and API
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0
+
+# Data validation
+pydantic>=2.0.0
+
+# Google Cloud dependencies
+google-cloud-storage>=2.10.0
+google-cloud-secret-manager>=2.16.0
+
+# Graph and visualization
+networkx>=3.0
+matplotlib>=3.7.0
+pillow>=10.0.0
+
+# Configuration and utilities
+python-dotenv>=1.0.0
+pyyaml>=6.0.0
+
+# Shared dependencies (detection utils, etc.)
+supervision>=0.18.0
