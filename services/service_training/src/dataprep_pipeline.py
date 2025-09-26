@@ -528,7 +528,7 @@ class DataPrepPipeline(Pipeline):
             logger.info(f"Importing video: {raw_video_path}")
 
             # Generate structured video ID using ID generator
-            video_guid = create_video_id()
+            video_guid = create_video_id(raw_video_path)
             
             video_folder = self.path_manager.get_path("imported_video", video_id=video_guid)
             if video_folder is None:

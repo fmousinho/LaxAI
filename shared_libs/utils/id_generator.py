@@ -5,9 +5,15 @@ This module provides functions to generate unique IDs for various entities
 used in the GCS structure, following the pattern: [type]_[GUID]
 """
 
+import logging
 import os
 import uuid
 from typing import Optional
+
+from shared_libs.config import logging_config  # Import logging configuration
+
+# Set up logger
+logger = logging.getLogger(__name__)
 
 
 def create_tenant_id() -> str:
@@ -23,6 +29,9 @@ def create_video_id(video_path: Optional[str] = None) -> str:
                    just the filename. If not provided, generates UUID-based ID.
     """
     if video_path:
+        if type(video_path) is not str:
+            logger.warning(f"Expected string for video_path, got {type(video_path)}")
+
         # Extract filename from path (handles both Unix and Windows paths)
         # Split on both forward and backward slashes and take the last non-empty part
         parts = video_path.replace('\\', '/').split('/')

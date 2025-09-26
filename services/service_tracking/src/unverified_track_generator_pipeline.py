@@ -523,7 +523,7 @@ class TrackGeneratorPipeline(Pipeline):
                     raise RuntimeError(f"Video resolution {width}x{height} does not meet minimum requirements of {MIN_VIDEO_RESOLUTION[0]}x{MIN_VIDEO_RESOLUTION[1]}")
 
             # Generate structured video ID using ID generator
-            video_guid = create_video_id()
+            video_guid = create_video_id(raw_video_path)
             
             path = self.path_manager.get_path("imported_video", 
                                                     video_id=video_guid)
