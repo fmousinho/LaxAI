@@ -325,3 +325,43 @@ class TestTrackStitcher:
         # Check that edges include temporal conflicts
         edge_types = [edge["relationship"] for edge in data["edges"]]
         assert "temporal_conflict" in edge_types
+
+    def test_resume_from_existing_graph(self, mock_detections, tmp_path):
+        """Test resuming verification from a saved graph."""
+        # Create initial stitcher and do some work
+        stitcher1 = TrackStitcher(detections=mock_detections)
+        
+        # Get a pair and respond
+        result = stitcher1.get_pair_for_verification()
+        assert result["status"] == "pending_verification"
+        group1_id, group2_id = result["group1_id"], result["group2_id"]
+        stitcher1.respond("same")  # Merge the groups
+        
+        # Save the graph
+        graph_path = tmp_path / "test_resume.graphml"
+        success = stitcher1.save_graph(str(graph_path))
+        assert success
+        
+        # Create new stitcher from saved graph
+        import networkx as nx
+        saved_graph = nx.read_graphml(str(graph_path))
+        stitcher2 = TrackStitcher(detections=mock_detections, existing_graph=saved_graph)
+        
+        # Verify state was reconstructed correctly
+        assert stitcher2.track_graph.number_of_nodes() == 4
+        assert len(stitcher2.player_groups) < 4  # Should have fewer groups due to merging
+        
+        # Check that the merged groups are preserved
+        merged_group_found = False
+        for group_tracks in stitcher2.player_groups.values():
+            if len(group_tracks) > 1:
+                merged_group_found = True
+                break
+        assert merged_group_found, "Merged groups should be preserved when resuming"
+        
+        # Verify temporal conflicts are still present
+        temporal_count = 0
+        for _, _, data in stitcher2.track_graph.edges(data=True):
+            if data.get('relationship') == EdgeType.TEMPORAL_CONFLICT:
+                temporal_count += 1
+        assert temporal_count > 0, "Temporal conflicts should be preserved when resuming"

@@ -27,10 +27,7 @@ class TrackStitcher:
     Example Usage:
         ```python
         # Initialize stitcher
-        stitcher = TrackStitcher(
-            tracks_root_dir="/path/to/tracks",
-            detections=detections_obj
-        )
+        stitcher = TrackStitcher(detections=detections_obj)
 
         # First pass - skip unclear pairs
         while True:
@@ -51,28 +48,28 @@ class TrackStitcher:
                 print("All verification complete!")
                 break
 
+        # Save progress for potential resume later
+        stitcher.save_graph("checkpoint.graphml")
+
         # Second pass - revisit skipped pairs with enhanced context
         if stitcher.start_second_pass():
             while True:
                 result = stitcher.get_pair_for_verification()
-
+                
                 if result["status"] == "pending_verification":
                     print(f"Context for group1: {result['group1'].get('context', 'N/A')}")
                     print(f"Context for group2: {result['group2'].get('context', 'N/A')}")
-
+                    
                     decision = input("Same player? (same/different/skip): ")
                     stitcher.respond(decision)
                 elif result["status"] == "complete":
                     break
 
-        # Monitor progress and visualize relationships
-        progress = stitcher.get_verification_progress()
-        print(f"Progress: {progress['progress_percentage']}% complete")
-        print(f"Skipped pairs: {progress['skipped_pairs']}")
-
-        # Get visualization as PIL Image
-        graph_image = stitcher.visualize_graph()
-        graph_image.save("verification_progress.png")
+        # To resume from a saved checkpoint:
+        import networkx as nx
+        saved_graph = nx.read_graphml("checkpoint.graphml")
+        stitcher = TrackStitcher(detections=detections_obj, existing_graph=saved_graph)
+        # Continue verification from where you left off
         ```
 
     Key Features:
@@ -83,15 +80,18 @@ class TrackStitcher:
         - Rich progress analytics and inconsistency detection
         - Returns group IDs only (image handling is external)
         - Visualization returns PIL.Image objects for flexible display/saving
+        - Resume interrupted verification from saved graph checkpoints
     """
 
-    def __init__(self, detections: Detections):
+    def __init__(self, detections: Detections, existing_graph: Optional[nx.Graph] = None):
         """
         Initializes the TrackStitcher.
 
         Args:
-            tracks_root_dir (str): Path to the directory containing unverified track folders.
             detections (Detections): Detections object containing track information.
+            existing_graph (Optional[nx.Graph]): Existing graph to resume from. If provided,
+                                               the stitcher will load the previous state and
+                                               allow continuing verification.
         """
         print("🚀 Initializing TrackStitcher...")
         self.detections = detections
@@ -103,14 +103,18 @@ class TrackStitcher:
         all_track_ids = sorted(self._track_to_frames.keys())
         print(f"✅ Found {len(all_track_ids)} tracks (from detections).")
 
-        # 3. Initialize player groups. Initially, each track is its own group.
-        # The key is the representative ID for the group (we use the smallest track_id).
-        self.player_groups: Dict[int, Set[int]] = {tid: {tid} for tid in all_track_ids}
+        if existing_graph is not None:
+            print("📂 Loading existing graph and reconstructing state...")
+            self._load_existing_graph(existing_graph, all_track_ids)
+        else:
+            # 3. Initialize player groups. Initially, each track is its own group.
+            # The key is the representative ID for the group (we use the smallest track_id).
+            self.player_groups: Dict[int, Set[int]] = {tid: {tid} for tid in all_track_ids}
 
-        # 4. Initialize graph representation for advanced relationship tracking
-        self.track_graph = nx.Graph()
-        self.track_graph.add_nodes_from(all_track_ids)
-        self._populate_temporal_conflicts()
+            # 4. Initialize graph representation for advanced relationship tracking
+            self.track_graph = nx.Graph()
+            self.track_graph.add_nodes_from(all_track_ids)
+            self._populate_temporal_conflicts()
         
         # 5. State for the comparison iterator
         self._comparison_keys: List[int] = []
@@ -122,6 +126,74 @@ class TrackStitcher:
         self._verification_mode = "normal"  # "normal", "second_pass", or "skipped_only"
         
         print("Initialization complete. Ready for verification.")
+
+    def _load_existing_graph(self, existing_graph: nx.Graph, expected_track_ids: List[int]):
+        """
+        Load an existing graph and reconstruct the stitcher state.
+        
+        Args:
+            existing_graph: The saved graph to load
+            expected_track_ids: Track IDs that should exist based on detections
+        """
+        # Handle potential string node IDs from GraphML format
+        graph_nodes = list(existing_graph.nodes())
+        if graph_nodes and isinstance(graph_nodes[0], str):
+            # Convert string node IDs back to integers
+            mapping = {str(node_id): node_id for node_id in expected_track_ids}
+            existing_graph = nx.relabel_nodes(existing_graph, mapping)
+        
+        # Convert string relationship values back to EdgeType enums
+        for u, v, data in existing_graph.edges(data=True):
+            if 'relationship' in data and isinstance(data['relationship'], str):
+                try:
+                    data['relationship'] = EdgeType(data['relationship'])
+                except ValueError:
+                    # If it's not a valid EdgeType, leave as string or set to UNKNOWN
+                    data['relationship'] = EdgeType.UNKNOWN
+        
+        # Validate that the graph contains the expected tracks
+        graph_track_ids = set(existing_graph.nodes())
+        expected_set = set(expected_track_ids)
+        
+        if not expected_set.issubset(graph_track_ids):
+            missing = expected_set - graph_track_ids
+            raise ValueError(f"Existing graph is missing tracks: {sorted(missing)}")
+        
+        if graph_track_ids - expected_set:
+            extra = graph_track_ids - expected_set
+            print(f"⚠️  Warning: Graph contains extra tracks not in detections: {sorted(extra)}")
+        
+        # Set the graph
+        self.track_graph = existing_graph.copy()
+        
+        # Ensure all expected tracks are in the graph
+        for track_id in expected_track_ids:
+            if track_id not in self.track_graph:
+                self.track_graph.add_node(track_id)
+        
+        # Reconstruct player groups from connected components (SAME_PLAYER relationships)
+        components = self._get_connected_components()
+        self.player_groups = {}
+        
+        for component in components:
+            # Use the smallest track ID as the group representative
+            group_id = min(component)
+            self.player_groups[group_id] = component
+        
+        # Ensure temporal conflicts are present (re-run detection if needed)
+        existing_temporal_edges = 0
+        for _, _, data in self.track_graph.edges(data=True):
+            if data.get('relationship') == EdgeType.TEMPORAL_CONFLICT:
+                existing_temporal_edges += 1
+        
+        if existing_temporal_edges == 0:
+            print("🔄 Re-detecting temporal conflicts...")
+            self._populate_temporal_conflicts()
+        else:
+            print(f"✅ Found {existing_temporal_edges} existing temporal conflict relationships")
+        
+        verified_tracks = sum(len(group) for group in self.player_groups.values())
+        print(f"✅ Reconstructed {len(self.player_groups)} player groups with {verified_tracks} tracks")
 
 
     def _invert_supervision_data(self, detections: Detections) -> Dict[int, np.ndarray]:
