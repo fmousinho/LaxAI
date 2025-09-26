@@ -1,9 +1,14 @@
 from typing import Dict, List, Set, Optional, Tuple, Any
 from enum import Enum
+import logging
 import numpy as np
 import networkx as nx
 
 from supervision import Detections
+from shared_libs.config import logging_config  # Import logging configuration
+
+# Set up logger
+logger = logging.getLogger(__name__)
 
 class EdgeType(Enum):
     """Types of relationships between tracks."""
@@ -93,7 +98,7 @@ class TrackStitcher:
                                                the stitcher will load the previous state and
                                                allow continuing verification.
         """
-        print("🚀 Initializing TrackStitcher...")
+        logger.info("Initializing TrackStitcher...")
         self.detections = detections
 
         # 1. Pre-process supervision data for efficient lookups
@@ -101,10 +106,10 @@ class TrackStitcher:
         
         # 2. Discover all track IDs using detections-derived track IDs
         all_track_ids = sorted(self._track_to_frames.keys())
-        print(f"✅ Found {len(all_track_ids)} tracks (from detections).")
+        logger.info(f"Found {len(all_track_ids)} tracks (from detections).")
 
         if existing_graph is not None:
-            print("📂 Loading existing graph and reconstructing state...")
+            logger.info("Loading existing graph and reconstructing state...")
             self._load_existing_graph(existing_graph, all_track_ids)
         else:
             # 3. Initialize player groups. Initially, each track is its own group.
@@ -125,7 +130,7 @@ class TrackStitcher:
         # 6. Verification mode tracking
         self._verification_mode = "normal"  # "normal", "second_pass", or "skipped_only"
         
-        print("Initialization complete. Ready for verification.")
+        logger.info("Initialization complete. Ready for verification.")
 
     def _load_existing_graph(self, existing_graph: nx.Graph, expected_track_ids: List[int]):
         """
@@ -161,7 +166,7 @@ class TrackStitcher:
         
         if graph_track_ids - expected_set:
             extra = graph_track_ids - expected_set
-            print(f"⚠️  Warning: Graph contains extra tracks not in detections: {sorted(extra)}")
+            logger.warning(f"Graph contains extra tracks not in detections: {sorted(extra)}")
         
         # Set the graph
         self.track_graph = existing_graph.copy()
@@ -187,13 +192,13 @@ class TrackStitcher:
                 existing_temporal_edges += 1
         
         if existing_temporal_edges == 0:
-            print("🔄 Re-detecting temporal conflicts...")
+            logger.info("Re-detecting temporal conflicts...")
             self._populate_temporal_conflicts()
         else:
-            print(f"✅ Found {existing_temporal_edges} existing temporal conflict relationships")
+            logger.info(f"Found {existing_temporal_edges} existing temporal conflict relationships")
         
         verified_tracks = sum(len(group) for group in self.player_groups.values())
-        print(f"✅ Reconstructed {len(self.player_groups)} player groups with {verified_tracks} tracks")
+        logger.info(f"Reconstructed {len(self.player_groups)} player groups with {verified_tracks} tracks")
 
 
     def _invert_supervision_data(self, detections: Detections) -> Dict[int, np.ndarray]:
@@ -228,7 +233,7 @@ class TrackStitcher:
 
     def _populate_temporal_conflicts(self):
         """Pre-populate graph with temporal conflict edges (tracks that overlap in time)."""
-        print("🔍 Detecting temporal conflicts...")
+        logger.info("Detecting temporal conflicts...")
         
         all_track_ids = list(self.track_graph.nodes())
         conflicts_found = 0
@@ -239,7 +244,7 @@ class TrackStitcher:
                     self.track_graph.add_edge(track1, track2, relationship=EdgeType.TEMPORAL_CONFLICT)
                     conflicts_found += 1
         
-        print(f"✅ Found {conflicts_found} temporal conflicts (auto-rejected pairs)")
+        logger.info(f"Found {conflicts_found} temporal conflicts (auto-rejected pairs)")
 
     def _tracks_overlap_in_time(self, track1_id: int, track2_id: int) -> bool:
         """Check if two individual tracks overlap in time."""
@@ -374,14 +379,14 @@ class TrackStitcher:
         if decision == "skip":
             # Record skip in graph and move to next pair
             self._record_group_verification(group1_id, group2_id, EdgeType.SKIPPED)
-            print(f"⏭️ Pair skipped for later review (groups {group1_id} and {group2_id})")
+            logger.info(f"Pair skipped for later review (groups {group1_id} and {group2_id})")
             self._j += 1
             
         elif decision == "same":
             # Record verification in graph
             self._record_group_verification(group1_id, group2_id, EdgeType.SAME_PLAYER)
             
-            print(f"👍 Merging group {group2_id} into group {group1_id}...")
+            logger.info(f"Merging group {group2_id} into group {group1_id}...")
             
             # Always merge into the group with the smaller ID to maintain consistency
             if group1_id > group2_id:
@@ -397,12 +402,12 @@ class TrackStitcher:
             # to compare the new, larger group against all others.
             self._i = 0
             self._j = 1
-            print(f"Merge complete. Restarting comparison scan.")
+            logger.info("Merge complete. Restarting comparison scan.")
             
         elif decision == "different":
             # Record verification in graph
             self._record_group_verification(group1_id, group2_id, EdgeType.DIFFERENT_PLAYER)
-            print(f"👎 Groups marked as different. Continuing...")
+            logger.info("Groups marked as different. Continuing...")
             self._j += 1
             
         self._last_proposed_pair = None
@@ -526,11 +531,11 @@ class TrackStitcher:
         """Start the second pass verification for skipped pairs."""
         skipped_count = len(self.get_skipped_pairs())
         if skipped_count == 0:
-            print("🎉 No skipped pairs found. Verification is complete!")
+            logger.info("No skipped pairs found. Verification is complete!")
             return False
         
-        print(f"🔄 Starting second pass verification for {skipped_count} skipped pairs...")
-        print("💡 Tip: You now have more context from merged groups to help with decisions.")
+        logger.info(f"Starting second pass verification for {skipped_count} skipped pairs...")
+        logger.info("Tip: You now have more context from merged groups to help with decisions.")
         self._verification_mode = "second_pass"
         return True
 
