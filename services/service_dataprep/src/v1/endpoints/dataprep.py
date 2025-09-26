@@ -39,6 +39,32 @@ def get_manager(tenant_id: str) -> DataPrepManager:
     return _managers[tenant_id]
 
 
+async def save_all_active_graphs():
+    """Save graphs for all active DataPrepManager instances."""
+    logger.info("Attempting to save graphs for all active sessions...")
+    saved_count = 0
+    failed_count = 0
+    
+    for tenant_id, manager in _managers.items():
+        try:
+            if manager.stitcher is not None and manager.current_process_folder is not None:
+                logger.info(f"Saving graph for tenant {tenant_id}, process folder {manager.current_process_folder}")
+                if manager.save_graph():
+                    saved_count += 1
+                    logger.info(f"Successfully saved graph for tenant {tenant_id}")
+                else:
+                    failed_count += 1
+                    logger.error(f"Failed to save graph for tenant {tenant_id}")
+            else:
+                logger.debug(f"No active session for tenant {tenant_id}, skipping save")
+        except Exception as e:
+            failed_count += 1
+            logger.error(f"Error saving graph for tenant {tenant_id}: {e}")
+    
+    logger.info(f"Graph save operation complete: {saved_count} saved, {failed_count} failed")
+    return saved_count, failed_count
+
+
 @router.get(
     "/folders",
     response_model=ProcessFoldersResponse,

@@ -1,10 +1,9 @@
 """
 Main FastAPI entry point for LaxAI DataPrep Service.
 """
-import os
-import sys
 
 # Ensure shared_libs can be imported
+import sys
 sys.path.insert(0, '/app')
 
 from shared_libs.utils.env_secrets import setup_environment_secrets
@@ -12,6 +11,9 @@ from shared_libs.utils.env_secrets import setup_environment_secrets
 setup_environment_secrets()
 
 import logging
+import os
+import signal
+import asyncio
 from contextlib import asynccontextmanager
 from typing import List
 
@@ -51,8 +53,49 @@ class Settings:
 async def lifespan(app: FastAPI):
     """Application lifespan context manager."""
     logger.info("Starting LaxAI DataPrep Service...")
-    yield
-    logger.info("Shutting down LaxAI DataPrep Service...")
+    
+    # Set up signal handlers for graceful shutdown
+    shutdown_event = asyncio.Event()
+    
+    def signal_handler(signum, frame):
+        logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+        shutdown_event.set()
+    
+    # Register signal handlers
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    # Create a task to wait for shutdown signal
+    async def wait_for_shutdown():
+        await shutdown_event.wait()
+        logger.info("Shutdown signal received, saving graphs...")
+        try:
+            from v1.endpoints.dataprep import save_all_active_graphs
+            await save_all_active_graphs()
+        except Exception as e:
+            logger.error(f"Error during signal-triggered graph save: {e}")
+    
+    shutdown_task = asyncio.create_task(wait_for_shutdown())
+    
+    try:
+        yield
+    finally:
+        # Cancel the shutdown task if it's still running
+        if not shutdown_task.done():
+            shutdown_task.cancel()
+            try:
+                await shutdown_task
+            except asyncio.CancelledError:
+                pass
+        
+        logger.info("Shutting down LaxAI DataPrep Service...")
+        
+        # Attempt to save all active graphs before shutdown
+        try:
+            from v1.endpoints.dataprep import save_all_active_graphs
+            await save_all_active_graphs()
+        except Exception as e:
+            logger.error(f"Error during graph save on shutdown: {e}")
 
 
 def create_application() -> FastAPI:
