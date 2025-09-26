@@ -8,7 +8,7 @@ used in the GCS structure, following the pattern: [type]_[GUID]
 import logging
 import os
 import uuid
-from typing import Optional
+from typing import Optional, Any
 
 from shared_libs.config import logging_config  # Import logging configuration
 
@@ -21,7 +21,7 @@ def create_tenant_id() -> str:
     return f"tenant_{uuid.uuid4().hex[:8]}"
 
 
-def create_video_id(video_path: Optional[str] = None) -> str:
+def create_video_id(video_path: Optional[Any] = None) -> str:
     """Generate a unique video ID.
     
     Args:
@@ -31,7 +31,7 @@ def create_video_id(video_path: Optional[str] = None) -> str:
     if video_path:
         if type(video_path) is not str:
             logger.warning(f"Expected string for video_path, got {type(video_path)}")
-
+            return f"video_{uuid.uuid4().hex[:8]}"
         # Extract filename from path (handles both Unix and Windows paths)
         # Split on both forward and backward slashes and take the last non-empty part
         parts = video_path.replace('\\', '/').split('/')
