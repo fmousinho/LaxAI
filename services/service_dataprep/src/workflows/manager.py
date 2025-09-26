@@ -346,3 +346,108 @@ class DataPrepManager:
             True if the graph was successfully saved, False otherwise
         """
         return self.save_graph()
+
+    def move_crops_to_verified(self) -> bool:
+        """
+        Move crops from unverified_tracks to verified_tracks based on track_graph associations.
+        
+        For each group in the track graph, consolidates all crops from tracks in that group
+        into a single verified_tracks/{group_id}/ folder.
+
+        Returns:
+            True if all crops were moved successfully, False otherwise
+        """
+        if self.stitcher is None:
+            logger.error("No active stitcher session")
+            return False
+
+        if self.current_process_folder is None:
+            logger.error("No current process folder set")
+            return False
+
+        try:
+            logger.info(f"Starting crop migration for video {self.current_process_folder}")
+            moved_count = 0
+            failed_count = 0
+
+            # For each group in player_groups
+            for group_id, track_ids in self.stitcher.player_groups.items():
+                logger.info(f"Processing group {group_id} with tracks: {list(track_ids)}")
+                
+                # Collect all crop files from all tracks in this group
+                crops_to_move = []
+                
+                for track_id in track_ids:
+                    # Get the unverified_tracks path for this track
+                    unverified_prefix = self.path_manager.get_path(
+                        "unverified_tracks",
+                        video_id=self.current_process_folder,
+                        track_id=track_id
+                    )
+                    
+                    if unverified_prefix is None:
+                        logger.warning(f"Could not generate path for unverified track {track_id}")
+                        continue
+                    
+                    # List all crop files in this track's folder
+                    try:
+                        crop_files = self.storage.list_blobs(prefix=unverified_prefix)
+                        crops_to_move.extend(crop_files)
+                        logger.debug(f"Found {len(crop_files)} crops in track {track_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to list crops for track {track_id}: {e}")
+                        failed_count += 1
+                        continue
+                
+                # Move all collected crops to the verified_tracks/{group_id}/ folder
+                verified_prefix = self.path_manager.get_path(
+                    "verified_tracks",
+                    video_id=self.current_process_folder,
+                    track_id=group_id
+                )
+                
+                if verified_prefix is None:
+                    logger.error(f"Could not generate verified path for group {group_id}")
+                    failed_count += len(crops_to_move)
+                    continue
+                
+                for crop_blob in crops_to_move:
+                    try:
+                        # Construct the new path by replacing the unverified prefix with verified
+                        # crop_blob.name is the full GCS path like "process/video1/unverified_tracks/123/crop_1_100.jpg"
+                        # We need to change it to "process/video1/verified_tracks/456/crop_1_100.jpg"
+                        
+                        # Extract the filename from the original path
+                        filename = crop_blob.name.split('/')[-1]  # e.g., "crop_1_100.jpg"
+                        
+                        # Construct new verified path
+                        verified_path = f"{verified_prefix}{filename}"
+                        
+                        # Copy the blob to the new location
+                        if self.storage.copy_blob(crop_blob.name, verified_path):
+                            # Delete the original
+                            if self.storage.delete_blob(crop_blob.name):
+                                moved_count += 1
+                                logger.debug(f"Moved crop {filename} to group {group_id}")
+                            else:
+                                logger.warning(f"Failed to delete original crop {crop_blob.name} after copying")
+                                failed_count += 1
+                        else:
+                            logger.error(f"Failed to copy crop {crop_blob.name} to {verified_path}")
+                            failed_count += 1
+                            
+                    except Exception as e:
+                        logger.error(f"Error moving crop {crop_blob.name}: {e}")
+                        failed_count += 1
+            
+            logger.info(f"Crop migration complete: {moved_count} moved, {failed_count} failed")
+            
+            if failed_count > 0:
+                logger.warning(f"Crop migration had {failed_count} failures")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error during crop migration: {e}")
+            return False

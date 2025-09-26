@@ -1,5 +1,17 @@
 """
-DataPrep API endpoints for track stitching verification workflows.
+DataPrfrom ..schemas.dataprep import (
+    ProcessFoldersResponse,
+    StartPrepRequest,
+    StartPrepResponse,
+    VerificationImagesResponse,
+    RecordResponseRequest,
+    RecordResponseResponse,
+    SaveGraphResponse,
+    SaveGraphImageResponse,
+    SuspendPrepResponse,
+    MoveCropsResponse,
+    ErrorResponse,
+)ints for track stitching verification workflows.
 """
 
 import logging
@@ -18,7 +30,8 @@ from ..schemas.dataprep import (
     SaveGraphResponse,
     SaveGraphImageResponse,
     SuspendPrepResponse,
-    ErrorResponse
+    MoveCropsResponse,
+    ErrorResponse,
 )
 from ...workflows.manager import DataPrepManager
 
@@ -268,3 +281,33 @@ async def suspend_prep(tenant_id: str) -> SuspendPrepResponse:
     except Exception as e:
         logger.error(f"Failed to suspend prep for tenant {tenant_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to suspend session: {str(e)}")
+
+
+@router.post(
+    "/move-crops",
+    response_model=MoveCropsResponse,
+    summary="Move Crops to Verified Tracks",
+    description="Move crops from unverified_tracks to verified_tracks based on track graph associations."
+)
+async def move_crops_to_verified(tenant_id: str) -> MoveCropsResponse:
+    """
+    Move crops from unverified to verified tracks based on graph associations.
+
+    Args:
+        tenant_id: The tenant identifier
+
+    Returns:
+        Success status and optional message
+    """
+    try:
+        manager = get_manager(tenant_id)
+        success = manager.move_crops_to_verified()
+
+        if success:
+            return MoveCropsResponse(success=True, message="Crops moved to verified tracks successfully")
+        else:
+            return MoveCropsResponse(success=False, message="Failed to move some or all crops")
+
+    except Exception as e:
+        logger.error(f"Failed to move crops for tenant {tenant_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to move crops: {str(e)}")

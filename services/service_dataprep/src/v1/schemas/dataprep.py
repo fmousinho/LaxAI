@@ -89,6 +89,13 @@ class SuspendPrepResponse(BaseModel):
     message: Optional[str] = Field(None, description="Optional message about the operation")
 
 
+class MoveCropsResponse(BaseModel):
+    """Response model for moving crops to verified tracks."""
+
+    success: bool = Field(..., description="Whether all crops were moved successfully")
+    message: Optional[str] = Field(None, description="Optional message about the operation")
+
+
 class ErrorResponse(BaseModel):
     """Error response model."""
 
