@@ -20,7 +20,7 @@ class DataPrepManager:
     Manager class for dataprep service operations.
 
     Provides methods to list process folders, start verification sessions,
-    get images for verification, and record user responses.
+    get images for verification, record user responses, and suspend/resume sessions.
     """
 
     def __init__(self, tenant_id: str):
@@ -87,8 +87,30 @@ class DataPrepManager:
             detections_json = json.loads(detections_json_text)
             detections = load_all_detections_summary(detections_json)
 
+            # Check for existing saved graph
+            existing_graph = None
+            saved_graph_path = self.path_manager.get_path(
+                "saved_graph",
+                video_id=process_folder
+            )
+            
+            if saved_graph_path is not None:
+                try:
+                    # Try to download the saved graph
+                    graph_data = self.storage.download_as_string(saved_graph_path)
+                    if graph_data is not None:
+                        import networkx as nx
+                        import io
+                        # Load the graph from the downloaded data
+                        existing_graph = nx.read_graphml(io.StringIO(graph_data))
+                        logger.info(f"Found existing saved graph, will resume from {saved_graph_path}")
+                    else:
+                        logger.info("No existing saved graph found, starting fresh")
+                except Exception as e:
+                    logger.warning(f"Could not load existing saved graph: {e}, starting fresh")
+
             # Create the stitcher
-            self.stitcher = TrackStitcher(detections=detections)
+            self.stitcher = TrackStitcher(detections=detections, existing_graph=existing_graph)
             self.current_process_folder = process_folder
 
             logger.info(f"Started prep session for process folder: {process_folder}")
