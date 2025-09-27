@@ -76,7 +76,9 @@ async def lifespan(app: FastAPI):
         await shutdown_event.wait()
         logger.info("Shutdown signal received, saving graphs...")
         try:
-            from v1.endpoints.dataprep import save_all_active_graphs
+            from services.service_dataprep.src.v1.endpoints.dataprep import (
+                save_all_active_graphs,
+            )
             await save_all_active_graphs()
         except Exception as e:
             logger.error(f"Error during signal-triggered graph save: {e}")
@@ -98,7 +100,9 @@ async def lifespan(app: FastAPI):
         
         # Attempt to save all active graphs before shutdown
         try:
-            from v1.endpoints.dataprep import save_all_active_graphs
+            from services.service_dataprep.src.v1.endpoints.dataprep import (
+                save_all_active_graphs,
+            )
             await save_all_active_graphs()
         except Exception as e:
             logger.error(f"Error during graph save on shutdown: {e}")
