@@ -67,7 +67,8 @@ def create_app() -> FastAPI:
         description="API service for queuing LaxAI machine learning training jobs",
         version=settings.app_version,
         lifespan=lifespan,
-        debug=settings.debug
+        debug=settings.debug,
+        redirect_slashes=False
     )
 
     # Add CORS middleware
