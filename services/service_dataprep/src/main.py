@@ -4,7 +4,11 @@ Main FastAPI entry point for LaxAI DataPrep Service.
 
 # Ensure shared_libs can be imported
 import sys
-sys.path.insert(0, '/app')
+import os
+
+# For Docker, /app is already the root
+if '/app' not in sys.path:
+    sys.path.insert(0, '/app')
 
 from shared_libs.utils.env_secrets import setup_environment_secrets
 
@@ -21,6 +25,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 # Import API routers
 from .v1 import router as dataprep_router
+
+import shared_libs.config.logging_config
 
 logger = logging.getLogger(__name__)
 
@@ -131,3 +137,14 @@ def create_application() -> FastAPI:
 
 # Create the FastAPI app instance
 app = create_application()
+
+if __name__ == "__main__":
+    import uvicorn
+    settings = Settings()
+    uvicorn.run(
+        "services.service_dataprep.src.main:app",
+        host=settings.host,
+        port=settings.port,
+        reload=settings.reload,
+        log_level=settings.log_level.lower(),
+    )
