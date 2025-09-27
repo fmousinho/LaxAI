@@ -11,6 +11,7 @@
 
 substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"
+  _SERVICE_ACCOUNT: "service-tracking@laxai-466119.iam.gserviceaccount.com"
 
 steps:
   # Build the service tracking image
@@ -48,6 +49,7 @@ steps:
       - "--accelerator"
       - "type=nvidia-l4,count=1"
       - "--project=${_GOOGLE_CLOUD_PROJECT}"
+      - "--service-account=${_SERVICE_ACCOUNT}"
 
       
 

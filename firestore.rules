@@ -1,0 +1,21 @@
+# Firestore Security Rules for LaxAI
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Allow API service to read/write tracking progress
+    match /tracking_progress/{taskId} {
+      allow read, write: if request.auth != null || 
+        request.auth.token.email.matches('.*@laxai.*') ||
+        resource.data.service == 'api-service';
+    }
+    
+    // Allow API service to read/write tracking runs
+    match /tracking_runs/{taskId} {
+      allow read, write: if request.auth != null ||
+        request.auth.token.email.matches('.*@laxai.*') ||
+        resource.data.service == 'api-service';
+    }
+    
+    // Your existing rules...
+  }
+}

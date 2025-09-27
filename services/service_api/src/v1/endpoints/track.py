@@ -2,10 +2,12 @@ import json
 import logging
 import os
 import uuid
+import asyncio
 from datetime import datetime, timezone
 from typing import List, Dict, Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from google.api_core.exceptions import GoogleAPIError
 from google.cloud import pubsub_v1, firestore  # type: ignore
 
@@ -239,9 +241,9 @@ async def cancel_tracking_job(task_id: str):
 @router.get("/{task_id}/progress", response_model=Dict[str, Any])
 async def get_tracking_progress(task_id: str):
     """
-    Get real-time progress for a tracking job.
+    Get current progress for a tracking job.
 
-    Returns current processing status, frames processed, and other progress metrics.
+    Returns the latest processing status, frames processed, and other progress metrics.
     """
     try:
         # Get progress from Firestore
@@ -252,6 +254,9 @@ async def get_tracking_progress(task_id: str):
             raise HTTPException(status_code=404, detail=f"No progress data found for task {task_id}")
         
         progress_data = progress_doc.to_dict()
+        if not progress_data:
+            raise HTTPException(status_code=404, detail=f"No progress data found for task {task_id}")
+            
         return progress_data
 
     except HTTPException:
@@ -259,3 +264,54 @@ async def get_tracking_progress(task_id: str):
     except Exception as e:
         logger.error(f"Error getting progress for task {task_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get progress for task {task_id}")
+
+
+@router.get("/{task_id}/progress/stream")
+async def stream_tracking_progress(task_id: str):
+    """
+    Server-Sent Events endpoint for real-time progress updates.
+    
+    Returns a stream of progress updates that can be consumed by any client
+    without requiring GCP authentication.
+    """
+    async def generate():
+        try:
+            db = firestore.Client()
+            last_update = None
+            
+            while True:
+                # Get latest progress
+                progress_doc = db.collection('tracking_progress').document(task_id).get()
+                
+                if progress_doc.exists:
+                    progress_data = progress_doc.to_dict()
+                    
+                    if progress_data:
+                        updated_at = progress_data.get('updated_at')
+                        
+                        # Only send if there's new data
+                        if updated_at != last_update:
+                            last_update = updated_at
+                            yield f"data: {json.dumps(progress_data)}\n\n"
+                            
+                            # If job is complete, end the stream
+                            if progress_data.get('status') in ['completed', 'failed', 'cancelled']:
+                                break
+                
+                # Wait before checking again
+                await asyncio.sleep(2)
+                
+        except Exception as e:
+            logger.error(f"Error in progress stream for task {task_id}: {e}")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Cache-Control",
+        }
+    )
