@@ -19,7 +19,7 @@ from shared_libs.config import logging_config
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 # Import API routers
-from v1 import router as train_router
+from v1 import router
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ def create_app() -> FastAPI:
     )
 
     # Include routers
-    app.include_router(train_router)
+    app.include_router(router, prefix="/api/v1")
 
     return app
 

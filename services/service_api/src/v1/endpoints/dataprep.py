@@ -35,19 +35,21 @@ class DataPrepClient:
     """HTTP client for communicating with service_dataprep."""
 
     def __init__(self):
-        # Use Google Cloud service-to-service discovery as primary method
-        # Cloud Run services can communicate using the service URL
-        project_id = os.getenv("GOOGLE_CLOUD_PROJECT", None)
         service_name = os.getenv("SERVICE_DATAPREP_NAME", "laxai-service-dataprep")
         port = os.getenv("SERVICE_DATAPREP_PORT", "8080")
-        
-        if not project_id:
-            dataprep_service_url = f"http://{service_name}.{project_id}.internal:{port}"
+
+        # Allow explicit override via environment variable (recommended for Cloud Run)
+        explicit_url = os.getenv("SERVICE_DATAPREP_URL")
+
+        if explicit_url:
+            dataprep_service_url = explicit_url.rstrip("/")
         else:
-            external_url = f"https://{service_name}.a.run.app:{port}"
-            dataprep_service_url = os.getenv("SERVICE_DATAPREP_URL", external_url)
+            # Fall back to an internal hostname (useful for local/dev environments)
+            dataprep_service_url = f"http://{service_name}:{port}"
 
         self.base_url = dataprep_service_url
+        # Only fetch ID tokens for HTTPS targets (IAP protected endpoints)
+        self._target_audience = dataprep_service_url if dataprep_service_url.startswith("https://") else None
         self.client = httpx.AsyncClient(base_url=dataprep_service_url, timeout=30.0)
 
     async def close(self):
@@ -57,15 +59,12 @@ class DataPrepClient:
     async def _proxy_request(self, method: str, path: str, **kwargs) -> dict:
         """Proxy a request to service_dataprep."""
         try:
-            # Fetch Google Cloud ID token for authentication
-            auth_req = google.auth.transport.requests.Request()
-            id_token = google.oauth2.id_token.fetch_id_token(auth_req, self.base_url)
-            
-            # Prepare headers with Bearer token and content type
-            headers = {
-                "Authorization": f"Bearer {id_token}",
-                "Content-Type": "application/json"
-            }
+            headers = {"Content-Type": "application/json"}
+
+            if self._target_audience:
+                auth_req = google.auth.transport.requests.Request()
+                id_token = google.oauth2.id_token.fetch_id_token(auth_req, self._target_audience)
+                headers["Authorization"] = f"Bearer {id_token}"
             
             # Merge with any existing headers from kwargs (if provided)
             if "headers" in kwargs:
@@ -80,7 +79,7 @@ class DataPrepClient:
             logger.error("HTTP error from service_dataprep: %s", e)
             raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
         except httpx.RequestError as e:
-            logger.error("Request error to service_dataprep: %s", e)
+            logger.error("Request error to service_dataprep (base_url=%s): %s", self.base_url, repr(e))
             raise HTTPException(status_code=503, detail="Service unavailable")
 
 
