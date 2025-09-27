@@ -160,6 +160,8 @@ class TrackingJobProxy:
         except GoogleAPIError as e:
             logger.error(f"Failed to start tracking job: {e}")
             raise
+        
+        return task_id
               
 
     def cancel_tracking_job(self, task_id: str) -> None:

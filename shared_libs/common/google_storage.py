@@ -104,10 +104,10 @@ class GCSPaths:
 
         Raises:
             KeyError: If the key is not found in the configuration.
-            ValueError: If any kwargs values contain invalid characters (/, \\, .).
+            ValueError: If any kwargs values contain invalid characters (/, \\).
         """
         # Validate kwargs values for invalid characters
-        invalid_chars = ["/", "\\", "."]
+        invalid_chars = ["/", "\\"]  # Removed "." as it's valid in filenames
         for param_name, param_value in kwargs.items():
             if isinstance(param_value, str):
                 for char in invalid_chars:
@@ -115,7 +115,7 @@ class GCSPaths:
                         logger.error(
                             f"Invalid character '{char}' found in parameter '{param_name}' "
                             f"with value '{param_value}'. Path parameters cannot contain "
-                            f"'/', '\\', or '.' characters."
+                            f"'/' or '\\' characters."
                         )
                         return None
 
