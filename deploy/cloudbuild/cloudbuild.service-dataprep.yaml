@@ -45,7 +45,7 @@ steps:
       - "--image=us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-dataprep:latest"
       - "--region=us-central1"
       - "--cpu=2"
-      - "--memory=1Gi"
+      - "--memory=2Gi"
       - "--min-instances=0"
       - "--cpu-throttling"
       - "--max-instances=2"
