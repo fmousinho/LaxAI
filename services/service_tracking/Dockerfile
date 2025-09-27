@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for service_tracking
-# Stage 1: Base image with Python and system dependencies
-FROM python:3.12-slim AS base
+# Stage 1: Base image with Python, PyTorch, and system dependencies
+FROM nvidia/pytorch:2.3.1-py3 AS base
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \

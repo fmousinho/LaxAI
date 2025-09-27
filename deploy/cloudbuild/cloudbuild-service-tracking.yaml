@@ -31,6 +31,25 @@ steps:
       - "push"
       - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-tracking:latest"
 
+  # Deploy to Cloud Run with GPU
+  - id: "deploy-service-tracking"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: gcloud
+    args:
+      - "run"
+      - "deploy"
+      - "laxai-service-tracking"
+      - "--image=us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-tracking:latest"
+      - "--region=us-central1"
+      - "--platform=managed"
+      - "--execution-environment=gen2"
+      - "--cpu=4"
+      - "--memory=16Gi"
+      - "--accelerator=type=nvidia-tesla-t4,count=1"
+      - "--project=${_GOOGLE_CLOUD_PROJECT}"
+
+      
+
 images:
   - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-tracking:latest"
 

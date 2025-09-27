@@ -47,7 +47,7 @@ steps:
       - "--service-account=${_SERVICE_ACCOUNT}"
       - "--set-env-vars=GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT},CLOUD_REGION=${_REGION}"
       - "--memory=512MB"
-      - "--timeout=540s" # 9 minutes max for Cloud Functions
+      - "--timeout=540s"
       - "--max-instances=10"
       - "--quiet"
 
