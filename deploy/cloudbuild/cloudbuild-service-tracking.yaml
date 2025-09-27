@@ -46,8 +46,8 @@ steps:
       - "--execution-environment=gen2"
       - "--cpu=4"
       - "--memory=16Gi"
-      - "--accelerator"
-      - "type=nvidia-l4,count=1"
+      - "--gpu=1"
+      - "--gpu-type=nvidia-l4"
       - "--project=${_GOOGLE_CLOUD_PROJECT}"
       - "--service-account=${_SERVICE_ACCOUNT}"
 
