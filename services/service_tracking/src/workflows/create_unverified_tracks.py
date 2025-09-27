@@ -271,7 +271,8 @@ class UnverifiedTrackGenerationWorkflow:
                         config=self.detection_config,
                         tenant_id=self.tenant_id,
                         verbose=self.verbose,
-                        save_intermediate=self.save_intermediate
+                        save_intermediate=self.save_intermediate,
+                        task_id=self.task_id
                     )
 
                     # Execute track generation

@@ -92,6 +92,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import supervision as sv
 from supervision.utils.image import crop_image
 
+from google.cloud import firestore
 from shared_libs.common.google_storage import get_storage, GCSPaths
 from shared_libs.common.detection import DetectionModel
 from shared_libs.common.pipeline_step import StepStatus
@@ -212,6 +213,7 @@ class TrackGeneratorPipeline(Pipeline):
                  save_intermediate: bool = True, 
                  enable_grass_mask: bool = model_config.enable_grass_mask, 
                  delete_process_folder: bool = True, 
+                 task_id: Optional[str] = None,
                  **kwargs):
         """
         Initialize the TrackGeneratorPipeline.
@@ -228,6 +230,7 @@ class TrackGeneratorPipeline(Pipeline):
             enable_grass_mask (bool): Enable background removal functionality using statistical color analysis.
                 Currently unused in this pipeline
             delete_process_folder (bool): Clean up temporary processing files after completion to save storage
+            task_id (Optional[str]): Task ID for progress tracking and status updates
             **kwargs: Additional arguments passed to the parent Pipeline class
         
         Raises:
@@ -251,6 +254,19 @@ class TrackGeneratorPipeline(Pipeline):
         
         # Store tenant_id for path generation
         self.tenant_id = tenant_id
+        self.task_id = task_id
+        
+        # Initialize Firestore client for progress updates
+        if task_id:
+            try:
+                self.firestore_client = firestore.Client()
+                self.progress_collection = self.firestore_client.collection('tracking_progress')
+                logger.info(f"Initialized Firestore progress tracking for task_id: {task_id}")
+            except Exception as e:
+                logger.warning(f"Failed to initialize Firestore client for progress tracking: {e}")
+                self.firestore_client = None
+        else:
+            self.firestore_client = None
         
         # Detection model is required for training pipeline
         try:
@@ -297,6 +313,19 @@ class TrackGeneratorPipeline(Pipeline):
         # Override run_folder to use structured GCS path
         self.run_guid = create_run_id()
         self.run_folder = self.path_manager.get_path("run_data", run_id=self.run_guid)
+
+    def _update_progress(self, progress_data: Dict[str, Any]) -> None:
+        """Update progress in Firestore for real-time tracking."""
+        if not self.firestore_client or not self.task_id:
+            return
+        
+        try:
+            doc_ref = self.progress_collection.document(self.task_id)
+            progress_data['updated_at'] = firestore.SERVER_TIMESTAMP
+            doc_ref.set(progress_data, merge=True)
+            logger.debug(f"Updated progress for task {self.task_id}: {progress_data}")
+        except Exception as e:
+            logger.warning(f"Failed to update progress in Firestore: {e}")
 
     async def _execute_parallel_operations_async(self,
                                                tasks: List[Tuple] | List[str],
@@ -737,6 +766,16 @@ class TrackGeneratorPipeline(Pipeline):
                     # Log progress every 100 frames
                     if frame_number % 100 == 0:
                         logger.info(f"Processed {frame_number}/{total_frames} frames, {detections_count} total detections")
+                        # Update progress in Firestore for real-time tracking
+                        progress_percent = (frame_number / total_frames) * 100
+                        self._update_progress({
+                            'status': 'processing',
+                            'progress_percent': progress_percent,
+                            'frames_processed': frame_number,
+                            'total_frames': total_frames,
+                            'detections_count': detections_count,
+                            'current_video': video_guid if 'video_guid' in locals() else None
+                        })
             
             # Process any remaining crops in final batch
             if len(get_crop_tasks) > 0:

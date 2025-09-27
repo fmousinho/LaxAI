@@ -3,7 +3,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Dict, Any
 
 from fastapi import APIRouter, HTTPException
 from google.api_core.exceptions import GoogleAPIError
@@ -234,3 +234,28 @@ async def cancel_tracking_job(task_id: str):
     except Exception as e:
         logger.error(f"Error cancelling tracking job {task_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to cancel tracking job {task_id}")
+
+
+@router.get("/{task_id}/progress", response_model=Dict[str, Any])
+async def get_tracking_progress(task_id: str):
+    """
+    Get real-time progress for a tracking job.
+
+    Returns current processing status, frames processed, and other progress metrics.
+    """
+    try:
+        # Get progress from Firestore
+        db = firestore.Client()
+        progress_doc = db.collection('tracking_progress').document(task_id).get()
+        
+        if not progress_doc.exists:
+            raise HTTPException(status_code=404, detail=f"No progress data found for task {task_id}")
+        
+        progress_data = progress_doc.to_dict()
+        return progress_data
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting progress for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get progress for task {task_id}")
