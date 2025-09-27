@@ -134,7 +134,7 @@ def get_status_manager() -> TrackingStatusManager:
     return _status_manager
 
 
-@router.post("/", response_model=TrackingResponse)
+@router.post("", response_model=TrackingResponse)
 async def create_tracking_job(request: TrackingRequest):
     """
     Create a new tracking job.

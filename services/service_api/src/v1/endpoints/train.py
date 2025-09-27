@@ -122,7 +122,7 @@ publisher = PubSubPublisher()
 status_manager = TrainingStatusManager()
 
 
-@router.post("/", response_model=TrainingResponse)
+@router.post("", response_model=TrainingResponse)
 async def start_training(request: TrainingRequest) -> TrainingResponse:
     """Queue a new training job."""
 
