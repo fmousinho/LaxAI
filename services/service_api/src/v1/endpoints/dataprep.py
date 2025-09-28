@@ -37,19 +37,21 @@ class DataPrepClient:
     def __init__(self):
         service_name = os.getenv("SERVICE_DATAPREP_NAME", "laxai-service-dataprep")
         port = os.getenv("SERVICE_DATAPREP_PORT", "8080")
+        project_id = os.getenv("GOOGLE_CLOUD_PROJECT", "laxai-466119")
+        region = "us-central1"  # Cloud Run region
 
-        # Allow explicit override via environment variable (recommended for Cloud Run)
+        # Allow explicit override via environment variable (for local/dev environments)
         explicit_url = os.getenv("SERVICE_DATAPREP_URL")
 
         if explicit_url:
             dataprep_service_url = explicit_url.rstrip("/")
+            self._target_audience = None  # External URL, no ID token needed
         else:
-            # Fall back to an internal hostname (useful for local/dev environments)
-            dataprep_service_url = f"http://{service_name}:{port}"
+            # Use internal Cloud Run service URL (no authentication needed for internal ingress with allow-unauthenticated)
+            dataprep_service_url = "https://laxai-service-dataprep-517529966392.us-central1.run.app"
+            self._target_audience = None  # Internal service, no ID token needed
 
         self.base_url = dataprep_service_url
-        # For internal Cloud Run services, no authentication needed
-        self._target_audience = None
         self.client = httpx.AsyncClient(base_url=dataprep_service_url, timeout=30.0)
 
     async def close(self):

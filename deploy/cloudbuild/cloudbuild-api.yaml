@@ -15,7 +15,6 @@ substitutions:
   _WORK_DIR: "services/service_api"
   _SERVICE_DATAPREP_NAME: "laxai-service-dataprep"
   _SERVICE_DATAPREP_PORT: "80"
-  _SERVICE_DATAPREP_URL: "https://laxai-service-dataprep-517529966392.us-central1.run.app/"
 
 steps:
   - id: "build-and-tag-image"
@@ -55,7 +54,7 @@ steps:
       - "--timeout=300s"
       - "--concurrency=10"
       - "--service-account=${_SERVICE_ACCOUNT}"
-      - "--set-env-vars=GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT},SERVICE_DATAPREP_NAME=${_SERVICE_DATAPREP_NAME},SERVICE_DATAPREP_PORT=${_SERVICE_DATAPREP_PORT}, SERVICE_DATAPREP_URL=${_SERVICE_DATAPREP_URL}"
+      - "--set-env-vars=GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT},SERVICE_DATAPREP_NAME=${_SERVICE_DATAPREP_NAME},SERVICE_DATAPREP_PORT=${_SERVICE_DATAPREP_PORT}"
       - "--no-allow-unauthenticated"
       - "--quiet"
 

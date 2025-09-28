@@ -55,6 +55,7 @@ steps:
       - "--service-account=${_SERVICE_ACCOUNT}"
       - "--set-env-vars=GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT},PYTHONUNBUFFERED=1"
       - "--ingress=internal"
+      - "--allow-unauthenticated"
       - "--quiet"
 
 images:

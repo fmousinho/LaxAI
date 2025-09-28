@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for service_training
 # Stage 1: Base image with Python and system dependencies
-FROM python:3.12-slim AS base
+FROM pytorch/pytorch:2.3.1-cuda12.1-cudnn8-runtime AS base
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -10,12 +10,16 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
+    DEBIAN_FRONTEND=noninteractive TZ=America/New_York apt-get install -y \
     build-essential \
     curl \
     python3-opencv \
     libglib2.0-0 \
     libgomp1 \
     ffmpeg \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app directory

@@ -1,7 +1,7 @@
 # Multi-stage Dockerfile for service_dataprep
 # API service for track stitching verification workflows
 
-FROM python:3.12-slim AS base
+FROM pytorch/pytorch:2.3.1-cuda12.1-cudnn8-runtime AS base
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -11,14 +11,16 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
+    DEBIAN_FRONTEND=noninteractive TZ=America/New_York apt-get install -y \
+    build-essential \
     curl \
-    libgl1 \
+    python3-opencv \
     libglib2.0-0 \
+    libgomp1 \
+    ffmpeg \
     libsm6 \
     libxext6 \
     libxrender-dev \
-    libgomp1 \
-    libgthread-2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app directory
