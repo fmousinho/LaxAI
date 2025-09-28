@@ -9,7 +9,7 @@
 
 substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"
-  _SERVICE_ACCOUNT: "laxai-466119@appspot.gserviceaccount.com"
+  _SERVICE_ACCOUNT: "function-proxy-tracking@appspot.gserviceaccount.com"
   _FUNCTION_NAME: "laxai-tracking-proxy"
   _REGION: "us-central1"
 
