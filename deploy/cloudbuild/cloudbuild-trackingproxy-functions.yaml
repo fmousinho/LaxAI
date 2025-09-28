@@ -49,6 +49,7 @@ steps:
       - "--memory=512MB"
       - "--timeout=540s"
       - "--max-instances=10"
+      - "--ingress=internal"
       - "--quiet"
 
 options:

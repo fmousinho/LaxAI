@@ -50,6 +50,7 @@ steps:
       - "--memory=512MB"
       - "--timeout=540s" # 9 minutes max for Cloud Functions
       - "--max-instances=10"
+      - "--ingress=internal"
       - "--quiet"
 
 options:

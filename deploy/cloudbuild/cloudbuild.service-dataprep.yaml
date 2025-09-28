@@ -11,7 +11,7 @@ substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"
   # Note: Cloud Build does not expand nested substitutions inside substitution values.
   # Use the literal project id here to avoid unresolved ${_GOOGLE_CLOUD_PROJECT} in the email.
-  _SERVICE_ACCOUNT: "googlebatch@laxai-466119.iam.gserviceaccount.com"
+  _SERVICE_ACCOUNT: "service-dataprep@laxai-466119.iam.gserviceaccount.com"
   _WORK_DIR: "services/service_dataprep"
 
 steps:
@@ -54,7 +54,7 @@ steps:
       - "--port=8080"
       - "--service-account=${_SERVICE_ACCOUNT}"
       - "--set-env-vars=GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT},PYTHONUNBUFFERED=1"
-      - "--no-allow-unauthenticated"
+      - "--ingress=internal"
       - "--quiet"
 
 images:

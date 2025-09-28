@@ -48,8 +48,8 @@ class DataPrepClient:
             dataprep_service_url = f"http://{service_name}:{port}"
 
         self.base_url = dataprep_service_url
-        # Only fetch ID tokens for HTTPS targets (IAP protected endpoints)
-        self._target_audience = dataprep_service_url if dataprep_service_url.startswith("https://") else None
+        # For internal Cloud Run services, no authentication needed
+        self._target_audience = None
         self.client = httpx.AsyncClient(base_url=dataprep_service_url, timeout=30.0)
 
     async def close(self):
@@ -100,7 +100,7 @@ async def get_process_folders(tenant_id: str) -> ProcessFoldersResponse:
 
     Proxies to service_dataprep.
     """
-    data = await dataprep_client._proxy_request("GET", "/process-folders", params={"tenant_id": tenant_id})
+    data = await dataprep_client._proxy_request("GET", "/folders", params={"tenant_id": tenant_id})
     return ProcessFoldersResponse(**data)
 
 
@@ -127,7 +127,7 @@ async def get_verification_images(tenant_id: str) -> VerificationImagesResponse:
 
     Proxies to service_dataprep.
     """
-    data = await dataprep_client._proxy_request("GET", "/verification-images", params={"tenant_id": tenant_id})
+    data = await dataprep_client._proxy_request("GET", "/verify", params={"tenant_id": tenant_id})
     return VerificationImagesResponse(**data)
 
 
@@ -140,7 +140,7 @@ async def record_response(request: RecordResponseRequest, tenant_id: str) -> Rec
     """
     data = await dataprep_client._proxy_request(
         "POST",
-        "/record-response",
+        "/respond",
         json={"decision": request.decision},
         params={"tenant_id": tenant_id}
     )
