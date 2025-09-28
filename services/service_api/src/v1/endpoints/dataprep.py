@@ -45,11 +45,11 @@ class DataPrepClient:
 
         if explicit_url:
             dataprep_service_url = explicit_url.rstrip("/")
-            self._target_audience = explicit_url.rstrip("/")  # Need authentication for explicit URL too
+            self._target_audience = dataprep_service_url  # Use ID token for external URLs
         else:
             # Use internal Cloud Run service URL with proper authentication
             dataprep_service_url = "https://laxai-service-dataprep-517529966392.us-central1.run.app"
-            self._target_audience = dataprep_service_url
+            self._target_audience = dataprep_service_url  # Required for internal service authentication
 
         self.base_url = dataprep_service_url
         self.client = httpx.AsyncClient(base_url=dataprep_service_url, timeout=30.0)
