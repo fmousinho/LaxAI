@@ -54,8 +54,7 @@ steps:
       - "--port=8080"
       - "--service-account=${_SERVICE_ACCOUNT}"
       - "--set-env-vars=GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT},PYTHONUNBUFFERED=1"
-      - "--ingress=internal"
-      - "--allow-unauthenticated"
+      - "--ingress=all"
       - "--quiet"
 
 images:

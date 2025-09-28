@@ -6,11 +6,12 @@ FROM pytorch/pytorch:2.3.1-cuda12.1-cudnn8-runtime AS base
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    TZ=UTC
 
 # Install system dependencies
-RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive TZ=America/New_York apt-get install -y \
+RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
     python3-opencv \
