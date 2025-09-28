@@ -488,6 +488,21 @@ class TrackGeneratorPipeline(Pipeline):
 
         return formatted_results
 
+    async def _save_detections_async(self, detections_path: str, detections_data: List) -> None:
+        """
+        Save detections asynchronously without blocking the main processing flow.
+        
+        Args:
+            detections_path: GCS path where to save the detections
+            detections_data: List of detections to save
+        """
+        try:
+            from shared_libs.common.detection_utils import save_all_detections
+            save_all_detections(self.tenant_storage, detections_path, detections_data, extra_metadata=None)
+            logger.debug(f"Asynchronously saved detections to {detections_path}")
+        except Exception as e:
+            logger.error(f"Failed to save detections asynchronously to {detections_path}: {e}")
+
     def stop(self) -> bool:
         """
         Stop this pipeline instance gracefully.
@@ -727,6 +742,9 @@ class TrackGeneratorPipeline(Pipeline):
                                 upload_tasks.append(upload_task)
                                 batch_counter += 1
                                 
+                                # Save detections asynchronously (non-blocking)
+                                asyncio.create_task(self._save_detections_async(detections_path, all_detections.copy()))
+                                
                                 # Yield control so the newly created batch task can start
                                 await asyncio.sleep(0)
 
@@ -798,12 +816,8 @@ class TrackGeneratorPipeline(Pipeline):
                 
                 logger.info(f"All crop upload batches completed")
             
-            detections_blob_name = self.path_manager.get_path("detections_path", video_id=video_guid)
-            if not detections_blob_name:
-                logger.error("Unable to determine detections blob name for saving")
-                return {"status": StepStatus.ERROR.value, "error": "Unable to determine detections blob name for saving"}
-            else:
-                save_all_detections(self.tenant_storage, detections_blob_name, all_detections, extra_metadata=None)
+            # Save final detections asynchronously (non-blocking)
+            asyncio.create_task(self._save_detections_async(detections_path, all_detections))
 
             logger.info(f"Player detection completed for video {video_guid} - {detections_count} detections found across {len(all_detections)} frames")
 
