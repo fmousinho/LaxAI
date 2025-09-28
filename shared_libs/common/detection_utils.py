@@ -110,7 +110,7 @@ def save_all_detections(storage_client, blob_name: str, detections_list: List[De
     """Serialize and upload a list of Detections objects as a single summary JSON.
 
     Args:
-        storage_client: Object exposing upload_from_bytes(destination, bytes)
+        storage_client: Object exposing upload_from_bytes(destination, data)
         blob_name: Target blob path (should end with .json)
         detections_list: List of sv.Detections across frames
         extra_metadata: Optional additional key-values to append to summary
@@ -124,8 +124,7 @@ def save_all_detections(storage_client, blob_name: str, detections_list: List[De
                 'xyxy': [], 'confidence': [], 'class_id': [], 'tracker_id': [],
                 'frame_index': [], 'data': {}, 'total_frames': 0, 'total_detections': 0
             }
-            payload = json.dumps(empty_summary).encode('utf-8')
-            return storage_client.upload_from_bytes(blob_name, payload)
+            return storage_client.upload_from_bytes(blob_name, empty_summary)
 
         # Before merging, some sv.Detections implementations require identical data keys across
         # all objects. Our tests deliberately remove frame_index on one object to verify fallback
@@ -168,8 +167,7 @@ def save_all_detections(storage_client, blob_name: str, detections_list: List[De
             merged = Detections.merge(detections_list)
 
         summary = _detections_to_summary_dict(merged, detections_list, extra_metadata)
-        payload = json.dumps(summary).encode('utf-8')
-        return storage_client.upload_from_bytes(blob_name, payload)
+        return storage_client.upload_from_bytes(blob_name, summary)
     except Exception as e:  # pragma: no cover - defensive logging
         logger.error(f"Failed to save all detections to {blob_name}: {e}")
         return False

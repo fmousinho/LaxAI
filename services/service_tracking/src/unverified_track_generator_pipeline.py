@@ -210,7 +210,7 @@ class TrackGeneratorPipeline(Pipeline):
                  config: DetectionConfig, 
                  tenant_id: str, 
                  verbose: bool = True, 
-                 save_intermediate: bool = True, 
+                 save_intermediate: bool = False, 
                  enable_grass_mask: bool = model_config.enable_grass_mask, 
                  delete_process_folder: bool = True, 
                  task_id: Optional[str] = None,
@@ -624,6 +624,11 @@ class TrackGeneratorPipeline(Pipeline):
         
         try:
             logger.info(f"Starting player detection for video: {video_guid}")
+
+            detections_path = self.path_manager.get_path("detections_path", video_id=video_guid)
+            if not detections_path:
+                logger.error("Could not determine detections path. Aborting.")
+                return {"status": StepStatus.ERROR.value, "error": "Could not determine detections path"}
             
             # Process all frames in the video
             detections_count = 0
@@ -721,6 +726,7 @@ class TrackGeneratorPipeline(Pipeline):
                                 logger.debug(f"Upload batch task {upload_task} created for batch {batch_counter}")
                                 upload_tasks.append(upload_task)
                                 batch_counter += 1
+                                
                                 # Yield control so the newly created batch task can start
                                 await asyncio.sleep(0)
 
@@ -792,13 +798,12 @@ class TrackGeneratorPipeline(Pipeline):
                 
                 logger.info(f"All crop upload batches completed")
             
-            # Save detections using shared utility in process_folder
-            process_folder_path = self.path_manager.get_path("process_folder", video_id=video_guid)
-            if process_folder_path:
-                detections_blob_name = f"{process_folder_path.rstrip('/')}/detections.json"
+            detections_blob_name = self.path_manager.get_path("detections_path", video_id=video_guid)
+            if not detections_blob_name:
+                logger.error("Unable to determine detections blob name for saving")
+                return {"status": StepStatus.ERROR.value, "error": "Unable to determine detections blob name for saving"}
             else:
-                raise RuntimeError("Unable to determine process folder path for detections")
-            save_all_detections(self.tenant_storage, detections_blob_name, all_detections, extra_metadata=None)
+                save_all_detections(self.tenant_storage, detections_blob_name, all_detections, extra_metadata=None)
 
             logger.info(f"Player detection completed for video {video_guid} - {detections_count} detections found across {len(all_detections)} frames")
 

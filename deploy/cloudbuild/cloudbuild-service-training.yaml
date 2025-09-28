@@ -11,6 +11,7 @@
 
 substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"
+  _SERVICE_ACCOUNT: "service-training@laxai-466119.iam.gserviceaccount.com"
 
 steps:
   # Build the service training image
@@ -30,6 +31,7 @@ steps:
     args:
       - "push"
       - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-training:latest"
+      - "--service-account=${_SERVICE_ACCOUNT}"
 
 images:
   - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-training:latest"
