@@ -204,10 +204,13 @@ def load_all_detections_summary(summary_json: Dict[str, Any]) -> Detections:
         frame_index = summary_json.get('frame_index', [])
         if frame_index:
             data_field = dict(data_field)  # shallow copy
-            data_field['frame_index'] = frame_index
+            data_field['frame_index'] = np.array(frame_index, dtype=int)
         # Ensure data_field is a dict[str, list|ndarray]
         if not isinstance(data_field, dict):
             data_field = {}
+        # Cast to expected type to satisfy type checker
+        from typing import cast, Dict, Union, List
+        data_field = cast(Dict[str, Union[np.ndarray, List]], data_field)
         det = Detections(
             xyxy=xyxy,
             class_id=class_id,
@@ -492,9 +495,14 @@ def load_serialized_detections(serialized_json: Dict[str, Any]) -> Detections:
         class_id = np.array(class_id_list, dtype=int) if class_id_list else None
         confidence = np.array(confidence_list, dtype=np.float32) if confidence_list else None
         tracker_id = np.array(tracker_id_list, dtype=int) if tracker_id_list else None
+        frame_index_array = np.array(frame_index_list, dtype=int) if frame_index_list else np.array([], dtype=int)
 
-        # Create data dict with frame_index as list
-        data_field = {'frame_index': frame_index_list}
+        # Create data dict with frame_index as numpy array
+        data_field = {'frame_index': frame_index_array}
+
+        # Cast to expected type to satisfy type checker
+        from typing import cast, Dict, Union, List
+        data_field = cast(Dict[str, Union[np.ndarray, List]], data_field)
 
         det = Detections(
             xyxy=xyxy,
