@@ -94,7 +94,10 @@ class DataPrepManager:
             
             import json
             detections_json = json.loads(detections_json_text)
+            
+            # Load detections - the loader automatically handles different formats
             detections = load_all_detections_summary(detections_json)
+            logger.info("Successfully loaded detections")
 
             # Check for existing saved graph
             existing_graph = None

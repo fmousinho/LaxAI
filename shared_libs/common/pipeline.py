@@ -551,7 +551,21 @@ class Pipeline:
 
         # Handle supervision.Detections objects
         if hasattr(obj, "xyxy") and hasattr(obj, "confidence"):
-            return f"<supervision_detections_object_len_{len(obj) if hasattr(obj, '__len__') else 'unknown'}>"
+            # Return dict representation for serialization
+            result = {}
+            if hasattr(obj, 'xyxy') and obj.xyxy is not None:
+                result['xyxy'] = obj.xyxy.tolist() if hasattr(obj.xyxy, 'tolist') else obj.xyxy
+            if hasattr(obj, 'confidence') and obj.confidence is not None:
+                result['confidence'] = obj.confidence.tolist() if hasattr(obj.confidence, 'tolist') else obj.confidence
+            if hasattr(obj, 'class_id') and obj.class_id is not None:
+                result['class_id'] = obj.class_id.tolist() if hasattr(obj.class_id, 'tolist') else obj.class_id
+            if hasattr(obj, 'tracker_id') and obj.tracker_id is not None:
+                result['tracker_id'] = obj.tracker_id.tolist() if hasattr(obj.tracker_id, 'tolist') else obj.tracker_id
+            if hasattr(obj, 'data') and obj.data:
+                result['data'] = self._make_json_serializable(obj.data)
+            if hasattr(obj, 'metadata') and obj.metadata:
+                result['metadata'] = self._make_json_serializable(obj.metadata)
+            return result
 
         # Handle dictionaries
         if isinstance(obj, dict):

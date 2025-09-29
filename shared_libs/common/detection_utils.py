@@ -176,6 +176,8 @@ def save_all_detections(storage_client, blob_name: str, detections_list: List[De
 def load_all_detections_summary(summary_json: Dict[str, Any]) -> Detections:
     """Load a merged summary JSON (created by save_all_detections) back into a Detections object.
 
+    Also handles the serialized format where 'all_detections' contains serialized detection strings.
+
     Note: frame_index is preserved in the returned object's data as 'frame_index'.
 
     Args:
@@ -185,6 +187,12 @@ def load_all_detections_summary(summary_json: Dict[str, Any]) -> Detections:
         Detections: Single merged detection object representing all rows.
     """
     try:
+        # Check if this is the serialized format (has 'all_detections' with strings)
+        if 'all_detections' in summary_json and isinstance(summary_json['all_detections'], list):
+            # This is the serialized format - delegate to the specialized loader
+            return load_serialized_detections(summary_json)
+
+        # Original summary format handling
         xyxy = np.array(summary_json.get('xyxy', []), dtype=np.float32) if summary_json.get('xyxy') else np.empty((0,4), dtype=np.float32)
         class_id_raw = summary_json.get('class_id', [])
         class_id = np.array(class_id_raw, dtype=int) if class_id_raw else None
@@ -405,3 +413,97 @@ def load_detections_from_json(
         logger.info("Tracker state updated with loaded detections.")
 
     return detections_list
+
+
+def load_serialized_detections(serialized_json: Dict[str, Any]) -> Detections:
+    """Load detections from serialized format where all_detections contains JSON strings.
+
+    This handles the format where tracking service saves individual serialized detection objects
+    instead of the merged summary format.
+
+    Args:
+        serialized_json: Parsed JSON dict with 'all_detections' containing serialized strings
+
+    Returns:
+        Detections: Single merged detection object representing all rows.
+    """
+    try:
+        import json
+        all_detections = serialized_json.get('all_detections', [])
+        if not all_detections:
+            return Detections.empty()
+
+        # Parse each serialized detection
+        parsed_detections = []
+        for serialized_str in all_detections:
+            if isinstance(serialized_str, str):
+                # Check if it's the old format (length-only strings)
+                if serialized_str.startswith('<supervision_detections_object_len_'):
+                    # Old format - can't deserialize, skip
+                    continue
+                else:
+                    # Try to parse as JSON
+                    try:
+                        det_dict = json.loads(serialized_str)
+                        parsed_detections.append(det_dict)
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to parse serialized detection: {e}")
+                        continue
+            elif isinstance(serialized_str, dict):
+                # Already a dict
+                parsed_detections.append(serialized_str)
+            else:
+                continue
+
+        if not parsed_detections:
+            return Detections.empty()
+
+        # Extract arrays from all detections
+        xyxy_list = []
+        confidence_list = []
+        class_id_list = []
+        tracker_id_list = []
+        frame_index_list = []
+
+        for det_dict in parsed_detections:
+            xyxy = det_dict.get('xyxy', [])
+            confidence = det_dict.get('confidence', [])
+            class_id = det_dict.get('class_id', [])
+            tracker_id = det_dict.get('tracker_id', [])
+            data = det_dict.get('data', {})
+
+            # Handle frame_index from data
+            frame_index = data.get('frame_index', [])
+            if isinstance(frame_index, list) and len(frame_index) > 0:
+                frame_index_val = frame_index[0]  # Assume all detections in frame have same index
+            else:
+                frame_index_val = -1
+
+            # Extend lists
+            xyxy_list.extend(xyxy)
+            confidence_list.extend(confidence)
+            class_id_list.extend(class_id)
+            if tracker_id:
+                tracker_id_list.extend(tracker_id)
+            frame_index_list.extend([frame_index_val] * len(xyxy))
+
+        # Convert to numpy arrays
+        xyxy = np.array(xyxy_list, dtype=np.float32) if xyxy_list else np.empty((0, 4), dtype=np.float32)
+        class_id = np.array(class_id_list, dtype=int) if class_id_list else None
+        confidence = np.array(confidence_list, dtype=np.float32) if confidence_list else None
+        tracker_id = np.array(tracker_id_list, dtype=int) if tracker_id_list else None
+
+        # Create data dict with frame_index as list
+        data_field = {'frame_index': frame_index_list}
+
+        det = Detections(
+            xyxy=xyxy,
+            class_id=class_id,
+            confidence=confidence,
+            tracker_id=tracker_id,
+            data=data_field
+        )
+        return det
+    except Exception as e:  # pragma: no cover
+        logger.error(f"Failed to load serialized detections: {e}")
+        return Detections.empty()
