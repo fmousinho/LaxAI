@@ -9,7 +9,7 @@
 
 substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"
-  _SERVICE_ACCOUNT: "function-proxy-tracking@appspot.gserviceaccount.com"
+  _SERVICE_ACCOUNT: "function-proxy-tracking@laxai-466119.iam.gserviceaccount.com"
   _FUNCTION_NAME: "laxai-tracking-proxy"
   _REGION: "us-central1"
 
@@ -49,7 +49,7 @@ steps:
       - "--memory=512MB"
       - "--timeout=540s"
       - "--max-instances=10"
-      - "--ingress=internal"
+      - "--ingress-settings=internal-only"
       - "--quiet"
 
 options:

@@ -70,6 +70,12 @@ class DataPrepManager:
             True if successfully started, False otherwise
         """
         try:
+            # Clean up the process folder name by removing .mp4 extension if present
+            if process_folder.endswith('.mp4/'):
+                process_folder = process_folder[:-5] + '/'  # Remove '.mp4/'
+            elif process_folder.endswith('.mp4'):
+                process_folder = process_folder[:-4]  # Remove '.mp4'
+            
             # Get the detections.json path
             detections_path = self.path_manager.get_path(
                 "detections_path",
