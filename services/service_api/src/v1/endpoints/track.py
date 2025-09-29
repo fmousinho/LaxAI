@@ -270,9 +270,8 @@ async def get_tracking_progress(task_id: str):
 async def stream_tracking_progress(task_id: str):
     """
     Server-Sent Events endpoint for real-time progress updates.
-    
-    Returns a stream of progress updates that can be consumed by any client
-    without requiring GCP authentication.
+
+    Returns a stream of progress updates for authenticated clients.
     """
     async def generate():
         try:
