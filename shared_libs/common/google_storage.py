@@ -32,7 +32,6 @@ from google.cloud import storage
 from google.cloud.exceptions import Forbidden, NotFound
 from google.cloud.storage import Blob
 from google.oauth2 import service_account
-from shared_libs.common.detection_serialization import serialize_detections
 
 from shared_libs.common.detection_format import Detections
 from shared_libs.config.all_config import google_storage_config
@@ -467,12 +466,6 @@ class GoogleStorageClient:
                     logger.error(f"Invalid image data type for {destination_blob_name}: {type(data)}")
                     return False
 
-            elif isinstance(data, Detections):
-                # Serialize detections using lightweight helper (no supervision dependency)
-                json_string = serialize_detections(data)
-                blob.upload_from_string(json_string, content_type="application/json")
-                return True
-
             elif destination_blob_name.endswith(".json"):
                 json_bytes = json.dumps(data).encode("utf-8")
                 content_type = content_type or "application/json"
@@ -506,6 +499,9 @@ class GoogleStorageClient:
             blob.download_to_filename(destination_file_path)
             logger.debug(f"Blob {source_blob_name} downloaded to {destination_file_path}")
             return True
+        except NotFound:
+            logger.info(f"Blob {source_blob_name} not found (404)")
+            return False
         except Exception as e:
             logger.error(f"Failed to download blob: {e}")
             return False
@@ -550,6 +546,9 @@ class GoogleStorageClient:
 
             return content
 
+        except NotFound:
+            logger.info(f"Blob {source_blob_name} not found (404)")
+            return None
         except Exception as e:
             logger.error(f"Failed to download blob as bytes: {e}")
             return None
@@ -572,6 +571,9 @@ class GoogleStorageClient:
             content = blob.download_as_text()
             logger.info(f"Blob {source_blob_name} downloaded as string")
             return content
+        except NotFound:
+            logger.info(f"Blob {source_blob_name} not found (404)")
+            return None
         except Exception as e:
             logger.error(f"Failed to download blob as string: {e}")
             return None

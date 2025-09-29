@@ -12,9 +12,15 @@ class DummyStorageClient:
     def __init__(self):
         self.uploads = {}
 
-    def upload_from_bytes(self, destination_blob_name: str, data: bytes, content_type=None):  # noqa: D401
+    def upload_from_bytes(self, destination_blob_name: str, data, content_type=None):  # noqa: D401
         # Simulate GCS upload. Store raw bytes for later inspection.
-        self.uploads[destination_blob_name] = data
+        # Handle both bytes and dict data (like real GoogleStorageClient)
+        if destination_blob_name.endswith(".json") and isinstance(data, dict):
+            import json
+            json_bytes = json.dumps(data).encode("utf-8")
+            self.uploads[destination_blob_name] = json_bytes
+        else:
+            self.uploads[destination_blob_name] = data
         return True
 
 
