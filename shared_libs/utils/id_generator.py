@@ -36,6 +36,11 @@ def create_video_id(video_path: Optional[Any] = None) -> str:
         # Split on both forward and backward slashes and take the last non-empty part
         parts = video_path.replace('\\', '/').split('/')
         filename = [part for part in parts if part][-1] if parts else video_path
+        # Trim whitespace from the filename to avoid issues with leading/trailing spaces
+        filename = filename.strip()
+        # Remove .mp4 extension if present
+        if filename.lower().endswith('.mp4'):
+            filename = filename[:-4]
         return filename
     else:
         return f"video_{uuid.uuid4().hex[:8]}"

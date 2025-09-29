@@ -79,9 +79,12 @@ class DataPrepManager:
                 raise ValueError(f"Invalid detections path: {detections_path}")
 
             # Load detections from GCS
+            logger.info(f"Attempting to download detections from: {detections_path}")
             detections_json_text = self.storage.download_as_string(detections_path)
             if detections_json_text is None:
-                raise ValueError(f"Could not download detections from {detections_path}")
+                raise ValueError(f"Could not download detections from {detections_path}. "
+                               f"Please ensure the video has been processed by the tracking service first. "
+                               f"Check that the process_folder name exactly matches the folder in GCS.")
             
             import json
             detections_json = json.loads(detections_json_text)
