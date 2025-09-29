@@ -60,8 +60,8 @@ async def save_all_active_graphs():
     
     for tenant_id, manager in _managers.items():
         try:
-            if manager.stitcher is not None and manager.current_process_folder is not None:
-                logger.info(f"Saving graph for tenant {tenant_id}, process folder {manager.current_process_folder}")
+            if manager.stitcher is not None and manager.current_video_id is not None:
+                logger.info(f"Saving graph for tenant {tenant_id}, video {manager.current_video_id}")
                 if manager.save_graph():
                     saved_count += 1
                     logger.info(f"Successfully saved graph for tenant {tenant_id}")
@@ -122,15 +122,15 @@ async def start_prep(request: StartPrepRequest, tenant_id: str) -> StartPrepResp
     """
     try:
         manager = get_manager(tenant_id)
-        success = manager.start_prep(request.process_folder)
+        success = manager.start_prep(request.video_id)
 
         if success:
-            return StartPrepResponse(success=True, message=f"Started verification session for {request.process_folder}")
+            return StartPrepResponse(success=True, message=f"Started verification session for {request.video_id}")
         else:
-            return StartPrepResponse(success=False, message=f"Failed to start session for {request.process_folder}")
+            return StartPrepResponse(success=False, message=f"Failed to start session for {request.video_id}")
 
     except Exception as e:
-        logger.error(f"Failed to start prep for tenant {tenant_id}, folder {request.process_folder}: {e}")
+        logger.error(f"Failed to start prep for tenant {tenant_id}, folder {request.video_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to start verification session: {str(e)}")
 
 

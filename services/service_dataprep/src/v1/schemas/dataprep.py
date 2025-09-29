@@ -18,12 +18,12 @@ class ProcessFoldersResponse(BaseModel):
 class StartPrepRequest(BaseModel):
     """Request model for starting a verification session."""
 
-    process_folder: str = Field(..., description="Process folder name (video ID) to start verification for")
+    video_id: str = Field(..., description="Video ID to start verification for (can be full path, filename with .mp4, or filename without extension)")
 
     class Config:
         json_schema_extra = {
             "example": {
-                "process_folder": "video_001"
+                "video_id": "GRIT Dallas-Houston 2027 vs Capital 2027 Orange - 9-00am_summary"
             }
         }
 

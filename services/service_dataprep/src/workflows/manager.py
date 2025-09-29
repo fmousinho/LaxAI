@@ -34,7 +34,7 @@ class DataPrepManager:
         self.path_manager = GCSPaths()
         self.storage = get_storage(tenant_id)
         self.stitcher: Optional[TrackStitcher] = None
-        self.current_process_folder: Optional[str] = None
+        self.current_video_id: Optional[str] = None
 
     def get_process_folders(self) -> List[str]:
         """
@@ -59,38 +59,64 @@ class DataPrepManager:
             logger.error(f"Failed to list process folders for tenant {self.tenant_id}: {e}")
             return []
 
-    def start_prep(self, process_folder: str) -> bool:
+    def start_prep(self, video_id: str) -> bool:
         """
-        Start a track stitching verification session for a process folder.
+        Start a track stitching verification session for a video.
 
         Args:
-            process_folder: The process folder name (video ID)
+            video_id: The video ID (can be full path, filename with .mp4, or filename without extension)
 
         Returns:
             True if successfully started, False otherwise
         """
         try:
-            # Clean up the process folder name by removing .mp4 extension if present
-            if process_folder.endswith('.mp4/'):
-                process_folder = process_folder[:-5] + '/'  # Remove '.mp4/'
-            elif process_folder.endswith('.mp4'):
-                process_folder = process_folder[:-4]  # Remove '.mp4'
+            # Normalize the video_id by removing .mp4 extension if present
+            if video_id.endswith('.mp4/'):
+                video_id = video_id[:-5] + '/'  # Remove '.mp4/'
+            elif video_id.endswith('.mp4'):
+                video_id = video_id[:-4]  # Remove '.mp4'
+            
+            # Check if video file exists in the imported_video path
+            imported_video_path = self.path_manager.get_path(
+                "imported_video",
+                video_id=video_id
+            )
+            if type(imported_video_path) is not str:
+                logger.error(f"Invalid imported video path: {imported_video_path}")
+                return False
+            
+            # List files in the imported_video directory to check for video file
+            try:
+                blobs = self.storage.list_blobs(prefix=imported_video_path)
+                video_files = [blob.name for blob in blobs if blob.name.endswith('.mp4')]
+                if not video_files:
+                    logger.error(f"No video file found in {imported_video_path}. Expected a .mp4 file.")
+                    return False
+                elif len(video_files) > 1:
+                    logger.warning(f"Multiple video files found in {imported_video_path}, using first: {video_files[0]}")
+                video_file_path = video_files[0]
+                logger.info(f"Found video file: {video_file_path}")
+            except Exception as e:
+                logger.error(f"Failed to check for video file in {imported_video_path}: {e}")
+                return False
             
             # Get the detections.json path
             detections_path = self.path_manager.get_path(
                 "detections_path",
-                video_id=process_folder
+                video_id=video_id
             )
             if type(detections_path) is not str:
-                raise ValueError(f"Invalid detections path: {detections_path}")
+                logger.error(f"Invalid detections path: {detections_path}")
+                return False
 
             # Load detections from GCS
             logger.info(f"Attempting to download detections from: {detections_path}")
             detections_json_text = self.storage.download_as_string(detections_path)
             if detections_json_text is None:
-                raise ValueError(f"Could not download detections from {detections_path}. "
-                               f"Please ensure the video has been processed by the tracking service first. "
-                               f"Check that the process_folder name exactly matches the folder in GCS.")
+                logger.error(f"Could not download detections from {detections_path}. "
+                           f"Please ensure the video has been processed by the tracking service first. "
+                           f"Check that the video_id '{video_id}' is correct.")
+                return False
             
             import json
             detections_json = json.loads(detections_json_text)
@@ -103,7 +129,7 @@ class DataPrepManager:
             existing_graph = None
             saved_graph_path = self.path_manager.get_path(
                 "saved_graph",
-                video_id=process_folder
+                video_id=video_id
             )
             
             if saved_graph_path is not None:
@@ -123,13 +149,13 @@ class DataPrepManager:
 
             # Create the stitcher
             self.stitcher = TrackStitcher(detections=detections, existing_graph=existing_graph)
-            self.current_process_folder = process_folder
+            self.current_video_id = video_id
 
-            logger.info(f"Started prep session for process folder: {process_folder}")
+            logger.info(f"Started prep session for video: {video_id}")
             return True
 
         except Exception as e:
-            logger.error(f"Failed to start prep for {process_folder}: {e}")
+            logger.error(f"Failed to start prep for {video_id}: {e}")
             return False
 
     def get_images_for_verification(self) -> Dict[str, Any]:
@@ -147,8 +173,8 @@ class DataPrepManager:
         if self.stitcher is None:
             return {"status": "error", "message": "No active stitcher session"}
 
-        if self.current_process_folder is None:
-            return {"status": "error", "message": "No current process folder"}
+        if self.current_video_id is None:
+            return {"status": "error", "message": "No current video"}
 
         try:
             result = self.stitcher.get_pair_for_verification()
@@ -213,7 +239,7 @@ class DataPrepManager:
         Returns:
             List of GCS prefixes for the tracks in the group
         """
-        if self.stitcher is None or self.current_process_folder is None:
+        if self.stitcher is None or self.current_video_id is None:
             return []
 
         # Get the tracks for this group
@@ -224,7 +250,7 @@ class DataPrepManager:
             # Get the unverified_tracks path for this track
             prefix = self.path_manager.get_path(
                 "unverified_tracks",
-                video_id=self.current_process_folder,
+                video_id=self.current_video_id,
                 track_id=track_id
             )
             prefixes.append(prefix)
@@ -242,8 +268,8 @@ class DataPrepManager:
             logger.error("No active stitcher session to save")
             return False
 
-        if self.current_process_folder is None:
-            logger.error("No current process folder set")
+        if self.current_video_id is None:
+            logger.error("No current video set")
             return False
 
         import tempfile
@@ -264,7 +290,7 @@ class DataPrepManager:
             # Get the GCS path for the saved graph
             gcs_path = self.path_manager.get_path(
                 "saved_graph",
-                video_id=self.current_process_folder
+                video_id=self.current_video_id
             )
 
             if gcs_path is None:
@@ -300,8 +326,8 @@ class DataPrepManager:
             logger.error("No active stitcher session to visualize")
             return False
 
-        if self.current_process_folder is None:
-            logger.error("No current process folder set")
+        if self.current_video_id is None:
+            logger.error("No current video set")
             return False
 
         import tempfile
@@ -325,7 +351,7 @@ class DataPrepManager:
             # Get the GCS path for the graph image
             gcs_path = self.path_manager.get_path(
                 "track_graph_image",
-                video_id=self.current_process_folder
+                video_id=self.current_video_id
             )
 
             if gcs_path is None:
@@ -373,12 +399,12 @@ class DataPrepManager:
             logger.error("No active stitcher session")
             return False
 
-        if self.current_process_folder is None:
-            logger.error("No current process folder set")
+        if self.current_video_id is None:
+            logger.error("No current video set")
             return False
 
         try:
-            logger.info(f"Starting crop migration for video {self.current_process_folder}")
+            logger.info(f"Starting crop migration for video {self.current_video_id}")
             moved_count = 0
             failed_count = 0
 
@@ -393,7 +419,7 @@ class DataPrepManager:
                     # Get the unverified_tracks path for this track
                     unverified_prefix = self.path_manager.get_path(
                         "unverified_tracks",
-                        video_id=self.current_process_folder,
+                        video_id=self.current_video_id,
                         track_id=track_id
                     )
                     
@@ -414,7 +440,7 @@ class DataPrepManager:
                 # Move all collected crops to the verified_tracks/{group_id}/ folder
                 verified_prefix = self.path_manager.get_path(
                     "verified_tracks",
-                    video_id=self.current_process_folder,
+                    video_id=self.current_video_id,
                     track_id=group_id
                 )
                 

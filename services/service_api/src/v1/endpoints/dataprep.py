@@ -47,9 +47,9 @@ class DataPrepClient:
             dataprep_service_url = explicit_url.rstrip("/")
             self._target_audience = dataprep_service_url  # Use ID token for external URLs
         else:
-            # Use internal Cloud Run service URL with proper authentication
-            dataprep_service_url = "https://laxai-service-dataprep-517529966392.us-central1.run.app"
-            self._target_audience = dataprep_service_url  # Required for internal service authentication
+            # Use external Cloud Run service URL with proper authentication
+            dataprep_service_url = "https://laxai-service-dataprep-kfccnooita-uc.a.run.app"
+            self._target_audience = dataprep_service_url  # Required for external service authentication
 
         self.base_url = dataprep_service_url
         self.client = httpx.AsyncClient(base_url=dataprep_service_url, timeout=30.0)
@@ -116,7 +116,7 @@ async def start_prep(request: StartPrepRequest, tenant_id: str) -> StartPrepResp
     data = await dataprep_client._proxy_request(
         "POST",
         "/start",
-        json={"process_folder": request.process_folder},
+        json={"video_id": request.video_id},
         params={"tenant_id": tenant_id}
     )
     return StartPrepResponse(**data)
