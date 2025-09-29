@@ -180,12 +180,12 @@ class TestGCSVideoDiscovery:
             ]
 
     @pytest.mark.integration
-    def test_gcs_connectivity_tenant1_mp4_videos(self):
-        """Integration test that connects to GCS and verifies tenant1 has exactly 1 mp4 video."""
+    def test_gcs_connectivity_test_tenant_mp4_videos(self):
+        """Integration test that connects to GCS and verifies test-tenant has exactly 1 mp4 video."""
         # This test makes real GCS calls - ensure credentials are available
         try:
-            # Get real GCS storage client for tenant1
-            storage = get_storage("tenant1")
+            # Get real GCS storage client for test-tenant
+            storage = get_storage("test-tenant")
 
             # Get path manager
             path_manager = GCSPaths()

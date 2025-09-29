@@ -35,7 +35,7 @@ def test_cancel_via_web_api_endpoint():
     # Create a training job with minimal parameters
     training_request = {
         "custom_name": "test_cancel_job",
-        "tenant_id": "tenant1",
+        "tenant_id": "test-tenant",
         "resume_from_checkpoint": False,
         "training_params": {
             # Value unused by patched train; keep small
@@ -281,7 +281,7 @@ mock_training_service = MockTrainingService()
 
 class DummyRequest:
     """Minimal request object with attribute access and model_dump()."""
-    def __init__(self, tenant_id: str = "tenant1", n_datasets_to_use: Optional[int] = None):
+    def __init__(self, tenant_id: str = "test-tenant", n_datasets_to_use: Optional[int] = None):
         """Initialize DummyRequest with default test values."""
         self.tenant_id = tenant_id
         self.verbose = True
@@ -306,7 +306,7 @@ class DummyRequest:
         }
 
 
-def make_request_obj(tenant_id: str = "tenant1", n_datasets_to_use: Optional[int] = None):
+def make_request_obj(tenant_id: str = "test-tenant", n_datasets_to_use: Optional[int] = None):
     """Create a DummyRequest object with the specified parameters."""
     return DummyRequest(tenant_id=tenant_id, n_datasets_to_use=n_datasets_to_use)
 
@@ -604,7 +604,7 @@ def test_train_all_resnet_with_checkpoint_verification():
 
     try:
         results = train(
-            tenant_id="tenant1",
+            tenant_id="test-tenant",
             verbose=False,
             save_intermediate=False,
             custom_name=run_name,
@@ -658,7 +658,7 @@ def test_train_all_with_dino_memory_stable():
 
     try:
         results = train(
-            tenant_id="tenant1",
+            tenant_id="test-tenant",
             verbose=False,
             save_intermediate=False,
             custom_name="e2e_dino_1_epoch_single_dataset",
@@ -731,7 +731,7 @@ def test_convert_request_to_kwargs_includes_top_level_n_datasets():
     from training_service import _convert_request_to_kwargs  # type: ignore
 
     req = SimpleNamespace(
-        tenant_id="tenant1",
+        tenant_id="test-tenant",
         verbose=True,
         custom_name="run1",
         resume_from_checkpoint=True,
@@ -777,7 +777,7 @@ def test_checkpoint_resume():
 
     try:
         result = train(
-            tenant_id="tenant1",
+            tenant_id="test-tenant",
             verbose=False,
             custom_name="test_cancellation",
             resume_from_checkpoint=True,

@@ -273,21 +273,21 @@ async def stream_tracking_progress(task_id: str):
 
     Returns a stream of progress updates for authenticated clients.
     """
-    # First check if the job has started
-    status_manager = get_status_manager()
-    job_status = status_manager.get_tracking_job_status(task_id)
+    async def generate_progress_stream():
+        try:
+            db = firestore.Client()
+            status_manager = get_status_manager()
+            last_update = None
 
-    if job_status.get("status") == "not_started":
-        # Job hasn't started yet, send a message and keep the connection alive
-        # but don't start the expensive polling loop
-        async def generate_waiting():
-            try:
+            # First, check if job is not started and wait for it
+            job_status = status_manager.get_tracking_job_status(task_id)
+            if job_status.get("status") == "not_started":
                 # Send initial message that job hasn't started
                 yield f"data: {json.dumps({'status': 'waiting', 'message': 'Job is queued and has not started yet. Progress updates will begin when processing starts.'})}\n\n"
 
                 # Keep connection alive with periodic status checks
                 while True:
-                    await asyncio.sleep(5)  # Check every 5 seconds
+                    await asyncio.sleep(3)  # Check every 5 seconds
 
                     # Re-check job status
                     current_status = status_manager.get_tracking_job_status(task_id)
@@ -299,27 +299,7 @@ async def stream_tracking_progress(task_id: str):
                     # Send keep-alive message
                     yield f"data: {json.dumps({'status': 'waiting', 'message': 'Still waiting for job to start...'})}\n\n"
 
-            except Exception as e:
-                logger.error(f"Error in waiting stream for task {task_id}: {e}")
-                yield f"data: {json.dumps({'error': str(e)})}\n\n"
-
-        return StreamingResponse(
-            generate_waiting(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Cache-Control",
-            }
-        )
-
-    # Job has started or is in progress, proceed with normal progress streaming
-    async def generate():
-        try:
-            db = firestore.Client()
-            last_update = None
-
+            # Now proceed with normal progress streaming
             while True:
                 # Get latest progress
                 progress_doc = db.collection('tracking_progress').document(task_id).get()
@@ -347,7 +327,7 @@ async def stream_tracking_progress(task_id: str):
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
     return StreamingResponse(
-        generate(),
+        generate_progress_stream(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

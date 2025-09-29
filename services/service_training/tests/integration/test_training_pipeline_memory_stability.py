@@ -158,7 +158,7 @@ class TestTrainingPipelineMemoryStability:
         memory_monitor.measure("before_pipeline_creation")
 
         pipeline = TrainPipeline(
-            tenant_id='tenant1',
+            tenant_id='test-tenant',
             verbose=True,
             save_intermediate=False,
             pipeline_name='memory_test_2_epochs_single_dataset',
@@ -344,7 +344,7 @@ class TestTrainingPipelineMemoryStability:
 
         # Create pipeline
         pipeline = TrainPipeline(
-            tenant_id='tenant1',
+            tenant_id='test-tenant',
             n_datasets_to_use=1,
             num_epochs=2,
             verbose=False
