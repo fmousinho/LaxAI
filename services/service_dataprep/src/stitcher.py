@@ -4,7 +4,7 @@ import logging
 import numpy as np
 import networkx as nx
 
-from shared_libs.common.detection_format import Detections
+from supervision import Detections
 from shared_libs.config import logging_config  # Import logging configuration
 
 # Set up logger
