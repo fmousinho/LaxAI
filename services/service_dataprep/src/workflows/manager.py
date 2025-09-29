@@ -114,7 +114,7 @@ class DataPrepManager:
                         import networkx as nx
                         import io
                         # Load the graph from the downloaded data
-                        existing_graph = nx.read_graphml(io.StringIO(graph_data))
+                        existing_graph = nx.read_gml(io.StringIO(graph_data))
                         logger.info(f"Found existing saved graph, will resume from {saved_graph_path}")
                     else:
                         logger.info("No existing saved graph found, starting fresh")
@@ -251,11 +251,11 @@ class DataPrepManager:
 
         try:
             # Create a temporary file for the graph
-            with tempfile.NamedTemporaryFile(mode='w+', suffix='.graphml', delete=False) as temp_file:
+            with tempfile.NamedTemporaryFile(mode='w+', suffix='.gml', delete=False) as temp_file:
                 temp_filepath = temp_file.name
 
             # Save the graph to the temporary file
-            success = self.stitcher.save_graph(temp_filepath, format="graphml")
+            success = self.stitcher.save_graph(temp_filepath, format="gml")
             if not success:
                 logger.error("Failed to save graph to temporary file")
                 os.unlink(temp_filepath)

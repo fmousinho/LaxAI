@@ -19,6 +19,8 @@ class TestTrackStitcher:
             'frame_index': np.array([1, 2, 1, 2, 3, 4, 3, 4], dtype=np.int32),
             'tracker_id': np.array([1, 1, 2, 2, 3, 3, 4, 4], dtype=np.int32)
         }
+        # Set tracker_id as a direct attribute for the stitcher code
+        mock_dets.tracker_id = np.array([1, 1, 2, 2, 3, 3, 4, 4], dtype=np.int32)
         return mock_dets
 
     @pytest.fixture
