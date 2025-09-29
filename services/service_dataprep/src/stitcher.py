@@ -208,7 +208,7 @@ class TrackStitcher:
         """
         try:
             frame_indices = detections.data['frame_index']
-            track_ids = detections.data['tracker_id']
+            track_ids = detections.tracker_id
         except KeyError as e:
             raise ValueError(f"Detections data must include '{e.args[0]}' for each detection.")
 
