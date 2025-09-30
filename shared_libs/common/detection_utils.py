@@ -444,6 +444,29 @@ def load_serialized_detections(serialized_json: Dict[str, Any]) -> Detections:
                 if serialized_str.startswith('<supervision_detections_object_len_'):
                     # Old format - can't deserialize, skip
                     continue
+                elif serialized_str.startswith('Detections('):
+                    # This is a serialized Detections object repr string
+                    try:
+                        # Import required modules for eval
+                        import numpy as np
+                        from supervision import Detections
+                        
+                        # Safely evaluate the Detections repr
+                        det_obj = eval(serialized_str, {"__builtins__": {}, "array": np.array, "Detections": Detections, "float32": np.float32, "int64": np.int64, "int32": np.int32})
+                        
+                        # Convert to dict format for processing
+                        det_dict = {
+                            'xyxy': det_obj.xyxy,
+                            'confidence': det_obj.confidence,
+                            'class_id': det_obj.class_id,
+                            'tracker_id': getattr(det_obj, 'tracker_id', None),
+                            'data': getattr(det_obj, 'data', {}),
+                            'metadata': getattr(det_obj, 'metadata', {})
+                        }
+                        parsed_detections.append(det_dict)
+                    except Exception as e:
+                        logger.warning(f"Failed to parse serialized Detections object: {e}")
+                        continue
                 else:
                     # Try to parse as JSON
                     try:

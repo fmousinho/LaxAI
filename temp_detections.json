@@ -1,0 +1,1 @@
+{"all_detections": ["Detections(xyxy=array([[ 596.1562 ,  338.09634,  636.78204,  401.70578]], dtype=float32), mask=None, confidence=array([0.85196936], dtype=float32), class_id=array([3]), tracker_id=array([1]), data={'frame_index': [10]}, metadata={})"] }
