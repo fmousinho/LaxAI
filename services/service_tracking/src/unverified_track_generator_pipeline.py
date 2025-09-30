@@ -101,7 +101,7 @@ from shared_libs.common.pipeline import Pipeline, PipelineStatus
 from config.all_config import DetectionConfig, detection_config, model_config
 from utils.id_generator import create_video_id, create_run_id
 from shared_libs.common.tracker import AffineAwareByteTrack
-from shared_libs.common.detection_utils import detections_list_to_json
+from shared_libs.common.detection_utils import detections_to_json
 from shared_libs.common.track_to_player import map_detections_to_players
 
 logger = logging.getLogger(__name__)
@@ -489,7 +489,7 @@ class TrackGeneratorPipeline(Pipeline):
 
         return formatted_results
 
-    async def _save_detections_async(self, detections_path: str, detections_data: List) -> None:
+    async def _save_detections_async(self, detections_path: str, detections_data: sv.Detections) -> None:
         """
         Save detections asynchronously without blocking the main processing flow.
         
@@ -498,7 +498,7 @@ class TrackGeneratorPipeline(Pipeline):
             detections_data: List of detections to save
         """
         try:
-            json_data = detections_list_to_json(detections_data)
+            json_data = detections_to_json(detections_data)
             json_bytes = json.dumps(json_data).encode('utf-8')
             self.storage_client.upload_from_bytes(detections_path, json_bytes)
             logger.debug(f"Asynchronously saved detections to {detections_path}")
@@ -649,7 +649,7 @@ class TrackGeneratorPipeline(Pipeline):
             
             # Process all frames in the video
             detections_count = 0
-            all_detections = []
+            all_detections = sv.Detections.empty()
             get_crop_tasks = []  # Collect async crop processing tasks
             upload_tasks = []  # Track concurrent upload tasks
             batch_counter = 0  # Track batch numbers for logging
@@ -660,7 +660,7 @@ class TrackGeneratorPipeline(Pipeline):
             # Check for frame-level resume information in context
             resume_frame = context.get("resume_frame", 0)
             resume_detections_count = context.get("resume_detections_count", 0)
-            resume_all_detections = context.get("resume_all_detections", [])
+            resume_all_detections = context.get("resume_all_detections", sv.Detections.empty())
             resume_crop_paths = context.get("resume_crop_paths", [])
             
             if resume_frame > 0:
@@ -758,9 +758,9 @@ class TrackGeneratorPipeline(Pipeline):
                             detections.data['frame_index'] = [frame_number] * len(detections)
                         else:
                             detections.data['frame_index'] = []
-                        all_detections.append(detections)
+                        all_detections = sv.Detections.merge([all_detections, detections])
                         # Save detections asynchronously (non-blocking)
-                        asyncio.create_task(self._save_detections_async(detections_path, all_detections.copy()))
+                        asyncio.create_task(self._save_detections_async(detections_path, all_detections))
 
                     frame_number += 1
                     

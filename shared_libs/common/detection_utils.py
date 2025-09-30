@@ -14,7 +14,7 @@ from supervision import Detections
 logger = logging.getLogger(__name__)
 
 
-def detection_to_json(detection: Detections) -> Dict[str, Any]:
+def detection_to_json_single(detection: Detections) -> Dict[str, Any]:
     """Convert a Detections object to a JSON-serializable dictionary.
     
     Args:
@@ -65,7 +65,7 @@ def detection_to_json(detection: Detections) -> Dict[str, Any]:
         raise ValueError(f"Cannot serialize detection object: {e}")
 
 
-def json_to_detection(json_data: Dict[str, Any]) -> Detections:
+def json_to_detection_single(json_data: Dict[str, Any]) -> Detections:
     """Convert a JSON dictionary back to a Detections object.
     
     Args:
@@ -141,25 +141,32 @@ def json_to_detection(json_data: Dict[str, Any]) -> Detections:
         raise ValueError(f"Cannot deserialize JSON data to detection object: {e}")
 
 
-def detections_list_to_json(detections_list: List[Detections]) -> List[Dict[str, Any]]:
-    """Convert a list of Detections objects to a list of JSON-serializable dictionaries.
+def detections_to_json(detections: Detections) -> List[Dict[str, Any]]:
+    """Convert a Detections objects to a list of JSON-serializable dictionaries.
     
     Args:
-        detections_list: List of supervision Detections objects
-        
+        detections: A Supervision Detections object
+
     Returns:
         List of dictionaries that can be serialized to JSON
     """
-    return [detection_to_json(detection) for detection in detections_list]
+    if not detections or len(detections) == 0:
+        return []
+    elif len(detections) == 1:
+        return [detection_to_json_single(detections)]
+    else:
+        result = [detection_to_json_single(d) for d in detections] # type: ignore
+        return result
 
-
-def json_to_detections_list(json_list: List[Dict[str, Any]]) -> List[Detections]:
+def json_to_detections(json_list: List[Dict[str, Any]]) -> Detections:
     """Convert a list of JSON dictionaries back to a list of Detections objects.
     
     Args:
         json_list: List of dictionaries containing detection data
         
     Returns:
-        List of supervision Detections objects
+        Supervision  object
     """
-    return [json_to_detection(json_data) for json_data in json_list]
+    detections_list = [json_to_detection_single(json_data) for json_data in json_list]
+
+    return Detections.merge(detections_list) if detections_list else Detections.empty()

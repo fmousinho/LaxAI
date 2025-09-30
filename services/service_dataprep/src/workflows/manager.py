@@ -9,7 +9,7 @@ import logging
 from typing import List, Dict, Any, Optional
 
 from shared_libs.common.google_storage import GCSPaths, get_storage
-from shared_libs.common.detection_utils import load_all_detections_summary
+from shared_libs.common.detection_utils import json_to_detections
 from ..stitcher import TrackStitcher
 
 logger = logging.getLogger(__name__)
@@ -122,7 +122,7 @@ class DataPrepManager:
             detections_json = json.loads(detections_json_text)
             
             # Load detections - the loader automatically handles different formats
-            detections = load_all_detections_summary(detections_json)
+            detections = json_to_detections(detections_json)
             logger.info("Successfully loaded detections")
 
             # Check for existing saved graph

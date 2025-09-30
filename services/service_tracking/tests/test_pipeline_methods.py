@@ -79,10 +79,7 @@ class TestTrackGeneratorPipelineMethods:
         with patch('services.service_tracking.src.unverified_track_generator_pipeline.get_storage', return_value=mock_storage), \
              patch('services.service_tracking.src.unverified_track_generator_pipeline.GCSPaths', return_value=mock_path_manager), \
              patch('services.service_tracking.src.unverified_track_generator_pipeline.DetectionModel', return_value=mock_detection_model), \
-             patch('services.service_tracking.src.unverified_track_generator_pipeline.AffineAwareByteTrack', return_value=mock_tracker), \
-             patch('services.service_tracking.src.unverified_track_generator_pipeline.training_config') as mock_training_config:
-
-            mock_training_config.num_workers = 4  # Set a reasonable value for testing
+             patch('services.service_tracking.src.unverified_track_generator_pipeline.AffineAwareByteTrack', return_value=mock_tracker):
 
             pipeline = TrackGeneratorPipeline(
                 config=mock_config,

@@ -52,7 +52,7 @@ from config.all_config import (DetectionConfig, detection_config, model_config,
                                training_config)
 from PIL import Image
 from supervision import Detections
-from shared_libs.common.detection_utils import detections_list_to_json
+from shared_libs.common.detection_utils import detections_to_json
 from supervision.utils.image import crop_image
 
 from shared_libs.common.background_mask import (

@@ -154,7 +154,7 @@ class TestTrackGeneratorPipeline:
         # Test empty video path
         result = pipeline.run("")
         assert result["status"] == "error"
-        assert "No video path provided" in result["error"]
+        assert "resume_from_checkpoint is True but no video found in checkpoint context" in result["error"]
 
     @patch('services.service_tracking.src.unverified_track_generator_pipeline.get_storage')
     @patch('services.service_tracking.src.unverified_track_generator_pipeline.GCSPaths')
@@ -264,6 +264,6 @@ class TestTrackGeneratorPipeline:
 
         assert MIN_VIDEO_RESOLUTION == (1920, 1080)
         assert FRAME_SAMPLING_FOR_CROP == 15
-        assert CROP_BATCH_SIZE == 50
-        assert MAX_CONCURRENT_UPLOADS == 3
+        assert CROP_BATCH_SIZE == 5
+        assert MAX_CONCURRENT_UPLOADS == 2
         assert CHECKPOINT_FRAME_INTERVAL == 100

@@ -5,7 +5,7 @@ import numpy as np
 import supervision as sv
 import pytest
 
-from shared_libs.common.detection_utils import save_all_detections, load_all_detections_summary
+from shared_libs.common.detection_utils import detections_to_json, json_to_detections
 
 
 class DummyStorageClient:
@@ -45,68 +45,57 @@ def _make_detections(n: int, frame_idx: int) -> sv.Detections:
     return d
 
 
-def test_save_all_detections_empty_list():
-    storage = DummyStorageClient()
-    ok = save_all_detections(storage, "detections.json", [])
-    assert ok is True
-    assert "detections.json" in storage.uploads
-    payload = json.loads(storage.uploads["detections.json"].decode("utf-8"))
-    assert payload["total_frames"] == 0
-    assert payload["total_detections"] == 0
-    assert payload["xyxy"] == []
+def test_detections_to_json_empty_list():
+    detections_list = []
+    json_list = detections_to_json(detections_list)
+    assert json_list == []
+    
+    # Test round trip
+    restored_list = json_to_detections(json_list)
+    assert len(restored_list) == 0
 
 
-def test_save_all_detections_non_empty_and_load_round_trip():
-    storage = DummyStorageClient()
+def test_detections_to_json_round_trip():
     det_list: List[sv.Detections] = [
         _make_detections(3, 0),
         _make_detections(2, 1),
     ]
-    ok = save_all_detections(storage, "video_root/detections.json", det_list)
-    assert ok is True
-    raw = storage.uploads["video_root/detections.json"].decode("utf-8")
-    parsed = json.loads(raw)
-    assert parsed["total_frames"] == len(det_list)
-    assert parsed["total_detections"] == sum(len(d) for d in det_list)
-    # Ensure frame_index length matches total rows
-    assert len(parsed["frame_index"]) == parsed["total_detections"]
+    
+    # Convert to JSON list
+    json_list = detections_to_json(det_list)
+    assert len(json_list) == 2
+    assert len(json_list[0]["xyxy"]) == 3  # First detection has 3 objects
+    assert len(json_list[1]["xyxy"]) == 2  # Second detection has 2 objects
+    
+    # Test round trip conversion
+    restored_list = json_to_detections(json_list)
+    assert len(restored_list) == 2
+    assert len(restored_list[0]) == 3
+    assert len(restored_list[1]) == 2
+    
+    # Verify data integrity
+    assert np.allclose(restored_list[0].xyxy, det_list[0].xyxy)
+    assert np.allclose(restored_list[1].xyxy, det_list[1].xyxy)
 
-    merged = load_all_detections_summary(parsed)
-    assert isinstance(merged, sv.Detections)
-    assert len(merged) == parsed["total_detections"]
-    # Confirm frame_index recovered
-    assert "frame_index" in merged.data
-    assert len(merged.data["frame_index"]) == len(merged)
 
-
-def test_load_all_detections_summary_handles_missing_fields():
-    minimal = {
-        "xyxy": [],
-        "confidence": [],
-        "class_id": [],
-        "tracker_id": [],
-        "frame_index": [],
-        "data": {},
-        "total_frames": 0,
-        "total_detections": 0,
-    }
-    det = load_all_detections_summary(minimal)
-    assert isinstance(det, sv.Detections)
-    assert len(det) == 0
+def test_json_to_detections_handles_empty_json():
+    json_list = []
+    det_list = json_to_detections(json_list)
+    assert len(det_list) == 0
 
 
 @pytest.mark.parametrize("n1,n2", [(1, 1), (2, 3)])
-def test_frame_index_fallback_metadata(n1, n2):
-    storage = DummyStorageClient()
+def test_frame_index_preservation(n1, n2):
     d1 = _make_detections(n1, 5)
     d2 = _make_detections(n2, 6)
-    # Remove explicit frame_index list to force metadata fallback for second
-    del d2.data["frame_index"]
     det_list = [d1, d2]
-    ok = save_all_detections(storage, "f/detections.json", det_list)
-    assert ok
-    parsed = json.loads(storage.uploads["f/detections.json"].decode("utf-8"))
-    assert parsed["total_detections"] == n1 + n2
-    assert len(parsed["frame_index"]) == n1 + n2
-    # Ensure both frame ids appear
-    assert 5 in parsed["frame_index"] and 6 in parsed["frame_index"]
+    
+    # Convert to JSON and back
+    json_list = detections_to_json(det_list)
+    restored_list = json_to_detections(json_list)
+    
+    # Verify frame indices are preserved
+    assert len(restored_list[0].data["frame_index"]) == n1
+    assert all(idx == 5 for idx in restored_list[0].data["frame_index"])
+    assert len(restored_list[1].data["frame_index"]) == n2
+    assert all(idx == 6 for idx in restored_list[1].data["frame_index"])
