@@ -114,7 +114,7 @@ FRAME_SAMPLING_FOR_CROP = 15
 CROP_BATCH_SIZE = 5
 
 #: Maximum concurrent upload tasks to prevent overwhelming storage service
-MAX_CONCURRENT_UPLOADS = 5
+MAX_CONCURRENT_UPLOADS = 2
 
 #: Interval for checkpoint saves (every N frames)
 CHECKPOINT_FRAME_INTERVAL = 100
