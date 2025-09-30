@@ -88,6 +88,7 @@ import numpy as np
 import asyncio
 from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 
 import supervision as sv
 from supervision.utils.image import crop_image
@@ -321,7 +322,7 @@ class TrackGeneratorPipeline(Pipeline):
         
         try:
             doc_ref = self.progress_collection.document(self.task_id)
-            progress_data['updated_at'] = firestore.SERVER_TIMESTAMP
+            progress_data['updated_at'] = datetime.now(timezone.utc).isoformat()
             doc_ref.set(progress_data, merge=True)
             logger.debug(f"Updated progress for task {self.task_id}: {progress_data}")
         except Exception as e:

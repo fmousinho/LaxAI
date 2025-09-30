@@ -1,10 +1,14 @@
 ############################################################################
 #                                                                          #
-#              SIMPLIFIED BUILDER FOR SERVICE TRACKING                    #
+#              SIMPLIFIED BUILDER FOR SERVICE TRACKING JOB               #
 #                                                                          #
 ############################################################################
 
-# This Cloud Build file builds a Docker image and pushes it to Artifact Registry.
+# This Cloud Build file builds a Docker image and pushes it to Artifact Registry,
+# then deploys it as a Cloud Run job.
+#
+# NOTE: This only deploys the job definition. The job will NOT be executed automatically.
+# To run the job, use: gcloud run jobs execute laxai-service-tracking
 #
 # Usage:
 #   gcloud builds submit --config=deploy/cloudbuild/cloudbuild-service-tracking.yaml
@@ -32,27 +36,29 @@ steps:
       - "push"
       - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-tracking:latest"
 
-  # Deploy to Cloud Run with GPU
-  - id: "deploy-service-tracking"
+  # Deploy to Cloud Run as a job with GPU
+  - id: "deploy-service-tracking-job"
     name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     entrypoint: gcloud
     args:
       - "run"
+      - "jobs"
       - "deploy"
       - "laxai-service-tracking"
       - "--image=us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-tracking:latest"
       - "--region=us-central1"
-      - "--platform=managed"
-      - "--execution-environment=gen2"
       - "--cpu=4"
       - "--memory=16Gi"
       - "--gpu=1"
       - "--gpu-type=nvidia-l4"
       - "--project=${_GOOGLE_CLOUD_PROJECT}"
       - "--service-account=${_SERVICE_ACCOUNT}"
+      - "--set-env-vars=GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT}"
+      - "--max-retries=3"
+      - "--task-timeout=3600s"
+      - "--parallelism=1"
 
       
-
 images:
   - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-tracking:latest"
 
