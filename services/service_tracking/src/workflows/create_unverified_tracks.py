@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 from shared_libs.common.google_storage import GCSPaths, get_storage  # noqa: E402
 from unverified_track_generator_pipeline import TrackGeneratorPipeline  # noqa: E402
-from config.all_config import DetectionConfig, detection_config  # noqa: E402
+from shared_libs.config.all_config import DetectionConfig, detection_config  # noqa: E402
 
 
 class UnverifiedTrackGenerationWorkflow:

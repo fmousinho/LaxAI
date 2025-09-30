@@ -13,7 +13,7 @@ import cv2
 import supervision as sv
 
 from services.service_tracking.src.unverified_track_generator_pipeline import TrackGeneratorPipeline
-from config.all_config import DetectionConfig
+from shared_libs.config.all_config import DetectionConfig
 from common.pipeline_step import StepStatus
 
 

@@ -200,7 +200,6 @@ class TrackStitcher:
         verified_tracks = sum(len(group) for group in self.player_groups.values())
         logger.info(f"Reconstructed {len(self.player_groups)} player groups with {verified_tracks} tracks")
 
-
     def _invert_supervision_data(self, detections: Detections) -> Dict[int, np.ndarray]:
         """Converts frame->tracks mapping to track->frames for faster lookups.
         

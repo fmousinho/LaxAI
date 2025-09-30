@@ -45,7 +45,7 @@ Key Features:
 Example:
     ```python
     from unverified_track_generator_pipeline import TrackGeneratorPipeline
-    from config.all_config import detection_config
+    from shared_libs.config.all_config import detection_config
 
     # Initialize pipeline
     pipeline = TrackGeneratorPipeline(
@@ -98,8 +98,8 @@ from shared_libs.common.google_storage import get_storage, GCSPaths
 from shared_libs.common.detection import DetectionModel
 from shared_libs.common.pipeline_step import StepStatus
 from shared_libs.common.pipeline import Pipeline, PipelineStatus
-from config.all_config import DetectionConfig, detection_config, model_config
-from utils.id_generator import create_video_id, create_run_id
+from shared_libs.config.all_config import DetectionConfig, detection_config, model_config
+from shared_libs.utils.id_generator import create_video_id, create_run_id
 from shared_libs.common.tracker import AffineAwareByteTrack
 from shared_libs.common.detection_utils import detections_to_json
 from shared_libs.common.track_to_player import map_detections_to_players
@@ -179,7 +179,7 @@ class TrackGeneratorPipeline(Pipeline):
     Example:
         ```python
         from unverified_track_generator_pipeline import TrackGeneratorPipeline
-        from config.all_config import detection_config
+        from shared_libs.config.all_config import detection_config
 
         # Initialize pipeline
         pipeline = TrackGeneratorPipeline(
@@ -245,7 +245,7 @@ class TrackGeneratorPipeline(Pipeline):
         self.dataloader_workers = 2
         
         # Import transform_config to get the background removal setting
-        from config.all_config import transform_config
+        from shared_libs.config.all_config import transform_config
         
         # Get storage client
         self.tenant_storage = get_storage(tenant_id)  # For tenant-specific operations (without /user suffix)
