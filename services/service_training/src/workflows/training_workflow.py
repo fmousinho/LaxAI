@@ -35,7 +35,6 @@ class TrainingWorkflow:
     def __init__(self,
                  tenant_id: str,
                  verbose: bool = True,
-                 save_intermediate: bool = True,
                  custom_name: str = "training_workflow_run",
                  resume_from_checkpoint: bool = True,
                  wandb_tags: Optional[List[str]] = None,
@@ -52,7 +51,6 @@ class TrainingWorkflow:
         Args:
             tenant_id: The tenant ID for GCS operations.
             verbose: Enable verbose logging for pipelines.
-            save_intermediate: Save intermediate pipeline results to GCS.
             custom_name: Custom name for the training run.
             resume_from_checkpoint: Resume training from checkpoint if available.
             wandb_tags: List of tags for wandb tracking.
@@ -66,7 +64,6 @@ class TrainingWorkflow:
         """
         self.tenant_id = tenant_id
         self.verbose = verbose
-        self.save_intermediate = save_intermediate
         self.custom_name = custom_name
         self.resume_from_checkpoint = resume_from_checkpoint
         self.wandb_tags = wandb_tags or []
@@ -279,7 +276,6 @@ class TrainingWorkflow:
             train_pipeline = TrainPipeline(
                 tenant_id=self.tenant_id,
                 verbose=self.verbose,
-                save_intermediate=self.save_intermediate,
                 pipeline_name=pipeline_identity,  # Also used as identity
                 run_guid=pipeline_identity,
                 **all_kwargs

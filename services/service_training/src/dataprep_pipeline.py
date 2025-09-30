@@ -170,7 +170,6 @@ class DataPrepPipeline(Pipeline):
                  config: DetectionConfig, 
                  tenant_id: str, 
                  verbose: bool = True, 
-                 save_intermediate: bool = False, 
                  enable_grass_mask: Optional[bool] = None, 
                  delete_process_folder: bool = True, 
                  **kwargs):
@@ -185,7 +184,6 @@ class DataPrepPipeline(Pipeline):
                 GCS bucket information, and processing parameters
             tenant_id (str): The tenant ID for data organization and access control in multi-tenant environments
             verbose (bool): Enable detailed logging throughout the pipeline for monitoring progress
-            save_intermediate (bool): Save intermediate results for debugging and recovery capabilities
             enable_grass_mask (bool): Enable background removal functionality using statistical color analysis.
                 If None, uses transform_config.enable_background_removal setting
             delete_process_folder (bool): Clean up temporary processing files after completion to save storage
@@ -303,8 +301,7 @@ class DataPrepPipeline(Pipeline):
             pipeline_name="dataprep_pipeline",
             storage_client=self.tenant_storage,
             step_definitions=step_definitions,
-            verbose=verbose,
-            save_intermediate=save_intermediate
+            verbose=verbose
         )
         
         # Override run_folder to use structured GCS path
@@ -630,7 +627,7 @@ class DataPrepPipeline(Pipeline):
             detections_blob_name = f"{video_folder.rstrip('/')}/detections.json"
             json_data = detections_list_to_json(all_detections)
             json_bytes = json.dumps(json_data).encode("utf-8")
-            self.tenant_storage.upload_from_bytes(detections_blob_name, json_bytes
+            self.tenant_storage.upload_from_bytes(detections_blob_name, json_bytes)
 
             logger.info(f"Player detection completed for frame id {frame_id} - {detections_count} detections found")
 

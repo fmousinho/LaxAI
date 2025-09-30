@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 
-def load_transform(tenant_id: str, frames_per_video: int, verbose: bool, save_intermediate: bool):
+def load_transform(tenant_id: str, frames_per_video: int, verbose: bool):
     """
     Main function to orchestrate the data prep and training workflows.
 
@@ -41,7 +41,6 @@ def load_transform(tenant_id: str, frames_per_video: int, verbose: bool, save_in
         tenant_id: The tenant ID for GCS operations.
         frames_per_video: Number of frames to extract per video in the data prep pipeline.
         verbose: Enable verbose logging for pipelines.
-        save_intermediate: Save intermediate pipeline results to GCS.
     """
     logger.info(f"--- Starting End-to-End Workflow for Tenant: {tenant_id} ---")
 
@@ -115,8 +114,7 @@ def load_transform(tenant_id: str, frames_per_video: int, verbose: bool, save_in
         dataprep_pipeline = DataPrepPipeline(
             config=detection_config,
             tenant_id=tenant_id,
-            verbose=verbose,
-            save_intermediate=save_intermediate
+            verbose=verbose
         )
         
         # Use the full path for the video
@@ -141,14 +139,12 @@ def main():
     parser.add_argument("--tenant_id", type=str, default="tenant1", help="The tenant ID for GCS.")
     parser.add_argument("--frames", type=int, default=20, help="Number of frames to extract per video.")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose pipeline logging.")
-    parser.add_argument("--save_intermediate", action="store_true", help="Save intermediate pipeline step results to GCS.")
     args = parser.parse_args()
 
     load_transform(
         tenant_id=args.tenant_id,
         frames_per_video=args.frames,
-        verbose=args.verbose,
-        save_intermediate=args.save_intermediate
+        verbose=args.verbose
     )
 
 if __name__ == "__main__":

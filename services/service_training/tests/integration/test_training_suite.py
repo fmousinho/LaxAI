@@ -503,8 +503,7 @@ def test_pipeline_status_saved_on_interruption():
             storage_client=mock_client,
             step_definitions=step_definitions,
             pipeline_name="test_interruption_pipeline",
-            verbose=True,
-            save_intermediate=True
+            verbose=True
         )
 
         # Run the pipeline - it should be interrupted during step2
@@ -606,7 +605,6 @@ def test_train_all_resnet_with_checkpoint_verification():
         results = train(
             tenant_id="test-tenant",
             verbose=False,
-            save_intermediate=False,
             custom_name=run_name,
             resume_from_checkpoint=False,
             wandb_tags=["e2e", "resnet", "checkpoint_test"],

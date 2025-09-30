@@ -160,7 +160,6 @@ class TestTrainingPipelineMemoryStability:
         pipeline = TrainPipeline(
             tenant_id='test-tenant',
             verbose=True,
-            save_intermediate=False,
             pipeline_name='memory_test_2_epochs_single_dataset',
             **training_config_override
         )

@@ -158,7 +158,6 @@ class TrackGeneratorPipeline(Pipeline):
             GCS bucket information, and processing parameters
         tenant_id (str): The tenant ID for data organization and access control
         verbose (bool): Enable detailed logging throughout the pipeline
-        save_intermediate (bool): Save intermediate results for debugging
         enable_grass_mask (bool): Enable background removal functionality (currently unused)
         delete_process_folder (bool): Clean up temporary processing files after completion
         **kwargs: Additional keyword arguments passed to parent Pipeline class
@@ -211,7 +210,6 @@ class TrackGeneratorPipeline(Pipeline):
                  config: DetectionConfig, 
                  tenant_id: str, 
                  verbose: bool = True, 
-                 save_intermediate: bool = False, 
                  enable_grass_mask: bool = model_config.enable_grass_mask, 
                  delete_process_folder: bool = True, 
                  task_id: Optional[str] = None,
@@ -227,7 +225,6 @@ class TrackGeneratorPipeline(Pipeline):
                 GCS bucket information, and processing parameters
             tenant_id (str): The tenant ID for data organization and access control in multi-tenant environments
             verbose (bool): Enable detailed logging throughout the pipeline for monitoring progress
-            save_intermediate (bool): Save intermediate results for debugging and recovery capabilities
             enable_grass_mask (bool): Enable background removal functionality using statistical color analysis.
                 Currently unused in this pipeline
             delete_process_folder (bool): Clean up temporary processing files after completion to save storage
@@ -307,8 +304,7 @@ class TrackGeneratorPipeline(Pipeline):
             pipeline_name="unverified_tracks_pipeline",
             storage_client=self.tenant_storage,
             step_definitions=step_definitions,
-            verbose=verbose,
-            save_intermediate=save_intermediate
+            verbose=verbose
         )
         
         # Override run_folder to use structured GCS path

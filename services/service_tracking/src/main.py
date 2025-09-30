@@ -35,8 +35,6 @@ def main():
                        help='Custom name for the track generation run')
     parser.add_argument('--verbose', action='store_true', default=True,
                        help='Enable verbose logging')
-    parser.add_argument('--save-intermediate', action='store_true', default=True,
-                       help='Save intermediate pipeline results to GCS')
     parser.add_argument('--resume-from-checkpoint', action='store_true', default=True,
                        help='Resume track generation from checkpoint if available')
     parser.add_argument('--video_limit', type=int, default=None,
@@ -49,7 +47,6 @@ def main():
     logger.info(f"Starting track generation for tenant: {args.tenant_id}")
     logger.info(f"Custom name: {args.custom_name}")
     logger.info(f"Verbose: {args.verbose}")
-    logger.info(f"Save intermediate: {args.save_intermediate}")
     logger.info(f"Resume from checkpoint: {args.resume_from_checkpoint}")
     logger.info(f"Video limit: {args.video_limit}")
     logger.info(f"Task ID: {args.task_id}")
@@ -59,7 +56,6 @@ def main():
         workflow = UnverifiedTrackGenerationWorkflow(
             tenant_id=args.tenant_id,
             verbose=args.verbose,
-            save_intermediate=args.save_intermediate,
             custom_name=args.custom_name,
             resume_from_checkpoint=args.resume_from_checkpoint,
             task_id=args.task_id,

@@ -72,7 +72,6 @@ def test_create_tracking_job_valid(client, mocker):
         "tenant_id": "test-tenant",
         "tracking_params": {
             "verbose": True,
-            "save_intermediate": False,
             "video_limit": 10
         }
     }

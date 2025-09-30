@@ -21,12 +21,11 @@ logger = logging.getLogger(__name__)
 
 class TrainPipeline(Pipeline):
 
-    def __init__(self, tenant_id: str, verbose: bool = True, save_intermediate: bool = False, pipeline_name: str = "training_pipeline", **training_kwargs):
+    def __init__(self, tenant_id: str, verbose: bool = True, pipeline_name: str = "training_pipeline", **training_kwargs):
         """
         Initialize the training pipeline.
         """
         self.verbose = verbose
-        self.save_intermediate = save_intermediate
         self.storage_client = get_storage(tenant_id)
        
 
@@ -80,8 +79,7 @@ class TrainPipeline(Pipeline):
             pipeline_name=pipeline_name,
             storage_client=self.storage_client,
             step_definitions=step_definitions,
-            verbose=verbose,
-            save_intermediate=save_intermediate
+            verbose=verbose
         )
 
     def run(self, dataset_name: str | List[str], resume_from_checkpoint: bool = True, wandb_run_tags: Optional[List[str]] = None, custom_name: str = "run") -> Dict[str, Any]:

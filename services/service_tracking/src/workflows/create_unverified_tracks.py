@@ -33,7 +33,6 @@ class UnverifiedTrackGenerationWorkflow:
     def __init__(self,
                  tenant_id: str,
                  verbose: bool = True,
-                 save_intermediate: bool = False,
                  custom_name: str = "track_generation_workflow_run",
                  resume_from_checkpoint: bool = True,
                  detection_config_param: Optional[DetectionConfig] = None,
@@ -46,7 +45,6 @@ class UnverifiedTrackGenerationWorkflow:
         Args:
             tenant_id: The tenant ID for GCS operations.
             verbose: Enable verbose logging for pipelines.
-            save_intermediate: Save intermediate pipeline results to GCS.
             custom_name: Custom name for the track generation run.
             resume_from_checkpoint: Resume track generation from checkpoint if available.
             detection_config_param: Detection configuration object. If None, uses default.
@@ -56,7 +54,6 @@ class UnverifiedTrackGenerationWorkflow:
         """
         self.tenant_id = tenant_id
         self.verbose = verbose
-        self.save_intermediate = save_intermediate
         self.custom_name = custom_name
         self.resume_from_checkpoint = resume_from_checkpoint
         self.detection_config = detection_config_param or detection_config
@@ -271,7 +268,6 @@ class UnverifiedTrackGenerationWorkflow:
                         config=self.detection_config,
                         tenant_id=self.tenant_id,
                         verbose=self.verbose,
-                        save_intermediate=self.save_intermediate,
                         task_id=self.task_id
                     )
 

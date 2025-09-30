@@ -134,7 +134,6 @@ class Pipeline:
         storage_client: GoogleStorageClient,
         step_definitions: Dict[str, Dict[str, Any]],
         verbose: bool = False,
-        save_intermediate: bool = False,
         pipeline_name: str = "default_name",
         run_guid: Optional[str] = None,
         excluded_serialization_keys: Optional[List[str]] = None,
@@ -153,13 +152,11 @@ class Pipeline:
                     }
                 }
             verbose: Enable verbose logging (default: False)
-            save_intermediate: Save intermediate results for each step (default: False)
             excluded_serialization_keys: Optional list of keys to exclude from serialization when saving intermediate results (default: None, meaning no exclusions)
         """
 
         self.storage_client = storage_client
         self.verbose = verbose
-        self.save_intermediate = save_intermediate
         self.step_definitions = step_definitions
         self.pipeline_name = pipeline_name
         # Allow explicit run_guid override so external systems (API/task manager) can unify IDs.
@@ -254,67 +251,6 @@ class Pipeline:
         """Log step message if verbose mode is enabled."""
         if self.verbose:
             getattr(logger, level)(f"[{self.pipeline_name}:{step_name}] {message}")
-
-    def _save_step_output(
-        self,
-        step_name: str,
-        data: Any,
-        context_id: Optional[str] = None,
-        filename: Optional[str] = None,
-    ):
-        """
-        Save step output if save_intermediate is enabled.
-
-        Args:
-            step_name: Name of the step
-            data: Data to save
-            context_id: Optional context ID (e.g., video_guid, batch_id)
-            filename: Optional custom filename
-        """
-        if not self.save_intermediate:
-            return None
-
-        try:
-            # Determine the output path
-            if context_id:
-                base_path = f"{self.run_folder}/{context_id}/intermediate"
-            else:
-                base_path = f"{self.run_folder}/intermediate"
-
-            if filename:
-                output_path = f"{base_path}/{step_name}_{filename}"
-            else:
-                timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-                output_path = f"{base_path}/{step_name}_{timestamp}.json"
-
-            # Serialize the data
-            if isinstance(data, (dict, list)):
-                # For dictionaries, filter out large data keys before serialization
-                if isinstance(data, dict):
-                    filtered_data = {}
-                    for key, value in data.items():
-                        # Skip keys that contain large data or non-serializable objects
-                        if key in self.excluded_serialization_keys:
-                            filtered_data[key] = f"<{key}_excluded_for_serialization>"
-                        else:
-                            filtered_data[key] = self._make_json_serializable(value)
-                    content = json.dumps(filtered_data, indent=2, default=str)
-                else:
-                    # For lists, use the serialization method directly
-                    content = json.dumps(self._make_json_serializable(data), indent=2, default=str)
-            else:
-                content = str(data)
-
-            # Save to storage
-            if self.storage_client.upload_from_string(output_path, content):
-                self._log_step(step_name, f"Saved output to {output_path}")
-                return output_path
-            else:
-                self._log_step(step_name, f"Failed to save output to {output_path}", "warning")
-                return None
-        except Exception as e:
-            self._log_step(step_name, f"Error saving output: {e}", "error")
-            return None
 
     def _execute_step(self, step_name: str, func: Callable, *args, **kwargs):
         """
@@ -439,7 +375,6 @@ class Pipeline:
                 "run_guid": self.run_guid,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "verbose": self.verbose,
-                "save_intermediate": self.save_intermediate,
                 "steps": list(self.steps.keys()),
             }
         )
@@ -814,12 +749,6 @@ class Pipeline:
                         context.update(step_result)
                     else:
                         context[f"{step_name}_result"] = step_result
-
-                    # Save intermediate results if enabled
-                    if self.save_intermediate:
-                        self._save_step_output(
-                            step_name, step_result, filename=f"{step_name}_result.json"
-                        )
 
                     results["steps_completed"] += 1
                     completed_steps.append(step_name)

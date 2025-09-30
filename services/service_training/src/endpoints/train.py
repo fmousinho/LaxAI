@@ -46,7 +46,6 @@ def execute_training_task(task_id: str, training_request: TrainingRequest):
         workflow = TrainingWorkflow(
             tenant_id=training_request.tenant_id,
             verbose=getattr(training_request, 'verbose', True),
-            save_intermediate=getattr(training_request, 'save_intermediate', True),
             custom_name=training_request.custom_name,
             resume_from_checkpoint=training_request.resume_from_checkpoint,
             wandb_tags=getattr(training_request, 'wandb_tags', []),

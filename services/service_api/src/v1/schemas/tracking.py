@@ -13,7 +13,6 @@ class TrackingParams(BaseModel):
     """Tracking-specific parameters."""
 
     verbose: Optional[bool] = Field(True, description="Enable verbose logging for pipelines")
-    save_intermediate: Optional[bool] = Field(True, description="Save intermediate pipeline results to GCS")
     resume_from_checkpoint: Optional[bool] = Field(True, description="Resume track generation from checkpoint if available")
     video_limit: Optional[int] = Field(None, description="Maximum number of videos to process (None for all)")
 
@@ -41,7 +40,6 @@ class TrackingRequest(BaseModel):
                 "tenant_id": "default",
                 "tracking_params": {
                     "verbose": True,
-                    "save_intermediate": False,
                     "resume_from_checkpoint": True,
                     "video_limit": None
                 }

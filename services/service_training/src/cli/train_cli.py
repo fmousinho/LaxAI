@@ -89,12 +89,6 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--save_intermediate",
-        action="store_true",
-        help="Save intermediate pipeline step results to GCS."
-    )
-
-    parser.add_argument(
         "--custom_name",
         type=str,
         default="cli_training_run",
@@ -173,7 +167,6 @@ def parse_args_to_workflow_kwargs(args: argparse.Namespace) -> dict:
     workflow_kwargs = {
         'tenant_id': args.tenant_id,
         'verbose': args.verbose,
-        'save_intermediate': args.save_intermediate,
         'custom_name': args.custom_name,
         'resume_from_checkpoint': args.resume_from_checkpoint,
         'wandb_tags': args.wandb_tags,
