@@ -17,11 +17,3 @@ python_functions = "test_*"
 # Default command-line options for pytest.
 # -v for verbose, --tb=short for shorter tracebacks.
 addopts = "-v --tb=short"
-
-# Environment variables to be set during test runs.
-# This is a reliable way to set env vars without .env files.
-env = [
-    "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1",
-    "GOOGLE_CLOUD_PROJECT=laxai-466119",
-    "PYTHONDONTWRITEBYTECODE=1"
-]

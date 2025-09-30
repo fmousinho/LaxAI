@@ -34,9 +34,9 @@ existing_python_path = os.environ.get("PYTHONPATH", "")
 # Filter out any empty strings that might result from splitting.
 existing_paths = [p for p in existing_python_path.split(os.pathsep) if p]
 
-# Combine the new absolute paths with the existing ones.
-# Using a set ensures that there are no duplicate entries.
-combined_paths = set(absolute_source_paths + existing_paths)
+# For absolute imports from the workspace root, we need the project root in PYTHONPATH
+# Combine the project root with the existing paths.
+combined_paths = set([str(project_root)] + existing_paths)
 
 # Join the unique paths back into a single string using the OS separator.
 new_python_path = os.pathsep.join(sorted(list(combined_paths)))
@@ -45,8 +45,12 @@ new_python_path = os.pathsep.join(sorted(list(combined_paths)))
 # This will be used by Python to find modules during import.
 os.environ["PYTHONPATH"] = new_python_path
 # Also update sys.path directly for the current process.
-for path in absolute_source_paths:
-    if path not in sys.path:
-        sys.path.insert(0, path)
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+# Set environment variables for tests
+os.environ.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+os.environ.setdefault("GOOGLE_CLOUD_PROJECT", "laxai-466119")
+os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 
 print(f"Updated PYTHONPATH: {new_python_path}")
