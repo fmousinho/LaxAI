@@ -88,7 +88,7 @@ class DataPrepManager:
             # List files in the imported_video directory to check for video file
             try:
                 blobs = self.storage.list_blobs(prefix=imported_video_path)
-                video_files = [blob.name for blob in blobs if blob.name.endswith('.mp4')]
+                video_files = [blob for blob in blobs if blob.endswith('.mp4')]
                 if not video_files:
                     logger.error(f"No video file found in {imported_video_path}. Expected a .mp4 file.")
                     return False
