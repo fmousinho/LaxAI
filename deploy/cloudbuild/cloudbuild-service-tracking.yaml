@@ -15,7 +15,7 @@
 
 substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"
-  _SERVICE_ACCOUNT: "service-tracking@laxai-466119.iam.gserviceaccount.com"
+ # _SERVICE_ACCOUNT: "service-tracking@laxai-466119.iam.gserviceaccount.com"
 
 steps:
   # Build the service tracking image
