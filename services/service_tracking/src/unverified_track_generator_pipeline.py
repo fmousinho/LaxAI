@@ -742,11 +742,6 @@ class TrackGeneratorPipeline(Pipeline):
                                 logger.debug(f"Upload batch task {upload_task} created for batch {batch_counter}")
                                 upload_tasks.append(upload_task)
                                 batch_counter += 1
-                                
-                                # Save detections asynchronously (non-blocking)
-                                asyncio.create_task(self._save_detections_async(detections_path, all_detections.copy()))
-                                
-                                # Yield control so the newly created batch task can start
                                 await asyncio.sleep(0)
 
                     except Exception as e:
@@ -763,6 +758,8 @@ class TrackGeneratorPipeline(Pipeline):
                         else:
                             detections.data['frame_index'] = []
                         all_detections.append(detections)
+                        # Save detections asynchronously (non-blocking)
+                        asyncio.create_task(self._save_detections_async(detections_path, all_detections.copy()))
 
                     frame_number += 1
                     
@@ -818,7 +815,7 @@ class TrackGeneratorPipeline(Pipeline):
                 logger.info(f"All crop upload batches completed")
             
             # Save final detections asynchronously (non-blocking)
-            asyncio.create_task(self._save_detections_async(detections_path, all_detections))
+            asyncio.run(self._save_detections_async(detections_path, all_detections))
 
             logger.info(f"Player detection completed for video {video_guid} - {detections_count} detections found across {len(all_detections)} frames")
 

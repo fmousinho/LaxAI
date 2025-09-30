@@ -170,7 +170,7 @@ class DataPrepPipeline(Pipeline):
                  config: DetectionConfig, 
                  tenant_id: str, 
                  verbose: bool = True, 
-                 save_intermediate: bool = True, 
+                 save_intermediate: bool = False, 
                  enable_grass_mask: Optional[bool] = None, 
                  delete_process_folder: bool = True, 
                  **kwargs):

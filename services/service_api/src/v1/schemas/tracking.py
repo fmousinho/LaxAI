@@ -41,7 +41,7 @@ class TrackingRequest(BaseModel):
                 "tenant_id": "default",
                 "tracking_params": {
                     "verbose": True,
-                    "save_intermediate": True,
+                    "save_intermediate": False,
                     "resume_from_checkpoint": True,
                     "video_limit": None
                 }

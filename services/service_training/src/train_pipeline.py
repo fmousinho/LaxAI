@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 class TrainPipeline(Pipeline):
 
-    def __init__(self, tenant_id: str = "tenant1", verbose: bool = True, save_intermediate: bool = True, pipeline_name: str = "training_pipeline", **training_kwargs):
+    def __init__(self, tenant_id: str, verbose: bool = True, save_intermediate: bool = False, pipeline_name: str = "training_pipeline", **training_kwargs):
         """
         Initialize the training pipeline.
         """

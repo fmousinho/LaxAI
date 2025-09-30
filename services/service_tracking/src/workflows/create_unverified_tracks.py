@@ -33,7 +33,7 @@ class UnverifiedTrackGenerationWorkflow:
     def __init__(self,
                  tenant_id: str,
                  verbose: bool = True,
-                 save_intermediate: bool = True,
+                 save_intermediate: bool = False,
                  custom_name: str = "track_generation_workflow_run",
                  resume_from_checkpoint: bool = True,
                  detection_config_param: Optional[DetectionConfig] = None,
@@ -186,7 +186,7 @@ class UnverifiedTrackGenerationWorkflow:
         try:
             from datetime import datetime, timezone
 
-            doc_ref = self.firestore_client.collection("track_generation_runs").document(self.task_id)
+            doc_ref = self.firestore_client.collection("tracking_runs").document(self.task_id)
 
             update_data = {
                 "status": status,
