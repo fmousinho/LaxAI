@@ -11,7 +11,9 @@
 # To run the job, use: gcloud run jobs execute laxai-service-tracking
 #
 # Usage:
-#   gcloud builds submit --config=deploy/cloudbuild/cloudbuild-service-tracking.yaml
+#   gcloud builds submit --region=us-central1 --config=deploy/cloudbuild/cloudbuild-service-tracking.yaml
+
+region: us-central1
 
 substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"

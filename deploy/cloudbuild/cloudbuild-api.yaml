@@ -7,6 +7,8 @@
 # This Cloud Build file builds a Docker image, pushes it to Artifact
 # Registry, and deploys it to a CPU-based Cloud Run service.
 
+region: us-central1
+
 substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"
   # Note: Cloud Build does not expand nested substitutions inside substitution values.

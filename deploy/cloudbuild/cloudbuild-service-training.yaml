@@ -7,7 +7,9 @@
 # This Cloud Build file builds a Docker image and pushes it to Artifact Registry.
 #
 # Usage:
-#   gcloud builds submit --config=deploy/cloudbuild/cloudbuild-service-training.yaml
+#   gcloud builds submit --region=us-central1 --config=deploy/cloudbuild/cloudbuild-service-training.yaml
+
+region: us-central1
 
 substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"

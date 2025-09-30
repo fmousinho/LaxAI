@@ -8,6 +8,8 @@
 # This Cloud Build file deploys the training proxy as a Cloud Function
 # triggered by Pub/Sub messages. Much more cost-effective than always-on Cloud Run.
 
+region: us-central1
+
 substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"
   _SERVICE_ACCOUNT: "function-proxy-training@laxai-466119.iam.gserviceaccount.com"
