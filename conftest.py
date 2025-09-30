@@ -2,13 +2,25 @@ import sys
 from pathlib import Path
 import os
 
-# This file is crucial for ensuring tests run correctly in VS Code and from the CLI.
-# It programmatically modifies the Python path to include all necessary source directories.
-
 # Get the absolute path of the project root directory.
 # Path(__file__).resolve() gets the full path to this conftest.py file.
 # .parent gives the directory containing it, which is the project root.
 project_root = Path(__file__).resolve().parent
+
+# Load test environment variables from .env.test
+try:
+    from dotenv import load_dotenv
+    env_test_path = project_root / ".env.test"
+    if env_test_path.exists():
+        load_dotenv(env_test_path)
+        print(f"✅ Loaded test environment from {env_test_path}")
+    else:
+        print(f"⚠️  .env.test file not found at {env_test_path}")
+except ImportError:
+    print("⚠️  python-dotenv not installed, skipping .env.test loading")
+
+# This file is crucial for ensuring tests run correctly in VS Code and from the CLI.
+# It programmatically modifies the Python path to include all necessary source directories.
 
 # Define a list of all directories that contain Python source code.
 # These paths are relative to the project root.
