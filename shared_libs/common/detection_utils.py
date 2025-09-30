@@ -39,24 +39,27 @@ def detection_to_json_single(detection: Detections) -> Dict[str, Any]:
             }
         
         # Convert numpy arrays to lists for JSON serialization
+        # For single detections, iterate to get the actual values
+        xyxy_val, mask, conf_val, class_val, tracker_val, data_dict = next(iter(detection))
+        
         result = {
-            "xyxy": detection.xyxy.tolist() if detection.xyxy is not None else [],
-            "confidence": detection.confidence.tolist() if detection.confidence is not None else [],
-            "class_id": detection.class_id.tolist() if detection.class_id is not None else [],
-            "tracker_id": detection.tracker_id.tolist() if detection.tracker_id is not None else [],
+            "xyxy": [xyxy_val.tolist()],
+            "confidence": [float(conf_val)] if conf_val is not None else [],
+            "class_id": [int(class_val)] if class_val is not None else [],
+            "tracker_id": [int(tracker_val)] if tracker_val is not None else [],
             "data": {},
             "metadata": getattr(detection, 'metadata', {})
         }
         
-        # Handle data field - convert numpy arrays to lists
-        if hasattr(detection, 'data') and detection.data:
-            for key, value in detection.data.items():
+        # Handle data field from iteration
+        if data_dict:
+            for key, value in data_dict.items():
                 if isinstance(value, np.ndarray):
-                    result["data"][key] = value.tolist()
+                    result["data"][key] = [value.tolist()]
                 elif isinstance(value, (list, tuple)):
-                    result["data"][key] = list(value)
+                    result["data"][key] = [list(value)]
                 else:
-                    result["data"][key] = value
+                    result["data"][key] = [value]
         
         return result
         
@@ -155,7 +158,12 @@ def detections_to_json(detections: Detections) -> List[Dict[str, Any]]:
     elif len(detections) == 1:
         return [detection_to_json_single(detections)]
     else:
-        result = [detection_to_json_single(d) for d in detections] # type: ignore
+        # Split multi-detection object into individual single-detection objects
+        result = []
+        for i in range(len(detections)):
+            # Use indexing to get individual detection as Detections object
+            single_det = detections[i]
+            result.append(detection_to_json_single(single_det))
         return result
 
 def json_to_detections(json_list: List[Dict[str, Any]]) -> Detections:
