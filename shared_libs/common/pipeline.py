@@ -690,7 +690,7 @@ class Pipeline:
         Returns:
             Dictionary with pipeline results
         """
-        logger.info(f"Starting {self.pipeline_name} pipeline execution")
+        logger.debug(f"Starting {self.pipeline_name} pipeline execution")
         self.status = PipelineStatus.RUNNING
 
         if context is None:
