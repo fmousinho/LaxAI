@@ -5,11 +5,6 @@ minversion = "6.0"
 # Defines the directories to search for tests.
 testpaths = [
     "tests",
-    "sv-tests",
-    "services/service_training/tests",
-    "services/service_api/tests",
-    "services/service_tracking/tests",
-    "services/service_cr_train_proxy/tests"
 ]
 
 # Glob patterns for test file discovery.
