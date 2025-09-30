@@ -121,8 +121,17 @@ class DataPrepManager:
             import json
             detections_json = json.loads(detections_json_text)
             
+            # Handle different JSON formats - extract detections list if wrapped in object
+            if isinstance(detections_json, dict) and "detections" in detections_json:
+                detections_list = detections_json["detections"]
+            elif isinstance(detections_json, list):
+                detections_list = detections_json
+            else:
+                logger.error(f"Invalid detections JSON format: {type(detections_json)}")
+                return False
+            
             # Load detections - the loader automatically handles different formats
-            detections = json_to_detections(detections_json)
+            detections = json_to_detections(detections_list)
             logger.info("Successfully loaded detections")
 
             # Check for existing saved graph

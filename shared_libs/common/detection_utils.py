@@ -159,14 +159,79 @@ def detections_to_json(detections: Detections) -> List[Dict[str, Any]]:
         return result
 
 def json_to_detections(json_list: List[Dict[str, Any]]) -> Detections:
-    """Convert a list of JSON dictionaries back to a list of Detections objects.
+    """Convert a list of JSON dictionaries back to a Detections object.
+    
+    Each dictionary in the list represents detections from one frame.
+    This function concatenates all detections from all frames into a single Detections object.
     
     Args:
-        json_list: List of dictionaries containing detection data
+        json_list: List of dictionaries containing detection data per frame
         
     Returns:
-        Supervision  object
+        A single Detections object with all detections concatenated
     """
-    detections_list = [json_to_detection_single(json_data) for json_data in json_list]
-
-    return Detections.merge(detections_list) if detections_list else Detections.empty()
+    if not json_list:
+        return Detections.empty()
+    
+    # Collect all data across frames
+    all_xyxy = []
+    all_confidence = []
+    all_class_id = []
+    all_tracker_id = []
+    all_data = {}
+    all_metadata = {}
+    
+    for frame_data in json_list:
+        # Extract frame-level data
+        xyxy = frame_data.get("xyxy", [])
+        confidence = frame_data.get("confidence", [])
+        class_id = frame_data.get("class_id", [])
+        tracker_id = frame_data.get("tracker_id", [])
+        data = frame_data.get("data", {})
+        metadata = frame_data.get("metadata", {})
+        
+        # Extend arrays
+        all_xyxy.extend(xyxy)
+        all_confidence.extend(confidence)
+        all_class_id.extend(class_id)
+        all_tracker_id.extend(tracker_id)
+        
+        # Merge data dictionaries (extend lists, etc.)
+        for key, value in data.items():
+            if key not in all_data:
+                all_data[key] = []
+            if isinstance(value, list):
+                all_data[key].extend(value)
+            else:
+                all_data[key].append(value)
+        
+        # For metadata, we might want to track per-frame, but for now just take the last one
+        all_metadata.update(metadata)
+    
+    # Convert to numpy arrays
+    xyxy_array = np.array(all_xyxy, dtype=np.float32) if all_xyxy else np.empty((0, 4), dtype=np.float32)
+    confidence_array = np.array(all_confidence, dtype=np.float32) if all_confidence else None
+    class_id_array = np.array(all_class_id, dtype=int) if all_class_id else None
+    tracker_id_array = np.array(all_tracker_id, dtype=int) if all_tracker_id else None
+    
+    # Convert data lists to numpy arrays where appropriate
+    data_dict = {}
+    for key, value in all_data.items():
+        if isinstance(value, list) and value and all(isinstance(x, (int, float)) for x in value):
+            data_dict[key] = np.array(value)
+        else:
+            data_dict[key] = value
+    
+    # Create the Detections object
+    detection = Detections(
+        xyxy=xyxy_array,
+        confidence=confidence_array,
+        class_id=class_id_array,
+        tracker_id=tracker_id_array,
+        data=data_dict
+    )
+    
+    # Set metadata
+    detection.metadata.update(all_metadata)
+    
+    return detection
