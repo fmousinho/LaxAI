@@ -36,27 +36,28 @@ steps:
       - "push"
       - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-tracking:latest"
 
-  # Deploy to Cloud Run as a job with GPU
-  - id: "deploy-service-tracking-job"
-    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
-    entrypoint: gcloud
-    args:
-      - "run"
-      - "jobs"
-      - "deploy"
-      - "laxai-service-tracking"
-      - "--image=us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-tracking:latest"
-      - "--region=us-central1"
-      - "--cpu=4"
-      - "--memory=16Gi"
-      - "--gpu=1"
-      - "--gpu-type=nvidia-l4"
-      - "--project=${_GOOGLE_CLOUD_PROJECT}"
-      - "--service-account=${_SERVICE_ACCOUNT}"
-      - "--set-env-vars=GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT}"
-      - "--max-retries=3"
-      - "--task-timeout=3600s"
-      - "--parallelism=1"
+  # # Deploy to Cloud Run as a job with GPU
+  # - id: "deploy-service-tracking-job"
+  #   name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+  #   entrypoint: gcloud
+  #   args:
+  #     - "beta"
+  #     - "run"
+  #     - "jobs"
+  #     - "deploy"
+  #     - "laxai-service-tracking"
+  #     - "--image=us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-tracking:latest"
+  #     - "--region=us-central1"
+  #     - "--cpu=4"
+  #     - "--memory=16Gi"
+  #     - "--gpu=1"
+  #     - "--gpu-type=nvidia-l4"
+  #     - "--project=${_GOOGLE_CLOUD_PROJECT}"
+  #     - "--service-account=${_SERVICE_ACCOUNT}"
+  #     - "--set-env-vars=GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT}"
+  #     - "--max-retries=3"
+  #     - "--task-timeout=3600s"
+  #     - "--parallelism=1"
 
       
 images:
