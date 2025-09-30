@@ -467,9 +467,8 @@ class GoogleStorageClient:
                     return False
 
             elif destination_blob_name.endswith(".json"):
-                json_bytes = json.dumps(data).encode("utf-8")
                 content_type = content_type or "application/json"
-                blob.upload_from_string(json_bytes, content_type=content_type)
+                blob.upload_from_string(data, content_type=content_type)
                 return True
 
             else:

@@ -101,7 +101,7 @@ from shared_libs.common.pipeline import Pipeline, PipelineStatus
 from config.all_config import DetectionConfig, detection_config, model_config
 from utils.id_generator import create_video_id, create_run_id
 from shared_libs.common.tracker import AffineAwareByteTrack
-from shared_libs.common.detection_utils import save_all_detections
+from shared_libs.common.detection_utils import detections_list_to_json
 from shared_libs.common.track_to_player import map_detections_to_players
 
 logger = logging.getLogger(__name__)
@@ -498,8 +498,9 @@ class TrackGeneratorPipeline(Pipeline):
             detections_data: List of detections to save
         """
         try:
-            from shared_libs.common.detection_utils import save_all_detections
-            save_all_detections(self.tenant_storage, detections_path, detections_data, extra_metadata=None)
+            json_data = detections_list_to_json(detections_data)
+            json_bytes = json.dumps(json_data).encode('utf-8')
+            self.storage_client.upload_from_bytes(detections_path, json_bytes)
             logger.debug(f"Asynchronously saved detections to {detections_path}")
         except Exception as e:
             logger.error(f"Failed to save detections asynchronously to {detections_path}: {e}")

@@ -52,7 +52,7 @@ from config.all_config import (DetectionConfig, detection_config, model_config,
                                training_config)
 from PIL import Image
 from supervision import Detections
-from shared_libs.common.detection_utils import save_all_detections
+from shared_libs.common.detection_utils import detections_list_to_json
 from supervision.utils.image import crop_image
 
 from shared_libs.common.background_mask import (
@@ -628,7 +628,9 @@ class DataPrepPipeline(Pipeline):
 
             # Save detections using shared utility
             detections_blob_name = f"{video_folder.rstrip('/')}/detections.json"
-            save_all_detections(self.tenant_storage, detections_blob_name, all_detections)
+            json_data = detections_list_to_json(all_detections)
+            json_bytes = json.dumps(json_data).encode("utf-8")
+            self.tenant_storage.upload_from_bytes(detections_blob_name, json_bytes
 
             logger.info(f"Player detection completed for frame id {frame_id} - {detections_count} detections found")
 
