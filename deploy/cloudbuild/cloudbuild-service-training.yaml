@@ -9,7 +9,6 @@
 # Usage:
 #   gcloud builds submit --region=us-central1 --config=deploy/cloudbuild/cloudbuild-service-training.yaml
 
-region: us-central1
 
 substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"

@@ -244,20 +244,29 @@ async def get_tracking_progress(task_id: str):
     Get current progress for a tracking job.
 
     Returns the latest processing status, frames processed, and other progress metrics.
+    If no progress data exists, waits up to 20 seconds for it to appear before returning 404.
     """
     try:
-        # Get progress from Firestore
         db = firestore.Client()
-        progress_doc = db.collection('tracking_progress').document(task_id).get()
+        start_time = asyncio.get_event_loop().time()
+        timeout = 20.0  # 20 seconds
         
-        if not progress_doc.exists:
-            raise HTTPException(status_code=404, detail=f"No progress data found for task {task_id}")
-        
-        progress_data = progress_doc.to_dict()
-        if not progress_data:
-            raise HTTPException(status_code=404, detail=f"No progress data found for task {task_id}")
+        while True:
+            # Get progress from Firestore
+            progress_doc = db.collection('tracking_progress').document(task_id).get()
             
-        return progress_data
+            if progress_doc.exists:
+                progress_data = progress_doc.to_dict()
+                if progress_data:
+                    return progress_data
+            
+            # Check if we've exceeded the timeout
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed >= timeout:
+                raise HTTPException(status_code=404, detail=f"No progress data found for task {task_id} after waiting {timeout} seconds")
+            
+            # Wait before checking again
+            await asyncio.sleep(2)
 
     except HTTPException:
         raise
