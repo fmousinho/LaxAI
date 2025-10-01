@@ -216,11 +216,15 @@ class UnverifiedTrackGenerationWorkflow:
             doc_ref = self.firestore_client.collection("tracking_progress").document(self.task_id)
 
             update_data = {
-                "status": "running",
                 "frames_processed": frames_processed,
                 "total_frames": total_frames,
                 "updated_at": datetime.now(timezone.utc).isoformat() + "Z"
             }
+            
+            # Only update status to 'running' if not cancelled
+            # This prevents overwriting a 'cancelled' status set by the signal handler
+            if not (self.cancellation_event and self.cancellation_event.is_set()):
+                update_data["status"] = "running"
 
             doc_ref.update(update_data)
             logger.info(f"Updated Firestore progress for task_id {self.task_id}: {frames_processed}/{total_frames} frames")
@@ -339,15 +343,19 @@ class UnverifiedTrackGenerationWorkflow:
             if self.cancellation_event and self.cancellation_event.is_set():
                 final_status = "cancelled"
                 message = "Track generation cancelled during execution"
+                error_message = message  # Preserve error message for Firestore
             elif successful_runs == total_runs:
                 final_status = "completed"
                 message = f"Successfully processed all {total_runs} videos"
+                error_message = None
             elif successful_runs > 0:
                 final_status = "partial_success"
                 message = f"Processed {successful_runs}/{total_runs} videos successfully"
+                error_message = None
             else:
                 final_status = "failed"
                 message = f"Failed to process any of the {total_runs} videos"
+                error_message = message
 
             result = {
                 "status": final_status,
@@ -363,7 +371,8 @@ class UnverifiedTrackGenerationWorkflow:
                 "track_generation_results": track_generation_results,
             }
 
-            self._update_firestore_status(final_status)
+            # Update Firestore with status and error message if applicable
+            self._update_firestore_status(final_status, error_message)
             return result
 
         except InterruptedError:
