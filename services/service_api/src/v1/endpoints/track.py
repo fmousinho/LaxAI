@@ -249,7 +249,7 @@ async def get_tracking_progress(task_id: str):
     try:
         db = firestore.Client()
         start_time = asyncio.get_event_loop().time()
-        timeout = 20.0  # 20 seconds
+        timeout = 30.0  # 30 seconds
         
         while True:
             # Get progress from Firestore
