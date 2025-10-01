@@ -183,7 +183,7 @@ class UnverifiedTrackGenerationWorkflow:
         try:
             from datetime import datetime, timezone
 
-            doc_ref = self.firestore_client.collection("tracking_runs").document(self.task_id)
+            doc_ref = self.firestore_client.collection("tracking_progress").document(self.task_id)
 
             update_data = {
                 "status": status,
@@ -198,6 +198,35 @@ class UnverifiedTrackGenerationWorkflow:
 
         except Exception as e:
             logger.error(f"Failed to update Firestore status for task_id {self.task_id}: {e}")
+
+    def _update_firestore_progress(self, frames_processed: int, total_frames: int) -> None:
+        """
+        Update the Firestore document with processing progress.
+
+        Args:
+            frames_processed: Number of frames processed so far
+            total_frames: Total number of frames to process
+        """
+        if not self.firestore_client or not self.task_id:
+            return
+
+        try:
+            from datetime import datetime, timezone
+
+            doc_ref = self.firestore_client.collection("tracking_progress").document(self.task_id)
+
+            update_data = {
+                "status": "running",
+                "frames_processed": frames_processed,
+                "total_frames": total_frames,
+                "updated_at": datetime.now(timezone.utc).isoformat() + "Z"
+            }
+
+            doc_ref.update(update_data)
+            logger.info(f"Updated Firestore progress for task_id {self.task_id}: {frames_processed}/{total_frames} frames")
+
+        except Exception as e:
+            logger.error(f"Failed to update Firestore progress for task_id {self.task_id}: {e}")
 
     def execute(self) -> Dict[str, Any]:
         """Execute track generation for all discovered videos.
@@ -254,14 +283,14 @@ class UnverifiedTrackGenerationWorkflow:
             successful_runs = 0
             total_runs = len(videos)
 
-            for video_path in videos:
+            for i, video_path in enumerate(videos):
                 # Check for cancellation before processing each video
                 if self.cancellation_event and self.cancellation_event.is_set():
                     logger.info("Track generation cancelled during video processing")
                     break
 
                 try:
-                    logger.info(f"Processing video: {video_path}")
+                    logger.info(f"Processing video {i+1}/{total_runs}: {video_path}")
 
                     # Create pipeline for this video
                     pipeline = TrackGeneratorPipeline(
@@ -288,6 +317,10 @@ class UnverifiedTrackGenerationWorkflow:
                     else:
                         logger.warning(f"Failed to process video {video_path}: {video_result.get('status')}")
 
+                    # Update progress after each video
+                    if self.task_id:
+                        self._update_firestore_progress(i + 1, total_runs)
+
                 except Exception as e:
                     logger.error(f"Error processing video {video_path}: {e}")
                     track_generation_results.append({
@@ -297,6 +330,10 @@ class UnverifiedTrackGenerationWorkflow:
                             "error": str(e)
                         }
                     })
+
+                    # Still update progress even on error
+                    if self.task_id:
+                        self._update_firestore_progress(i + 1, total_runs)
 
             # Determine overall status
             if self.cancellation_event and self.cancellation_event.is_set():

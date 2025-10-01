@@ -74,7 +74,7 @@ class TrackingStatusManager:
         if not self.project_id:
             raise ValueError("GOOGLE_CLOUD_PROJECT environment variable not set")
         self.db = firestore.Client(project=self.project_id)
-        self._runs_collection = self.db.collection("tracking_runs")
+        self._runs_collection = self.db.collection("tracking_progress")
 
     def get_tracking_job_status(self, task_id: str) -> dict:
         """Get status for a specific tracking job."""
@@ -258,7 +258,24 @@ async def get_tracking_progress(task_id: str):
             if progress_doc.exists:
                 progress_data = progress_doc.to_dict()
                 if progress_data:
-                    return progress_data
+                    # Only include progress-specific fields if status is "running"
+                    status = progress_data.get("status")
+                    if status == "running":
+                        return progress_data
+                    else:
+                        # For non-running status, return only basic status fields
+                        basic_data = {
+                            "task_id": progress_data.get("task_id"),
+                            "status": status,
+                            "updated_at": progress_data.get("updated_at"),
+                            "created_at": progress_data.get("created_at"),
+                            "error": progress_data.get("error"),
+                            "execution_name": progress_data.get("execution_name"),
+                            "job_name": progress_data.get("job_name"),
+                            "region": progress_data.get("region")
+                        }
+                        # Remove None values
+                        return {k: v for k, v in basic_data.items() if v is not None}
             
             # Check if we've exceeded the timeout
             elapsed = asyncio.get_event_loop().time() - start_time
@@ -288,25 +305,25 @@ async def stream_tracking_progress(task_id: str):
             status_manager = get_status_manager()
             last_update = None
 
-            # First, check if job is not started and wait for it
+            # First, check if job is initializing and wait for it
             job_status = status_manager.get_tracking_job_status(task_id)
-            if job_status.get("status") == "not_started":
-                # Send initial message that job hasn't started
-                yield f"data: {json.dumps({'status': 'waiting', 'message': 'Job is queued and has not started yet. Progress updates will begin when processing starts.'})}\n\n"
+            if job_status.get("status") == "initializing":
+                # Send initial message that job is initializing
+                yield f"data: {json.dumps({'status': 'initializing', 'message': 'Job is initializing and will start processing soon.'})}\n\n"
 
                 # Keep connection alive with periodic status checks
                 while True:
-                    await asyncio.sleep(3)  # Check every 5 seconds
+                    await asyncio.sleep(3)  # Check every 3 seconds
 
                     # Re-check job status
                     current_status = status_manager.get_tracking_job_status(task_id)
-                    if current_status.get("status") != "not_started":
+                    if current_status.get("status") != "initializing":
                         # Job has started! Send a message and break to start normal streaming
                         yield f"data: {json.dumps({'status': 'started', 'message': 'Job has started processing. Switching to progress streaming.'})}\n\n"
                         break
 
                     # Send keep-alive message
-                    yield f"data: {json.dumps({'status': 'waiting', 'message': 'Still waiting for job to start...'})}\n\n"
+                    yield f"data: {json.dumps({'status': 'initializing', 'message': 'Job is still initializing...'})}\n\n"
 
             # Now proceed with normal progress streaming
             while True:
@@ -322,7 +339,28 @@ async def stream_tracking_progress(task_id: str):
                         # Only send if there's new data
                         if updated_at != last_update:
                             last_update = updated_at
-                            yield f"data: {json.dumps(progress_data)}\n\n"
+                            
+                            # Filter data based on status
+                            status = progress_data.get("status")
+                            if status == "running":
+                                # Include all data including progress fields
+                                filtered_data = progress_data
+                            else:
+                                # For non-running status, only include basic status fields
+                                filtered_data = {
+                                    "task_id": progress_data.get("task_id"),
+                                    "status": status,
+                                    "updated_at": progress_data.get("updated_at"),
+                                    "created_at": progress_data.get("created_at"),
+                                    "error": progress_data.get("error"),
+                                    "execution_name": progress_data.get("execution_name"),
+                                    "job_name": progress_data.get("job_name"),
+                                    "region": progress_data.get("region")
+                                }
+                                # Remove None values
+                                filtered_data = {k: v for k, v in filtered_data.items() if v is not None}
+                            
+                            yield f"data: {json.dumps(filtered_data)}\n\n"
 
                             # If job is complete, end the stream
                             if progress_data.get('status') in ['completed', 'failed', 'cancelled']:

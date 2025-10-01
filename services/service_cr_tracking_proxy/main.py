@@ -39,7 +39,7 @@ class TrackingJobProxy:
         Returns a dict with status, error, operation_name, execution_name, timestamps, etc.
         """
         try:
-            doc = self._runs_collection.document(task_id).get()
+            doc = self._progress_collection.document(task_id).get()
             if not doc.exists:
                 return {"task_id": task_id, "status": "not_found", "error": "No mapping found for this task_id."}
             data = doc.to_dict() or {}
@@ -65,7 +65,7 @@ class TrackingJobProxy:
 
         # Firestore client for mapping task_id -> operation/execution
         self.db = firestore.Client(project=self.project_id)
-        self._runs_collection = self.db.collection("tracking_runs")
+        self._progress_collection = self.db.collection("tracking_progress")
 
     def _build_run_request(self, payload: Dict[str, Any]) -> RunJobRequest:
         """Builds a RunJobRequest for the existing laxai-service-tracking job with args overrides.
@@ -141,14 +141,14 @@ class TrackingJobProxy:
                     "execution_name": execution_name,
                     "job_name": _JOB_NAME,
                     "region": self.region,
-                    "status": "not_started",
+                    "status": "initializing",
                     "created_at": now,
                     "updated_at": now,
                     "error": None,
                     "payload": payload,
                 }
                 try:
-                    doc_ref = self._runs_collection.document(task_id)
+                    doc_ref = self._progress_collection.document(task_id)
                     if not doc_ref.get().exists:
                         doc_ref.set(doc)
                         logger.info(f"Persisted run mapping for task_id={task_id} -> operation={execution_name}")
@@ -170,7 +170,7 @@ class TrackingJobProxy:
         Uses the execution_name stored in Firestore for direct cancellation.
         """
         try:
-            doc_ref = self._runs_collection.document(task_id)
+            doc_ref = self._progress_collection.document(task_id)
             doc = doc_ref.get()
             if not doc.exists:
                 logger.warning(f"No mapping found for task_id={task_id}; nothing to cancel")
@@ -208,7 +208,7 @@ class TrackingJobProxy:
             logger.error(f"Failed to cancel task_id={task_id}: {e}")
             # Try to update mapping with error
             try:
-                self._runs_collection.document(task_id).update({"status": "error", "error": str(e), "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
+                self._progress_collection.document(task_id).update({"status": "error", "error": str(e), "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
             except Exception:
                 pass
             # Don't re-raise the exception, just log it
@@ -232,6 +232,7 @@ class TrackingJobProxy:
                     logger.error(f"Missing tenant_id in payload. Available keys: {list(payload.keys())}")
                     raise ValueError("Create action requires tenant_id")
                 job_id = self.start_tracking_job(payload)
+
                 logger.info(f"Queued tracking job: {job_id}")
 
             elif action == "cancel":

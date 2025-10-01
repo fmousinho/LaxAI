@@ -32,7 +32,7 @@ def test_health_endpoint(client):
 
 def test_list_training_jobs(client):
     """Test listing training jobs."""
-    response = client.get("/train/")
+    response = client.get("/api/v1/train/")
     assert response.status_code == 200
     data = response.json()
     assert "jobs" in data
@@ -42,7 +42,7 @@ def test_list_training_jobs(client):
 
 def test_list_tracking_jobs(client):
     """Test listing tracking jobs."""
-    response = client.get("/track/")
+    response = client.get("/api/v1/track/")
     assert response.status_code == 200
     data = response.json()
     assert "jobs" in data
@@ -55,14 +55,14 @@ def test_create_tracking_job_missing_tenant_id(client):
         "custom_name": "test_tracking_job"
         # Missing tenant_id
     }
-    response = client.post("/track/", json=request_data)
+    response = client.post("/api/v1/track", json=request_data)
     assert response.status_code == 422  # Validation error
 
 
-def test_create_tracking_job_valid(client, mocker):
-    """Test creating a tracking job with valid data."""
+def test_create_tracking_job_valid_mock(client, mocker):
+    """Test creating a tracking job with valid data (mocked)."""
     # Mock the PubSub publisher
-    mock_publisher = mocker.patch("src.v1.endpoints.track.get_publisher")
+    mock_publisher = mocker.patch("services.service_api.src.v1.endpoints.track.get_publisher")
     mock_instance = mocker.MagicMock()
     mock_instance.publish_tracking_request.return_value = "test-task-id-123"
     mock_publisher.return_value = mock_instance
@@ -76,7 +76,7 @@ def test_create_tracking_job_valid(client, mocker):
         }
     }
 
-    response = client.post("/track/", json=request_data)
+    response = client.post("/api/v1/track", json=request_data)
     assert response.status_code == 200
     data = response.json()
     assert data["task_id"] == "test-task-id-123"
@@ -84,29 +84,30 @@ def test_create_tracking_job_valid(client, mocker):
     assert "Tracking job queued successfully" in data["message"]
 
 
-def test_get_tracking_job_status_not_found(client, mocker):
-    """Test getting status for a non-existent tracking job."""
+def test_get_tracking_job_status_not_found_mock(client, mocker):
+    """Test getting status for a non-existent tracking job (mocked)."""
     # Mock the status manager
-    mock_manager = mocker.patch("src.v1.endpoints.track.get_status_manager")
+    mock_manager = mocker.patch("services.service_api.src.v1.endpoints.track.get_status_manager")
     mock_instance = mocker.MagicMock()
     mock_instance.get_tracking_job_status.return_value = {
         "task_id": "non-existent-id",
         "status": "not_found",
-        "error": "No tracking job found with this task_id."
+        "error": "No tracking job found with this task_id.",
+        "updated_at": "2023-01-01T00:00:00Z"
     }
     mock_manager.return_value = mock_instance
 
-    response = client.get("/track/non-existent-id")
+    response = client.get("/api/v1/track/non-existent-id")
     assert response.status_code == 200
     data = response.json()
     assert data["task_id"] == "non-existent-id"
     assert data["status"] == "not_found"
 
 
-def test_cancel_tracking_job(client, mocker):
-    """Test cancelling a tracking job."""
+def test_cancel_tracking_job_mock(client, mocker):
+    """Test cancelling a tracking job (mocked)."""
     # Mock the status manager and its methods
-    mock_manager = mocker.patch("src.v1.endpoints.track.get_status_manager")
+    mock_manager = mocker.patch("services.service_api.src.v1.endpoints.track.get_status_manager")
     mock_instance = mocker.MagicMock()
     mock_instance.get_tracking_job_status.return_value = {
         "task_id": "test-task-id",
@@ -115,7 +116,7 @@ def test_cancel_tracking_job(client, mocker):
     mock_instance._runs_collection = mocker.MagicMock()
     mock_manager.return_value = mock_instance
 
-    response = client.delete("/track/test-task-id")
+    response = client.delete("/api/v1/track/test-task-id")
     assert response.status_code == 200
     data = response.json()
     assert data["task_id"] == "test-task-id"
