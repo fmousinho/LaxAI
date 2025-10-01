@@ -149,7 +149,7 @@ async def create_tracking_job(request: TrackingRequest):
 
         return TrackingResponse(
             task_id=task_id,
-            status="queued",
+            status="not_started",  # Use PipelineStatus.NOT_STARTED value
             message="Tracking job queued successfully",
             created_at=datetime.now(timezone.utc).isoformat()
         )

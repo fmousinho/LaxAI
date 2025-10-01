@@ -279,10 +279,6 @@ class UnverifiedTrackGenerationWorkflow:
                 self._update_firestore_status("completed")
                 return result
 
-            # Update status to running before starting
-            if self.task_id:
-                self._update_firestore_status("running")
-
             track_generation_results = []
             successful_runs = 0
             total_runs = len(videos)
@@ -339,21 +335,21 @@ class UnverifiedTrackGenerationWorkflow:
                     if self.task_id:
                         self._update_firestore_progress(i + 1, total_runs)
 
-            # Determine overall status
+            # Determine overall status (use PipelineStatus enum values)
             if self.cancellation_event and self.cancellation_event.is_set():
-                final_status = "cancelled"
+                final_status = "cancelled"  # PipelineStatus.CANCELLED.value
                 message = "Track generation cancelled during execution"
                 error_message = message  # Preserve error message for Firestore
             elif successful_runs == total_runs:
-                final_status = "completed"
+                final_status = "completed"  # PipelineStatus.COMPLETED.value
                 message = f"Successfully processed all {total_runs} videos"
                 error_message = None
             elif successful_runs > 0:
-                final_status = "partial_success"
-                message = f"Processed {successful_runs}/{total_runs} videos successfully"
+                final_status = "completed"  # Changed from "partial_success" - use PipelineStatus.COMPLETED
+                message = f"Processed {successful_runs}/{total_runs} videos successfully (partial success)"
                 error_message = None
             else:
-                final_status = "failed"
+                final_status = "error"  # Changed from "failed" - use PipelineStatus.ERROR.value
                 message = f"Failed to process any of the {total_runs} videos"
                 error_message = message
 

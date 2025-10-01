@@ -731,6 +731,18 @@ class TrackGeneratorPipeline(Pipeline):
                 else:
                     logger.info(f"📦 SEQUENTIAL DETECTION | Processing frame-by-frame (batch_size={self.detection_model.batch_size})")
                 
+                # Update status to "running" now that we're about to process frames
+                # This complies with PipelineStatus.RUNNING enum value
+                self._update_progress({
+                    'status': 'running',
+                    'progress_percent': 0.0,
+                    'frames_processed': resume_frame,
+                    'total_frames': total_frames,
+                    'detections_count': detections_count,
+                    'current_video': video_guid
+                })
+                logger.info(f"Status updated to 'running' - starting frame processing")
+                
                 # Frame buffer for batch processing
                 frame_buffer: List[np.ndarray] = []
                 frame_indices_buffer: List[int] = []
@@ -902,7 +914,7 @@ class TrackGeneratorPipeline(Pipeline):
                                 if frame_number % 100 == 0:
                                     logger.info(f"📹 Progress: {frame_number}/{total_frames} frames ({detections_count} detections)")
                                     self._update_progress({
-                                        'status': 'processing',
+                                        'status': 'running',  # Use PipelineStatus.RUNNING.value
                                         'progress_percent': (frame_number / total_frames) * 100,
                                         'frames_processed': frame_number,
                                         'total_frames': total_frames,
@@ -1000,7 +1012,7 @@ class TrackGeneratorPipeline(Pipeline):
                         # Update progress in Firestore for real-time tracking
                         progress_percent = (frame_number / total_frames) * 100
                         self._update_progress({
-                            'status': 'processing',
+                            'status': 'running',  # Use PipelineStatus.RUNNING.value
                             'progress_percent': progress_percent,
                             'frames_processed': frame_number,
                             'total_frames': total_frames,

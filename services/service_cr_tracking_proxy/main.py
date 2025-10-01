@@ -141,7 +141,7 @@ class TrackingJobProxy:
                     "execution_name": execution_name,
                     "job_name": _JOB_NAME,
                     "region": self.region,
-                    "status": "initializing",
+                    "status": "not_started",  # Use PipelineStatus.NOT_STARTED value
                     "created_at": now,
                     "updated_at": now,
                     "error": None,
