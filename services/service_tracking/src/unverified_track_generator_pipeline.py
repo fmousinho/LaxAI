@@ -787,6 +787,9 @@ class TrackGeneratorPipeline(Pipeline):
                         break
 
                     try:
+                        # Initialize detections to empty to avoid unbound variable errors
+                        detections = sv.Detections.empty()
+                        
                         # Convert BGR to RGB for model input
                         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) #type: ignore
                         
@@ -1247,7 +1250,8 @@ class TrackGeneratorPipeline(Pipeline):
         Handle graceful pipeline shutdown during video processing.
 
         Completes all pending crop extraction and upload tasks before stopping,
-        preventing data loss and enabling resume capability.
+        preventing data loss and enabling resume capability. Updates Firestore status
+        to 'cancelled' before shutting down.
 
         Args:
             crop_tasks: Pending crop extraction tasks to complete
@@ -1267,8 +1271,18 @@ class TrackGeneratorPipeline(Pipeline):
 
         Note:
             Ensures no data loss by completing pending operations before cancellation.
+            Updates Firestore status to 'cancelled' for external monitoring.
         """
         logger.info("Initiating graceful stop of the pipeline...")
+        
+        # Update Firestore status to cancelled immediately
+        self._update_progress({
+            'status': 'cancelled',
+            'frames_processed': frame_number,
+            'detections_count': detections_count,
+            'cancellation_reason': 'Stop requested during detection processing'
+        })
+        logger.info(f"Updated Firestore status to 'cancelled' for task_id: {self.task_id}")
         
         if crop_tasks:
             logger.info(f"Processing remaining {len(crop_tasks)} crop tasks before stopping...")
@@ -1284,6 +1298,8 @@ class TrackGeneratorPipeline(Pipeline):
                 await asyncio.gather(*upload_tasks)
             
             asyncio.run(wait_for_pending_uploads())
+
+        logger.info(f"Graceful stop completed. Processed {frame_number} frames with {detections_count} detections.")
 
         # Return context with partial results
         context_to_update = {
