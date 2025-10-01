@@ -7,7 +7,6 @@
 # This Cloud Build file deploys the tracking proxy as a Cloud Function
 # triggered by Pub/Sub messages. Much more cost-effective than always-on Cloud Run.
 
-region: us-central1
 
 substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"
