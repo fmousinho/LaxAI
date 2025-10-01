@@ -204,7 +204,7 @@ class DataPrepManager:
                     "group2_id": group2_id,
                     "group1_prefixes": group1_prefixes,
                     "group2_prefixes": group2_prefixes,
-                    "total_pairs": progress_info["total_pairs"],
+                    "total_pairs": progress_info["total_possible_pairs"],
                     "verified_pairs": progress_info["verified_pairs"],
                 }
             else:
