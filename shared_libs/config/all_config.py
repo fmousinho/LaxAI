@@ -138,7 +138,7 @@ class DetectionConfig:
     )
     frames_per_video: int = 3  # Number of frames to extract per video
     # Batch processing configuration
-    batch_size: int = 16  # Number of frames to process in parallel (16 for GPU, 1 for CPU/MPS)
+    batch_size: int = 32  # Number of frames to process in parallel (32 for GPU, 1 for CPU/MPS)
     # Note: This default assumes GPU availability. For CPU/MPS, this should be set to 1
     # at runtime based on the device being used.
     use_batch_detection: bool = True  # Enable batch detection for improved GPU utilization (default: enabled)
