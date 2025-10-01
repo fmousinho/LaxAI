@@ -145,7 +145,10 @@ class TrackingJobProxy:
                     "created_at": now,
                     "updated_at": now,
                     "error": None,
-                    "payload": payload,
+                    # Flatten payload fields (exclude action and task_id to avoid duplication)
+                    "tenant_id": payload.get("tenant_id"),
+                    "custom_name": payload.get("custom_name"),
+                    "tracking_params": payload.get("tracking_params")
                 }
                 try:
                     doc_ref = self._progress_collection.document(task_id)
