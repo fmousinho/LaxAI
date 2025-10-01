@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
 from google.api_core.exceptions import GoogleAPIError
 from google.cloud import pubsub_v1, firestore  # type: ignore
 
@@ -290,96 +289,3 @@ async def get_tracking_progress(task_id: str):
     except Exception as e:
         logger.error(f"Error getting progress for task {task_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get progress for task {task_id}")
-
-
-@router.get("/{task_id}/progress/stream")
-async def stream_tracking_progress(task_id: str):
-    """
-    Server-Sent Events endpoint for real-time progress updates.
-
-    Returns a stream of progress updates for authenticated clients.
-    """
-    async def generate_progress_stream():
-        try:
-            db = firestore.Client()
-            status_manager = get_status_manager()
-            last_update = None
-
-            # First, check if job is initializing and wait for it
-            job_status = status_manager.get_tracking_job_status(task_id)
-            if job_status.get("status") == "initializing":
-                # Send initial message that job is initializing
-                yield f"data: {json.dumps({'status': 'initializing', 'message': 'Job is initializing and will start processing soon.'})}\n\n"
-
-                # Keep connection alive with periodic status checks
-                while True:
-                    await asyncio.sleep(3)  # Check every 3 seconds
-
-                    # Re-check job status
-                    current_status = status_manager.get_tracking_job_status(task_id)
-                    if current_status.get("status") != "initializing":
-                        # Job has started! Send a message and break to start normal streaming
-                        yield f"data: {json.dumps({'status': 'started', 'message': 'Job has started processing. Switching to progress streaming.'})}\n\n"
-                        break
-
-                    # Send keep-alive message
-                    yield f"data: {json.dumps({'status': 'initializing', 'message': 'Job is still initializing...'})}\n\n"
-
-            # Now proceed with normal progress streaming
-            while True:
-                # Get latest progress
-                progress_doc = db.collection('tracking_progress').document(task_id).get()
-
-                if progress_doc.exists:
-                    progress_data = progress_doc.to_dict()
-
-                    if progress_data:
-                        updated_at = progress_data.get('updated_at')
-
-                        # Only send if there's new data
-                        if updated_at != last_update:
-                            last_update = updated_at
-                            
-                            # Filter data based on status
-                            status = progress_data.get("status")
-                            if status == "running":
-                                # Include all data including progress fields
-                                filtered_data = progress_data
-                            else:
-                                # For non-running status, only include basic status fields
-                                filtered_data = {
-                                    "task_id": progress_data.get("task_id"),
-                                    "status": status,
-                                    "updated_at": progress_data.get("updated_at"),
-                                    "created_at": progress_data.get("created_at"),
-                                    "error": progress_data.get("error"),
-                                    "execution_name": progress_data.get("execution_name"),
-                                    "job_name": progress_data.get("job_name"),
-                                    "region": progress_data.get("region")
-                                }
-                                # Remove None values
-                                filtered_data = {k: v for k, v in filtered_data.items() if v is not None}
-                            
-                            yield f"data: {json.dumps(filtered_data)}\n\n"
-
-                            # If job is complete, end the stream
-                            if progress_data.get('status') in ['completed', 'failed', 'cancelled']:
-                                break
-
-                # Wait before checking again
-                await asyncio.sleep(2)
-
-        except Exception as e:
-            logger.error(f"Error in progress stream for task {task_id}: {e}")
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
-
-    return StreamingResponse(
-        generate_progress_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Cache-Control",
-        }
-    )
