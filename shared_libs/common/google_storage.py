@@ -252,6 +252,11 @@ class GoogleStorageClient:
         self._authenticated = False
         self.credentials = credentials
 
+    @property
+    def bucket_name(self) -> Optional[str]:
+        """Get the current bucket name."""
+        return self._bucket.name if self._bucket else None
+
     def _authenticate(self) -> bool:
         """
         Authenticate with Google Cloud Storage.

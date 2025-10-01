@@ -262,6 +262,7 @@ class DataPrepManager:
                 video_id=self.current_video_id,
                 track_id=track_id
             )
+            prefix = f"{self.storage.bucket_name}/{self.tenant_id}/{prefix}"
             prefixes.append(prefix)
 
         return prefixes
