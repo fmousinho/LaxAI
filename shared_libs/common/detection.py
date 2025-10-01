@@ -46,6 +46,7 @@ class DetectionModel:
         model_dir: str = COLLECTION_NAME,
         model_version: str = ALIAS,
         device: Optional[torch.device] = None,
+        batch_size: Optional[int] = None,
     ):
         """
         Initializes the DetectionModel.
@@ -54,6 +55,8 @@ class DetectionModel:
             registry: The name of the model registry.
             device: The device to run the model on (CPU or GPU).
             device: The torch.device (cpu or cuda) to load the model onto.
+            batch_size: Number of frames to process in parallel. If None, uses config default
+                       adjusted for device type (1 for CPU/MPS, 16 for CUDA).
         """
         self.model: RFDETRBase
         self.model_artifact = f"{registry}/{model_dir}:{model_version}"
@@ -67,12 +70,22 @@ class DetectionModel:
         else:
             self.device = device
 
+        # Set batch size based on device if not explicitly provided
+        if batch_size is None:
+            if self.device.type == "cuda":
+                self.batch_size = detection_config.batch_size  # Default 16 for GPU
+            else:
+                self.batch_size = 1  # CPU/MPS: process one frame at a time
+        else:
+            self.batch_size = batch_size
+
         if self._load_model():
             logger.info(
                 f"Detection model '{self.model.__class__.__name__}' " "successfully initialized"
             )
             logger.info(f"Detection threshold: {detection_config.prediction_threshold}")
             logger.info(f"Model loaded onto device: {self.device}")
+            logger.info(f"Batch size: {self.batch_size}")
         else:
             raise RuntimeError(f"Failed to load '{self.model_artifact}' from wandb.")
 
@@ -192,6 +205,68 @@ class DetectionModel:
             )
 
         return self.model.predict(images, threshold=threshold, **kwargs)
+
+    def generate_detections_batch(
+        self,
+        images: List[Union[str, Image.Image, np.ndarray]],
+        threshold: float = detection_config.prediction_threshold,
+        **kwargs,
+    ) -> List[Detections]:
+        """
+        Runs batch inference on multiple frames simultaneously for improved GPU utilization.
+        
+        This method processes frames in batches to maximize GPU throughput. It's particularly
+        effective for video processing where multiple frames can be detected in parallel
+        before sequential tracking is applied.
+
+        Args:
+            images: List of input images to process in batch. Each can be a file path (str),
+                   PIL Image, or NumPy array. All images should be in the same format.
+            threshold: Confidence threshold for detections.
+            **kwargs: Additional keyword arguments passed to the underlying model's predict method.
+
+        Returns:
+            List of `supervision.Detections` objects, one per input image, maintaining input order.
+
+        Raises:
+            ValueError: If images list is empty.
+            
+        Note:
+            - For single frame processing, use `generate_detections()` instead
+            - Batch size is controlled by `self.batch_size` (configured at initialization)
+            - Images are processed in batches to balance memory usage and throughput
+            - RF-DETR's predict method handles list inputs natively, returning List[Detections]
+        """
+        if not images:
+            raise ValueError("Images list cannot be empty for batch detection")
+        
+        # If only one image, use the standard method and return as list
+        if len(images) == 1:
+            result = self.generate_detections(images[0], threshold=threshold, **kwargs)
+            # Handle both single Detections and List[Detections] return types
+            if isinstance(result, list):
+                return result
+            else:
+                return [result]
+        
+        # Process images in batches using configured batch_size
+        all_detections: List[Detections] = []
+        
+        for i in range(0, len(images), self.batch_size):
+            batch = images[i:i + self.batch_size]
+            
+            # RF-DETR's predict method accepts lists and returns List[Detections]
+            # Type ignore needed due to RF-DETR's flexible input type signature
+            batch_results = self.model.predict(batch, threshold=threshold, **kwargs)  # type: ignore
+            
+            # Ensure we always get a list back
+            if isinstance(batch_results, list):
+                all_detections.extend(batch_results)
+            else:
+                # If single result returned, wrap it in a list
+                all_detections.append(batch_results)
+        
+        return all_detections
 
     def empty_detections(self):
         """Returns an empty Detections object."""
