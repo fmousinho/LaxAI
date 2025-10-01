@@ -257,24 +257,7 @@ async def get_tracking_progress(task_id: str):
             if progress_doc.exists:
                 progress_data = progress_doc.to_dict()
                 if progress_data:
-                    # Only include progress-specific fields if status is "running"
-                    status = progress_data.get("status")
-                    if status == "running":
-                        return progress_data
-                    else:
-                        # For non-running status, return only basic status fields
-                        basic_data = {
-                            "task_id": progress_data.get("task_id"),
-                            "status": status,
-                            "updated_at": progress_data.get("updated_at"),
-                            "created_at": progress_data.get("created_at"),
-                            "error": progress_data.get("error"),
-                            "execution_name": progress_data.get("execution_name"),
-                            "job_name": progress_data.get("job_name"),
-                            "region": progress_data.get("region")
-                        }
-                        # Remove None values
-                        return {k: v for k, v in basic_data.items() if v is not None}
+                    return {k: v for k, v in progress_data.items() if v is not None}
             
             # Check if we've exceeded the timeout
             elapsed = asyncio.get_event_loop().time() - start_time
