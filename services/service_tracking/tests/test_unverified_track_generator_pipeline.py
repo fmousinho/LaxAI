@@ -131,10 +131,10 @@ class TestTrackGeneratorPipeline:
                 tenant_id="test_tenant"
             )
 
-    @patch('unverified_track_generator_pipeline.get_storage')
-    @patch('unverified_track_generator_pipeline.GCSPaths')
-    @patch('unverified_track_generator_pipeline.DetectionModel')
-    @patch('unverified_track_generator_pipeline.AffineAwareByteTrack')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.get_storage')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.GCSPaths')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.DetectionModel')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.AffineAwareByteTrack')
     def test_run_with_empty_video_path(self, mock_tracker_class, mock_detection_class,
                                       mock_paths_class, mock_storage_func,
                                       mock_config, mock_detection_model, mock_tracker,

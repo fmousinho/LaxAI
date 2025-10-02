@@ -54,8 +54,11 @@ COPY services/service_tracking/src/ /app/services/service_tracking/src/
 COPY config.toml /app/config.toml
 
 # Set PYTHONPATH globally for all users and entrypoints
+# Suppress gRPC ALTS warnings in Cloud Run
 ENV PYTHONPATH=/app/shared_libs:/app/services/service_tracking/src \
-    CONFIG_TOML_PATH=/app/config.toml
+    CONFIG_TOML_PATH=/app/config.toml \
+    GRPC_VERBOSITY=ERROR \
+    GRPC_TRACE=""
 
 # Create non-root user for security
 RUN groupadd -r appuser && useradd -r -g appuser appuser

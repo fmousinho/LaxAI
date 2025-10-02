@@ -87,9 +87,13 @@ from matplotlib.style import context
 import numpy as np
 import asyncio
 import time
+import warnings
 from typing import List, Dict, Any, Optional, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
+
+# Suppress PyTorch JIT tracing warnings in multiprocessing context
+warnings.filterwarnings('ignore', category=UserWarning, message='.*TracerWarning.*')
 
 import supervision as sv
 from supervision.utils.image import crop_image
@@ -282,13 +286,12 @@ class TrackGeneratorPipeline(Pipeline):
             logger.critical(f"CRITICAL ERROR: Tracker is required for training pipeline but failed to initialize: {e}")
             raise RuntimeError(f"Training pipeline cannot continue without tracker: {e}")
         
-        # Initialize thread pool executor for parallel crop extraction
-        # This allows true parallelism for CPU-bound crop operations
-        self._crop_executor = ThreadPoolExecutor(
-            max_workers=4,
-            thread_name_prefix="crop_worker"
+        # Initialize process pool executor for parallel crop extraction
+        # Process pool bypasses GIL for true parallelism on CPU-bound crop operations
+        self._crop_executor = ProcessPoolExecutor(
+            max_workers=4
         )
-        logger.info("Crop extraction thread pool initialized (4 workers)")
+        logger.info("Crop extraction process pool initialized (4 workers)")
 
         # Define base pipeline steps (always included)
         step_definitions = [
@@ -324,7 +327,7 @@ class TrackGeneratorPipeline(Pipeline):
         """Cleanup resources on pipeline destruction."""
         if hasattr(self, '_crop_executor'):
             self._crop_executor.shutdown(wait=False)
-            logger.debug("Crop extraction thread pool shut down")
+            logger.debug("Crop extraction process pool shut down")
 
     def _update_progress(self, progress_data: Dict[str, Any]) -> None:
         """Update progress in Firestore for real-time tracking."""
