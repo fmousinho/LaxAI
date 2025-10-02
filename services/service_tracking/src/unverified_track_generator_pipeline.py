@@ -281,6 +281,14 @@ class TrackGeneratorPipeline(Pipeline):
         except RuntimeError as e:
             logger.critical(f"CRITICAL ERROR: Tracker is required for training pipeline but failed to initialize: {e}")
             raise RuntimeError(f"Training pipeline cannot continue without tracker: {e}")
+        
+        # Initialize thread pool executor for parallel crop extraction
+        # This allows true parallelism for CPU-bound crop operations
+        self._crop_executor = ThreadPoolExecutor(
+            max_workers=4,
+            thread_name_prefix="crop_worker"
+        )
+        logger.info("Crop extraction thread pool initialized (4 workers)")
 
         # Define base pipeline steps (always included)
         step_definitions = [
@@ -311,6 +319,12 @@ class TrackGeneratorPipeline(Pipeline):
         # Override run_folder to use structured GCS path
         self.run_guid = create_run_id()
         self.run_folder = self.path_manager.get_path("run_data", run_id=self.run_guid)
+    
+    def __del__(self):
+        """Cleanup resources on pipeline destruction."""
+        if hasattr(self, '_crop_executor'):
+            self._crop_executor.shutdown(wait=False)
+            logger.debug("Crop extraction thread pool shut down")
 
     def _update_progress(self, progress_data: Dict[str, Any]) -> None:
         """Update progress in Firestore for real-time tracking."""
@@ -659,6 +673,22 @@ class TrackGeneratorPipeline(Pipeline):
             f"Tracking: {avg_tracking_time_per_frame*1000:.1f}ms/frame | "
             f"Avg detections/frame: {total_detections/batch_size if batch_size > 0 else 0:.1f}"
         )
+    
+    def _log_crop_metrics(self, crop_time: float, num_crops: int, frame_idx: int):
+        """
+        Log crop extraction performance metrics.
+        
+        Args:
+            crop_time: Time spent extracting crops (seconds)
+            num_crops: Number of crops extracted
+            frame_idx: Frame number being processed
+        """
+        crops_per_sec = num_crops / crop_time if crop_time > 0 else 0
+        logger.info(
+            f"✂️ CROP Frame {frame_idx} | "
+            f"{num_crops} crops in {crop_time:.3f}s "
+            f"({crops_per_sec:.1f} crops/sec)"
+        )
 
     async def _process_video_frames_async(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -866,7 +896,7 @@ class TrackGeneratorPipeline(Pipeline):
                                     if frame_idx % FRAME_SAMPLING_FOR_CROP == 0:
                                         get_crop_task = asyncio.create_task(
                                             self._get_upload_list_for_frame(
-                                                frame_rgb_tracked.copy(), detections_tracked, video_guid, frame_idx
+                                                frame_rgb_tracked, detections_tracked, video_guid, frame_idx
                                             )
                                         )
                                         get_crop_tasks.append(get_crop_task)
@@ -947,7 +977,7 @@ class TrackGeneratorPipeline(Pipeline):
                         if frame_number % FRAME_SAMPLING_FOR_CROP == 0:
                             # Create async task for crop processing (returns list of (blob_path, crop_image))
                             get_crop_task = asyncio.create_task(
-                                self._get_upload_list_for_frame(frame_rgb.copy(), detections, video_guid, frame_number)
+                                self._get_upload_list_for_frame(frame_rgb, detections, video_guid, frame_number)
                             )
                             get_crop_tasks.append(get_crop_task)
                             logger.debug(f"Crop task created (pending={len(get_crop_tasks)} in current batch) -> {get_crop_task}")
@@ -1235,8 +1265,27 @@ class TrackGeneratorPipeline(Pipeline):
         Generate upload tasks for crops from a single frame.
         
         Returns list of (blob_path, crop_image) tuples for batch upload.
+        
+        This method runs crop extraction in a thread pool to avoid blocking
+        the async event loop, enabling true parallelism for CPU-bound operations.
         """
-        crop_tuples = self._get_crops(frame, detections)
+        # Run blocking crop extraction in thread pool for true parallelism
+        loop = asyncio.get_event_loop()
+        crop_start = time.time()
+        
+        crop_tuples = await loop.run_in_executor(
+            self._crop_executor,
+            self._get_crops,
+            frame,
+            detections
+        )
+        
+        crop_time = time.time() - crop_start
+        
+        # Log metrics if crops were extracted
+        if len(crop_tuples) > 0:
+            self._log_crop_metrics(crop_time, len(crop_tuples), frame_number)
+        
         upload_list = []
         if len(crop_tuples) > 0:
             for crop_tuple in crop_tuples:
@@ -1248,10 +1297,9 @@ class TrackGeneratorPipeline(Pipeline):
                 upload_list_tuple = (crop_path, crop_tuple[1])
                 upload_list.append(upload_list_tuple)
 
-            logger.debug(f"Generated upload list for frame {frame_number}: {upload_list}")
+            logger.debug(f"Generated upload list for frame {frame_number}: {len(upload_list)} crops")
         else:
-            logger.warning(f"No valid crops found for frame {frame_number}")
-            return upload_list
+            logger.debug(f"No valid crops found for frame {frame_number}")
 
         return upload_list
 
