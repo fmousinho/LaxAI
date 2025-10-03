@@ -146,8 +146,15 @@ class DetectionModel:
                 )
 
                 # Optimize for the configured batch size
-                logger.info(f"Optimizing model for batch size: {self.batch_size}")
-                self.model.optimize_for_inference(batch_size=self.batch_size)
+                try:
+                    logger.info(f"Optimizing model for batch size: {self.batch_size}")
+                    self.model.optimize_for_inference(batch_size=self.batch_size)
+                except Exception as optimize_error:
+                    logger.warning(
+                        "Skipping optimize_for_inference due to error: %s",
+                        optimize_error,
+                        exc_info=True,
+                    )
 
                 return True
 

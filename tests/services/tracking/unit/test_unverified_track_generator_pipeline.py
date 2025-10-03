@@ -12,13 +12,28 @@ import numpy as np
 import cv2
 import supervision as sv
 
-from services.service_tracking.src.unverified_track_generator_pipeline import TrackGeneratorPipeline
+from services.service_tracking.src.unverified_track_generator_pipeline import (
+    TrackGeneratorPipeline,
+    CROP_BATCH_SIZE,
+    CROP_WORKER_ENV_VAR,
+    CROP_BATCH_ENV_VAR,
+)
 from shared_libs.config.all_config import DetectionConfig
 from shared_libs.common.pipeline_step import StepStatus
 
 
 class TestTrackGeneratorPipeline:
     """Test suite for TrackGeneratorPipeline."""
+
+    @pytest.fixture(autouse=True)
+    def crop_concurrency_defaults(self, monkeypatch):
+        """Ensure deterministic crop concurrency during tests."""
+        monkeypatch.delenv(CROP_WORKER_ENV_VAR, raising=False)
+        monkeypatch.delenv(CROP_BATCH_ENV_VAR, raising=False)
+        monkeypatch.setattr(
+            "services.service_tracking.src.unverified_track_generator_pipeline.os.cpu_count",
+            lambda: 4,
+        )
 
     @pytest.fixture
     def mock_config(self):
@@ -90,6 +105,8 @@ class TestTrackGeneratorPipeline:
         assert pipeline.tracker == mock_tracker
         assert pipeline.tenant_storage == mock_storage
         assert pipeline.path_manager == mock_path_manager
+        assert pipeline._crop_worker_count == 4
+        assert pipeline._crop_batch_size == CROP_BATCH_SIZE
 
     @patch('services.service_tracking.src.unverified_track_generator_pipeline.get_storage')
     @patch('services.service_tracking.src.unverified_track_generator_pipeline.GCSPaths')
@@ -131,10 +148,10 @@ class TestTrackGeneratorPipeline:
                 tenant_id="test_tenant"
             )
 
-    @patch('unverified_track_generator_pipeline.get_storage')
-    @patch('unverified_track_generator_pipeline.GCSPaths')
-    @patch('unverified_track_generator_pipeline.DetectionModel')
-    @patch('unverified_track_generator_pipeline.AffineAwareByteTrack')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.get_storage')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.GCSPaths')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.DetectionModel')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.AffineAwareByteTrack')
     def test_run_with_empty_video_path(self, mock_tracker_class, mock_detection_class,
                                       mock_paths_class, mock_storage_func,
                                       mock_config, mock_detection_model, mock_tracker,
@@ -257,13 +274,37 @@ class TestTrackGeneratorPipeline:
         from services.service_tracking.src.unverified_track_generator_pipeline import (
             MIN_VIDEO_RESOLUTION,
             FRAME_SAMPLING_FOR_CROP,
-            CROP_BATCH_SIZE,
             MAX_CONCURRENT_UPLOADS,
-            CHECKPOINT_FRAME_INTERVAL
+            CHECKPOINT_FRAME_INTERVAL,
         )
 
         assert MIN_VIDEO_RESOLUTION == (1920, 1080)
         assert FRAME_SAMPLING_FOR_CROP == 15
-        assert CROP_BATCH_SIZE == 5
+        assert CROP_BATCH_SIZE == 4  # Default batch size prior to dynamic overrides
         assert MAX_CONCURRENT_UPLOADS == 2
         assert CHECKPOINT_FRAME_INTERVAL == 100
+
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.get_storage')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.GCSPaths')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.DetectionModel')
+    @patch('services.service_tracking.src.unverified_track_generator_pipeline.AffineAwareByteTrack')
+    def test_concurrency_env_overrides(self, mock_tracker_class, mock_detection_class,
+                                       mock_paths_class, mock_storage_func,
+                                       mock_config, mock_detection_model, mock_tracker,
+                                       mock_storage, mock_path_manager, monkeypatch):
+        """Environment variables should override default worker and batch sizing."""
+        mock_storage_func.return_value = mock_storage
+        mock_paths_class.return_value = mock_path_manager
+        mock_detection_class.return_value = mock_detection_model
+        mock_tracker_class.return_value = mock_tracker
+
+        monkeypatch.setenv(CROP_WORKER_ENV_VAR, "6")
+        monkeypatch.setenv(CROP_BATCH_ENV_VAR, "3")
+
+        pipeline = TrackGeneratorPipeline(
+            config=mock_config,
+            tenant_id="test_tenant"
+        )
+
+        assert pipeline._crop_worker_count == 6
+        assert pipeline._crop_batch_size == 3

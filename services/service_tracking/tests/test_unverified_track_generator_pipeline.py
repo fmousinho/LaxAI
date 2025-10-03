@@ -264,6 +264,6 @@ class TestTrackGeneratorPipeline:
 
         assert MIN_VIDEO_RESOLUTION == (1920, 1080)
         assert FRAME_SAMPLING_FOR_CROP == 15
-        assert CROP_BATCH_SIZE == 5
+        assert CROP_BATCH_SIZE == 4  # Match ProcessPoolExecutor worker count
         assert MAX_CONCURRENT_UPLOADS == 2
         assert CHECKPOINT_FRAME_INTERVAL == 100

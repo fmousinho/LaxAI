@@ -81,6 +81,7 @@ Stop Pipeline Example:
 """
 
 import logging
+import os
 import cv2
 import json
 from matplotlib.style import context
@@ -88,7 +89,7 @@ import numpy as np
 import asyncio
 import time
 import warnings
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Union
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 
@@ -115,14 +116,187 @@ logger = logging.getLogger(__name__)
 MIN_VIDEO_RESOLUTION = (1920, 1080)
 FRAME_SAMPLING_FOR_CROP = 15
 
-#: Batch size for crop processing and upload (reduce memory usage for long videos)
-CROP_BATCH_SIZE = 5
+#: Batch size for crop processing and upload (match process pool worker count)
+CROP_BATCH_SIZE = 4
 
 #: Maximum concurrent upload tasks to prevent overwhelming storage service
 MAX_CONCURRENT_UPLOADS = 2
 
 #: Interval for checkpoint saves (every N frames)
 CHECKPOINT_FRAME_INTERVAL = 100
+
+CROP_WORKER_ENV_VAR = "TRACKING_CROP_WORKERS"
+CROP_BATCH_ENV_VAR = "TRACKING_CROP_BATCH_SIZE"
+
+
+def _determine_crop_concurrency() -> Tuple[int, int]:
+    """Derive process worker count and crop batch size from CPU info or overrides."""
+    default_workers = CROP_BATCH_SIZE
+    worker_count = default_workers
+
+    env_worker_value = os.getenv(CROP_WORKER_ENV_VAR)
+    if env_worker_value:
+        try:
+            worker_count = max(1, int(env_worker_value))
+        except ValueError:
+            logger.warning(
+                "Invalid %s value '%s'; falling back to default %d workers",
+                CROP_WORKER_ENV_VAR,
+                env_worker_value,
+                default_workers,
+            )
+            worker_count = default_workers
+    else:
+        cpu_total = os.cpu_count()
+        if cpu_total and cpu_total > 0:
+            if cpu_total <= 2:
+                worker_count = max(1, cpu_total)
+            else:
+                worker_count = max(default_workers, cpu_total - 1)
+
+    env_batch_value = os.getenv(CROP_BATCH_ENV_VAR)
+    if env_batch_value:
+        try:
+            batch_size = max(1, int(env_batch_value))
+        except ValueError:
+            logger.warning(
+                "Invalid %s value '%s'; using worker count %d",
+                CROP_BATCH_ENV_VAR,
+                env_batch_value,
+                worker_count,
+            )
+            batch_size = worker_count
+    else:
+        batch_size = worker_count
+
+    if batch_size > worker_count:
+        logger.warning(
+            "Crop batch size %d exceeds worker count %d; capping batch size",
+            batch_size,
+            worker_count,
+        )
+        batch_size = worker_count
+
+    return worker_count, batch_size
+
+
+def extract_crops_from_frame(
+    shm_name: str,
+    frame_shape: Tuple[int, int, int],
+    frame_dtype: str,
+    detections_dict: Union[Dict[str, Any], List[Dict[str, Any]]],
+    frame_number: int,
+    min_width: int,
+    min_height: int,
+    min_contrast: float
+) -> Tuple[List[Tuple[int, bytes]], float]:
+    """Extract quality-filtered crops from shared memory frame data.
+
+    This function is defined at module scope so it can be pickled by
+    :class:`concurrent.futures.ProcessPoolExecutor`. It attaches to the
+    shared memory segment created by the caller, reconstructs the frame, and
+    iterates through serialized detections to generate JPEG-encoded crops.
+
+    Args:
+        shm_name: Name of the shared memory block containing frame bytes.
+        frame_shape: Shape tuple ``(height, width, channels)`` for the frame.
+        frame_dtype: NumPy dtype string (e.g., ``"uint8"``) for the frame.
+    detections_dict: Serialized detections payload (dict or list of dicts).
+    frame_number: Frame identifier being processed (for instrumentation).
+        min_width: Minimum crop width in pixels.
+        min_height: Minimum crop height in pixels.
+        min_contrast: Minimum grayscale standard deviation required.
+
+    Returns:
+        List of ``(track_id, jpeg_bytes)`` tuples for crops passing quality checks.
+    """
+    import logging
+    import time
+    from multiprocessing import shared_memory
+    from shared_libs.common.detection_utils import json_to_detections
+
+    worker_logger = logging.getLogger(__name__)
+    results: List[Tuple[int, bytes]] = []
+    shm = None
+
+    try:
+        # Attach to shared memory created by the parent process
+        shm = shared_memory.SharedMemory(name=shm_name)
+        dtype = np.dtype(frame_dtype)
+        frame = np.ndarray(frame_shape, dtype=dtype, buffer=shm.buf)
+
+        if isinstance(detections_dict, list):
+            detections = json_to_detections(detections_dict)
+        else:
+            detections = json_to_detections([detections_dict])
+        num_detections = len(detections)
+
+        if num_detections == 0:
+            worker_logger.info(
+                "[WORKER %s] Frame %s has no detections; skipping",
+                shm_name,
+                frame_number,
+            )
+            return results, 0.0
+
+        worker_logger.debug(
+            "[WORKER %s] Processing %d detections via shared memory",
+            shm_name,
+            num_detections,
+        )
+
+        start_time = time.time()
+        worker_logger.info(
+            "[WORKER %s] Start crop extraction | frame=%s | detections=%d",
+            shm_name,
+            frame_number,
+            num_detections,
+        )
+
+        for xyxy, _mask, confidence, class_id, tracker_id, data in detections:
+            try:
+                crop = crop_image(frame, xyxy.astype(int))
+            except Exception as exc:  # pragma: no cover - defensive
+                worker_logger.debug("Failed to crop detection: %s", exc)
+                continue
+
+            height, width = crop.shape[:2]
+            if width < min_width or height < min_height:
+                continue
+
+            gray_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            contrast = float(np.asarray(gray_crop, dtype=np.float32).std())
+            if contrast < min_contrast:
+                continue
+
+            success, buffer = cv2.imencode(".jpg", crop)
+            if not success:
+                worker_logger.debug("cv2.imencode failed for tracker_id=%s", tracker_id)
+                continue
+
+            track_id = int(tracker_id) if tracker_id is not None else -1
+            results.append((track_id, buffer.tobytes()))
+        processing_time = time.time() - start_time
+        worker_logger.info(
+            "[WORKER %s] Finished crop extraction | frame=%s | crops=%d | duration=%.3fs",
+            shm_name,
+            frame_number,
+            len(results),
+            processing_time,
+        )
+
+        return results, processing_time
+
+    except Exception as exc:  # pragma: no cover - worker side logging
+        worker_logger.error("Shared memory crop extraction failed: %s", exc)
+        return results, 0.0
+
+    finally:
+        if shm is not None:
+            try:
+                shm.close()
+            except Exception:
+                worker_logger.debug("Failed to close shared memory %s", shm_name)
 
 
 class TrackGeneratorPipeline(Pipeline):
@@ -288,10 +462,20 @@ class TrackGeneratorPipeline(Pipeline):
         
         # Initialize process pool executor for parallel crop extraction
         # Process pool bypasses GIL for true parallelism on CPU-bound crop operations
+        self._crop_worker_count, self._crop_batch_size = _determine_crop_concurrency()
         self._crop_executor = ProcessPoolExecutor(
-            max_workers=4
+            max_workers=self._crop_worker_count
         )
-        logger.info("Crop extraction process pool initialized (4 workers)")
+        logger.info(
+            "Crop extraction process pool initialized (workers=%d, batch_size=%d)",
+            self._crop_worker_count,
+            self._crop_batch_size,
+        )
+
+        # Semaphores (created lazily within the running event loop)
+        self._upload_semaphore = None  # type: Optional[asyncio.Semaphore]
+        self._crop_task_semaphore = None  # type: Optional[asyncio.Semaphore]
+        self._active_crop_tasks: int = 0
 
         # Define base pipeline steps (always included)
         step_definitions = [
@@ -677,7 +861,14 @@ class TrackGeneratorPipeline(Pipeline):
             f"Avg detections/frame: {total_detections/batch_size if batch_size > 0 else 0:.1f}"
         )
     
-    def _log_crop_metrics(self, crop_time: float, num_crops: int, frame_idx: int):
+    def _log_crop_metrics(
+        self,
+        crop_time: float,
+        num_crops: int,
+        frame_idx: int,
+        worker_time: Optional[float] = None,
+        wait_time: Optional[float] = None,
+    ) -> None:
         """
         Log crop extraction performance metrics.
         
@@ -685,12 +876,19 @@ class TrackGeneratorPipeline(Pipeline):
             crop_time: Time spent extracting crops (seconds)
             num_crops: Number of crops extracted
             frame_idx: Frame number being processed
+            worker_time: Actual processing time spent inside worker (seconds)
+            wait_time: Time spent waiting in the executor queue (seconds)
         """
         crops_per_sec = num_crops / crop_time if crop_time > 0 else 0
+        timing_detail = ""
+        if worker_time is not None and wait_time is not None:
+            timing_detail = (
+                f" | worker {worker_time:.3f}s | wait {wait_time:.3f}s"
+            )
         logger.info(
             f"✂️ CROP Frame {frame_idx} | "
             f"{num_crops} crops in {crop_time:.3f}s "
-            f"({crops_per_sec:.1f} crops/sec)"
+            f"({crops_per_sec:.1f} crops/sec){timing_detail}"
         )
 
     async def _process_video_frames_async(self, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -904,7 +1102,7 @@ class TrackGeneratorPipeline(Pipeline):
                                         )
                                         get_crop_tasks.append(get_crop_task)
                                         
-                                        if len(get_crop_tasks) >= CROP_BATCH_SIZE:
+                                        if len(get_crop_tasks) >= self._crop_batch_size:
                                             logger.debug(f"Processing crop batch {batch_counter} (frame {frame_idx})...")
                                             batch_frame_tasks = get_crop_tasks[:]
                                             get_crop_tasks.clear()
@@ -985,7 +1183,7 @@ class TrackGeneratorPipeline(Pipeline):
                             get_crop_tasks.append(get_crop_task)
                             logger.debug(f"Crop task created (pending={len(get_crop_tasks)} in current batch) -> {get_crop_task}")
 
-                            if len(get_crop_tasks) >= CROP_BATCH_SIZE:
+                            if len(get_crop_tasks) >= self._crop_batch_size:
                                 logger.info(f"Processing batch {batch_counter} of crop uploads (frame {frame_number})...")
                                 # Snapshot current tasks and reset collector immediately to avoid mutation during gather
                                 batch_frame_tasks = get_crop_tasks[:]
@@ -1260,51 +1458,133 @@ class TrackGeneratorPipeline(Pipeline):
         return (width >= MIN_VIDEO_RESOLUTION[0] and height >= MIN_VIDEO_RESOLUTION[1])
 
     async def _get_upload_list_for_frame(
-            self, frame: np.ndarray, 
-            detections: sv.Detections, 
-            video_guid: str, 
-            frame_number: int) -> List[Tuple[str, np.ndarray]]:
-        """
-        Generate upload tasks for crops from a single frame.
-        
-        Returns list of (blob_path, crop_image) tuples for batch upload.
-        
-        This method runs crop extraction in a thread pool to avoid blocking
-        the async event loop, enabling true parallelism for CPU-bound operations.
-        """
-        # Run blocking crop extraction in thread pool for true parallelism
-        loop = asyncio.get_event_loop()
-        crop_start = time.time()
-        
-        crop_tuples = await loop.run_in_executor(
-            self._crop_executor,
-            self._get_crops,
-            frame,
-            detections
-        )
-        
-        crop_time = time.time() - crop_start
-        
-        # Log metrics if crops were extracted
-        if len(crop_tuples) > 0:
-            self._log_crop_metrics(crop_time, len(crop_tuples), frame_number)
-        
-        upload_list = []
-        if len(crop_tuples) > 0:
-            for crop_tuple in crop_tuples:
-                crop_dir = self.path_manager.get_path("unverified_tracks", video_id=video_guid, track_id=crop_tuple[0])
-                if crop_dir is None:
-                    raise RuntimeError(f"Unable to determine crop directory for {video_guid}, track {crop_tuple[0]}")
-                crop_dir = crop_dir.rstrip('/') + '/'
-                crop_path = f"{crop_dir}crop_{frame_number}.jpg"
-                upload_list_tuple = (crop_path, crop_tuple[1])
-                upload_list.append(upload_list_tuple)
+        self, frame: np.ndarray,
+        detections: sv.Detections,
+        video_guid: str,
+        frame_number: int) -> List[Tuple[str, bytes]]:
+        """Generate upload tasks for crops extracted from a single frame."""
+        from multiprocessing import shared_memory
+        from shared_libs.common.detection_utils import detections_to_json
 
-            logger.debug(f"Generated upload list for frame {frame_number}: {len(upload_list)} crops")
-        else:
-            logger.debug(f"No valid crops found for frame {frame_number}")
+        if self._crop_task_semaphore is None:
+            self._crop_task_semaphore = asyncio.Semaphore(self._crop_worker_count)
 
-        return upload_list
+        async with self._crop_task_semaphore:
+            self._active_crop_tasks += 1
+            submit_time = time.time()
+            logger.info(
+                "✂️ SUBMIT Frame %s | detections=%d | active_workers=%d",
+                frame_number,
+                len(detections),
+                self._active_crop_tasks,
+            )
+
+            shm = None
+            worker_time: float = 0.0
+            try:
+                detections_dict = detections_to_json(detections)
+
+                frame_bytes = frame.nbytes
+                shm = shared_memory.SharedMemory(create=True, size=frame_bytes)
+                shm_array = np.ndarray(frame.shape, dtype=frame.dtype, buffer=shm.buf)
+                shm_array[:] = frame
+
+                loop = asyncio.get_event_loop()
+                crop_start = time.time()
+
+                logger.debug(
+                    "Submitting crop extraction for frame %s via shared memory %s",
+                    frame_number,
+                    shm.name,
+                )
+
+                crop_tuples, worker_time = await loop.run_in_executor(
+                    self._crop_executor,
+                    extract_crops_from_frame,
+                    shm.name,
+                    frame.shape,
+                    str(frame.dtype),
+                    detections_dict,
+                    frame_number,
+                    self.MIN_CROP_WIDTH,
+                    self.MIN_CROP_HEIGHT,
+                    self.MIN_CROP_CONTRAST,
+                )
+
+                crop_time = time.time() - crop_start
+                wait_time = max(crop_time - worker_time, 0.0)
+
+                self._log_crop_metrics(
+                    crop_time,
+                    len(crop_tuples),
+                    frame_number,
+                    worker_time,
+                    wait_time,
+                )
+
+                upload_list: List[Tuple[str, bytes]] = []
+                if crop_tuples:
+                    for track_id, jpeg_bytes in crop_tuples:
+                        crop_dir = self.path_manager.get_path(
+                            "unverified_tracks",
+                            video_id=video_guid,
+                            track_id=track_id,
+                        )
+                        if crop_dir is None:
+                            raise RuntimeError(
+                                f"Unable to determine crop directory for {video_guid}, track {track_id}"
+                            )
+                        crop_path = f"{crop_dir.rstrip('/')}/crop_{frame_number}.jpg"
+                        upload_list.append((crop_path, jpeg_bytes))
+
+                    logger.debug(
+                        "Generated upload list for frame %s: %d crops",
+                        frame_number,
+                        len(upload_list),
+                    )
+                else:
+                    logger.debug("No valid crops found for frame %s", frame_number)
+
+                logger.info(
+                    "✂️ COMPLETE Frame %s | total=%.3fs | worker=%.3fs | wait=%.3fs | crops=%d",
+                    frame_number,
+                    crop_time,
+                    worker_time,
+                    wait_time,
+                    len(crop_tuples),
+                )
+
+                return upload_list
+
+            except Exception as exc:
+                logger.error(
+                    "Error preparing crops for frame %s (video %s): %s",
+                    frame_number,
+                    video_guid,
+                    exc,
+                )
+                logger.exception(exc)
+                return []
+
+            finally:
+                if shm is not None:
+                    try:
+                        shm.close()
+                        shm.unlink()
+                    except Exception as cleanup_exc:
+                        logger.warning(
+                            "Shared memory cleanup failed for frame %s (%s): %s",
+                            frame_number,
+                            shm.name,
+                            cleanup_exc,
+                        )
+                self._active_crop_tasks = max(self._active_crop_tasks - 1, 0)
+                logger.info(
+                    "✂️ RELEASE Frame %s | active_workers=%d | elapsed=%.3fs",
+                    frame_number,
+                    self._active_crop_tasks,
+                    time.time() - submit_time,
+                )
 
     def _graceful_stop(self, crop_tasks, upload_tasks, batch_counter, video_guid, 
                       all_crop_paths, frame_number, detections_count, all_detections,
