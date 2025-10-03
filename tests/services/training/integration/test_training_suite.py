@@ -21,16 +21,11 @@ from shared_libs.utils.env_secrets import setup_environment_secrets
 
 def test_cancel_via_web_api_endpoint():
     """Test cancelling a training job via the web API DELETE endpoint."""
-    import os
-    import sys
     import time
 
-    # Add the service_training src path to sys.path for imports
-    service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
-    sys.path.insert(0, service_src_path)
-
-    # Import the training router from service_training
-    from endpoints.train import router as training_router  # type: ignore
+    from services.service_training.src.endpoints.train import (
+        router as training_router,
+    )
 
     # Create a training job with minimal parameters
     training_request = {
@@ -186,8 +181,7 @@ def test_cli_cancellation_with_signals():
         tmp_file.close()
 
     # Get the current workspace root dynamically
-    current_file = _Path(__file__).resolve()
-    workspace_root = current_file.parent.parent.parent.parent
+    workspace_root = _Path(__file__).resolve().parents[4]
     venv_python = workspace_root / ".venv" / "bin" / "python"
 
     cmd = [
@@ -317,24 +311,17 @@ def make_request_obj(tenant_id: str = "test-tenant", n_datasets_to_use: Optional
 
 def test_training_cancellation_with_interrupted_error():
     """Test that InterruptedError is properly raised and handled during training cancellation."""
-    import os
-    import sys
-
-    # Add the service_training src path to sys.path for imports
-    service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
-    sys.path.insert(0, service_src_path)
-    
     from unittest.mock import MagicMock, patch
 
     import torch
     # Create a minimal training setup
-    from training_loop import Training  # type: ignore[import-unresolved]
+    from services.service_training.src.training_loop import Training  # type: ignore[import-unresolved]
 
     # Mock components to avoid actual training
     with patch('torch.optim.AdamW'), \
          patch('torch.utils.data.DataLoader') as mock_dataloader, \
          patch('torch.nn.TripletMarginLoss'), \
-         patch('wandb_logger.wandb_logger') as mock_wandb:
+         patch('services.service_training.src.wandb_logger.wandb_logger') as mock_wandb:
 
         # Setup mock dataloader
         mock_dl = MagicMock()
@@ -433,15 +420,9 @@ def test_pipeline_cancellation_with_pending_stop():
 def test_pipeline_status_saved_on_interruption():
     """Test that pipeline status and progress are saved to checkpoint when interrupted mid-run."""
     import json
-    import os
-    import sys
     import threading
     import time
     from unittest.mock import MagicMock, patch
-
-    # Add the service_training src path to sys.path for imports
-    service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
-    sys.path.insert(0, service_src_path)
 
     from shared_libs.common.google_storage import GoogleStorageClient
     from shared_libs.common.pipeline import Pipeline, stop_pipeline
@@ -548,13 +529,6 @@ def test_pipeline_status_saved_on_interruption():
 
 def test_siamesenet_dino_can_download_and_initialize(tmp_path: Path):
     """Integration test: ensure SiameseNet downloads DINOv3 from Hugging Face and initializes."""
-    import os
-    import sys
-
-    # Add the service_training src path to sys.path for imports
-    service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
-    sys.path.insert(0, service_src_path)
-    
     # Ensure environment secrets are set for the test run
     setup_environment_secrets()
 
@@ -565,7 +539,7 @@ def test_siamesenet_dino_can_download_and_initialize(tmp_path: Path):
 
     try:
         import torch
-        from siamesenet_dino import SiameseNet  # type: ignore
+        from services.service_training.src.siamesenet_dino import SiameseNet  # type: ignore
 
         net = SiameseNet()
         net.eval()
@@ -583,13 +557,6 @@ def test_siamesenet_dino_can_download_and_initialize(tmp_path: Path):
 @pytest.mark.e2e
 def test_train_all_resnet_with_checkpoint_verification():
     """End-to-end test: ResNet training with 2 epochs and 2 datasets, verifying checkpoint creation."""
-    import os
-    import sys
-
-    # Add the service_training src path to sys.path for imports
-    service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
-    sys.path.insert(0, service_src_path)
-    
     import wandb
     from shared_libs.config.all_config import wandb_config
 
@@ -609,7 +576,10 @@ def test_train_all_resnet_with_checkpoint_verification():
             resume_from_checkpoint=False,
             wandb_tags=["e2e", "resnet", "checkpoint_test"],
             training_kwargs={"num_epochs": 2, "batch_size": 8},
-            model_kwargs={"model_class_module": "siamesenet", "model_class_str": "SiameseNet"},
+            model_kwargs={
+                "model_class_module": "services.service_training.src.siamesenet",
+                "model_class_str": "SiameseNet",
+            },
             n_datasets_to_use=2,
         )
         # Verify training completed successfully
@@ -627,13 +597,6 @@ def test_train_all_resnet_with_checkpoint_verification():
 @pytest.mark.slow
 def test_train_signature_has_n_datasets_to_use():
     """Test that the train function signature includes n_datasets_to_use parameter."""
-    import os
-    import sys
-
-    # Add the service_training src path to sys.path for imports
-    service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
-    sys.path.insert(0, service_src_path)
-    
     from services.service_training.src.workflows.training_workflow import \
         train_workflow as train  # type: ignore
     sig = inspect.signature(train)
@@ -653,14 +616,9 @@ def test_train_signature_has_n_datasets_to_use():
 
 def test_convert_request_to_kwargs_includes_top_level_n_datasets():
     """Test that request conversion includes top-level n_datasets parameter."""
-    import os
-    import sys
-
-    # Add the service_training src path to sys.path for imports
-    service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
-    sys.path.insert(0, service_src_path)
-    
-    from training_service import _convert_request_to_kwargs  # type: ignore
+    from services.service_training.src.training_service import (
+        _convert_request_to_kwargs,
+    )  # type: ignore
 
     req = SimpleNamespace(
         tenant_id="test-tenant",
@@ -689,13 +647,6 @@ def test_checkpoint_resume():
     resume_from_checkpoint=True is set but no existing checkpoint is available to resume from.
     In this case, training should start fresh and complete normally.
     """
-    import os
-    import sys
-
-    # Add the service_training src path to sys.path for imports
-    service_src_path = os.path.join(os.path.dirname(__file__), '../../src')
-    sys.path.insert(0, service_src_path)
-    
     import time
 
     import wandb
@@ -714,7 +665,10 @@ def test_checkpoint_resume():
             custom_name="test_cancellation",
             resume_from_checkpoint=True,
             training_kwargs={"num_epochs": 2, "batch_size": 8},
-            model_kwargs={"model_class_module": "siamesenet", "model_class_str": "SiameseNet"},
+            model_kwargs={
+                "model_class_module": "services.service_training.src.siamesenet",
+                "model_class_str": "SiameseNet",
+            },
             n_datasets_to_use=1,
             pipeline_name="test_resume_pipeline"
         )

@@ -4,17 +4,20 @@ import os
 import traceback
 from typing import Any, Callable, Dict, List, Optional
 
-from config.transforms import get_transforms
-from dataset import LacrossePlayerDataset
-from evaluator import ModelEvaluator
-from training_loop import Training
-from wandb_logger import wandb_logger
+from shared_libs.config.transforms import get_transforms
+from services.service_training.src.dataset import LacrossePlayerDataset
+from services.service_training.src.evaluator import ModelEvaluator
+from services.service_training.src.training_loop import Training
+from services.service_training.src.wandb_logger import wandb_logger
 
 from shared_libs.common.google_storage import GCSPaths, get_storage
 from shared_libs.common.pipeline import Pipeline, PipelineStatus
 from shared_libs.common.pipeline_step import StepStatus
-from shared_libs.config.all_config import (model_config, training_config,
-                                           wandb_config)
+from shared_libs.config.all_config import (
+    model_config,
+    training_config,
+    wandb_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +40,15 @@ class TrainPipeline(Pipeline):
             model_class_str = training_kwargs["model_class_str"]
         else:
             model_class_str = model_config.model_class_str
-        module = importlib.import_module(model_class_module)
+        module_import_path = model_class_module
+        try:
+            module = importlib.import_module(module_import_path)
+        except ModuleNotFoundError as exc:
+            if "." not in module_import_path:
+                module_import_path = f"services.service_training.src.{module_import_path}"
+                module = importlib.import_module(module_import_path)
+            else:
+                raise exc
 
         self.collection_name = model_class_module
         

@@ -7,12 +7,14 @@ from datetime import datetime, timezone
 import numpy as np
 import torch
 import torch.nn as nn
-from evaluator import (ModelEvaluator, calculate_embedding_variance,
-                       calculate_gradient_norm,
-                       calculate_intra_inter_distances,
-                       calculate_triplet_mining_efficiency)
+from services.service_training.src.evaluator import (ModelEvaluator,
+                                                     calculate_embedding_variance,
+                                                     calculate_gradient_norm,
+                                                     calculate_intra_inter_distances,
+                                                     calculate_triplet_mining_efficiency)
 from torch.utils.data import DataLoader, Dataset
-from wandb_logger import wandb_logger
+from services.service_training.src.parameter_registry import parameter_registry
+from services.service_training.src.wandb_logger import wandb_logger
 
 from shared_libs.config.all_config import (model_config, training_config,
                                            wandb_config)
@@ -81,8 +83,6 @@ class Training:
         automatically validated. If any required hyperparameter is missing in both 
         kwargs and training_config, a ValueError will be raised.
         """
-        from parameter_registry import parameter_registry
-
         # Clear GPU memory at start to recover from previous crashes
         if clear_memory_on_start:
             clear_gpu_memory()
@@ -1018,7 +1018,7 @@ class Training:
         """
         # Use the centralized comprehensive evaluator to compute and persist
         # full evaluation, then return the retrieval metrics used by training.
-        from evaluator import ModelEvaluator
+        from services.service_training.src.evaluator import ModelEvaluator
 
         # dataloader may be a DataLoader; evaluator expects a Dataset instance
         dataset = getattr(dataloader, 'dataset', dataloader)

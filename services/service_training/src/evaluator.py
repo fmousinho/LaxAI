@@ -17,9 +17,9 @@ try:
 except ImportError:
     PSUTIL_AVAILABLE = False
 
-from config.transforms import get_transforms
-from dataset import LacrossePlayerDataset
-from wandb_logger import wandb_logger
+from shared_libs.config.transforms import get_transforms
+from services.service_training.src.dataset import LacrossePlayerDataset
+from services.service_training.src.wandb_logger import wandb_logger
 
 from shared_libs.config.all_config import evaluator_config, wandb_config
 

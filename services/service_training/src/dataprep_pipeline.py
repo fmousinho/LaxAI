@@ -48,8 +48,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import supervision as sv
-from config.all_config import (DetectionConfig, detection_config, model_config,
-                               training_config)
+from shared_libs.config.all_config import (
+    DetectionConfig,
+    detection_config,
+    model_config,
+    training_config,
+)
 from PIL import Image
 from supervision import Detections
 from shared_libs.common.detection_utils import detections_to_json
@@ -625,7 +629,10 @@ class DataPrepPipeline(Pipeline):
 
             # Save detections using shared utility
             detections_blob_name = f"{video_folder.rstrip('/')}/detections.json"
-            json_data = detections_list_to_json(all_detections)
+            json_data = [
+                detections_to_json(detections)
+                for detections in all_detections
+            ]
             json_bytes = json.dumps(json_data).encode("utf-8")
             self.tenant_storage.upload_from_bytes(detections_blob_name, json_bytes)
 

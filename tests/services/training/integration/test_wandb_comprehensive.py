@@ -389,7 +389,7 @@ def cleanup_wandb_artifacts():
     
     # Comprehensive cleanup after all tests complete
     try:
-        from config.all_config import wandb_config
+        from shared_libs.config.all_config import wandb_config
 
         import wandb
         

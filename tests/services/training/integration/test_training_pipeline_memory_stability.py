@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import psutil
 import pytest
 import torch
-from train_pipeline import TrainPipeline
+from services.service_training.src.train_pipeline import TrainPipeline
 
 from shared_libs.common.google_storage import GCSPaths, get_storage
 from shared_libs.config.all_config import training_config, wandb_config
@@ -56,7 +56,7 @@ def mock_gcs_paths():
 @pytest.fixture
 def mock_wandb_for_memory_test():
     """Mock WandB to avoid actual logging during memory tests."""
-    with patch('wandb_logger.wandb') as mock_wandb:
+    with patch('services.service_training.src.wandb_logger.wandb') as mock_wandb:
         # Mock WandB initialization
         mock_run = MagicMock()
         # Set specific attributes that are needed by the wandb_logger
@@ -174,7 +174,7 @@ class TestTrainingPipelineMemoryStability:
             mock_create_dataset.return_value = (mock_train_dataset, mock_val_dataset)
 
             # Mock training components
-            with patch('training_loop.Training') as mock_training_class:
+            with patch('services.service_training.src.training_loop.Training') as mock_training_class:
                 mock_training = MagicMock()
                 mock_training_class.return_value = mock_training
 
@@ -186,7 +186,7 @@ class TestTrainingPipelineMemoryStability:
                 }
 
                 # Mock evaluation
-                with patch('evaluator.ModelEvaluator') as mock_evaluator_class:
+                with patch('services.service_training.src.evaluator.ModelEvaluator') as mock_evaluator_class:
                     mock_evaluator = MagicMock()
                     mock_evaluator_class.return_value = mock_evaluator
 
@@ -267,7 +267,7 @@ class TestTrainingPipelineMemoryStability:
 
     def test_memory_efficient_checkpoint_saving(self, mock_wandb_for_memory_test, memory_monitor):
         """Test that checkpoint saving doesn't cause memory spikes."""
-        from wandb_logger import WandbLogger
+        from services.service_training.src.wandb_logger import WandbLogger
 
         # Setup environment
         setup_environment_secrets()

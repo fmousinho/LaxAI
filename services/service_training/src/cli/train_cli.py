@@ -16,7 +16,7 @@ sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/services/service_training/src')
 from shared_libs.config import logging_config
 from shared_libs.config.logging_config import print_banner
-from parameter_registry import parameter_registry
+from services.service_training.src.parameter_registry import parameter_registry
 from workflows.training_workflow import TrainingWorkflow
 
 logger = logging.getLogger(__name__)

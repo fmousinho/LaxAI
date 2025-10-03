@@ -133,13 +133,13 @@ class ParameterRegistry:
 
         # Dynamic import based on config path
         if config_path_parts[0] == "training_config":
-            from config.all_config import training_config as config_obj
+            from shared_libs.config.all_config import training_config as config_obj
         elif config_path_parts[0] == "model_config":
-            from config.all_config import model_config as config_obj
+            from shared_libs.config.all_config import model_config as config_obj
         elif config_path_parts[0] == "evaluator_config":
-            from config.all_config import evaluator_config as config_obj
+            from shared_libs.config.all_config import evaluator_config as config_obj
         elif config_path_parts[0] == "wandb_config":
-            from config.all_config import wandb_config as config_obj
+            from shared_libs.config.all_config import wandb_config as config_obj
         else:
             raise ValueError(f"Unknown config object: {config_path_parts[0]}")
 
@@ -485,12 +485,6 @@ class ParameterRegistry:
                 type=ParameterType.INT,
                 description="Required width for input images",
                 config_path="model_config.input_width",
-            ),
-            ParameterDefinition(
-                name="enable_grass_mask",
-                type=ParameterType.BOOL,
-                description="Determines whether grass will be removed when creating the dataset",
-                config_path="model_config.enable_grass_mask",
             ),
             ParameterDefinition(
                 name="model_class_module",

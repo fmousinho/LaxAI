@@ -36,7 +36,7 @@ class TestTrackingServiceIntegration:
         cmd = [
             "gcloud", "run", "jobs", "execute", job_name,
             f"--region={region}",
-            f"--args=--tenant_id={test_tenant},--custom_name=test_integration_run,--verbose,--save-intermediate,--video_limit=1",
+            f"--args=--tenant_id={test_tenant},--custom_name=test_integration_run,--verbose,--video_limit=1",
             "--wait"  # Wait for job completion
         ]
 

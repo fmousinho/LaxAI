@@ -502,6 +502,29 @@ class AffineAwareByteTrack(sv.ByteTrack):
             )
             return AffineAwareByteTrack.get_identity_affine_matrix()
 
+        # Vectorized displacement analysis to detect near-static scenes
+        displacement = good_new - good_old
+        # Norms of displacement for all tracked points (per-point translation magnitude)
+        displacement_norms = np.linalg.norm(displacement, axis=1)
+
+        if displacement_norms.size == 0:
+            logger.debug("Optical flow returned zero displacement points; treating as static camera.")
+            return AffineAwareByteTrack.get_identity_affine_matrix()
+
+        median_disp = float(np.median(displacement_norms))
+        max_disp = float(np.max(displacement_norms))
+
+        if (
+            median_disp <= tracker_config.affine_median_translation_px
+            and max_disp <= tracker_config.affine_max_translation_px
+        ):
+            logger.debug(
+                "Skipping affine warp (median displacement=%.3fpx, max=%.3fpx)",
+                median_disp,
+                max_disp,
+            )
+            return AffineAwareByteTrack.get_identity_affine_matrix()
+
         # Estimate the affine transformation matrix
         # This matrix will map points from the prev_gray frame to the current_gray frame
         m, mask = cv2.estimateAffine2D(good_old, good_new)
@@ -515,7 +538,26 @@ class AffineAwareByteTrack(sv.ByteTrack):
         # Ensure the affine matrix is float32
         m = m.astype(np.float32)
 
-        logger.debug("Successfully calculated affine transform matrix.")
+        # If the resulting transform is approximately identity, skip warping to reduce noise
+        translation_mag = float(np.linalg.norm(m[:, 2]))
+        linear_delta = float(np.linalg.norm(m[:, :2] - np.eye(2, dtype=np.float32)))
+
+        if (
+            translation_mag <= tracker_config.affine_median_translation_px
+            and linear_delta <= tracker_config.affine_linear_fro_threshold
+        ):
+            logger.debug(
+                "Affine matrix ~ identity (translation=%.3fpx, linear Δ=%.4f); using identity.",
+                translation_mag,
+                linear_delta,
+            )
+            return AffineAwareByteTrack.get_identity_affine_matrix()
+
+        logger.debug(
+            "Calculated affine transform (translation=%.3fpx, linear Δ=%.4f).",
+            translation_mag,
+            linear_delta,
+        )
         return m
 
     @staticmethod

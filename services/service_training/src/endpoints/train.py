@@ -9,8 +9,13 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
-from schemas.training import TrainingRequest, TrainingResponse, TrainingStatus
-from workflows.training_workflow import TrainingWorkflow
+
+from services.service_training.src.schemas.training import (
+    TrainingRequest,
+    TrainingResponse,
+    TrainingStatus,
+)
+from services.service_training.src.workflows.training_workflow import TrainingWorkflow
 
 from shared_libs.common.pipeline import stop_pipeline, stop_pipeline_by_guid
 

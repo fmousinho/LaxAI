@@ -40,7 +40,6 @@ class ModelParams(BaseModel):
     dropout_rate: Optional[float] = Field(None, description="Dropout rate")
     input_height: Optional[int] = Field(None, description="Required height for input images")
     input_width: Optional[int] = Field(None, description="Required width for input images")
-    enable_grass_mask: Optional[bool] = Field(None, description="Whether to remove grass when creating dataset")
     model_class_module: Optional[str] = Field(None, description="Module where the model class is defined")
     model_class: Optional[str] = Field(None, description="Name of the model class")
 
@@ -103,7 +102,6 @@ class TrainingRequest(BaseModel):
                     "dropout_rate": 0.1,
                     "input_height": 224,
                     "input_width": 224,
-                    "enable_grass_mask": False,
                     "model_class_module": "siamesenet_dino",
                     "model_class": "SiameseNet"
                 },

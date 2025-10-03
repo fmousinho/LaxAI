@@ -65,7 +65,7 @@ class TestDetectionModelBatchSize:
     @patch('shared_libs.common.detection.RFDETRBase')
     @patch('shared_libs.common.detection.wandb')
     def test_batch_size_default_cuda(self, mock_wandb, mock_rfdetr_class, mock_rfdetr_model):
-        """Test that batch_size defaults to 16 for CUDA devices."""
+        """Test that batch_size defaults to 32 for CUDA devices."""
         import torch
         
         # Mock CUDA availability
@@ -84,7 +84,7 @@ class TestDetectionModelBatchSize:
                     with patch('os.remove'):
                         model = DetectionModel(device=torch.device('cuda'))
             
-            assert model.batch_size == 16
+            assert model.batch_size == 32
             assert model.device.type == 'cuda'
     
     @patch('shared_libs.common.detection.RFDETRBase')
@@ -308,7 +308,7 @@ class TestBackwardCompatibility:
             
             # Should still work and use default batch_size based on device
             assert hasattr(model, 'batch_size')
-            assert model.batch_size == 16  # Default for CUDA
+            assert model.batch_size == 32  # Default for CUDA
 
 
 class TestBatchVsSequentialEquivalence:

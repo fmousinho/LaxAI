@@ -55,9 +55,11 @@ def detection_to_json_single(detection: Detections) -> Dict[str, Any]:
         if data_dict:
             for key, value in data_dict.items():
                 if isinstance(value, np.ndarray):
-                    result["data"][key] = [value.tolist()]
+                    converted = value.tolist()
+                    # Ensure we store a flat list rather than a nested structure
+                    result["data"][key] = converted if isinstance(converted, list) else [converted]
                 elif isinstance(value, (list, tuple)):
-                    result["data"][key] = [list(value)]
+                    result["data"][key] = list(value)
                 else:
                     result["data"][key] = [value]
         
@@ -163,7 +165,7 @@ def detections_to_json(detections: Detections) -> List[Dict[str, Any]]:
         for i in range(len(detections)):
             # Use indexing to get individual detection as Detections object
             single_det = detections[i]
-            result.append(detection_to_json_single(single_det))
+            result.append(detection_to_json_single(single_det))  # pyright: ignore[reportArgumentType]
         return result
 
 def json_to_detections(json_list: List[Dict[str, Any]]) -> Detections:

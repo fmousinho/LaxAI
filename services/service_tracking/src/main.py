@@ -10,12 +10,29 @@ import argparse
 import logging
 import os
 import sys
+import warnings
+
+import torch
 
 # Ensure shared_libs can be imported
 sys.path.insert(0, '/app')
 
 # Ensure src directory is in path for absolute imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+# Suppress PyTorch TracerWarnings that occur during model operations
+warnings.filterwarnings(
+    "ignore",
+    message=r".*Converting a tensor to a Python boolean might cause the trace to be incorrect.*"
+)
+warnings.filterwarnings(
+    "ignore",
+    message=r".*torch\.as_tensor results are registered as constants in the trace.*"
+)
+warnings.filterwarnings(
+    "ignore",
+    message=r".*torch\.tensor results are registered as constants in the trace.*"
+)
 
 # Set up logging
 logging.basicConfig(

@@ -50,7 +50,6 @@ class ModelConfig:
     resnet_conv_stride: int = 1
     resnet_conv_padding: int = 1
     resnet_conv_bias: bool = False  # Whether to use bias in the first conv
-    enable_grass_mask: bool = False
     model_class_module: str = "siamesenet_dino"  # Module where the model class is defined
     model_class_str: str = "SiameseNet"  # Name of the model class
 
@@ -73,6 +72,9 @@ class TrackerConfig:
     transform_velocities: bool = True  # Whether to transform velocities with affine matrix
     scale_height_velocity: bool = True  # Whether to scale height velocity based on scaling factor
     scaling_threshold: float = 0.1  # Minimum scale factor change to trigger height velocity scaling
+    affine_median_translation_px: float = 0.75  # Median displacement below this -> treat as static
+    affine_max_translation_px: float = 2.0  # Hard cap on max displacement to keep snapshot static
+    affine_linear_fro_threshold: float = 0.015  # Frobenius norm delta from identity to skip warp
 
 
 @dataclass

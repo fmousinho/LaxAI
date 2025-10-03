@@ -84,6 +84,7 @@ import logging
 import os
 import cv2
 import json
+from dataclasses import dataclass
 from matplotlib.style import context
 import numpy as np
 import asyncio
@@ -114,7 +115,7 @@ logger = logging.getLogger(__name__)
 
 #: Minimum video resolution required for processing (width, height)
 MIN_VIDEO_RESOLUTION = (1920, 1080)
-FRAME_SAMPLING_FOR_CROP = 15
+FRAME_SAMPLING_FOR_CROP = 30
 
 #: Batch size for crop processing and upload (match process pool worker count)
 CROP_BATCH_SIZE = 4
@@ -123,10 +124,23 @@ CROP_BATCH_SIZE = 4
 MAX_CONCURRENT_UPLOADS = 2
 
 #: Interval for checkpoint saves (every N frames)
-CHECKPOINT_FRAME_INTERVAL = 100
+CHECKPOINT_FRAME_INTERVAL = 5 * 60 * 30 # 5 minutes at 30 FPS
 
 CROP_WORKER_ENV_VAR = "TRACKING_CROP_WORKERS"
 CROP_BATCH_ENV_VAR = "TRACKING_CROP_BATCH_SIZE"
+
+
+@dataclass
+class FrameDetectionsPayload:
+    """Container for detection results awaiting tracking."""
+
+    frame_idx: int
+    frame_rgb: np.ndarray
+    detections: sv.Detections
+    detection_time: float
+    batch_id: int
+    batch_size: int
+    batch_position: int
 
 
 def _determine_crop_concurrency() -> Tuple[int, int]:
@@ -260,16 +274,23 @@ def extract_crops_from_frame(
                 worker_logger.debug("Failed to crop detection: %s", exc)
                 continue
 
-            height, width = crop.shape[:2]
+            # Convert to BGR once so downstream OpenCV routines receive the expected channel order
+            try:
+                crop_bgr = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
+            except Exception as exc:  # pragma: no cover - defensive
+                worker_logger.debug("Failed to convert crop to BGR: %s", exc)
+                continue
+
+            height, width = crop_bgr.shape[:2]
             if width < min_width or height < min_height:
                 continue
 
-            gray_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            gray_crop = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
             contrast = float(np.asarray(gray_crop, dtype=np.float32).std())
             if contrast < min_contrast:
                 continue
 
-            success, buffer = cv2.imencode(".jpg", crop)
+            success, buffer = cv2.imencode(".jpg", crop_bgr)
             if not success:
                 worker_logger.debug("cv2.imencode failed for tracker_id=%s", tracker_id)
                 continue
@@ -337,14 +358,11 @@ class TrackGeneratorPipeline(Pipeline):
             GCS bucket information, and processing parameters
         tenant_id (str): The tenant ID for data organization and access control
         verbose (bool): Enable detailed logging throughout the pipeline
-        enable_grass_mask (bool): Enable background removal functionality (currently unused)
-        delete_process_folder (bool): Clean up temporary processing files after completion
         **kwargs: Additional keyword arguments passed to parent Pipeline class
 
     Attributes:
         config (DetectionConfig): Detection configuration with model and processing parameters
         tenant_id (str): Tenant identifier for storage organization and data isolation
-        enable_grass_mask (bool): Whether background removal is enabled (currently unused)
         detection_model (DetectionModel): Loaded detection model instance for player detection
         tracker (AffineAwareByteTrack): Real-time tracker with affine transformation compensation
         tenant_storage (GoogleStorageClient): GCS client for tenant-specific operations
@@ -389,8 +407,6 @@ class TrackGeneratorPipeline(Pipeline):
                  config: DetectionConfig, 
                  tenant_id: str, 
                  verbose: bool = True, 
-                 enable_grass_mask: bool = model_config.enable_grass_mask, 
-                 delete_process_folder: bool = True, 
                  task_id: Optional[str] = None,
                  **kwargs):
         """
@@ -404,9 +420,6 @@ class TrackGeneratorPipeline(Pipeline):
                 GCS bucket information, and processing parameters
             tenant_id (str): The tenant ID for data organization and access control in multi-tenant environments
             verbose (bool): Enable detailed logging throughout the pipeline for monitoring progress
-            enable_grass_mask (bool): Enable background removal functionality using statistical color analysis.
-                Currently unused in this pipeline
-            delete_process_folder (bool): Clean up temporary processing files after completion to save storage
             task_id (Optional[str]): Task ID for progress tracking and status updates
             **kwargs: Additional arguments passed to the parent Pipeline class
         
@@ -417,7 +430,6 @@ class TrackGeneratorPipeline(Pipeline):
         self.config = config
         self.tenant_id = tenant_id
         self.video_capture = None
-        self.delete_process_folder = delete_process_folder
         self.dataloader_workers = 2
         
         # Import transform_config to get the background removal setting
@@ -664,44 +676,80 @@ class TrackGeneratorPipeline(Pipeline):
             "resume_frame": context.get("resume_frame")
         }
 
-        # Cleanup temporary processing files if enabled
-        if self.delete_process_folder:
-            video_guid = context.get("video_guid", "unknown")
-            process_folder_path = self.path_manager.get_path("process_folder", video_id=video_guid)
-            logger.info(f"Cleaning up temporary process folder: {process_folder_path}")
-            
-            blob_names = self.tenant_storage.list_blobs(prefix=process_folder_path)
-            if blob_names:
-                failed_deletes, successful_deletes = asyncio.run(self._execute_parallel_operations_async(
-                    list(blob_names),
-                    self.tenant_storage.delete_blob,
-                    f"cleanup process folder {process_folder_path}"
-                ))
-                
-                if failed_deletes:
-                    logger.warning(f"Failed to delete {len(failed_deletes)} temporary files from {process_folder_path}")
-                
-                logger.info(f"Successfully cleaned up {successful_deletes} temporary files from {process_folder_path}")
-            else:
-                logger.info("No temporary files found to clean up")
+        
 
         return formatted_results
 
-    async def _save_detections_async(self, detections_path: str, detections_data: sv.Detections) -> None:
-        """
-        Save detections asynchronously without blocking the main processing flow.
-        
-        Args:
-            detections_path: GCS path where to save the detections
-            detections_data: List of detections to save
-        """
+    def _serialize_detections(self, detections_data: sv.Detections) -> bytes:
+        """Serialize detections to JSON bytes."""
+
+        json_data = detections_to_json(detections_data)
+        return json.dumps(json_data).encode("utf-8")
+
+    async def _save_detections_async(
+        self,
+        detections_path: str,
+        detections_data: sv.Detections,
+        reason: str = "unspecified",
+    ) -> None:
+        """Save detections in the background and log timing diagnostics."""
+
+        loop = asyncio.get_running_loop()
         try:
-            json_data = detections_to_json(detections_data)
-            json_bytes = json.dumps(json_data).encode('utf-8')
-            self.storage_client.upload_from_bytes(detections_path, json_bytes)
-            logger.debug(f"Asynchronously saved detections to {detections_path}")
-        except Exception as e:
-            logger.error(f"Failed to save detections asynchronously to {detections_path}: {e}")
+            try:
+                detections_count = len(detections_data)
+            except TypeError:
+                detections_count = "unknown"
+
+            logger.info(
+                "📝 DETECTION SAVE START | reason=%s | detections=%s",
+                reason,
+                detections_count,
+            )
+
+            serialize_start = time.perf_counter()
+            json_bytes = await loop.run_in_executor(None, self._serialize_detections, detections_data)
+            serialization_time = time.perf_counter() - serialize_start
+
+            logger.info(
+                "📝 DETECTION SAVE SERIALIZED | reason=%s | bytes=%d | duration=%.3fs",
+                reason,
+                len(json_bytes),
+                serialization_time,
+            )
+
+            upload_start = time.perf_counter()
+            success = await loop.run_in_executor(
+                None,
+                self.storage_client.upload_from_bytes,
+                detections_path,
+                json_bytes,
+            )
+            upload_time = time.perf_counter() - upload_start
+
+            logger.info(
+                "📝 DETECTION SAVE UPLOADED | reason=%s | duration=%.3fs | success=%s",
+                reason,
+                upload_time,
+                bool(success),
+            )
+
+            logger.info(
+                "📝 DETECTION SAVE | reason=%s | bytes=%d | serialize=%.3fs | upload=%.3fs | success=%s",
+                reason,
+                len(json_bytes),
+                serialization_time,
+                upload_time,
+                bool(success),
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error(
+                "Failed to save detections (%s) to %s: %s",
+                reason,
+                detections_path,
+                exc,
+                exc_info=True,
+            )
 
     def stop(self) -> bool:
         """
@@ -821,8 +869,19 @@ class TrackGeneratorPipeline(Pipeline):
         # Run the async processing within a new event loop
         return asyncio.run(self._process_video_frames_async(context))
 
-    def _log_batch_metrics(self, batch_num: int, batch_size: int, detection_time: float, 
-                          tracking_time: float, total_detections: int, frame_start: int):
+    def _log_batch_metrics(
+        self,
+        batch_num: int,
+        batch_size: int,
+        detection_time: float,
+        tracking_time: float,
+        total_detections: int,
+        frame_start: int,
+        queue_wait_time: float = 0.0,
+        queue_wait_max: float = 0.0,
+        queue_depth_avg: float = 0.0,
+        extra_timings: Optional[Dict[str, float]] = None,
+    ):
         """
         Log comprehensive batch processing metrics for GPU utilization analysis.
         
@@ -833,11 +892,15 @@ class TrackGeneratorPipeline(Pipeline):
             tracking_time: Time spent on sequential tracking (seconds)
             total_detections: Total detections found in batch
             frame_start: Starting frame number of this batch
+            queue_wait_time: Aggregate time spent waiting for queue items (seconds)
+            queue_wait_max: Maximum queue wait duration observed (seconds)
+            queue_depth_avg: Average queue depth observed during batch
         """
         # Calculate metrics
         avg_detection_time_per_frame = detection_time / batch_size if batch_size > 0 else 0
         avg_tracking_time_per_frame = tracking_time / batch_size if batch_size > 0 else 0
         total_time = detection_time + tracking_time
+        avg_queue_wait = queue_wait_time / batch_size if batch_size > 0 else 0.0
         detection_fps = batch_size / detection_time if detection_time > 0 else 0
         tracking_fps = batch_size / tracking_time if tracking_time > 0 else 0
         total_fps = batch_size / total_time if total_time > 0 else 0
@@ -858,8 +921,16 @@ class TrackGeneratorPipeline(Pipeline):
             f"🔢 BATCH {batch_num} PER-FRAME | "
             f"Detection: {avg_detection_time_per_frame*1000:.1f}ms/frame | "
             f"Tracking: {avg_tracking_time_per_frame*1000:.1f}ms/frame | "
-            f"Avg detections/frame: {total_detections/batch_size if batch_size > 0 else 0:.1f}"
+            f"Avg detections/frame: {total_detections/batch_size if batch_size > 0 else 0:.1f} | "
+            f"Queue wait: {avg_queue_wait*1000:.1f}ms avg / {queue_wait_max*1000:.1f}ms max | "
+            f"Queue depth≈{queue_depth_avg:.1f}"
         )
+        if extra_timings:
+            timing_summary = " | ".join(
+                f"{name}={duration*1000:.1f}ms"
+                for name, duration in extra_timings.items()
+            )
+            logger.info(f"⏱️ BATCH {batch_num} TIMERS | {timing_summary}")
     
     def _log_crop_metrics(
         self,
@@ -899,15 +970,15 @@ class TrackGeneratorPipeline(Pipeline):
         video_blob_name = context.get("video_blob_name")
         video_guid = context.get("video_guid")
         video_folder = context.get("video_folder")
-        
+
         if not video_guid:
             logger.error("No video GUID for player detection")
             return {"status": StepStatus.ERROR.value, "error": "No video GUID provided"}
-        
+
         if not video_folder:
             logger.error("No video folder for player detection")
             return {"status": StepStatus.ERROR.value, "error": "No video folder provided for saving detections"}
-        
+
         try:
             logger.info(f"Starting player detection for video: {video_guid}")
 
@@ -915,381 +986,578 @@ class TrackGeneratorPipeline(Pipeline):
             if not detections_path:
                 logger.error("Could not determine detections path. Aborting.")
                 return {"status": StepStatus.ERROR.value, "error": "Could not determine detections path"}
-            
-            # Process all frames in the video
+
             detections_count = 0
             all_detections = sv.Detections.empty()
-            get_crop_tasks = []  # Collect async crop processing tasks
-            upload_tasks = []  # Track concurrent upload tasks
-            batch_counter = 0  # Track batch numbers for logging
-            all_crop_paths = []  # Track all successful crop upload paths
-           
+            get_crop_tasks: List[asyncio.Task] = []
+            upload_tasks: List[asyncio.Task] = []
+            batch_counter = 0
+            all_crop_paths: List[str] = []
             last_checkpoint_frame = -1
-            
-            # Check for frame-level resume information in context
+
             resume_frame = context.get("resume_frame", 0)
             resume_detections_count = context.get("resume_detections_count", 0)
             resume_all_detections = context.get("resume_all_detections", sv.Detections.empty())
             resume_crop_paths = context.get("resume_crop_paths", [])
-            
+
             if resume_frame > 0:
                 logger.info(f"Resuming video processing from frame {resume_frame}")
                 detections_count = resume_detections_count
                 all_detections = resume_all_detections
                 all_crop_paths = resume_crop_paths
-            
+
+            detection_queue: asyncio.Queue[Optional[FrameDetectionsPayload]] = asyncio.Queue(maxsize=2)
+            stop_requested = False
+            producer_error: Optional[Exception] = None
+            queue_metrics = {
+                "producer_wait_total": 0.0,
+                "producer_wait_max": 0.0,
+                "producer_wait_samples": 0,
+                "consumer_wait_total": 0.0,
+                "consumer_wait_max": 0.0,
+                "consumer_wait_samples": 0,
+                "consumer_depth_total": 0.0,
+                "consumer_depth_samples": 0,
+            }
+
+            detection_save_tasks: List[asyncio.Task] = []
+
+            async def schedule_detection_save(reason: str, force: bool = False) -> float:
+                """Queue a detection save task and return the scheduling latency."""
+
+                try:
+                    detections_count = len(all_detections)
+                except TypeError:
+                    detections_count = "unknown"
+
+                if not force and detections_count in (0, "unknown"):
+                    logger.debug(
+                        "Skipping detection save schedule | reason=%s | force=%s | detections=%s",
+                        reason,
+                        force,
+                        detections_count,
+                    )
+                    return 0.0
+
+                logger.info(
+                    "Queueing detection save task | reason=%s | force=%s | detections=%s",
+                    reason,
+                    force,
+                    detections_count,
+                )
+
+                schedule_start = time.perf_counter()
+                detection_save_tasks.append(
+                    asyncio.create_task(
+                        self._save_detections_async(detections_path, all_detections, reason)
+                    )
+                )
+                latency = time.perf_counter() - schedule_start
+
+                logger.debug(
+                    "Detection save task queued | reason=%s | latency=%.3fs | pending_tasks=%d",
+                    reason,
+                    latency,
+                    len(detection_save_tasks),
+                )
+
+                return latency
+
+            processed_frames = resume_frame if resume_frame > 0 else 0
+            previous_frame_rgb: Optional[np.ndarray] = None
+
             with self.tenant_storage.get_video_capture(video_blob_name or "") as cap:
                 if not cap.isOpened():
                     logger.error(f"Could not open video for detection: {video_blob_name}")
                     return {"status": StepStatus.ERROR.value, "error": f"Could not open video: {video_blob_name}"}
-                
+
                 total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
                 logger.info(f"Processing {total_frames} frames for detection")
-                
-                # Seek to resume frame if resuming
+
                 if resume_frame > 0:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, resume_frame)
                     logger.info(f"Seeked to frame {resume_frame} for resume")
-                
-                frame_number = resume_frame if resume_frame > 0 else 0
-                previous_frame_rgb: np.ndarray
-                
-                # Determine if we should use batch detection (GPU optimization)
+
                 use_batch_detection = self.config.use_batch_detection and self.detection_model.batch_size > 1
-                
+
                 if use_batch_detection:
-                    logger.info(f"🚀 BATCH DETECTION ENABLED | Batch size: {self.detection_model.batch_size} frames | GPU optimization active")
+                    logger.info(
+                        "🚀 BATCH DETECTION ENABLED | Batch size: %d frames | GPU optimization active",
+                        self.detection_model.batch_size,
+                    )
                 else:
-                    logger.info(f"📦 SEQUENTIAL DETECTION | Processing frame-by-frame (batch_size={self.detection_model.batch_size})")
-                
-                # Update status to "running" now that we're about to process frames
-                # This complies with PipelineStatus.RUNNING enum value
-                self._update_progress({
-                    'status': 'running',
-                    'progress_percent': 0.0,
-                    'frames_processed': resume_frame,
-                    'total_frames': total_frames,
-                    'detections_count': detections_count,
-                    'current_video': video_guid
-                })
-                logger.info(f"Status updated to 'running' - starting frame processing")
-                
-                # Frame buffer for batch processing
+                    logger.info(
+                        "📦 SEQUENTIAL DETECTION | Processing frame-by-frame (batch_size=%d)",
+                        self.detection_model.batch_size,
+                    )
+
+                self._update_progress(
+                    {
+                        "status": "running",
+                        "progress_percent": (processed_frames / total_frames) * 100 if total_frames else 0.0,
+                        "frames_processed": processed_frames,
+                        "total_frames": total_frames,
+                        "detections_count": detections_count,
+                        "current_video": video_guid,
+                    }
+                )
+                logger.info("Status updated to 'running' - starting frame processing")
+
                 frame_buffer: List[np.ndarray] = []
                 frame_indices_buffer: List[int] = []
-                batch_num = 0
-                
-                while True:
-                    # Check for cancellation request
-                    if self.is_stop_requested():
-                        logger.info(f"Stop requested during detection processing at frame {frame_number}/{total_frames}")
-                        update = self._graceful_stop(
-                            get_crop_tasks, upload_tasks, batch_counter, video_guid, 
-                            all_crop_paths, frame_number, detections_count, all_detections,
-                            video_blob_name, video_folder
-                        )
-                        context.update(update)
-                        return context
-                        
-                    ret, frame = cap.read()
-                    if not ret or frame is None or not isinstance(frame, np.ndarray):
-                        if not ret or frame is None:
-                            logger.debug(f"Frame read failed or returned None at frame {frame_number}. End of video reached.")
-                        else:
-                            logger.warning(f"Frame at {frame_number} is not a valid numpy array. Type: {type(frame)}")
-                        
-                        # Process any remaining frames in buffer before stopping
-                        if use_batch_detection and len(frame_buffer) > 0:
-                            logger.info(f"Processing final batch of {len(frame_buffer)} frames")
-                            # Process final partial batch using same logic as full batch
-                            batch_detections_list = self.detection_model.generate_detections_batch(frame_buffer)  # type: ignore
-                            for i, (frame_rgb_buffered, detections, frame_idx) in enumerate(
-                                zip(frame_buffer, batch_detections_list, frame_indices_buffer)
-                            ):
-                                if detections is None or len(detections) == 0:
-                                    detections = sv.Detections.empty()
-                                else:
-                                    detections_count += len(detections)
-                                
-                                if frame_idx == 0:
-                                    affine_matrix = self.tracker.get_identity_affine_matrix()
-                                else:
-                                    affine_matrix = self.tracker.calculate_affine_transform(
-                                        previous_frame_rgb, frame_rgb_buffered
-                                    )
-                                detections = self.tracker.update_with_transform(
-                                    detections, affine_matrix, frame_rgb_buffered
-                                )
-                                previous_frame_rgb = frame_rgb_buffered
-                                
-                                if len(detections) > 0:
-                                    detections.data['frame_index'] = [frame_idx] * len(detections)
-                                else:
-                                    detections.data['frame_index'] = []
-                                all_detections = sv.Detections.merge([all_detections, detections])
-                        break
+                batch_id_counter = 0
+                next_frame_index = resume_frame if resume_frame > 0 else 0
 
+                async def detection_producer() -> None:
+                    nonlocal stop_requested, producer_error, next_frame_index, batch_id_counter, queue_metrics
                     try:
-                        # Initialize detections to empty to avoid unbound variable errors
-                        detections = sv.Detections.empty()
-                        
-                        # Convert BGR to RGB for model input
-                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) #type: ignore
-                        
-                        if use_batch_detection:
-                            # === BATCH DETECTION MODE ===
-                            # Buffer frames until we reach batch size, then process all at once
-                            frame_buffer.append(frame_rgb)
-                            frame_indices_buffer.append(frame_number)
-                            
-                            # Process batch when buffer is full
-                            if len(frame_buffer) >= self.detection_model.batch_size:
-                                batch_start_time = time.time()
-                                
-                                # Step 1: Batch Detection (GPU-accelerated)
-                                detection_start = time.time()
-                                batch_detections_list = self.detection_model.generate_detections_batch(frame_buffer)  # type: ignore
-                                detection_time = time.time() - detection_start
-                                
-                                # Step 2: Sequential Tracking (maintains temporal consistency)
-                                tracking_start = time.time()
-                                batch_detections_tracked = []
-                                batch_total_detections = 0
-                                
-                                for i, (frame_rgb_buffered, detections, frame_idx) in enumerate(
-                                    zip(frame_buffer, batch_detections_list, frame_indices_buffer)
-                                ):
-                                    # Validate detections
-                                    if type(detections) is not sv.Detections:
-                                        raise RuntimeError("Unrecognized detection type")
-                                    if detections is None or len(detections) == 0:
-                                        logger.debug(f"Frame {frame_idx}: No detections found")
-                                        detections = sv.Detections.empty()
-                                    else:
-                                        batch_total_detections += len(detections)
-                                        logger.debug(f"Frame {frame_idx}: Found {len(detections)} detections")
+                        while True:
+                            if self.is_stop_requested():
+                                stop_requested = True
+                                break
 
-                                    # Calculate affine transformation and update tracker
-                                    if frame_idx == 0:
-                                        affine_matrix = self.tracker.get_identity_affine_matrix()
-                                    else:
-                                        affine_matrix = self.tracker.calculate_affine_transform(
-                                            previous_frame_rgb, frame_rgb_buffered
-                                        )
-
-                                    detections = self.tracker.update_with_transform(
-                                        detections, affine_matrix, frame_rgb_buffered
+                            ret, frame = cap.read()
+                            if not ret or frame is None or not isinstance(frame, np.ndarray):
+                                if not ret or frame is None:
+                                    logger.debug("Detection producer reached end of video stream")
+                                else:
+                                    logger.warning(
+                                        "Frame at %s is not a valid numpy array. Type: %s",
+                                        next_frame_index,
+                                        type(frame),
                                     )
-                                    batch_detections_tracked.append((frame_rgb_buffered, detections, frame_idx))
-                                    previous_frame_rgb = frame_rgb_buffered
-                                
-                                tracking_time = time.time() - tracking_start
-                                detections_count += batch_total_detections
-                                
-                                # Log batch metrics
-                                self._log_batch_metrics(
-                                    batch_num, len(frame_buffer), detection_time, tracking_time,
-                                    batch_total_detections, frame_indices_buffer[0]
-                                )
-                                
-                                # Step 3: Handle crops and save detections for each frame in batch
-                                for frame_rgb_tracked, detections_tracked, frame_idx in batch_detections_tracked:
-                                    if frame_idx % FRAME_SAMPLING_FOR_CROP == 0:
-                                        get_crop_task = asyncio.create_task(
-                                            self._get_upload_list_for_frame(
-                                                frame_rgb_tracked, detections_tracked, video_guid, frame_idx
+                                break
+
+                            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # type: ignore
+
+                            if use_batch_detection:
+                                frame_buffer.append(frame_rgb)
+                                frame_indices_buffer.append(next_frame_index)
+                                next_frame_index += 1
+
+                                if len(frame_buffer) >= self.detection_model.batch_size:
+                                    detection_start = time.time()
+                                    batch_results = self.detection_model.generate_detections_batch(frame_buffer)  # type: ignore
+                                    detection_time = time.time() - detection_start
+
+                                    for position, (frame_rgb_buffered, detections, frame_idx) in enumerate(
+                                        zip(frame_buffer, batch_results, frame_indices_buffer)
+                                    ):
+                                        if type(detections) is not sv.Detections or detections is None:
+                                            detections = sv.Detections.empty()
+
+                                        queue_put_start = time.perf_counter()
+                                        await detection_queue.put(
+                                            FrameDetectionsPayload(
+                                                frame_idx=frame_idx,
+                                                frame_rgb=frame_rgb_buffered,
+                                                detections=detections,
+                                                detection_time=detection_time,
+                                                batch_id=batch_id_counter,
+                                                batch_size=len(frame_buffer),
+                                                batch_position=position,
                                             )
                                         )
-                                        get_crop_tasks.append(get_crop_task)
-                                        
-                                        if len(get_crop_tasks) >= self._crop_batch_size:
-                                            logger.debug(f"Processing crop batch {batch_counter} (frame {frame_idx})...")
-                                            batch_frame_tasks = get_crop_tasks[:]
-                                            get_crop_tasks.clear()
-                                            upload_task = asyncio.create_task(
-                                                self._upload_crop_batch(batch_frame_tasks, batch_counter)
-                                            )
-                                            upload_tasks.append(upload_task)
-                                            batch_counter += 1
-                                            await asyncio.sleep(0)
-                                    
-                                    # Set frame_index and merge detections
-                                    if len(detections_tracked) > 0:
-                                        detections_tracked.data['frame_index'] = [frame_idx] * len(detections_tracked)
-                                    else:
-                                        detections_tracked.data['frame_index'] = []
-                                    all_detections = sv.Detections.merge([all_detections, detections_tracked])
-                                
-                                # Save detections asynchronously
-                                asyncio.create_task(self._save_detections_async(detections_path, all_detections))
-                                
-                                # Clear buffers for next batch
-                                frame_buffer.clear()
-                                frame_indices_buffer.clear()
-                                batch_num += 1
-                                frame_number += 1
-                                
-                                # Checkpointing
-                                if frame_number % CHECKPOINT_FRAME_INTERVAL == 0 and frame_number != last_checkpoint_frame:
-                                    checkpoint_context = {
-                                        "resume_frame": frame_number,
-                                        "resume_detections_count": detections_count,
-                                        "resume_all_detections": all_detections,
-                                        "resume_crop_paths": all_crop_paths,
-                                    }
-                                    if not self.save_checkpoint(checkpoint_context, self.current_completed_steps):
-                                        logger.warning(f"Failed to save checkpoint at frame {frame_number}")
-                                    last_checkpoint_frame = frame_number
-                                
-                                # Progress logging
-                                if frame_number % 100 == 0:
-                                    logger.info(f"📹 Progress: {frame_number}/{total_frames} frames ({detections_count} detections)")
-                                    self._update_progress({
-                                        'status': 'running',  # Use PipelineStatus.RUNNING.value
-                                        'progress_percent': (frame_number / total_frames) * 100,
-                                        'frames_processed': frame_number,
-                                        'total_frames': total_frames,
-                                        'detections_count': detections_count,
-                                        'current_video': video_guid
-                                    })
-                                continue  # Skip the sequential processing below
+                                        queue_put_wait = time.perf_counter() - queue_put_start
+                                        queue_metrics["producer_wait_total"] += queue_put_wait
+                                        queue_metrics["producer_wait_samples"] += 1
+                                        if queue_put_wait > queue_metrics["producer_wait_max"]:
+                                            queue_metrics["producer_wait_max"] = queue_put_wait
+
+                                    frame_buffer.clear()
+                                    frame_indices_buffer.clear()
+                                    batch_id_counter += 1
                             else:
-                                # Buffer not full yet, continue reading frames
-                                frame_number += 1
-                                continue
-                        
-                        # === SEQUENTIAL DETECTION MODE (fallback) ===
-                        detections = self.detection_model.generate_detections(frame_rgb)
+                                detection_start = time.time()
+                                detections = self.detection_model.generate_detections(frame_rgb)
+                                detection_time = time.time() - detection_start
+
+                                if type(detections) is not sv.Detections or detections is None:
+                                    detections = sv.Detections.empty()
+
+                                queue_put_start = time.perf_counter()
+                                await detection_queue.put(
+                                    FrameDetectionsPayload(
+                                        frame_idx=next_frame_index,
+                                        frame_rgb=frame_rgb,
+                                        detections=detections,
+                                        detection_time=detection_time,
+                                        batch_id=batch_id_counter,
+                                        batch_size=1,
+                                        batch_position=0,
+                                    )
+                                )
+                                queue_put_wait = time.perf_counter() - queue_put_start
+                                queue_metrics["producer_wait_total"] += queue_put_wait
+                                queue_metrics["producer_wait_samples"] += 1
+                                if queue_put_wait > queue_metrics["producer_wait_max"]:
+                                    queue_metrics["producer_wait_max"] = queue_put_wait
+
+                                next_frame_index += 1
+                                batch_id_counter += 1
+                    except Exception as producer_exc:  # pragma: no cover - defensive logging
+                        producer_error = producer_exc
+                        logger.error(
+                            "Detection producer error for video %s: %s",
+                            video_guid,
+                            producer_exc,
+                            exc_info=True,
+                        )
+                    finally:
+                        if use_batch_detection and frame_buffer:
+                            try:
+                                detection_start = time.time()
+                                batch_results = self.detection_model.generate_detections_batch(frame_buffer)  # type: ignore
+                                detection_time = time.time() - detection_start
+
+                                for position, (frame_rgb_buffered, detections, frame_idx) in enumerate(
+                                    zip(frame_buffer, batch_results, frame_indices_buffer)
+                                ):
+                                    if type(detections) is not sv.Detections or detections is None:
+                                        detections = sv.Detections.empty()
+
+                                    queue_put_start = time.perf_counter()
+                                    await detection_queue.put(
+                                        FrameDetectionsPayload(
+                                            frame_idx=frame_idx,
+                                            frame_rgb=frame_rgb_buffered,
+                                            detections=detections,
+                                            detection_time=detection_time,
+                                            batch_id=batch_id_counter,
+                                            batch_size=len(frame_buffer),
+                                            batch_position=position,
+                                        )
+                                    )
+                                    queue_put_wait = time.perf_counter() - queue_put_start
+                                    queue_metrics["producer_wait_total"] += queue_put_wait
+                                    queue_metrics["producer_wait_samples"] += 1
+                                    if queue_put_wait > queue_metrics["producer_wait_max"]:
+                                        queue_metrics["producer_wait_max"] = queue_put_wait
+
+                                batch_id_counter += 1
+                            except Exception as flush_exc:  # pragma: no cover - defensive logging
+                                producer_error = flush_exc
+                                logger.error(
+                                    "Detection producer flush error for video %s: %s",
+                                    video_guid,
+                                    flush_exc,
+                                    exc_info=True,
+                                )
+                        await detection_queue.put(None)
+
+                async def tracking_consumer() -> None:
+                    nonlocal stop_requested, detections_count, all_detections, processed_frames, previous_frame_rgb, batch_counter, last_checkpoint_frame, queue_metrics
+
+                    current_batch_detection_time = 0.0
+                    current_batch_total_detections = 0
+                    current_batch_tracking_start: Optional[float] = None
+                    current_batch_frame_start: Optional[int] = None
+                    current_batch_id: Optional[int] = None
+                    current_batch_size = 0
+                    current_batch_queue_wait = 0.0
+                    current_batch_queue_wait_max = 0.0
+                    current_batch_queue_depth_total = 0.0
+                    current_batch_queue_depth_samples = 0
+                    current_batch_affine_time = 0.0
+                    current_batch_tracker_time = 0.0
+                    current_batch_save_schedule_time = 0.0
+                    current_batch_crop_schedule_time = 0.0
+
+                    while True:
+                        queue_wait_start = time.perf_counter()
+                        payload = await detection_queue.get()
+                        queue_wait = time.perf_counter() - queue_wait_start
+
+                        if payload is None:
+                            break
+
+                        queue_metrics["consumer_wait_total"] += queue_wait
+                        queue_metrics["consumer_wait_samples"] += 1
+                        if queue_wait > queue_metrics["consumer_wait_max"]:
+                            queue_metrics["consumer_wait_max"] = queue_wait
+
+                        queue_depth_after = detection_queue.qsize()
+                        queue_metrics["consumer_depth_total"] += queue_depth_after
+                        queue_metrics["consumer_depth_samples"] += 1
+
+                        if self.is_stop_requested():
+                            stop_requested = True
+
+                        frame_idx = payload.frame_idx
+                        frame_rgb = payload.frame_rgb
+                        detections = payload.detections
                         if type(detections) is not sv.Detections:
                             raise RuntimeError("Unrecognized detection type")
                         if detections is None or len(detections) == 0:
-                            logger.debug(f"Frame {frame_number}: No detections found")
                             detections = sv.Detections.empty()
-                        else:
-                            detections_count += len(detections)
-                            logger.debug(f"Frame {frame_number}: Found {len(detections)} detections")
 
-                        if frame_number == 0:
+                        if payload.batch_position == 0:
+                            current_batch_detection_time = payload.detection_time
+                            current_batch_total_detections = 0
+                            current_batch_tracking_start = time.time()
+                            current_batch_frame_start = frame_idx
+                            current_batch_id = payload.batch_id
+                            current_batch_size = payload.batch_size
+                            current_batch_queue_wait = 0.0
+                            current_batch_queue_wait_max = 0.0
+                            current_batch_queue_depth_total = 0.0
+                            current_batch_queue_depth_samples = 0
+                            current_batch_affine_time = 0.0
+                            current_batch_tracker_time = 0.0
+                            current_batch_save_schedule_time = 0.0
+                            current_batch_crop_schedule_time = 0.0
+
+                        current_batch_queue_wait += queue_wait
+                        current_batch_queue_wait_max = max(current_batch_queue_wait_max, queue_wait)
+                        current_batch_queue_depth_total += queue_depth_after
+                        current_batch_queue_depth_samples += 1
+
+                        detections_found = len(detections)
+                        detections_count += detections_found
+                        current_batch_total_detections += detections_found
+
+                        affine_start = time.perf_counter()
+                        if (
+                            frame_idx == 0
+                            or previous_frame_rgb is None
+                            or (resume_frame > 0 and frame_idx == resume_frame)
+                        ):
                             affine_matrix = self.tracker.get_identity_affine_matrix()
                         else:
                             affine_matrix = self.tracker.calculate_affine_transform(previous_frame_rgb, frame_rgb)
+                        current_batch_affine_time += time.perf_counter() - affine_start
 
-                        detections = self.tracker.update_with_transform(detections, affine_matrix, frame_rgb)    
-                        if frame_number % FRAME_SAMPLING_FOR_CROP == 0:
-                            # Create async task for crop processing (returns list of (blob_path, crop_image))
+                        tracker_start = time.perf_counter()
+                        detections_tracked = self.tracker.update_with_transform(detections, affine_matrix, frame_rgb)
+                        current_batch_tracker_time += time.perf_counter() - tracker_start
+                        previous_frame_rgb = frame_rgb
+
+                        if len(detections_tracked) > 0:
+                            detections_tracked.data["frame_index"] = [frame_idx] * len(detections_tracked)
+                        else:
+                            detections_tracked.data["frame_index"] = []
+                        all_detections = sv.Detections.merge([all_detections, detections_tracked])
+
+                        if frame_idx % FRAME_SAMPLING_FOR_CROP == 0:
+                            crop_schedule_start = time.perf_counter()
                             get_crop_task = asyncio.create_task(
-                                self._get_upload_list_for_frame(frame_rgb, detections, video_guid, frame_number)
+                                self._get_upload_list_for_frame(frame_rgb, detections_tracked, video_guid, frame_idx)
                             )
                             get_crop_tasks.append(get_crop_task)
-                            logger.debug(f"Crop task created (pending={len(get_crop_tasks)} in current batch) -> {get_crop_task}")
 
                             if len(get_crop_tasks) >= self._crop_batch_size:
-                                logger.info(f"Processing batch {batch_counter} of crop uploads (frame {frame_number})...")
-                                # Snapshot current tasks and reset collector immediately to avoid mutation during gather
                                 batch_frame_tasks = get_crop_tasks[:]
                                 get_crop_tasks.clear()
                                 upload_task = asyncio.create_task(
                                     self._upload_crop_batch(batch_frame_tasks, batch_counter)
                                 )
-                                logger.debug(f"Upload batch task {upload_task} created for batch {batch_counter}")
                                 upload_tasks.append(upload_task)
                                 batch_counter += 1
                                 await asyncio.sleep(0)
 
-                    except Exception as e:
-                        logger.error(f"Error processing frame {frame_number} for video {video_guid}: {e}")
-                        detections = sv.Detections.empty()
-                        
-                    finally:
-                        previous_frame_rgb = frame_rgb
-                        # Set frame_index for all detections in this frame
-                        if type(detections) is not sv.Detections:
-                            raise RuntimeError("Unrecognized detection type")
-                        elif len(detections) > 0:
-                            detections.data['frame_index'] = [frame_number] * len(detections)
-                        else:
-                            detections.data['frame_index'] = []
-                        all_detections = sv.Detections.merge([all_detections, detections])
-                        # Save detections asynchronously (non-blocking)
-                        asyncio.create_task(self._save_detections_async(detections_path, all_detections))
+                            current_batch_crop_schedule_time += time.perf_counter() - crop_schedule_start
 
-                    frame_number += 1
-                    
-                    # Save frame-level checkpoint periodically
-                    if frame_number % CHECKPOINT_FRAME_INTERVAL == 0 and frame_number != last_checkpoint_frame:
-                        logger.debug(f"Saving checkpoint at frame {frame_number}")
-                        
-                        # Update context with current processing state
-                        checkpoint_context = {
-                            "resume_frame": frame_number,
-                            "resume_detections_count": detections_count,
-                            "resume_all_detections": all_detections,
-                            "resume_crop_paths": all_crop_paths,
-                        }
-                        
-                        # Save checkpoint during step execution
-                        # We need to get the current completed steps from the pipeline
-                        current_completed_steps = self.current_completed_steps
-                        if not self.save_checkpoint(checkpoint_context, current_completed_steps):
-                            logger.warning(f"Failed to save checkpoint at frame {frame_number}")
-                        else:
-                            logger.debug(f"Checkpoint saved successfully at frame {frame_number}")
-                        
-                        last_checkpoint_frame = frame_number
-                    
-                    # Log progress every 100 frames
-                    if frame_number % 100 == 0:
-                        logger.info(f"Processed {frame_number}/{total_frames} frames, {detections_count} total detections")
-                        # Update progress in Firestore for real-time tracking
-                        progress_percent = (frame_number / total_frames) * 100
-                        self._update_progress({
-                            'status': 'running',  # Use PipelineStatus.RUNNING.value
-                            'progress_percent': progress_percent,
-                            'frames_processed': frame_number,
-                            'total_frames': total_frames,
-                            'detections_count': detections_count,
-                            'current_video': video_guid if 'video_guid' in locals() else None
-                        })
-            
-            # Process any remaining crops in final batch
-            if len(get_crop_tasks) > 0:
+                        processed_frames = max(processed_frames, frame_idx + 1)
+
+                        if processed_frames % CHECKPOINT_FRAME_INTERVAL == 0 and processed_frames != last_checkpoint_frame:
+                            checkpoint_context = {
+                                "resume_frame": processed_frames,
+                                "resume_detections_count": detections_count,
+                                "resume_all_detections": all_detections,
+                                "resume_crop_paths": all_crop_paths,
+                            }
+                            if not self.save_checkpoint(checkpoint_context, self.current_completed_steps):
+                                logger.warning(f"Failed to save checkpoint at frame {processed_frames}")
+                            else:
+                                logger.debug(f"Checkpoint saved successfully at frame {processed_frames}")
+                                schedule_time = await schedule_detection_save("checkpoint", force=True)
+                                current_batch_save_schedule_time += schedule_time
+                            last_checkpoint_frame = processed_frames
+
+                        if processed_frames % 100 == 0:
+                            progress_percent = (processed_frames / total_frames) * 100 if total_frames else 0.0
+                            logger.info(
+                                "Processed %s/%s frames, %s total detections",
+                                processed_frames,
+                                total_frames,
+                                detections_count,
+                            )
+                            self._update_progress(
+                                {
+                                    "status": "running",
+                                    "progress_percent": progress_percent,
+                                    "frames_processed": processed_frames,
+                                    "total_frames": total_frames,
+                                    "detections_count": detections_count,
+                                    "current_video": video_guid,
+                                }
+                            )
+
+                        if (
+                            payload.batch_position == payload.batch_size - 1
+                            and current_batch_tracking_start is not None
+                            and current_batch_frame_start is not None
+                            and current_batch_id is not None
+                        ):
+                            batch_tracking_time = time.time() - current_batch_tracking_start
+                            queue_depth_avg = (
+                                current_batch_queue_depth_total / current_batch_queue_depth_samples
+                                if current_batch_queue_depth_samples > 0
+                                else 0.0
+                            )
+
+                            extra_timings = {
+                                "affine": current_batch_affine_time,
+                                "tracker": current_batch_tracker_time,
+                            }
+                            if current_batch_save_schedule_time > 0:
+                                extra_timings["save_schedule"] = current_batch_save_schedule_time
+                            if current_batch_crop_schedule_time > 0:
+                                extra_timings["crop_schedule"] = current_batch_crop_schedule_time
+
+                            self._log_batch_metrics(
+                                current_batch_id,
+                                current_batch_size,
+                                current_batch_detection_time,
+                                batch_tracking_time,
+                                current_batch_total_detections,
+                                current_batch_frame_start,
+                                queue_wait_time=current_batch_queue_wait,
+                                queue_wait_max=current_batch_queue_wait_max,
+                                queue_depth_avg=queue_depth_avg,
+                                extra_timings=extra_timings,
+                            )
+                            current_batch_tracking_start = None
+
+                producer_task = asyncio.create_task(detection_producer())
+                consumer_task = asyncio.create_task(tracking_consumer())
+
+                await asyncio.gather(producer_task, consumer_task)
+
+            producer_samples = max(queue_metrics["producer_wait_samples"], 1)
+            consumer_samples = max(queue_metrics["consumer_wait_samples"], 1)
+            avg_producer_wait = queue_metrics["producer_wait_total"] / producer_samples
+            avg_consumer_wait = queue_metrics["consumer_wait_total"] / consumer_samples
+            avg_depth = (
+                queue_metrics["consumer_depth_total"] / queue_metrics["consumer_depth_samples"]
+                if queue_metrics["consumer_depth_samples"] > 0
+                else 0.0
+            )
+            logger.info(
+                "🪄 DETECTION QUEUE | producer wait=%.2fms avg / %.2fms max | consumer wait=%.2fms avg / %.2fms max | depth≈%.1f",
+                avg_producer_wait * 1000,
+                queue_metrics["producer_wait_max"] * 1000,
+                avg_consumer_wait * 1000,
+                queue_metrics["consumer_wait_max"] * 1000,
+                avg_depth,
+            )
+
+            if producer_error is not None:
+                if detection_save_tasks:
+                    await asyncio.gather(*detection_save_tasks, return_exceptions=True)
+                    detection_save_tasks.clear()
+                raise producer_error
+
+            if stop_requested:
+                logger.info(
+                    "Stop requested during detection processing after completing %s detections",
+                    detections_count,
+                )
+
+                await schedule_detection_save("stop-request", force=True)
+
+                if get_crop_tasks:
+                    final_upload_task = asyncio.create_task(self._upload_crop_batch(get_crop_tasks, batch_counter))
+                    upload_tasks.append(final_upload_task)
+                    batch_counter += 1
+
+                if upload_tasks:
+                    logger.info(
+                        "Waiting for %s pending upload batches to finish before stopping",
+                        len(upload_tasks),
+                    )
+                    upload_results = await asyncio.gather(*upload_tasks)
+                    for uploaded in upload_results:
+                        if uploaded:
+                            all_crop_paths.extend(uploaded)
+
+                if detection_save_tasks:
+                    logger.info(
+                        "Waiting for %s detection save tasks before stopping",
+                        len(detection_save_tasks),
+                    )
+                    await asyncio.gather(*detection_save_tasks)
+                    detection_save_tasks.clear()
+
+                update = self._graceful_stop(
+                    [],
+                    [],
+                    batch_counter,
+                    video_guid,
+                    all_crop_paths,
+                    processed_frames,
+                    detections_count,
+                    all_detections,
+                    video_blob_name,
+                    video_folder,
+                )
+                context.update(update)
+                return context
+
+            if get_crop_tasks:
                 final_upload_task = asyncio.create_task(self._upload_crop_batch(get_crop_tasks, batch_counter))
                 upload_tasks.append(final_upload_task)
                 batch_counter += 1
-            
-            # Wait for all upload tasks to complete and collect results
+
             if upload_tasks:
                 logger.info(f"Waiting for {len(upload_tasks)} upload batches to complete...")
-                
-                # Wait for all upload batch tasks to complete
-                await asyncio.gather(*upload_tasks)
-                
-                logger.info(f"All crop upload batches completed")
-            
-            # Save final detections asynchronously (non-blocking)
-            asyncio.run(self._save_detections_async(detections_path, all_detections))
+                upload_results = await asyncio.gather(*upload_tasks)
+                for uploaded in upload_results:
+                    if uploaded:
+                        all_crop_paths.extend(uploaded)
+                logger.info("All crop upload batches completed")
 
-            logger.info(f"Player detection completed for video {video_guid} - {detections_count} detections found across {len(all_detections)} frames")
+            logger.info("Saving final detections synchronously...")
+            await self._save_detections_async(
+                detections_path,
+                all_detections,
+                reason="final",
+            )
+
+            if detection_save_tasks:
+                logger.info(
+                    "Waiting for %s detection save tasks to finish...",
+                    len(detection_save_tasks),
+                )
+                await asyncio.gather(*detection_save_tasks)
+                detection_save_tasks.clear()
+
+            logger.info(
+                "Player detection completed for video %s - %s detections found",
+                video_guid,
+                detections_count,
+            )
 
             if detections_count == 0:
                 logger.error(f"No detections found for video {video_guid}")
                 return {"status": StepStatus.ERROR.value, "error": "No detections found in video frames"}
 
-            context.update({
-                "status": StepStatus.COMPLETED.value,
-                "all_detections": all_detections,
-                "total_detections": detections_count,
-                "crop_paths": all_crop_paths,
-                "total_crops": len(all_crop_paths),
-                # Clear resume information on successful completion
-                "resume_frame": None,
-                "resume_detections_count": None,
-                "resume_all_detections": None,
-                "resume_crop_paths": None,
-            })
-            
+            context.update(
+                {
+                    "status": StepStatus.COMPLETED.value,
+                    "all_detections": all_detections,
+                    "total_detections": detections_count,
+                    "crop_paths": all_crop_paths,
+                    "total_crops": len(all_crop_paths),
+                    "resume_frame": None,
+                    "resume_detections_count": None,
+                    "resume_all_detections": None,
+                    "resume_crop_paths": None,
+                }
+            )
+
             return context
-            
+
         except Exception as e:
             logger.error(f"Critical error in player detection for video {video_guid}: {e}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
@@ -1433,7 +1701,7 @@ class TrackGeneratorPipeline(Pipeline):
             return False
         
         # Check contrast using standard deviation of grayscale image
-        gray_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        gray_crop = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
         contrast = np.std(gray_crop)  #type: ignore
         
         # Low contrast threshold

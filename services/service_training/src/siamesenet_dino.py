@@ -5,7 +5,7 @@ from typing import Optional, Tuple, cast
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from config.all_config import model_config
+from shared_libs.config.all_config import model_config
 from huggingface_hub import login
 from transformers import AutoModel
 

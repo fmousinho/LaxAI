@@ -17,8 +17,8 @@ from unittest.mock import MagicMock, Mock, patch
 import psutil
 import pytest
 import torch
-from training_loop import Training
-from wandb_logger import WandbLogger, wandb_logger
+from services.service_training.src.training_loop import Training
+from services.service_training.src.wandb_logger import WandbLogger, wandb_logger
 
 from shared_libs.config.all_config import training_config, wandb_config
 from shared_libs.utils.env_secrets import setup_environment_secrets
@@ -31,7 +31,7 @@ class TrainingErrorSimulator:
     @contextmanager
     def simulate_dataset_error():
         """Simulate dataset loading/iteration errors."""
-        with patch('training_loop.Training.setup_training_pipeline') as mock_setup:
+        with patch('services.service_training.src.training_loop.Training.setup_training_pipeline') as mock_setup:
             mock_setup.side_effect = RuntimeError("Simulated dataset loading error")
             yield mock_setup
     
@@ -39,7 +39,7 @@ class TrainingErrorSimulator:
     @contextmanager
     def simulate_model_error():
         """Simulate model loading/initialization errors."""
-        with patch('training_loop.Training.setup_model') as mock_model:
+        with patch('services.service_training.src.training_loop.Training.setup_model') as mock_model:
             mock_model.side_effect = RuntimeError("Simulated model loading error")
             yield mock_model
     
@@ -51,7 +51,7 @@ class TrainingErrorSimulator:
             yield torch.randn(2, 3, 224, 224)  # First batch works
             raise RuntimeError("Simulated DataLoader error")
         
-        with patch('training_loop.Training.setup_dataloader') as mock_dataloader:
+        with patch('services.service_training.src.training_loop.Training.setup_dataloader') as mock_dataloader:
             mock_dl = MagicMock()
             mock_dl.__iter__ = lambda: failing_dataloader()
             mock_dl.__len__ = lambda: 2
@@ -63,7 +63,7 @@ class TrainingErrorSimulator:
     def simulate_checkpoint_save_error():
         """Simulate checkpoint saving errors."""
         # Import the specific instance to mock it properly
-        from wandb_logger import wandb_logger
+        from services.service_training.src.wandb_logger import wandb_logger
         with patch.object(wandb_logger, 'save_checkpoint') as mock_save:
             mock_save.side_effect = RuntimeError("Simulated checkpoint save error")
             yield mock_save

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Union
 
-from parameter_registry import parameter_registry
+from services.service_training.src.parameter_registry import parameter_registry
 from pydantic import BaseModel, ConfigDict, Field
 
 

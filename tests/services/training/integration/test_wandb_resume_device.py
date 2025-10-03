@@ -14,9 +14,9 @@ def test_resume_from_cpu_checkpoint_to_gpu(monkeypatch):
     - Assert the training.model parameters and optimizer state tensors are on CUDA afterwards
     """
     try:
-        from config.all_config import model_config, wandb_config
-        from siamesenet import SiameseNet
-        from training_loop import Training
+        from shared_libs.config.all_config import model_config, wandb_config
+        from services.service_training.src.siamesenet import SiameseNet
+        from services.service_training.src.training_loop import Training
 
         from services.service_training.src.wandb_logger import wandb_logger
     except Exception as e:
