@@ -31,6 +31,8 @@ from ..schemas.dataprep import (
     SaveGraphImageResponse,
     SuspendPrepResponse,
     MoveCropsResponse,
+    SplitTrackRequest,
+    SplitTrackResponse,
     ErrorResponse,
 )
 from ...workflows.manager import DataPrepManager
@@ -311,3 +313,44 @@ async def move_crops_to_verified(tenant_id: str) -> MoveCropsResponse:
     except Exception as e:
         logger.error(f"Failed to move crops for tenant {tenant_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to move crops: {str(e)}")
+
+
+@router.post(
+    "/split-track",
+    response_model=SplitTrackResponse,
+    summary="Split Track at Frame",
+    description="Split a track into two parts at the specified frame boundary where a player switch occurred."
+)
+async def split_track_at_frame(request: SplitTrackRequest, tenant_id: str) -> SplitTrackResponse:
+    """
+    Split a track that was incorrectly merged by the tracker.
+
+    This endpoint allows correcting cases where the tracker incorrectly grouped
+    two different players in the same track. The track is split at the frame
+    where the player switch occurs.
+
+    Args:
+        request: Split track request containing track_id and crop_image_name
+        tenant_id: The tenant identifier
+
+    Returns:
+        Response indicating success or failure of the split operation
+    """
+    try:
+        manager = get_manager(tenant_id)
+        success = manager.split_track_at_frame(request.track_id, request.crop_image_name)
+
+        if success:
+            return SplitTrackResponse(
+                success=True,
+                message=f"Track {request.track_id} successfully split at frame from {request.crop_image_name}"
+            )
+        else:
+            return SplitTrackResponse(
+                success=False,
+                message=f"Failed to split track {request.track_id}"
+            )
+
+    except Exception as e:
+        logger.error(f"Failed to split track for tenant {tenant_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to split track: {str(e)}")

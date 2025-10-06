@@ -20,6 +20,8 @@ from ..schemas.dataprep import (
     RecordResponseResponse,
     SaveGraphImageResponse,
     SaveGraphResponse,
+    SplitTrackRequest,
+    SplitTrackResponse,
     StartPrepRequest,
     StartPrepResponse,
     SuspendPrepResponse,
@@ -180,3 +182,23 @@ async def suspend_prep(tenant_id: str) -> SuspendPrepResponse:
     """
     data = await dataprep_client._proxy_request("POST", "/suspend", params={"tenant_id": tenant_id})
     return SuspendPrepResponse(**data)
+
+
+@router.post("/split-track", response_model=SplitTrackResponse)
+async def split_track_at_frame(request: SplitTrackRequest, tenant_id: str) -> SplitTrackResponse:
+    """
+    Split a track that was incorrectly merged by the tracker.
+
+    This endpoint allows correcting cases where the tracker incorrectly grouped
+    two different players in the same track. The track is split at the frame
+    where the player switch occurs.
+
+    Proxies to service_dataprep.
+    """
+    data = await dataprep_client._proxy_request(
+        "POST",
+        "/split-track",
+        json={"track_id": request.track_id, "crop_image_name": request.crop_image_name},
+        params={"tenant_id": tenant_id}
+    )
+    return SplitTrackResponse(**data)

@@ -96,6 +96,28 @@ class MoveCropsResponse(BaseModel):
     message: Optional[str] = Field(None, description="Optional message about the operation")
 
 
+class SplitTrackRequest(BaseModel):
+    """Request model for splitting a track at a specific frame."""
+
+    track_id: int = Field(..., description="The track ID to split")
+    crop_image_name: str = Field(..., description="Name of the crop image where the split occurs (e.g., 'crop_960.jpg')")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "track_id": 1,
+                "crop_image_name": "crop_960.jpg"
+            }
+        }
+
+
+class SplitTrackResponse(BaseModel):
+    """Response model for splitting a track."""
+
+    success: bool = Field(..., description="Whether the track was split successfully")
+    message: Optional[str] = Field(None, description="Optional message about the operation")
+
+
 class ErrorResponse(BaseModel):
     """Error response model."""
 
