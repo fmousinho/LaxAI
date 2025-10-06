@@ -63,7 +63,7 @@ class TrackerConfig:
     """Configuration for ByteTrack and tracking parameters."""
 
     track_activation_threshold: float = 0.7
-    lost_track_buffer: int = 5
+    lost_track_buffer: int = 0
     minimum_matching_threshold: float = 0.8
     minimum_consecutive_frames: int = 10
     crop_save_interval: int = 5

@@ -11,6 +11,7 @@ from typing import List, Dict, Any, Optional
 from shared_libs.common.google_storage import GCSPaths, get_storage
 from shared_libs.common.detection_utils import json_to_detections
 from ..stitcher import TrackStitcher
+from ..track_splitter import TrackSplitter
 
 logger = logging.getLogger(__name__)
 
@@ -462,30 +463,30 @@ class DataPrepManager:
                 for crop_blob in crops_to_move:
                     try:
                         # Construct the new path by replacing the unverified prefix with verified
-                        # crop_blob.name is the full GCS path like "process/video1/unverified_tracks/123/crop_1_100.jpg"
+                        # crop_blob is the full GCS path like "process/video1/unverified_tracks/123/crop_1_100.jpg"
                         # We need to change it to "process/video1/verified_tracks/456/crop_1_100.jpg"
                         
                         # Extract the filename from the original path
-                        filename = crop_blob.name.split('/')[-1]  # e.g., "crop_1_100.jpg"
+                        filename = crop_blob.split('/')[-1]  # e.g., "crop_1_100.jpg"
                         
                         # Construct new verified path
                         verified_path = f"{verified_prefix}{filename}"
                         
                         # Copy the blob to the new location
-                        if self.storage.copy_blob(crop_blob.name, verified_path):
+                        if self.storage.copy_blob(crop_blob, verified_path):
                             # Delete the original
-                            if self.storage.delete_blob(crop_blob.name):
+                            if self.storage.delete_blob(crop_blob):
                                 moved_count += 1
                                 logger.debug(f"Moved crop {filename} to group {group_id}")
                             else:
-                                logger.warning(f"Failed to delete original crop {crop_blob.name} after copying")
+                                logger.warning(f"Failed to delete original crop {crop_blob} after copying")
                                 failed_count += 1
                         else:
-                            logger.error(f"Failed to copy crop {crop_blob.name} to {verified_path}")
+                            logger.error(f"Failed to copy crop {crop_blob} to {verified_path}")
                             failed_count += 1
                             
                     except Exception as e:
-                        logger.error(f"Error moving crop {crop_blob.name}: {e}")
+                        logger.error(f"Error moving crop {crop_blob}: {e}")
                         failed_count += 1
             
             logger.info(f"Crop migration complete: {moved_count} moved, {failed_count} failed")
@@ -499,3 +500,39 @@ class DataPrepManager:
         except Exception as e:
             logger.error(f"Error during crop migration: {e}")
             return False
+
+    def split_track_at_frame(self, track_id: int, crop_image_name: str) -> bool:
+        """
+        Split a track into two parts at the specified crop frame.
+
+        This function corrects cases where the tracker incorrectly grouped two players
+        in the same track. It splits the track at the frame where the player switch occurs,
+        keeping the original track_id for frames up to and including the split frame,
+        and creating a new track_id for frames after the split.
+
+        Args:
+            track_id: The original track ID to split
+            crop_image_name: Name of the crop image where the player switch occurs
+                           (e.g., "crop_1_100.jpg" where 100 is the frame number)
+
+        Returns:
+            True if the track was successfully split, False otherwise
+        """
+        if self.stitcher is None:
+            logger.error("No active stitcher session")
+            return False
+
+        if self.current_video_id is None:
+            logger.error("No current video set")
+            return False
+
+        # Create track splitter and delegate the work
+        splitter = TrackSplitter(
+            stitcher=self.stitcher,
+            path_manager=self.path_manager,
+            storage=self.storage,
+            video_id=self.current_video_id,
+            tenant_id=self.tenant_id
+        )
+
+        return splitter.split_track_at_frame(track_id, crop_image_name)

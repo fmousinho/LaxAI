@@ -19,74 +19,7 @@ class EdgeType(Enum):
     UNKNOWN = "unknown"
 
 class TrackStitcher:
-    """
-    Manages the semi-automated process of stitching player tracks together.
-
-    This class provides an API to get pairs of unverified track groups for manual
-    verification and handles the merging based on user input. It uses a graph-based
-    approach to track relationships between track groups.
-
-    Supports a progressive refinement workflow where unclear pairs can be skipped
-    during the first pass and revisited with enhanced context in a second pass.
-
-    Example Usage:
-        ```python
-        # Initialize stitcher
-        stitcher = TrackStitcher(detections=detections_obj)
-
-        # First pass - skip unclear pairs
-        while True:
-            result = stitcher.get_pair_for_verification()
-
-            if result["status"] == "pending_verification":
-                # Display images for result["group1_id"] and result["group2_id"]
-                # (retrieve images externally based on group IDs)
-
-                # Get user decision
-                decision = input("Are these the same player? (same/different/skip): ")
-                stitcher.respond(decision)
-
-            elif result["status"] == "second_pass_ready":
-                print(f"First pass complete! {result['skipped_count']} pairs skipped")
-                break
-            elif result["status"] == "complete":
-                print("All verification complete!")
-                break
-
-        # Save progress for potential resume later
-        stitcher.save_graph("checkpoint.graphml")
-
-        # Second pass - revisit skipped pairs with enhanced context
-        if stitcher.start_second_pass():
-            while True:
-                result = stitcher.get_pair_for_verification()
-                
-                if result["status"] == "pending_verification":
-                    print(f"Context for group1: {result['group1'].get('context', 'N/A')}")
-                    print(f"Context for group2: {result['group2'].get('context', 'N/A')}")
-                    
-                    decision = input("Same player? (same/different/skip): ")
-                    stitcher.respond(decision)
-                elif result["status"] == "complete":
-                    break
-
-        # To resume from a saved checkpoint:
-        import networkx as nx
-        saved_graph = nx.read_graphml("checkpoint.graphml")
-        stitcher = TrackStitcher(detections=detections_obj, existing_graph=saved_graph)
-        # Continue verification from where you left off
-        ```
-
-    Key Features:
-        - Skip unclear pairs without blocking progress: respond("skip")
-        - Progressive refinement with enhanced context in second pass
-        - Graph-based relationship tracking and visualization
-        - Automatic temporal conflict detection
-        - Rich progress analytics and inconsistency detection
-        - Returns group IDs only (image handling is external)
-        - Visualization returns PIL.Image objects for flexible display/saving
-        - Resume interrupted verification from saved graph checkpoints
-    """
+    detections: Detections
 
     def __init__(self, detections: Detections, existing_graph: Optional[nx.Graph] = None):
         """
