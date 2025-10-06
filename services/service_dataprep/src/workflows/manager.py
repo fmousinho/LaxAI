@@ -149,9 +149,21 @@ class DataPrepManager:
                     if graph_data is not None:
                         import networkx as nx
                         import io
-                        # Load the graph from the downloaded data
-                        existing_graph = nx.read_gml(io.StringIO(graph_data))
-                        logger.info(f"Found existing saved graph, will resume from {saved_graph_path}")
+                        import tempfile
+                        import os
+                        
+                        # Create a temporary file to load the graph
+                        with tempfile.NamedTemporaryFile(mode='w+', suffix='.gml', delete=False) as temp_file:
+                            temp_file.write(graph_data)
+                            temp_filepath = temp_file.name
+                        
+                        try:
+                            # Load the graph from the temporary file
+                            existing_graph = nx.read_gml(temp_filepath)
+                            logger.info(f"Found existing saved graph, will resume from {saved_graph_path}")
+                        finally:
+                            # Clean up the temporary file
+                            os.unlink(temp_filepath)
                     else:
                         logger.info("No existing saved graph found, starting fresh")
                 except Exception as e:

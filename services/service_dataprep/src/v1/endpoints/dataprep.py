@@ -338,12 +338,37 @@ async def split_track_at_frame(request: SplitTrackRequest, tenant_id: str) -> Sp
     """
     try:
         manager = get_manager(tenant_id)
-        success = manager.split_track_at_frame(request.track_id, request.crop_image_name)
+        
+        # Validate that the crop_image_name is a valid filename
+        crop_image_name = request.crop_image_name
+        import string
+        if not crop_image_name or len(crop_image_name) > 255:
+            raise HTTPException(
+                status_code=400, 
+                detail="Malformed request: crop_image_name must be a valid filename (1-255 characters)"
+            )
+        
+        # Check for invalid characters (allow alphanumeric, dots, underscores, hyphens)
+        valid_chars = string.ascii_letters + string.digits + '._-'
+        if not all(c in valid_chars for c in crop_image_name):
+            raise HTTPException(
+                status_code=400,
+                detail="Malformed request: crop_image_name contains invalid characters. Only letters, numbers, dots, underscores, and hyphens are allowed"
+            )
+        
+        # Check for path separators or query parameters
+        if '/' in crop_image_name or '\\' in crop_image_name or '?' in crop_image_name:
+            raise HTTPException(
+                status_code=400,
+                detail="Malformed request: crop_image_name cannot contain path separators or query parameters"
+            )
+        
+        success = manager.split_track_at_frame(request.track_id, crop_image_name)
 
         if success:
             return SplitTrackResponse(
                 success=True,
-                message=f"Track {request.track_id} successfully split at frame from {request.crop_image_name}"
+                message=f"Track {request.track_id} successfully split at frame from {crop_image_name}"
             )
         else:
             return SplitTrackResponse(
