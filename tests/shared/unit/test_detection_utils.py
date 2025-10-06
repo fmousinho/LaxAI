@@ -59,34 +59,7 @@ def test_detections_to_json_round_trip():
     # Test with single Detections object containing multiple detections
     detections = _make_detections(5, 0)
     
-    # Since detections_to_json doesn't handle multiple detections properly,
-    # we need to split them manually for this test
-    json_list = []
-    for i in range(len(detections)):
-        # Create single-detection Detections object
-        xyxy_single = detections.xyxy[i:i+1] if detections.xyxy is not None else np.empty((1, 4), dtype=np.float32)
-        confidence_single = detections.confidence[i:i+1] if detections.confidence is not None else None
-        class_id_single = detections.class_id[i:i+1] if detections.class_id is not None else None
-        tracker_id_single = detections.tracker_id[i:i+1] if detections.tracker_id is not None else None
-        
-        # Handle data field
-        data_single = {}
-        if detections.data:
-            for k, v in detections.data.items():
-                if isinstance(v, (list, np.ndarray)) and len(v) > i:
-                    data_single[k] = v[i:i+1] if hasattr(v, '__getitem__') else v
-                else:
-                    data_single[k] = v
-        
-        single_det = sv.Detections(
-            xyxy=xyxy_single,
-            confidence=confidence_single,
-            class_id=class_id_single,
-            tracker_id=tracker_id_single,
-            data=data_single,
-            metadata=detections.metadata
-        )
-        json_list.extend(detections_to_json(single_det))
+    json_list = detections_to_json(detections)
     
     assert len(json_list) == 5  # 5 detections in the object
     
@@ -115,57 +88,9 @@ def test_frame_index_preservation(n1, n2):
     d1 = _make_detections(n1, 5)
     d2 = _make_detections(n2, 6)
     
-    # Convert each detection manually since detections_to_json doesn't handle multiples
-    json_list1 = []
-    for i in range(len(d1)):
-        xyxy_single = d1.xyxy[i:i+1] if d1.xyxy is not None else np.empty((1, 4), dtype=np.float32)
-        confidence_single = d1.confidence[i:i+1] if d1.confidence is not None else None
-        class_id_single = d1.class_id[i:i+1] if d1.class_id is not None else None
-        tracker_id_single = d1.tracker_id[i:i+1] if d1.tracker_id is not None else None
-        
-        data_single = {}
-        if d1.data:
-            for k, v in d1.data.items():
-                if isinstance(v, (list, np.ndarray)) and len(v) > i:
-                    data_single[k] = v[i:i+1] if hasattr(v, '__getitem__') else v
-                else:
-                    data_single[k] = v
-        
-        single_det = sv.Detections(
-            xyxy=xyxy_single,
-            confidence=confidence_single,
-            class_id=class_id_single,
-            tracker_id=tracker_id_single,
-            data=data_single,
-            metadata=d1.metadata
-        )
-        json_list1.extend(detections_to_json(single_det))
-    
-    json_list2 = []
-    for i in range(len(d2)):
-        xyxy_single = d2.xyxy[i:i+1] if d2.xyxy is not None else np.empty((1, 4), dtype=np.float32)
-        confidence_single = d2.confidence[i:i+1] if d2.confidence is not None else None
-        class_id_single = d2.class_id[i:i+1] if d2.class_id is not None else None
-        tracker_id_single = d2.tracker_id[i:i+1] if d2.tracker_id is not None else None
-        
-        data_single = {}
-        if d2.data:
-            for k, v in d2.data.items():
-                if isinstance(v, (list, np.ndarray)) and len(v) > i:
-                    data_single[k] = v[i:i+1] if hasattr(v, '__getitem__') else v
-                else:
-                    data_single[k] = v
-        
-        single_det = sv.Detections(
-            xyxy=xyxy_single,
-            confidence=confidence_single,
-            class_id=class_id_single,
-            tracker_id=tracker_id_single,
-            data=data_single,
-            metadata=d2.metadata
-        )
-        json_list2.extend(detections_to_json(single_det))
-    
+    json_list1 = detections_to_json(d1)
+    json_list2 = detections_to_json(d2)
+
     combined_json_list = json_list1 + json_list2
     
     # Convert back to single merged Detections object

@@ -146,27 +146,85 @@ def json_to_detection_single(json_data: Dict[str, Any]) -> Detections:
         raise ValueError(f"Cannot deserialize JSON data to detection object: {e}")
 
 
-def detections_to_json(detections: Detections) -> List[Dict[str, Any]]:
-    """Convert a Detections objects to a list of JSON-serializable dictionaries.
-    
+def _normalize_data_value(value: Any) -> List[Any]:
+    """Normalize detection auxiliary data into a JSON-friendly list."""
+
+    if value is None:
+        return []
+
+    if isinstance(value, np.ndarray):
+        converted = value.tolist()
+        if isinstance(converted, list):
+            return converted
+        return [converted]
+
+    if isinstance(value, np.generic):  # numpy scalar
+        return [value.item()]
+
+    if isinstance(value, (list, tuple)):
+        normalized: List[Any] = []
+        for item in value:
+            if isinstance(item, np.ndarray):
+                item_converted = item.tolist()
+                normalized.append(item_converted if isinstance(item_converted, list) else [item_converted])
+            elif isinstance(item, np.generic):
+                normalized.append(item.item())
+            else:
+                normalized.append(item)
+        return normalized
+
+    return [value]
+
+
+def detections_to_json(detections: Union[Detections, List[Any]]) -> List[Dict[str, Any]]:
+    """Convert detections into a list of JSON-serializable dictionaries.
+
+    This implementation avoids repeatedly slicing the Supervision ``Detections`` object, which
+    proved extremely slow (minutes) for large detection sets. Instead we iterate once over the
+    underlying numpy arrays and build dictionaries directly.
+
     Args:
-        detections: A Supervision Detections object
+        detections: Either a ``Detections`` object or an empty list of detections.
 
     Returns:
-        List of dictionaries that can be serialized to JSON
+        List of dictionaries ready for JSON serialization.
     """
-    if not detections or len(detections) == 0:
+
+    if not detections:
         return []
-    elif len(detections) == 1:
-        return [detection_to_json_single(detections)]
-    else:
-        # Split multi-detection object into individual single-detection objects
-        result = []
-        for i in range(len(detections)):
-            # Use indexing to get individual detection as Detections object
-            single_det = detections[i]
-            result.append(detection_to_json_single(single_det))  # pyright: ignore[reportArgumentType]
-        return result
+
+    if isinstance(detections, list):
+        if len(detections) == 0:
+            return []
+        if len(detections) == 1 and isinstance(detections[0], Detections):
+            detections = detections[0]
+        else:
+            raise TypeError("detections_to_json expects a Detections object or an empty list")
+
+    if not isinstance(detections, Detections):
+        raise TypeError("detections_to_json expects a Detections object")
+
+    metadata = dict(getattr(detections, "metadata", {}) or {})
+
+    result: List[Dict[str, Any]] = []
+    # Iterate over detections once; ``supervision.Detections`` yields per-item tuples
+    for xyxy_val, _mask, conf_val, class_val, tracker_val, data_dict in detections:  # type: ignore[misc]
+        entry: Dict[str, Any] = {
+            "xyxy": [xyxy_val.tolist()],
+            "confidence": [float(conf_val)] if conf_val is not None else [],
+            "class_id": [int(class_val)] if class_val is not None else [],
+            "tracker_id": [int(tracker_val)] if tracker_val is not None else [],
+            "data": {},
+            "metadata": metadata,
+        }
+
+        if data_dict:
+            for key, value in data_dict.items():
+                entry["data"][key] = _normalize_data_value(value)
+
+        result.append(entry)
+
+    return result
 
 def json_to_detections(json_list: List[Dict[str, Any]]) -> Detections:
     """Convert a list of JSON dictionaries back to a Detections object.

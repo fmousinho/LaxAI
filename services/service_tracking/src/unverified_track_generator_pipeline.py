@@ -84,6 +84,10 @@ import logging
 import os
 import cv2
 import json
+try:
+    import orjson
+except ImportError:
+    orjson = None
 from dataclasses import dataclass
 from matplotlib.style import context
 import numpy as np
@@ -684,7 +688,10 @@ class TrackGeneratorPipeline(Pipeline):
         """Serialize detections to JSON bytes."""
 
         json_data = detections_to_json(detections_data)
-        return json.dumps(json_data).encode("utf-8")
+        if orjson is not None:
+            return orjson.dumps(json_data)
+        else:
+            return json.dumps(json_data).encode("utf-8")
 
     async def _save_detections_async(
         self,
