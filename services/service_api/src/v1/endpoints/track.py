@@ -202,33 +202,54 @@ async def cancel_tracking_job(task_id: str):
     """
     Cancel a tracking job.
 
-    This endpoint sends a cancellation request to the tracking proxy.
-    Note: This requires the tracking proxy to support cancellation.
+    This endpoint publishes a cancellation request to Pub/Sub, which triggers
+    the tracking proxy Cloud Function to cancel the Cloud Run job execution.
     """
     try:
-        # For now, we'll just update the status to cancelled in Firestore
-        # In a full implementation, this would send a message to cancel the Cloud Run job
+        # First check if the job exists
         status_manager = get_status_manager()
-
-        # Get current status
         current_status = status_manager.get_tracking_job_status(task_id)
         if current_status.get("status") == "not_found":
             raise HTTPException(status_code=404, detail=f"Tracking job {task_id} not found")
 
-        # Update status to cancelled
-        update_data = {
-            "status": "cancelled",
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "error": "Job cancelled by user"
-        }
+        # Check if job is already in a terminal state
+        job_status = current_status.get("status", "")
+        if job_status in ["completed", "cancelled", "error"]:
+            return {
+                "task_id": task_id,
+                "status": job_status,
+                "message": f"Job is already in terminal state: {job_status}"
+            }
 
-        status_manager._runs_collection.document(task_id).update(update_data)
+        # Publish cancellation request to Pub/Sub
+        publisher = get_publisher()
 
-        return {
+        # Create cancel message
+        cancel_message = {
+            "action": "cancel",
             "task_id": task_id,
-            "status": "cancelled",
-            "message": "Tracking job cancellation requested"
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
+
+        # Convert to JSON bytes and publish
+        data = json.dumps(cancel_message).encode('utf-8')
+
+        try:
+            future = publisher.publisher.publish(publisher.topic_path, data)
+            message_id = future.result()
+
+            logger.info(f"Published cancellation request for task {task_id} to Pub/Sub (message_id: {message_id})")
+
+            return {
+                "task_id": task_id,
+                "status": "cancelling",
+                "message": "Cancellation request queued successfully",
+                "message_id": message_id
+            }
+
+        except GoogleAPIError as e:
+            logger.error(f"Failed to publish cancellation request for task {task_id}: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to queue cancellation request: {str(e)}")
 
     except HTTPException:
         raise

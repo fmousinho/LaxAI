@@ -171,6 +171,7 @@ class TrackingJobProxy:
         """Cancel a running tracking task using persisted mapping.
 
         Uses the execution_name stored in Firestore for direct cancellation.
+        The job itself will update Firestore status during graceful shutdown.
         """
         try:
             doc_ref = self._progress_collection.document(task_id)
@@ -192,29 +193,22 @@ class TrackingJobProxy:
             try:
                 operation = self.executions_client.cancel_execution(name=execution_name, timeout=60)
                 results = operation.result()  # Wait for operation to complete
-                
+
                 logger.info(f"Successfully requested cancellation for execution {execution_name} (task_id={task_id})")
-                
-                # Update status to indicate cancellation was requested
-                doc_ref.update({"status": "cancelled", "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
-                
+                logger.info(f"Job will update Firestore status during graceful shutdown")
+
             except GoogleAPIError as cancel_error:
                 logger.error(f"Failed to cancel execution {execution_name}: {cancel_error}")
-                doc_ref.update({"status": "error", "error": str(cancel_error), "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
+                # Don't update Firestore here - let the job handle status updates
                 return  # Don't re-raise, just return to indicate cancellation attempt was made
             except Exception as cancel_error:
                 logger.error(f"Unexpected error during cancellation of execution {execution_name}: {cancel_error}")
-                doc_ref.update({"status": "error", "error": str(cancel_error), "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
+                # Don't update Firestore here - let the job handle status updates
                 return  # Don't re-raise, just return to indicate cancellation attempt was made
-        
+
         except Exception as e:
             logger.error(f"Failed to cancel task_id={task_id}: {e}")
-            # Try to update mapping with error
-            try:
-                self._progress_collection.document(task_id).update({"status": "error", "error": str(e), "updated_at": datetime.now(timezone.utc).isoformat() + "Z"})
-            except Exception:
-                pass
-            # Don't re-raise the exception, just log it
+            # Don't update Firestore here - let the job handle status updates
 
     def process_message(self, message_data: str) -> None:
         """Processes a decoded Pub/Sub message."""

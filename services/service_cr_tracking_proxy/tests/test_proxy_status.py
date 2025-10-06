@@ -52,7 +52,7 @@ def test_start_tracking_job_persists_mapping(proxy):
     doc = proxy._progress_collection.document("abc123")
     assert doc._data["task_id"] == "abc123"
     assert doc._data["execution_name"] == "exec123"
-    assert doc._data["status"] == "initializing"
+    assert doc._data["status"] == "not_started"
     assert "created_at" in doc._data
     assert "updated_at" in doc._data
     # Verify flattened fields are present
@@ -68,8 +68,10 @@ def test_cancel_tracking_job_updates_status(proxy):
     doc.exists = True
     doc._data = {"execution_name": "exec123", "status": "running"}
     proxy.cancel_tracking_job("abc123")
-    assert doc._data["status"] == "cancelled"
-    assert "updated_at" in doc._data
+    # Proxy no longer updates Firestore status - job handles it during graceful shutdown
+    assert doc._data["status"] == "running"  # Status should remain unchanged
+    # updated_at should not be present since proxy doesn't update status
+    assert "updated_at" not in doc._data
 
 def test_get_tracking_job_status(proxy):
     doc = proxy._progress_collection.document("abc123")
