@@ -192,6 +192,7 @@ class DataPrepManager:
             if result["status"] == "pending_verification":
                 group1_id = result["group1_id"]
                 group2_id = result["group2_id"]
+                logger.info(f"Next verification pair: Track ID {group1_id}, Track ID {group2_id}")
 
                 # Get track prefixes for each group
                 group1_prefixes = self._get_group_track_prefixes(group1_id)

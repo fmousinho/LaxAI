@@ -73,8 +73,8 @@ class TrackSplitter:
                 return False
 
             # Split frames at the boundary
-            first_part_frames = track_frames[track_frames <= split_frame]
-            second_part_frames = track_frames[track_frames > split_frame]
+            first_part_frames = track_frames[track_frames < split_frame]
+            second_part_frames = track_frames[track_frames >= split_frame]
 
             if len(second_part_frames) == 0:
                 logger.error(f"No frames found after split frame {split_frame} for track {track_id}")
@@ -180,7 +180,7 @@ class TrackSplitter:
             tracker_ids = np.asarray(tracker_ids)
 
             # Find indices where tracker_id matches and frame > split_frame
-            mask = (tracker_ids == old_track_id) & (frame_indices > split_frame)
+            mask = (tracker_ids == old_track_id) & (frame_indices >= split_frame)
 
             # Update tracker_ids for the second part
             self.stitcher.detections.tracker_id[mask] = new_track_id  # type: ignore
