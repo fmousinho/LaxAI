@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from ..schemas.dataprep import (
     ErrorResponse,
+    GraphStatisticsResponse,
     ProcessFoldersResponse,
     RecordResponseRequest,
     RecordResponseResponse,
@@ -171,6 +172,17 @@ async def save_graph_image(tenant_id: str) -> SaveGraphImageResponse:
     """
     data = await dataprep_client._proxy_request("POST", "/save-graph-image", params={"tenant_id": tenant_id})
     return SaveGraphImageResponse(**data)
+
+
+@router.get("/graph-statistics", response_model=GraphStatisticsResponse)
+async def get_graph_statistics(tenant_id: str) -> GraphStatisticsResponse:
+    """
+    Get statistics about the current graph state.
+
+    Proxies to service_dataprep.
+    """
+    data = await dataprep_client._proxy_request("GET", "/graph-statistics", params={"tenant_id": tenant_id})
+    return GraphStatisticsResponse(**data)
 
 
 @router.post("/suspend", response_model=SuspendPrepResponse)

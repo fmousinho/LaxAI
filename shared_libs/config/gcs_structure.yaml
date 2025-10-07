@@ -23,3 +23,4 @@ gcs:
     track_graphs: "process/{video_id}/track_graphs.gml"
     track_graph_image: "process/{video_id}/track_graph.jpg"
     verified_tracks: "process/{video_id}/verified_tracks/{track_id}/"
+    video_thumbnail: "process/{video_id}/thumbnail.jpg"

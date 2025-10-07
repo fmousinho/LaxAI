@@ -118,6 +118,18 @@ class SplitTrackResponse(BaseModel):
     message: Optional[str] = Field(None, description="Optional message about the operation")
 
 
+class GraphStatisticsResponse(BaseModel):
+    """Response model for graph statistics."""
+
+    success: bool = Field(..., description="Whether the statistics were retrieved successfully")
+    message: Optional[str] = Field(None, description="Optional message")
+    total_tracks: Optional[int] = Field(None, description="Total number of tracks in the graph")
+    total_relationships: Optional[int] = Field(None, description="Total number of relationships (edges) in the graph")
+    player_count: Optional[int] = Field(None, description="Number of distinct players (connected components)")
+    player_groups: Optional[List[List[int]]] = Field(None, description="List of player groups (track IDs grouped by player)")
+    verification_mode: Optional[str] = Field(None, description="Current verification mode")
+
+
 class ErrorResponse(BaseModel):
     """Error response model."""
 

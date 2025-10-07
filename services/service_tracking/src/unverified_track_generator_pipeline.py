@@ -499,10 +499,15 @@ class TrackGeneratorPipeline(Pipeline):
                 "description": "Move MP4 videos from tenant's raw directory for processing",
                 "function": self._import_video
             }),
+            ("generate_thumbnail", {
+                "description": "Generate video thumbnail with 242x136 resolution",
+                "function": self._generate_video_thumbnail
+            }),
             ("generate_detections", {
                 "description": "Run player detection and tracking model on whole video",
                 "function": self._get_detections_and_tracks
             })
+
             # ("extract_track_crops", {
             #     "description": "Extract crops for each track",
             #     "function": self._extract_track_crops
@@ -849,6 +854,71 @@ class TrackGeneratorPipeline(Pipeline):
 
         except Exception as e:
             logger.error(f"Failed to import video {raw_video_path}: {str(e)}")
+            return {"status": StepStatus.ERROR.value, "error": str(e)}
+    
+    def _generate_video_thumbnail(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Generate a video thumbnail with 242x136 resolution.
+        
+        Extracts a frame from the video, resizes it, and saves as thumbnail.jpg.
+        """
+        video_blob_name = context.get("video_blob_name")
+        video_guid = context.get("video_guid")
+        
+        if not video_blob_name:
+            return {"status": StepStatus.ERROR.value, "error": "No video blob name provided"}
+        
+        if not video_guid:
+            return {"status": StepStatus.ERROR.value, "error": "No video GUID provided"}
+
+        try:
+            logger.info(f"Generating thumbnail for video: {video_blob_name}")
+
+            # Open video and extract a frame
+            with self.tenant_storage.get_video_capture(video_blob_name) as cap:
+                if not cap.isOpened():
+                    raise RuntimeError(f"Could not open video for thumbnail generation: {video_blob_name}")
+                
+                # Get video properties
+                fps = cap.get(cv2.CAP_PROP_FPS) or 30
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                
+                # Seek to 1 second in or first frame if video is short
+                target_frame = min(int(fps), total_frames - 1) if total_frames > 0 else 0
+                
+                cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+                ret, frame = cap.read()
+                
+                if not ret or frame is None:
+                    raise RuntimeError(f"Could not read frame from video: {video_blob_name}")
+                
+                # Resize to 242x136
+                thumbnail = cv2.resize(frame, (242, 136), interpolation=cv2.INTER_LINEAR)
+                
+                # Encode as JPEG
+                success, buffer = cv2.imencode(".jpg", thumbnail)
+                if not success:
+                    raise RuntimeError("Failed to encode thumbnail as JPEG")
+                
+                # Get thumbnail path
+                thumbnail_path = self.path_manager.get_path("video_thumbnail", video_id=video_guid)
+                if not thumbnail_path:
+                    raise RuntimeError("Unable to determine thumbnail path")
+                
+                # Upload thumbnail
+                if not self.storage_client.upload_from_bytes(thumbnail_path, buffer.tobytes()):
+                    raise RuntimeError(f"Failed to upload thumbnail to {thumbnail_path}")
+                
+                logger.info(f"Successfully generated and uploaded thumbnail: {thumbnail_path}")
+                
+                context.update({
+                    "thumbnail_path": thumbnail_path
+                })
+                
+                return {"status": StepStatus.COMPLETED.value}
+
+        except Exception as e:
+            logger.error(f"Failed to generate video thumbnail for {video_blob_name}: {str(e)}")
             return {"status": StepStatus.ERROR.value, "error": str(e)}
     
     def _get_detections_and_tracks(self, context: Dict[str, Any]) -> Dict[str, Any]:

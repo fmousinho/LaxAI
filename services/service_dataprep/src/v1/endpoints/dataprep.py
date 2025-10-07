@@ -33,6 +33,7 @@ from ..schemas.dataprep import (
     MoveCropsResponse,
     SplitTrackRequest,
     SplitTrackResponse,
+    GraphStatisticsResponse,
     ErrorResponse,
 )
 from ...workflows.manager import DataPrepManager
@@ -253,6 +254,54 @@ async def save_graph_image(tenant_id: str) -> SaveGraphImageResponse:
     except Exception as e:
         logger.error(f"Failed to save graph image for tenant {tenant_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to save graph image: {str(e)}")
+
+
+@router.get(
+    "/graph-statistics",
+    response_model=GraphStatisticsResponse,
+    summary="Get Graph Statistics",
+    description="Get statistics and summary information about the current track relationship graph."
+)
+async def get_graph_statistics(tenant_id: str) -> GraphStatisticsResponse:
+    """
+    Get statistics about the current graph state.
+
+    Args:
+        tenant_id: The tenant identifier
+
+    Returns:
+        Graph statistics including track counts, relationships, and player groups
+    """
+    try:
+        manager = get_manager(tenant_id)
+        
+        if manager.stitcher is None:
+            return GraphStatisticsResponse(
+                success=False, 
+                message="No active stitching session",
+                total_tracks=None,
+                total_relationships=None,
+                player_count=None,
+                player_groups=None,
+                verification_mode=None
+            )
+        
+        # Get graph data from the stitcher
+        graph_data = manager.stitcher.export_graph_data()
+        
+        return GraphStatisticsResponse(
+            success=True,
+            message="Graph statistics retrieved successfully",
+            total_tracks=graph_data['metadata']['total_tracks'],
+            total_relationships=graph_data['metadata']['total_relationships'],
+            player_count=graph_data['metadata']['player_count'],
+            player_groups=graph_data['player_groups'],
+            verification_mode=graph_data['metadata']['verification_mode']
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to get graph statistics for tenant {tenant_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get graph statistics: {str(e)}")
 
 
 @router.post(

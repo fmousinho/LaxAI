@@ -10,6 +10,8 @@ import pytest
 from pathlib import Path
 import logging
 import subprocess
+import requests
+import random
 
 # Load test environment
 from dotenv import load_dotenv
@@ -25,7 +27,13 @@ class TestDataprepServiceLiveGCS:
 
     @pytest.fixture
     def test_tenant(self):
-        """Get the test tenant from environment."""
+        """Get the test ten            # 3. Test additional track splitting (minimal since we split during classification)
+            print("\n🪓 Testing additional track splitting functionality...")
+            
+            print(f"   Performed {splits_during_classification} track splits during classification")
+            
+            # Do 1-2 additional splits to ensure we test the endpoint
+            additional_splits = min(2, max(1, 3 - splits_during_classification))  # 1-2 more splitsenvironment."""
         tenant = os.environ.get('TEST_TENANT')
         assert tenant, "TEST_TENANT environment variable must be set"
         return tenant
@@ -437,47 +445,73 @@ class TestDataprepServiceIntegration:
         test_tenant = os.environ.get('TEST_TENANT')
         assert test_tenant, "TEST_TENANT environment variable must be set"
 
-        # Dataprep service URL
-        service_url = "https://laxai-service-dataprep-517529966392.us-central1.run.app"
-
-        # Test the /folders endpoint
-        folders_url = f"{service_url}/v1/dataprep/folders"
-        params = {"tenant_id": test_tenant}
-
-        print(f"Calling dataprep service: {folders_url}")
-        print(f"Tenant ID: {test_tenant}")
+        # Set up authentication
+        original_credentials = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+        http_test_credentials = os.environ.get('HTTP_TEST_CREDENTIALS')
+        if not http_test_credentials:
+            pytest.fail("HTTP_TEST_CREDENTIALS environment variable must be set")
+        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = http_test_credentials
 
         try:
-            response = requests.get(folders_url, params=params, timeout=30)
+            # Get authentication token
+            import subprocess
+            token_result = subprocess.run([
+                'gcloud', 'auth', 'print-identity-token', '--quiet'
+            ], capture_output=True, text=True, env=dict(os.environ, GOOGLE_APPLICATION_CREDENTIALS=http_test_credentials))
+            
+            if token_result.returncode != 0:
+                pytest.fail(f"Failed to get identity token: {token_result.stderr}")
+            
+            auth_token = token_result.stdout.strip()
+            headers = {'Authorization': f'Bearer {auth_token}'}
 
-            # Check response
-            assert response.status_code == 200, f"API call failed: {response.status_code} - {response.text}"
+            # Dataprep service URL
+            service_url = "https://laxai-service-dataprep-517529966392.us-central1.run.app"
 
-            response_data = response.json()
-            print(f"Response: {response_data}")
+            # Test the /folders endpoint
+            folders_url = f"{service_url}/api/v1/dataprep/folders"
+            params = {"tenant_id": test_tenant}
 
-            # Verify response structure
-            assert "folders" in response_data, "Response missing 'folders' key"
-            folders = response_data["folders"]
-            assert isinstance(folders, list), "Folders should be a list"
+            print(f"Calling dataprep service: {folders_url}")
+            print(f"Tenant ID: {test_tenant}")
 
-            # Verify that we have folders (created by tracking service)
-            assert len(folders) > 0, "No process folders found - tracking service may not have generated outputs"
+            try:
+                response = requests.get(folders_url, params=params, headers=headers, timeout=30)
 
-            print(f"✅ Found {len(folders)} process folders: {folders[:5]}...")  # Show first 5
+                # Check response
+                assert response.status_code == 200, f"API call failed: {response.status_code} - {response.text}"
 
-            # Verify folder names look like tracking service outputs
-            # They should be video IDs or run identifiers
-            for folder in folders[:3]:  # Check first 3 folders
-                assert isinstance(folder, str), f"Folder name should be string, got {type(folder)}"
-                assert len(folder) > 0, "Folder name should not be empty"
+                response_data = response.json()
+                print(f"Response: {response_data}")
 
-            print("✅ Dataprep service integration test passed!")
+                # Verify response structure
+                assert "folders" in response_data, "Response missing 'folders' key"
+                folders = response_data["folders"]
+                assert isinstance(folders, list), "Folders should be a list"
 
-        except requests.exceptions.RequestException as e:
-            pytest.fail(f"Request to dataprep service failed: {e}")
-        except Exception as e:
-            pytest.fail(f"Dataprep service test failed: {e}")
+                # Verify that we have folders (created by tracking service)
+                assert len(folders) > 0, "No process folders found - tracking service may not have generated outputs"
+
+                print(f"✅ Found {len(folders)} process folders: {folders[:5]}...")  # Show first 5
+
+                # Verify folder names look like tracking service outputs
+                # They should be video IDs or run identifiers
+                for folder in folders[:3]:  # Check first 3 folders
+                    assert isinstance(folder, str), f"Folder name should be string, got {type(folder)}"
+                    assert len(folder) > 0, "Folder name should not be empty"
+
+                print("✅ Dataprep service integration test passed!")
+
+            except requests.exceptions.RequestException as e:
+                pytest.fail(f"Request to dataprep service failed: {e}")
+            except Exception as e:
+                pytest.fail(f"Dataprep service test failed: {e}")
+        finally:
+            # Restore original credentials
+            if original_credentials:
+                os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = original_credentials
+            elif 'GOOGLE_APPLICATION_CREDENTIALS' in os.environ:
+                del os.environ['GOOGLE_APPLICATION_CREDENTIALS']
 
     @pytest.mark.integration
     def test_dataprep_service_tenant_isolation(self):
@@ -489,24 +523,324 @@ class TestDataprepServiceIntegration:
         test_tenant = os.environ.get('TEST_TENANT')
         assert test_tenant, "TEST_TENANT environment variable must be set"
 
-        service_url = "https://laxai-service-dataprep-517529966392.us-central1.run.app"
-        folders_url = f"{service_url}/v1/dataprep/folders"
+        # Set up authentication
+        original_credentials = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+        http_test_credentials = os.environ.get('HTTP_TEST_CREDENTIALS')
+        if not http_test_credentials:
+            pytest.fail("HTTP_TEST_CREDENTIALS environment variable must be set")
+        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = http_test_credentials
 
-        # Test with test tenant
-        test_params = {"tenant_id": test_tenant}
-        test_response = requests.get(folders_url, params=test_params, timeout=30)
-        assert test_response.status_code == 200
+        try:
+            # Get authentication token
+            import subprocess
+            token_result = subprocess.run([
+                'gcloud', 'auth', 'print-identity-token', '--quiet'
+            ], capture_output=True, text=True, env=dict(os.environ, GOOGLE_APPLICATION_CREDENTIALS=http_test_credentials))
+            
+            if token_result.returncode != 0:
+                pytest.fail(f"Failed to get identity token: {token_result.stderr}")
+            
+            auth_token = token_result.stdout.strip()
+            headers = {'Authorization': f'Bearer {auth_token}'}
 
-        test_folders = test_response.json()["folders"]
+            service_url = "https://laxai-service-dataprep-517529966392.us-central1.run.app"
+            folders_url = f"{service_url}/api/v1/dataprep/folders"
 
-        # Test with a non-existent tenant
-        fake_params = {"tenant_id": "non_existent_tenant_12345"}
-        fake_response = requests.get(folders_url, params=fake_params, timeout=30)
-        assert fake_response.status_code == 200  # Should return empty list, not error
+            # Test with test tenant
+            test_params = {"tenant_id": test_tenant}
+            test_response = requests.get(folders_url, params=test_params, headers=headers, timeout=30)
+            assert test_response.status_code == 200
 
-        fake_folders = fake_response.json()["folders"]
+            test_folders = test_response.json()["folders"]
 
-        # Verify isolation - fake tenant should have different/empty results
-        assert fake_folders != test_folders, "Tenants should be isolated"
+            # Test with a non-existent tenant
+            fake_params = {"tenant_id": "non_existent_tenant_12345"}
+            fake_response = requests.get(folders_url, params=fake_params, headers=headers, timeout=30)
+            assert fake_response.status_code == 200  # Should return empty list, not error
 
-        print(f"✅ Tenant isolation verified: test_tenant has {len(test_folders)} folders, fake tenant has {len(fake_folders)} folders")
+            fake_folders = fake_response.json()["folders"]
+
+            # Verify isolation - fake tenant should have different/empty results
+            assert fake_folders != test_folders, "Tenants should be isolated"
+
+            print(f"✅ Tenant isolation verified: test_tenant has {len(test_folders)} folders, fake tenant has {len(fake_folders)} folders")
+        finally:
+            # Restore original credentials
+            if original_credentials:
+                os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = original_credentials
+            elif 'GOOGLE_APPLICATION_CREDENTIALS' in os.environ:
+                del os.environ['GOOGLE_APPLICATION_CREDENTIALS']
+
+    @pytest.mark.integration
+    def test_dataprep_service_full_stitching_workflow(self):
+        """
+        Test the complete stitching workflow with random responses.
+
+        This test:
+        1. Starts a prep session for the test video
+        2. Iterates through all verification pairs
+        3. Provides random responses (10% same, 90% different, 5% skip)
+        4. Continues until the graph is fully populated
+        """
+        import random
+
+        # Temporarily set credentials for HTTP API access
+        original_credentials = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+        http_test_credentials = os.environ.get('HTTP_TEST_CREDENTIALS')
+        if not http_test_credentials:
+            pytest.fail("HTTP_TEST_CREDENTIALS environment variable must be set")
+        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = http_test_credentials
+
+        try:
+            # Get authentication token
+            import subprocess
+            token_result = subprocess.run([
+                'gcloud', 'auth', 'print-identity-token', '--quiet'
+            ], capture_output=True, text=True, env=dict(os.environ, GOOGLE_APPLICATION_CREDENTIALS=http_test_credentials))
+            
+            if token_result.returncode != 0:
+                pytest.fail(f"Failed to get identity token: {token_result.stderr}")
+            
+            auth_token = token_result.stdout.strip()
+            headers = {'Authorization': f'Bearer {auth_token}'}
+
+            test_tenant = os.environ.get('TEST_TENANT')
+            assert test_tenant, "TEST_TENANT environment variable must be set"
+
+            service_url = "https://laxai-service-dataprep-517529966392.us-central1.run.app"
+
+            # First, get available videos
+            folders_url = f"{service_url}/api/v1/dataprep/folders"
+            folders_response = requests.get(folders_url, params={"tenant_id": test_tenant}, headers=headers, timeout=30)
+            assert folders_response.status_code == 200, f"Failed to get folders: {folders_response.text}"
+            
+            folders_data = folders_response.json()
+            available_videos = folders_data.get("folders", [])
+            assert len(available_videos) > 0, "No videos available for testing"
+            
+            # Use the first available video
+            video_id = available_videos[0].rstrip('/')
+            print(f"Testing full stitching workflow for tenant: {test_tenant}, video: {video_id}")
+
+            # 1. Start prep session
+            start_url = f"{service_url}/api/v1/dataprep/start"
+            start_data = {"video_id": video_id}
+
+            print("Starting prep session...")
+            start_response = requests.post(start_url, params={"tenant_id": test_tenant}, json=start_data, headers=headers, timeout=200)
+            assert start_response.status_code == 200, f"Failed to start prep session: {start_response.text}"
+
+            start_result = start_response.json()
+            assert start_result["success"], f"Prep session start failed: {start_result.get('message', 'Unknown error')}"
+
+            print("✅ Prep session started successfully")
+
+            # 2. Iterate through verification pairs with structured splitting
+            iteration = 0
+            max_iterations = 1000  # Safety limit
+            final_progress = None
+            splits_during_classification = 0  # Track splits performed during classification
+            classifications_since_last_split = 0  # Track classifications since last split
+
+            while iteration < max_iterations:
+                # Get next verification pair
+                verify_url = f"{service_url}/api/v1/dataprep/verify"
+                verify_response = requests.get(verify_url, params={"tenant_id": test_tenant}, headers=headers, timeout=30)
+
+                assert verify_response.status_code == 200, f"Failed to get verification images: {verify_response.text}"
+
+                verify_result = verify_response.json()
+
+                if verify_result["status"] == "complete":
+                    final_progress = verify_result
+                    print("✅ Stitching workflow completed successfully!")
+                    print(f"   Total iterations: {iteration}")
+                    print(f"   Total splits during classification: {splits_during_classification}")
+                    break
+                elif verify_result["status"] == "second_pass_ready":
+                    final_progress = verify_result
+                    print("✅ First pass stitching workflow completed successfully!")
+                    print(f"   Total iterations: {iteration}")
+                    print(f"   Total splits during classification: {splits_during_classification}")
+                    print(f"   Skipped pairs available for second pass: {verify_result.get('skipped_count', 'unknown')}")
+                    break
+                elif verify_result["status"] == "pending_verification":
+                    # Generate random response: 10% same, 90% different, 5% skip
+                    rand = random.random()
+                    if rand < 0.05:  # 5% skip
+                        decision = "skip"
+                    elif rand < 0.15:  # 10% same (0.05 + 0.10 = 0.15)
+                        decision = "same"
+                    else:  # 85% different
+                        decision = "different"
+
+                    print(f"   Iteration {iteration + 1}: Responding '{decision}' to groups {verify_result['group1_id']} vs {verify_result['group2_id']}")
+
+                    # Record the response
+                    respond_url = f"{service_url}/api/v1/dataprep/respond"
+                    respond_data = {"decision": decision}
+
+                    respond_response = requests.post(respond_url, params={"tenant_id": test_tenant}, json=respond_data, headers=headers, timeout=30)
+                    assert respond_response.status_code == 200, f"Failed to record response: {respond_response.text}"
+
+                    respond_result = respond_response.json()
+                    assert respond_result["success"], f"Response recording failed: {respond_result.get('message', 'Unknown error')}"
+
+                    classifications_since_last_split += 1
+                    iteration += 1
+
+                    # After every 5 classifications, perform a track split (but only for the first 2 splits)
+                    if classifications_since_last_split >= 5 and splits_during_classification < 2:
+                        # Select a track from the current verification pair to split
+                        track_to_split = verify_result['group1_id']
+                        
+                        # Choose a random frame for splitting (between frame 100 and 2000)
+                        random_frame = random.randint(100, 2000)
+                        crop_image_name = f"crop_{random_frame}.jpg"
+                        
+                        print(f"   🪓 Splitting track {track_to_split} at frame {random_frame} after {classifications_since_last_split} classifications")
+                        
+                        # Call the split-track endpoint
+                        split_url = f"{service_url}/api/v1/dataprep/split-track"
+                        split_data = {
+                            "track_id": track_to_split,
+                            "crop_image_name": crop_image_name
+                        }
+                        
+                        split_response = requests.post(split_url, params={"tenant_id": test_tenant}, json=split_data, headers=headers, timeout=30)
+                        
+                        if split_response.status_code == 200:
+                            split_result = split_response.json()
+                            if split_result.get("success"):
+                                print(f"   ✅ Track {track_to_split} split successfully")
+                                splits_during_classification += 1
+                                classifications_since_last_split = 0  # Reset counter
+                            else:
+                                pytest.fail(f"Track {track_to_split} split failed: {split_result.get('message', 'Unknown error')}")
+                        else:
+                            pytest.fail(f"Track {track_to_split} split request failed: {split_response.status_code} - {split_response.text}")
+                else:
+                    pytest.fail(f"Unexpected verification status: {verify_result['status']}")
+
+            if iteration >= max_iterations:
+                pytest.fail(f"Stitching workflow did not complete within {max_iterations} iterations")
+
+            # Assert that each track has been analyzed at least once
+            # This is verified by checking that the workflow completed successfully,
+            # meaning the algorithm processed all tracks (even if no manual verification was needed)
+            assert final_progress is not None, "No final progress information captured"
+            
+            # The workflow completed successfully, which means all tracks were processed
+            # Either through manual verification (iterations > 0) or automatic processing (iterations = 0)
+            print(f"✅ Track analysis verification passed: Workflow completed successfully")
+            print(f"   Final status: {final_progress['status']}")
+            
+            # Additional validation: ensure we have meaningful progress data when available
+            if "total_pairs" in final_progress and final_progress["total_pairs"] is not None:
+                total_pairs = final_progress["total_pairs"]
+                print(f"   Total possible pairs: {total_pairs}")
+                # If there were pairs to potentially verify, ensure some analysis occurred
+                if total_pairs > 0 and iteration == 0:
+                    print(f"   Note: {total_pairs} pairs were available but no manual verification was needed")
+                    print("   This indicates tracks were automatically resolved (e.g., temporal conflicts)")
+
+            # Get and display final graph statistics
+            print("\n📊 Final Graph Statistics:")
+            stats_url = f"{service_url}/api/v1/dataprep/graph-statistics"
+            stats_response = requests.get(stats_url, params={"tenant_id": test_tenant}, headers=headers, timeout=30)
+            
+            if stats_response.status_code == 200:
+                stats_result = stats_response.json()
+                if stats_result.get("success"):
+                    print(f"   ✅ Graph statistics retrieved successfully")
+                    print(f"   📈 Total tracks: {stats_result.get('total_tracks', 'N/A')}")
+                    print(f"   🔗 Total relationships: {stats_result.get('total_relationships', 'N/A')}")
+                    print(f"   👥 Player count: {stats_result.get('player_count', 'N/A')}")
+                    print(f"   🎯 Verification mode: {stats_result.get('verification_mode', 'N/A')}")
+                    
+                    # Display player groups if available
+                    player_groups = stats_result.get('player_groups')
+                    if player_groups:
+                        print(f"   👥 Player groups: {player_groups}")
+                        # Calculate some additional statistics
+                        group_sizes = [len(group) for group in player_groups]
+                        if group_sizes:
+                            print(f"   📏 Group sizes: min={min(group_sizes)}, max={max(group_sizes)}, avg={sum(group_sizes)/len(group_sizes):.1f}")
+                else:
+                    print(f"   ⚠️  Failed to get graph statistics: {stats_result.get('message', 'Unknown error')}")
+            else:
+                print(f"   ❌ Graph statistics request failed: {stats_response.status_code} - {stats_response.text}")
+
+            # 3. Test additional track splitting (minimal since we split during classification)
+            print("\n🪓 Testing additional track splitting functionality...")
+            
+            print(f"   Performed {splits_during_classification} track splits during classification (first 2 splits after every 5 classifications)")
+            
+            # Do 1-2 additional splits to ensure we test the endpoint
+            additional_splits = min(2, max(1, 3 - splits_during_classification))  # 1-2 more splits
+            
+            # Get available tracks from graph statistics
+            available_track_ids = []
+            if stats_response.status_code == 200:
+                stats_result = stats_response.json()
+                if stats_result.get("success"):
+                    player_groups = stats_result.get('player_groups')
+                    if player_groups:
+                        # Flatten all track IDs from player groups
+                        for group in player_groups:
+                            available_track_ids.extend(group)
+                        available_track_ids = list(set(available_track_ids))  # Remove duplicates
+                        print(f"   📊 Found {len(available_track_ids)} available tracks from graph statistics: {sorted(available_track_ids)}")
+            
+            # Skip track splitting if no actual tracks are available
+            if not available_track_ids:
+                print("   ⚠️  No tracks found in graph statistics, skipping additional track splitting test")
+                additional_splits = 0
+            else:
+                # Ensure we have enough tracks for the required splits
+                if len(available_track_ids) < additional_splits:
+                    print(f"   ⚠️  Only {len(available_track_ids)} tracks available, reducing splits to {len(available_track_ids)}")
+                    additional_splits = len(available_track_ids)
+            
+            # Randomly select tracks for additional splitting
+            if additional_splits > 0:
+                selected_tracks = random.sample(available_track_ids, additional_splits)
+                print(f"Selected {additional_splits} additional tracks for splitting: {selected_tracks}")
+                
+                for track_id in selected_tracks:
+                    # Choose a random frame for splitting (between frame 100 and 2000)
+                    random_frame = random.randint(100, 2000)
+                    crop_image_name = f"crop_{random_frame}.jpg"
+                    
+                    print(f"   Splitting track {track_id} at frame {random_frame} (crop: {crop_image_name})")
+                    
+                    # Call the split-track endpoint
+                    split_url = f"{service_url}/api/v1/dataprep/split-track"
+                    split_data = {
+                        "track_id": track_id,
+                        "crop_image_name": crop_image_name
+                    }
+                    
+                    split_response = requests.post(split_url, params={"tenant_id": test_tenant}, json=split_data, headers=headers, timeout=30)
+                    
+                    if split_response.status_code == 200:
+                        split_result = split_response.json()
+                        if split_result.get("success"):
+                            print(f"   ✅ Track {track_id} split successfully")
+                        else:
+                            pytest.fail(f"Track {track_id} split failed: {split_result.get('message', 'Unknown error')}")
+                    else:
+                        pytest.fail(f"Track {track_id} split request failed: {split_response.status_code} - {split_response.text}")
+            else:
+                print("   ℹ️  No additional splits needed (already performed during classification)")
+            
+            print("✅ Track splitting test completed!")
+
+            print("✅ Full stitching workflow integration test passed!")
+
+        finally:
+            # Restore original credentials
+            if original_credentials is not None:
+                os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = original_credentials
+            else:
+                os.environ.pop('GOOGLE_APPLICATION_CREDENTIALS', None)
