@@ -21,7 +21,7 @@ class EdgeType(Enum):
 class TrackStitcher:
     detections: Detections
 
-    def __init__(self, detections: Detections, existing_graph: Optional[nx.Graph] = None, storage=None, video_id: Optional[str] = None):
+    def __init__(self, detections: Detections, existing_graph: Optional[nx.Graph] = None, storage=None, video_id: Optional[str] = None, path_manager=None):
         """
         Initializes the TrackStitcher.
 
@@ -32,11 +32,13 @@ class TrackStitcher:
                                                allow continuing verification.
             storage: Storage client for accessing GCS
             video_id (Optional[str]): Video ID for accessing track directories
+            path_manager: Path manager for getting GCS paths
         """
         logger.info("Initializing TrackStitcher...")
         self.detections = detections
         self.storage = storage
         self.video_id = video_id
+        self.path_manager = path_manager
 
         # List track directories with crop images if storage and video_id are available
         self._track_directories: List[str] = []
@@ -45,7 +47,7 @@ class TrackStitcher:
             logger.info(f"Found {len(self._track_directories)} track directories with crop images")
 
         # 1. Pre-process supervision data for efficient lookups
-        self._track_to_frames: Dict[int, np.ndarray] = self._invert_supervision_data(self.detections)
+        self._track_to_frames: Dict[int, np.ndarray] = self._invert_supervision_data(self.detections, self._track_directories)
         
         # 2. Discover all track IDs using detections-derived track IDs
         all_track_ids = sorted(self._track_to_frames.keys())
@@ -83,13 +85,16 @@ class TrackStitcher:
         Returns:
             List of track directory names (track IDs as strings)
         """
-        if not self.storage or not self.video_id:
-            logger.warning("Storage or video_id not available, cannot list track directories")
+        if not self.storage or not self.video_id or not self.path_manager:
+            logger.warning("Storage, video_id, or path_manager not available, cannot list track directories")
             return []
 
         try:
-            # Construct the unverified_tracks root path
-            unverified_tracks_root = f"process/{self.video_id}/unverified_tracks/"
+            # Get the unverified_tracks_root path using the path manager
+            unverified_tracks_root = self.path_manager.get_path("unverified_tracks_root", video_id=self.video_id)
+            if unverified_tracks_root is None:
+                logger.error("Could not get unverified_tracks_root path from path manager")
+                return []
 
             # List all directory prefixes with the prefix
             directory_prefixes = self.storage.list_blobs(
@@ -181,10 +186,17 @@ class TrackStitcher:
         verified_tracks = sum(len(group) for group in self.player_groups.values())
         logger.info(f"Reconstructed {len(self.player_groups)} player groups with {verified_tracks} tracks")
 
-    def _invert_supervision_data(self, detections: Detections) -> Dict[int, np.ndarray]:
+    def _invert_supervision_data(self, detections: Detections, track_directories: List[str]) -> Dict[int, np.ndarray]:
         """Converts frame->tracks mapping to track->frames for faster lookups.
         
-        Returns track_id -> sorted numpy array of frame indices for efficient operations.
+        Only includes tracks that have corresponding directories in track_directories.
+        
+        Args:
+            detections: Detections object containing track information
+            track_directories: List of track directory names (as strings) to include
+            
+        Returns:
+            track_id -> sorted numpy array of frame indices for efficient operations.
         """
         try:
             frame_indices = detections.data['frame_index']
@@ -196,18 +208,37 @@ class TrackStitcher:
         frame_indices = np.asarray(frame_indices, dtype=np.int32)
         track_ids = np.asarray(track_ids, dtype=np.int32)
 
+        # Convert track_directories to set of integers for fast lookup
+        track_dirs_set = set(int(track_id) for track_id in track_directories) if track_directories else set()
+
         track_to_frames = {}
         
-        # Get unique track IDs - much smaller than total detections (400 vs 2M)
-        unique_tracks = np.unique(track_ids)
-
-        # For each unique track, find all frames it appears in
-        for track_id in unique_tracks:
-            # Boolean mask for current track - vectorized operation
-            mask = track_ids == track_id
-            # Keep as sorted numpy array for efficient intersection operations
-            track_frames = np.sort(frame_indices[mask])
-            track_to_frames[int(track_id)] = track_frames
+        if track_dirs_set:
+            # Filter to only include tracks that have directories
+            # Use vectorized operations for better performance
+            unique_tracks = np.unique(track_ids)
+            
+            # Filter unique tracks to only those in track_directories
+            filtered_tracks = unique_tracks[np.isin(unique_tracks, list(track_dirs_set))]
+            
+            # For each filtered track, find all frames it appears in using vectorized operations
+            for track_id in filtered_tracks:
+                # Boolean mask for current track - vectorized operation
+                mask = track_ids == track_id
+                # Keep as sorted numpy array for efficient intersection operations
+                track_frames = np.sort(frame_indices[mask])
+                track_to_frames[int(track_id)] = track_frames
+        else:
+            # If no track directories provided, include all tracks (backward compatibility)
+            unique_tracks = np.unique(track_ids)
+            
+            # For each unique track, find all frames it appears in
+            for track_id in unique_tracks:
+                # Boolean mask for current track - vectorized operation
+                mask = track_ids == track_id
+                # Keep as sorted numpy array for efficient intersection operations
+                track_frames = np.sort(frame_indices[mask])
+                track_to_frames[int(track_id)] = track_frames
 
         return track_to_frames
 

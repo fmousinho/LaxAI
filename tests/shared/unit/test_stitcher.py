@@ -46,7 +46,7 @@ class TestTrackStitcher:
         stitcher = TrackStitcher.__new__(TrackStitcher)  # Create without __init__
         stitcher.detections = mock_detections
 
-        result = stitcher._invert_supervision_data(mock_detections)
+        result = stitcher._invert_supervision_data(mock_detections, [])
 
         assert isinstance(result, dict)
         assert 1 in result  # track 1

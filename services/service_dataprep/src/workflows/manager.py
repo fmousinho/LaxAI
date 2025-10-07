@@ -172,7 +172,7 @@ class DataPrepManager:
             logger.info("Starting fresh or resuming from saved graph")
 
             # Create the stitcher
-            self.stitcher = TrackStitcher(detections=detections, existing_graph=existing_graph, storage=self.storage, video_id=video_id)
+            self.stitcher = TrackStitcher(detections=detections, existing_graph=existing_graph, storage=self.storage, video_id=video_id, path_manager=self.path_manager)
             self.current_video_id = video_id
 
             logger.info(f"Started prep session for video: {video_id}")
