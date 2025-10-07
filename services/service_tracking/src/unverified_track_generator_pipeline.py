@@ -864,6 +864,7 @@ class TrackGeneratorPipeline(Pipeline):
         """
         video_blob_name = context.get("video_blob_name")
         video_guid = context.get("video_guid")
+        video_folder = context.get("video_folder")
         
         if not video_blob_name:
             return {"status": StepStatus.ERROR.value, "error": "No video blob name provided"}
@@ -900,8 +901,16 @@ class TrackGeneratorPipeline(Pipeline):
                 if not success:
                     raise RuntimeError("Failed to encode thumbnail as JPEG")
                 
-                # Get thumbnail path
-                thumbnail_path = self.path_manager.get_path("video_thumbnail", video_id=video_guid)
+                # Get thumbnail path - use the parent directory of video_folder
+                # instead of video_guid to place thumbnail in the same folder as the video
+                if video_folder and video_folder.endswith('/imported'):
+                    # Remove '/imported' suffix to get the video's folder
+                    video_dir = video_folder[:-9]  # Remove '/imported'
+                    thumbnail_path = f"{video_dir}/thumbnail.jpg"
+                else:
+                    # Fallback to original logic if video_folder doesn't end with '/imported'
+                    thumbnail_path = self.path_manager.get_path("video_thumbnail", video_id=video_guid)
+                
                 if not thumbnail_path:
                     raise RuntimeError("Unable to determine thumbnail path")
                 
