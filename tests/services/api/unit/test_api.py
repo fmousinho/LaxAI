@@ -40,6 +40,32 @@ def test_list_training_jobs(client):
     assert "limit" in data
 
 
+def test_list_training_jobs_by_tenant(client):
+    """Test listing training jobs for a specific tenant."""
+    tenant_id = "test-tenant"
+    response = client.get(f"/api/v1/train/tenant/{tenant_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["tenant_id"] == tenant_id
+    assert "jobs" in data
+    assert "count" in data
+    assert "limit" in data
+    assert "status_filter" in data
+
+
+def test_list_training_jobs_by_tenant_with_status_filter(client):
+    """Test listing training jobs for a specific tenant with status filter."""
+    tenant_id = "test-tenant"
+    status = "running"
+    response = client.get(f"/api/v1/train/tenant/{tenant_id}?status={status}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["tenant_id"] == tenant_id
+    assert data["status_filter"] == status
+    assert "jobs" in data
+    assert "count" in data
+
+
 def test_list_tracking_jobs(client):
     """Test listing tracking jobs."""
     response = client.get("/api/v1/track/")

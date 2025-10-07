@@ -116,6 +116,38 @@ class TrainingStatusManager:
             logger.error(f"Error listing training jobs: {e}")
             return []
 
+    def list_training_jobs_by_tenant(self, tenant_id: str, status_filter: str = None, limit: int = 50) -> List[dict]:
+        """List training jobs for a specific tenant, optionally filtered by status."""
+        
+        # Validate limit parameter
+        if limit < 1:
+            limit = 1
+        elif limit > 100:
+            limit = 100
+            
+        try:
+            # Start with base query for the tenant
+            query = self._runs_collection.where("tenant_id", "==", tenant_id)
+            
+            # Add status filter if provided
+            if status_filter:
+                query = query.where("status", "==", status_filter)
+            
+            # Order by creation time (newest first) and limit results
+            query = query.order_by("created_at", direction=firestore.Query.DESCENDING).limit(limit)
+            docs = query.stream()
+
+            jobs = []
+            for doc in docs:
+                data = doc.to_dict() or {}
+                data["task_id"] = doc.id  # Add the document ID as task_id
+                jobs.append(data)
+
+            return jobs
+        except Exception as e:
+            logger.error(f"Error listing training jobs for tenant {tenant_id}: {e}")
+            return []
+
 
 # Global instances
 publisher = PubSubPublisher()
@@ -159,6 +191,36 @@ async def list_training_jobs(limit: int = 50):
         }
     except Exception as e:
         logger.error(f"Error listing training jobs: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve training jobs")
+
+
+@router.get("/tenant/{tenant_id}")
+async def list_training_jobs_by_tenant(
+    tenant_id: str, 
+    status: str = None, 
+    limit: int = 50
+):
+    """List training jobs for a specific tenant, optionally filtered by status."""
+
+    # Validate limit parameter
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
+
+    try:
+        jobs = status_manager.list_training_jobs_by_tenant(
+            tenant_id=tenant_id, 
+            status_filter=status, 
+            limit=limit
+        )
+        return {
+            "tenant_id": tenant_id,
+            "jobs": jobs,
+            "count": len(jobs),
+            "limit": limit,
+            "status_filter": status
+        }
+    except Exception as e:
+        logger.error(f"Error listing training jobs for tenant {tenant_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to retrieve training jobs")
 
 

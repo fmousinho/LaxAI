@@ -5,6 +5,7 @@ This module contains the core training workflow logic that can be used
 by CLI, API, or other interfaces.
 """
 
+import asyncio
 import logging
 import os
 import signal
@@ -17,6 +18,13 @@ os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 logger = logging.getLogger(__name__)
 
 from shared_libs.common.google_storage import GCSPaths, get_storage  # noqa: E402
+
+try:
+    from google.cloud import pubsub_v1
+    PUBSUB_AVAILABLE = True
+except ImportError:
+    PUBSUB_AVAILABLE = False
+    logger.warning("google-cloud-pubsub not available, Pub/Sub publishing disabled")
 from services.service_training.src.train_pipeline import TrainPipeline  # noqa: E402
 
 
@@ -40,7 +48,8 @@ class TrainingWorkflow:
                  n_datasets_to_use: Optional[int] = None,
                  eval_kwargs: Optional[Dict[str, Any]] = None,
                  task_id: Optional[str] = None,
-                 cancellation_event: Optional[threading.Event] = None):
+                 cancellation_event: Optional[threading.Event] = None,
+                 execution_timeout: Optional[int] = None):
         """
         Initialize the training workflow.
 
@@ -57,6 +66,7 @@ class TrainingWorkflow:
             eval_kwargs: Dictionary of evaluation parameters.
             task_id: Task ID for tracking this training run.
             cancellation_event: Event for graceful cancellation handling.
+            execution_timeout: Maximum execution time in minutes. If set, a message will be sent to pub/sub to suspend and restart the job.
         """
         self.tenant_id = tenant_id
         self.verbose = verbose
@@ -70,6 +80,7 @@ class TrainingWorkflow:
         self.eval_kwargs = eval_kwargs or {}
         self.task_id = task_id
         self.cancellation_event = cancellation_event
+        self.execution_timeout = execution_timeout
 
         # Initialize Firestore client for status updates if task_id is provided
         self.firestore_client = None
@@ -82,6 +93,16 @@ class TrainingWorkflow:
                 logger.warning("google-cloud-firestore not available, status updates disabled")
             except Exception as e:
                 logger.error(f"Failed to initialize Firestore client: {e}")
+
+        # Initialize Pub/Sub publisher client for message publishing
+        self.pubsub_publisher = None
+        if PUBSUB_AVAILABLE:
+            try:
+                self.pubsub_publisher = pubsub_v1.PublisherClient()
+                logger.info("Initialized Pub/Sub publisher client")
+            except Exception as e:
+                logger.error(f"Failed to initialize Pub/Sub publisher client: {e}")
+                self.pubsub_publisher = None
 
         # Set up signal handlers for external cancellation (e.g., Cloud Run job cancellation)
         self._setup_signal_handlers()
@@ -202,6 +223,38 @@ class TrainingWorkflow:
         except Exception as e:
             logger.error(f"Failed to update Firestore status for task_id {self.task_id}: {e}")
 
+    def _publish_pubsub_message(self, action: str, task_id: str) -> None:
+        """
+        Publish a message to the training-jobs Pub/Sub topic.
+
+        Args:
+            action: The action to publish (e.g., "suspend-restart")
+            task_id: The task ID for the training run
+        """
+        if not self.pubsub_publisher or not task_id:
+            return
+
+        try:
+            from datetime import datetime, timezone
+
+            topic_path = self.pubsub_publisher.topic_path("laxai-466119", "training-jobs")
+
+            message_data = {
+                "action": action,
+                "task_id": task_id,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+            import json
+            message_json = json.dumps(message_data).encode('utf-8')
+
+            future = self.pubsub_publisher.publish(topic_path, message_json)
+            message_id = future.result()
+            logger.info(f"Published Pub/Sub message for task_id {task_id} with action '{action}': {message_id}")
+
+        except Exception as e:
+            logger.error(f"Failed to publish Pub/Sub message for task_id {task_id}: {e}")
+
     def execute(self) -> Dict[str, Any]:
         """Execute training using a SINGLE TrainPipeline over all datasets.
 
@@ -237,6 +290,10 @@ class TrainingWorkflow:
                 "training_results": [],
             }
             self._update_firestore_status("cancelled")
+            # Cancel timeout timer if it exists (cancelled before execution)
+            if timeout_timer:
+                timeout_timer.cancel()
+                logger.info("Cancelled execution timeout timer due to early cancellation")
             return result
 
         try:
@@ -262,6 +319,20 @@ class TrainingWorkflow:
                 return result
 
             dataset_mode = "multi" if len(datasets) > 1 else "single"
+
+            # Set up execution timeout timer if specified
+            timeout_timer = None
+            if self.execution_timeout is not None and self.execution_timeout > 0:
+                def timeout_handler():
+                    logger.warning(f"Execution timeout reached after {self.execution_timeout} minutes")
+                    # Update Firestore status to suspended
+                    if self.task_id:
+                        self._publish_pubsub_message("suspend-restart", self.task_id)
+
+                # Start timer in a separate thread
+                timeout_timer = threading.Timer(self.execution_timeout * 60, timeout_handler)
+                timeout_timer.start()
+                logger.info(f"Started execution timeout timer for {self.execution_timeout} minutes")
 
             # Merge kwargs for TrainPipeline (avoid duplicate pipeline_name)
             all_kwargs = {**self.training_kwargs, **self.model_kwargs, **self.eval_kwargs}
@@ -295,6 +366,10 @@ class TrainingWorkflow:
                     "dataset_mode": dataset_mode
                 }
                 self._update_firestore_status("cancelled")
+                # Cancel timeout timer if it exists (cancelled before pipeline execution)
+                if timeout_timer:
+                    timeout_timer.cancel()
+                    logger.info("Cancelled execution timeout timer due to cancellation before pipeline execution")
                 return result
 
             # Add task_id to wandb tags if provided
@@ -338,10 +413,18 @@ class TrainingWorkflow:
                 "training_results": [],
             }
             self._update_firestore_status(final_status)
+            # Cancel timeout timer if it exists (successful completion)
+            if timeout_timer:
+                timeout_timer.cancel()
+                logger.info("Cancelled execution timeout timer due to successful completion")
             return result
 
         except InterruptedError:
             logger.info("Training workflow cancelled (single-pipeline mode)")
+            # Cancel timeout timer if it exists
+            if timeout_timer:
+                timeout_timer.cancel()
+                logger.info("Cancelled execution timeout timer due to interruption")
             result = {
                 "status": "cancelled",
                 "datasets_found": 0,
@@ -361,6 +444,10 @@ class TrainingWorkflow:
             return result
         except Exception as e:
             logger.error(f"Training workflow failed: {e}")
+            # Cancel timeout timer if it exists
+            if timeout_timer:
+                timeout_timer.cancel()
+                logger.info("Cancelled execution timeout timer due to exception")
             result = {
                 "status": "failed",
                 "datasets_found": 0,
