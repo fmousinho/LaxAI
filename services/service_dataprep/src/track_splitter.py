@@ -72,12 +72,12 @@ class TrackSplitter:
                 logger.error(f"Track {track_id} not found in stitcher")
                 return False
 
-            # Split frames at the boundary
+            # Split frames at the boundary - crop at split_frame starts the new track
             first_part_frames = track_frames[track_frames < split_frame]
             second_part_frames = track_frames[track_frames >= split_frame]
 
             if len(second_part_frames) == 0:
-                logger.error(f"No frames found after split frame {split_frame} for track {track_id}")
+                logger.error(f"No frames found at or after split frame {split_frame} for track {track_id}")
                 return False
 
             # Generate new track ID
@@ -99,7 +99,7 @@ class TrackSplitter:
                 logger.error("Failed to move crops")
                 return False
 
-            logger.info(f"Successfully split track {track_id} into {track_id} (frames <= {split_frame}) and {new_track_id} (frames > {split_frame})")
+            logger.info(f"Successfully split track {track_id} into {track_id} (frames < {split_frame}) and {new_track_id} (frames >= {split_frame})")
             return True
 
         except Exception as e:
@@ -242,12 +242,12 @@ class TrackSplitter:
 
     def _move_crops_for_split(self, old_track_id: int, new_track_id: int, split_frame: int) -> bool:
         """
-        Move crops from the old track folder to the new track folder for frames > split_frame.
+        Move crops from the old track folder to the new track folder for frames >= split_frame.
 
         Args:
             old_track_id: Original track ID
             new_track_id: New track ID
-            split_frame: Frame where the split occurs
+            split_frame: Frame where the split occurs (this frame starts the new track)
 
         Returns:
             True if successful, False otherwise
@@ -284,8 +284,8 @@ class TrackSplitter:
                         logger.warning(f"Could not parse frame from crop {filename}, skipping")
                         continue
 
-                    # Only move crops with frame > split_frame
-                    if crop_frame > split_frame:
+                    # Only move crops with frame >= split_frame (split_frame starts the new track)
+                    if crop_frame >= split_frame:
                         # Construct new path
                         new_path = f"{new_track_prefix}{filename}"
 
