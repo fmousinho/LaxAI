@@ -21,7 +21,7 @@ class EdgeType(Enum):
 class TrackStitcher:
     detections: Detections
 
-    def __init__(self, detections: Detections, existing_graph: Optional[nx.Graph] = None):
+    def __init__(self, detections: Detections, existing_graph: Optional[nx.Graph] = None, storage=None, video_id: Optional[str] = None):
         """
         Initializes the TrackStitcher.
 
@@ -30,9 +30,19 @@ class TrackStitcher:
             existing_graph (Optional[nx.Graph]): Existing graph to resume from. If provided,
                                                the stitcher will load the previous state and
                                                allow continuing verification.
+            storage: Storage client for accessing GCS
+            video_id (Optional[str]): Video ID for accessing track directories
         """
         logger.info("Initializing TrackStitcher...")
         self.detections = detections
+        self.storage = storage
+        self.video_id = video_id
+
+        # List track directories with crop images if storage and video_id are available
+        self._track_directories: List[str] = []
+        if self.storage and self.video_id:
+            self._track_directories = self._list_track_directories()
+            logger.info(f"Found {len(self._track_directories)} track directories with crop images")
 
         # 1. Pre-process supervision data for efficient lookups
         self._track_to_frames: Dict[int, np.ndarray] = self._invert_supervision_data(self.detections)
@@ -64,6 +74,44 @@ class TrackStitcher:
         self._verification_mode = "normal"  # "normal", "second_pass", or "skipped_only"
         
         logger.info("Initialization complete. Ready for verification.")
+
+    def _list_track_directories(self) -> List[str]:
+        """
+        List all directories at unverified_tracks_root: "process/{video_id}/unverified_tracks/"
+        without their prefix. These directories correspond to track_ids for which there are crop images.
+
+        Returns:
+            List of track directory names (track IDs as strings)
+        """
+        if not self.storage or not self.video_id:
+            logger.warning("Storage or video_id not available, cannot list track directories")
+            return []
+
+        try:
+            # Construct the unverified_tracks root path
+            unverified_tracks_root = f"process/{self.video_id}/unverified_tracks/"
+
+            # List all directory prefixes with the prefix
+            directory_prefixes = self.storage.list_blobs(
+                prefix=unverified_tracks_root, 
+                delimiter="/",
+                exclude_prefix_in_return=True
+            )
+
+            # Extract directory names (track IDs) - these are already cleaned of the prefix
+            track_directories = []
+            for prefix in directory_prefixes:
+                # Remove trailing slash to get just the track ID
+                track_id = prefix.rstrip("/")
+                if track_id:  # Only add non-empty track IDs
+                    track_directories.append(track_id)
+
+            logger.info(f"Found {len(track_directories)} track directories: {track_directories[:5]}..." if len(track_directories) > 5 else f"Found {len(track_directories)} track directories: {track_directories}")
+            return track_directories
+
+        except Exception as e:
+            logger.error(f"Error listing track directories: {e}")
+            return []
 
     def _load_existing_graph(self, existing_graph: nx.Graph, expected_track_ids: List[int]):
         """

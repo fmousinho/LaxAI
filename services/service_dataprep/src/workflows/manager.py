@@ -168,9 +168,11 @@ class DataPrepManager:
                         logger.info("No existing saved graph found, starting fresh")
                 except Exception as e:
                     logger.warning(f"Could not load existing saved graph: {e}, starting fresh")
+            
+            logger.info("Starting fresh or resuming from saved graph")
 
             # Create the stitcher
-            self.stitcher = TrackStitcher(detections=detections, existing_graph=existing_graph)
+            self.stitcher = TrackStitcher(detections=detections, existing_graph=existing_graph, storage=self.storage, video_id=video_id)
             self.current_video_id = video_id
 
             logger.info(f"Started prep session for video: {video_id}")
@@ -407,7 +409,13 @@ class DataPrepManager:
         Returns:
             True if the graph was successfully saved, False otherwise
         """
-        return self.save_graph()
+        success = self.save_graph()
+        if success:
+            # Clear the session state to allow starting a new session
+            self.stitcher = None
+            self.current_video_id = None
+            logger.info("Session suspended and cleared")
+        return success
 
     def move_crops_to_verified(self) -> bool:
         """
