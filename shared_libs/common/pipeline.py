@@ -36,6 +36,7 @@ class PipelineStatus(Enum):
     COMPLETED = "completed"
     ERROR = "error"
     CANCELLED = "cancelled"
+    SUSPENDED = "suspended"
 
 
 def get_active_pipelines() -> Dict[str, str]:
