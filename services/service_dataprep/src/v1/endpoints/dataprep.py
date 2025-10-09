@@ -184,12 +184,8 @@ async def record_response(request: RecordResponseRequest, tenant_id: str) -> Rec
     """
     try:
         manager = get_manager(tenant_id)
-        success = manager.record_response(request.decision)
-
-        if success:
-            return RecordResponseResponse(success=True, message=f"Recorded decision: {request.decision}")
-        else:
-            return RecordResponseResponse(success=False, message="Failed to record response")
+        result = manager.record_response(request.pair_id, request.decision)
+        return RecordResponseResponse(**result)
 
     except Exception as e:
         logger.error(f"Failed to record response for tenant {tenant_id}: {e}")

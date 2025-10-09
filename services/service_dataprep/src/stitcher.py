@@ -71,11 +71,34 @@ class TrackStitcher:
         self._i = 0
         self._j = 1
         self._last_proposed_pair: Optional[Tuple[int, int]] = None
-        
+        self._in_progress_pairs: Set[Tuple[int, int]] = set()
+
         # 6. Verification mode tracking
         self._verification_mode = "normal"  # "normal", "second_pass", or "skipped_only"
         
         logger.info("Initialization complete. Ready for verification.")
+
+    @staticmethod
+    def _normalize_pair(group1_id: int, group2_id: int) -> Tuple[int, int]:
+        """Return a sorted tuple representing a group pair."""
+        return tuple(sorted((group1_id, group2_id)))
+
+    @property
+    def verification_mode(self) -> str:
+        """Current verification mode."""
+        return self._verification_mode
+
+    def mark_pair_in_progress(self, group1_id: int, group2_id: int) -> None:
+        """Mark a pair as in-progress so it is not re-issued."""
+        self._in_progress_pairs.add(self._normalize_pair(group1_id, group2_id))
+
+    def release_in_progress_pair(self, group1_id: int, group2_id: int) -> None:
+        """Release an in-progress pair, making it eligible for re-issuance."""
+        self._in_progress_pairs.discard(self._normalize_pair(group1_id, group2_id))
+
+    def is_pair_in_progress(self, group1_id: int, group2_id: int) -> bool:
+        """Return True if the pair is currently outstanding."""
+        return self._normalize_pair(group1_id, group2_id) in self._in_progress_pairs
 
     def _list_track_directories(self) -> List[str]:
         """
@@ -323,6 +346,10 @@ class TrackStitcher:
                 group1_id = self._comparison_keys[self._i]
                 group2_id = self._comparison_keys[self._j]
 
+                if self.is_pair_in_progress(group1_id, group2_id):
+                    self._j += 1
+                    continue
+
                 # Skip if already processed (has any edge between groups)
                 if self._groups_have_any_relationship(group1_id, group2_id):
                     self._j += 1
@@ -348,6 +375,12 @@ class TrackStitcher:
             # Move to the next primary group to compare
             self._i += 1
             self._j = self._i + 1 # Reset secondary group
+
+        if self._in_progress_pairs:
+            return {
+                "status": "waiting_for_responses",
+                "message": "All available pairs are currently awaiting responses."
+            }
 
         # Normal pass complete - check if there are skipped pairs
         skipped_count = len(self.get_skipped_pairs())
@@ -423,6 +456,21 @@ class TrackStitcher:
             
         self._last_proposed_pair = None
 
+    def respond_to_pair(self, group1_id: int, group2_id: int, decision: str, mode: Optional[str] = None) -> None:
+        """Record a response for a specific pair regardless of iteration order."""
+
+        if mode is not None:
+            self._verification_mode = mode
+
+        self._last_proposed_pair = (group1_id, group2_id)
+        success = False
+        try:
+            self.respond(decision)
+            success = True
+        finally:
+            if success:
+                self.release_in_progress_pair(group1_id, group2_id)
+
     def _get_skipped_pair_for_verification(self) -> Dict[str, Any]:
         """Get the next skipped pair for re-verification."""
         skipped_pairs = self.get_skipped_pairs()
@@ -430,16 +478,22 @@ class TrackStitcher:
         if not skipped_pairs:
             return {"status": "complete", "message": "✅ All skipped pairs have been processed."}
 
-        # Get the first skipped pair
-        group1_id, group2_id = skipped_pairs[0]
-        self._last_proposed_pair = (group1_id, group2_id)
+        for group1_id, group2_id in skipped_pairs:
+            if self.is_pair_in_progress(group1_id, group2_id):
+                continue
+
+            self._last_proposed_pair = (group1_id, group2_id)
+            return {
+                "status": "pending_verification",
+                "mode": "skipped_only",
+                "group1_id": group1_id,
+                "group2_id": group2_id,
+                "context": f"Previously skipped pair ({len(skipped_pairs)} skipped pairs remaining)"
+            }
 
         return {
-            "status": "pending_verification",
-            "mode": "skipped_only",
-            "group1_id": group1_id,
-            "group2_id": group2_id,
-            "context": f"Previously skipped pair ({len(skipped_pairs)} skipped pairs remaining)"
+            "status": "waiting_for_responses",
+            "message": "All skipped pairs are currently awaiting responses."
         }
 
     def _get_second_pass_pair(self) -> Dict[str, Any]:
@@ -450,21 +504,29 @@ class TrackStitcher:
             return {"status": "complete", "message": "✅ All skipped pairs have been resolved."}
 
         # For now, same as skipped_only but with enhanced context messaging
-        group1_id, group2_id = skipped_pairs[0]
-        self._last_proposed_pair = (group1_id, group2_id)
+        for group1_id, group2_id in skipped_pairs:
+            if self.is_pair_in_progress(group1_id, group2_id):
+                continue
 
-        # Get context about what groups these have been merged with
-        group1_context = self._get_group_context(group1_id)
-        group2_context = self._get_group_context(group2_id)
+            self._last_proposed_pair = (group1_id, group2_id)
+
+            # Get context about what groups these have been merged with
+            group1_context = self._get_group_context(group1_id)
+            group2_context = self._get_group_context(group2_id)
+
+            return {
+                "status": "pending_verification",
+                "mode": "second_pass",
+                "group1_id": group1_id,
+                "group2_id": group2_id,
+                "group1_context": group1_context,
+                "group2_context": group2_context,
+                "message": f"Second pass: Enhanced context available ({len(skipped_pairs)} skipped pairs remaining)"
+            }
 
         return {
-            "status": "pending_verification",
-            "mode": "second_pass",
-            "group1_id": group1_id,
-            "group2_id": group2_id,
-            "group1_context": group1_context,
-            "group2_context": group2_context,
-            "message": f"Second pass: Enhanced context available ({len(skipped_pairs)} skipped pairs remaining)"
+            "status": "waiting_for_responses",
+            "message": "All second-pass pairs are currently awaiting responses."
         }
 
     def _get_group_context(self, group_id: int) -> str:

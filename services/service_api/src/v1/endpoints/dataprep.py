@@ -146,7 +146,7 @@ async def record_response(request: RecordResponseRequest, tenant_id: str) -> Rec
     data = await dataprep_client._proxy_request(
         "POST",
         "/respond",
-        json={"decision": request.decision},
+        json={"pair_id": request.pair_id, "decision": request.decision},
         params={"tenant_id": tenant_id}
     )
     return RecordResponseResponse(**data)

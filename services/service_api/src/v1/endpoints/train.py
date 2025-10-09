@@ -3,11 +3,19 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
 from google.api_core.exceptions import GoogleAPIError
-from google.cloud import pubsub_v1, firestore  # type: ignore
+
+try:
+    from google.cloud import pubsub_v1, firestore  # type: ignore
+except (ImportError, ModuleNotFoundError) as import_error:  # pragma: no cover - dependency guard
+    pubsub_v1 = None  # type: ignore[assignment]
+    firestore = None  # type: ignore[assignment]
+    _google_import_error = import_error
+else:
+    _google_import_error = None
 
 from ..schemas.training import TrainingRequest, TrainingResponse, TrainingStatus
 
@@ -22,6 +30,12 @@ class PubSubPublisher:
     """Pub/Sub publisher for training job requests."""
 
     def __init__(self):
+        if pubsub_v1 is None or _google_import_error is not None:
+            raise RuntimeError(
+                "google-cloud-pubsub is required to publish training jobs. "
+                "Install google-cloud-pubsub and ensure the environment is configured."
+            ) from _google_import_error
+
         self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
         if not self.project_id:
             raise ValueError("GOOGLE_CLOUD_PROJECT environment variable not set")
@@ -73,6 +87,12 @@ class TrainingStatusManager:
     """Manages training job status queries from Firestore."""
 
     def __init__(self):
+        if firestore is None or _google_import_error is not None:
+            raise RuntimeError(
+                "google-cloud-firestore is required to query training status. "
+                "Install google-cloud-firestore and ensure the environment is configured."
+            ) from _google_import_error
+
         self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
         if not self.project_id:
             raise ValueError("GOOGLE_CLOUD_PROJECT environment variable not set")
@@ -149,9 +169,16 @@ class TrainingStatusManager:
             return []
 
 
-# Global instances
-publisher = PubSubPublisher()
-status_manager = TrainingStatusManager()
+# Global instances (lazily instantiated to avoid import failures during tests)
+publisher: Optional[PubSubPublisher]
+status_manager: Optional[TrainingStatusManager]
+
+if _google_import_error is None:
+    publisher = PubSubPublisher()
+    status_manager = TrainingStatusManager()
+else:  # pragma: no cover - executed only when dependency missing
+    publisher = None
+    status_manager = None
 
 
 @router.post("", response_model=TrainingResponse)
@@ -160,6 +187,12 @@ async def start_training(request: TrainingRequest) -> TrainingResponse:
 
     try:
         # Publish to Pub/Sub
+        if publisher is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Training service dependencies are unavailable. Please install google-cloud-pubsub and retry.",
+            )
+
         task_id = publisher.publish_training_request(request)
 
         return TrainingResponse(
@@ -183,6 +216,12 @@ async def list_training_jobs(limit: int = 50):
         raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
 
     try:
+        if status_manager is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Training status dependencies are unavailable. Please install google-cloud-firestore and retry.",
+            )
+
         jobs = status_manager.list_training_jobs(limit=limit)
         return {
             "jobs": jobs,
@@ -205,6 +244,12 @@ async def list_training_jobs_by_tenant(
     # Validate limit parameter
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
+
+    if status_manager is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Training status dependencies are unavailable. Please install google-cloud-firestore and retry.",
+        )
 
     try:
         jobs = status_manager.list_training_jobs_by_tenant(

@@ -4,6 +4,7 @@ DataPrep API schemas for LaxAI API Service proxy.
 Complete schemas for API request/response validation.
 """
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -40,22 +41,30 @@ class VerificationImagesResponse(BaseModel):
 
     status: str = Field(..., description="Status of the verification process")
     message: Optional[str] = Field(None, description="Optional message")
+    pair_id: Optional[str] = Field(None, description="Identifier for the verification pair (e.g., '3-120')")
     group1_id: Optional[int] = Field(None, description="First group ID for verification")
     group2_id: Optional[int] = Field(None, description="Second group ID for verification")
+    mode: Optional[str] = Field(None, description="Verification mode for this pair (normal, second_pass, skipped_only)")
+    issued_at: Optional[datetime] = Field(None, description="Timestamp when the pair was issued")
+    expires_at: Optional[datetime] = Field(None, description="Timestamp when the pair will expire if not answered")
     group1_prefixes: Optional[List[str]] = Field(None, description="GCS prefixes for group1 tracks")
     group2_prefixes: Optional[List[str]] = Field(None, description="GCS prefixes for group2 tracks")
     total_pairs: Optional[int] = Field(None, description="Total number of possible pairs")
     verified_pairs: Optional[int] = Field(None, description="Number of pairs already verified")
+    outstanding_pair_ids: Optional[List[str]] = Field(None, description="List of currently outstanding pair IDs")
+    max_outstanding_pairs: Optional[int] = Field(None, description="Maximum number of outstanding pairs allowed")
 
 
 class RecordResponseRequest(BaseModel):
     """Request model for recording a user response."""
 
+    pair_id: str = Field(..., description="Identifier of the verification pair being responded to")
     decision: str = Field(..., description="User's decision: 'same', 'different', or 'skip'")
 
     class Config:
         json_schema_extra = {
             "example": {
+                "pair_id": "3-120",
                 "decision": "same"
             }
         }
@@ -66,6 +75,10 @@ class RecordResponseResponse(BaseModel):
 
     success: bool = Field(..., description="Whether the response was recorded successfully")
     message: Optional[str] = Field(None, description="Optional message about the operation")
+    pair_id: Optional[str] = Field(None, description="Identifier of the verification pair that was processed")
+    pair_status: Optional[str] = Field(None, description="Status of the verification pair after processing")
+    outstanding_pair_ids: Optional[List[str]] = Field(None, description="List of currently outstanding pair IDs")
+    max_outstanding_pairs: Optional[int] = Field(None, description="Maximum number of outstanding pairs allowed")
 
 
 class SaveGraphResponse(BaseModel):
