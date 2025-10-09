@@ -321,6 +321,9 @@ class DataPrepManager:
 
     def record_response(self, pair_id: str, decision: str) -> Dict[str, Any]:
         """Record a user response for a specific verification pair."""
+        logger.info(
+            f"[MANAGER] record_response called: pair_id={pair_id!r} (type={type(pair_id).__name__}), decision={decision}"
+        )
 
         if self.stitcher is None:
             logger.error("No active stitcher session")
@@ -336,9 +339,15 @@ class DataPrepManager:
         with self._lock:
             self._cleanup_expired_pairs()
 
+            logger.info(
+                f"[MANAGER] Looking up pair_id={pair_id!r}. Current outstanding pairs: {self._pair_tracker.outstanding_pair_ids()}"
+            )
             pair = self._pair_tracker.get_pair(pair_id)
             if pair is None:
-                logger.warning("Attempt to record response for unknown pair %s", pair_id)
+                logger.warning(
+                    f"[MANAGER] Attempt to record response for unknown pair {pair_id!r}. "
+                    f"Outstanding pairs: {self._pair_tracker.outstanding_pair_ids()}"
+                )
                 return {
                     "success": False,
                     "message": f"Pair {pair_id} is not pending. Please request a new verification pair.",
@@ -407,6 +416,14 @@ class DataPrepManager:
                     "max_outstanding_pairs": self._pair_tracker.max_outstanding_pairs,
                 }
 
+            logger.info(
+                "About to complete pair %s (tenant %s). Outstanding before completion: %d, pairs: %s",
+                pair_id,
+                self.tenant_id,
+                self._pair_tracker.active_count,
+                self._pair_tracker.outstanding_pair_ids(),
+            )
+            
             completed_pair = self._pair_tracker.complete_pair(pair_id, "completed")
             if completed_pair is None:
                 logger.warning(
@@ -417,11 +434,12 @@ class DataPrepManager:
                 )
 
             logger.info(
-                "Recorded decision %s for pair %s (tenant %s). Outstanding pairs: %d",
+                "Recorded decision %s for pair %s (tenant %s). Outstanding pairs after: %d, pairs: %s",
                 decision,
                 pair_id,
                 self.tenant_id,
                 self._pair_tracker.active_count,
+                self._pair_tracker.outstanding_pair_ids(),
             )
             return {
                 "success": True,

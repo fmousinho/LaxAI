@@ -184,7 +184,12 @@ async def record_response(request: RecordResponseRequest, tenant_id: str) -> Rec
     """
     try:
         manager = get_manager(tenant_id)
+        logger.info(
+            f"[DATAPREP] Received record_response request: pair_id={request.pair_id!r} (type={type(request.pair_id).__name__}), "
+            f"decision={request.decision}, tenant_id={tenant_id}"
+        )
         result = manager.record_response(request.pair_id, request.decision)
+        logger.info(f"[DATAPREP] record_response result: {result}")
         return RecordResponseResponse(**result)
 
     except Exception as e:
