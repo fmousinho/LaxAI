@@ -51,9 +51,12 @@ def create_frame_id() -> str:
     return f"frame_{uuid.uuid4().hex[:8]}"
 
 
-def create_dataset_id() -> str:
+def create_dataset_id(video_name: Optional[str]) -> str:
     """Generate a unique dataset ID."""
-    return f"dataset_{uuid.uuid4().hex[:8]}"
+    if video_name:
+        return video_name
+    else:
+        return f"dataset_{uuid.uuid4().hex[:8]}"
 
 
 def create_run_id() -> str:
