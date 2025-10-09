@@ -341,20 +341,21 @@ class DataPrepManager:
             logger.error(f"Error saving graph: {e}")
             return False
 
-    def save_graph_image(self) -> bool:
+    def save_graph_image(self) -> tuple[bool, Optional[str]]:
         """
         Generate and save a visual representation of the track relationship graph to GCS.
 
         Returns:
-            True if the graph image was successfully saved, False otherwise
+            Tuple of (success: bool, image_url: Optional[str]) where image_url is the full GCS path
+            with gs:// prefix if successful, None otherwise
         """
         if self.stitcher is None:
             logger.error("No active stitcher session to visualize")
-            return False
+            return False, None
 
         if self.current_video_id is None:
             logger.error("No current video set")
-            return False
+            return False, None
 
         import tempfile
         import os
@@ -364,7 +365,7 @@ class DataPrepManager:
             image = self.stitcher.visualize_graph()
             if image is None:
                 logger.error("Failed to generate graph visualization")
-                return False
+                return False, None
 
             # Create a temporary file for the image
             with tempfile.NamedTemporaryFile(mode='w+b', suffix='.jpg', delete=False) as temp_file:
@@ -383,7 +384,7 @@ class DataPrepManager:
             if gcs_path is None:
                 logger.error("Failed to generate GCS path for graph image")
                 os.unlink(temp_filepath)
-                return False
+                return False, None
 
             # Upload the file to GCS
             upload_success = self.storage.upload_from_file(gcs_path, temp_filepath)
@@ -392,11 +393,13 @@ class DataPrepManager:
             os.unlink(temp_filepath)
 
             if upload_success:
-                logger.info(f"Successfully saved graph visualization to {gcs_path}")
-                return True
+                # Construct the full GCS URL with gs:// prefix
+                full_gcs_url = f"gs://{self.storage.bucket_name}/{gcs_path}"
+                logger.info(f"Successfully saved graph visualization to {full_gcs_url}")
+                return True, full_gcs_url
             else:
                 logger.error("Failed to upload graph image to GCS")
-                return False
+                return False, None
 
         except Exception as e:
             logger.error(f"Error saving graph image: {e}")

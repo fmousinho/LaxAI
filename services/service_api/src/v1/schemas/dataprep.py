@@ -80,6 +80,7 @@ class SaveGraphImageResponse(BaseModel):
 
     success: bool = Field(..., description="Whether the graph image was saved successfully")
     message: Optional[str] = Field(None, description="Optional message about the operation")
+    image_url: Optional[str] = Field(None, description="GCS URL of the saved graph image (gs://bucket/path)")
 
 
 class SuspendPrepResponse(BaseModel):

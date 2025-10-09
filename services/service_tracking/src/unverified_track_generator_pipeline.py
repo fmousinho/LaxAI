@@ -94,6 +94,7 @@ import numpy as np
 import asyncio
 import time
 import warnings
+import threading
 from typing import List, Dict, Any, Optional, Tuple, Union
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -493,16 +494,20 @@ class TrackGeneratorPipeline(Pipeline):
         self._crop_task_semaphore = None  # type: Optional[asyncio.Semaphore]
         self._active_crop_tasks: int = 0
 
+        # Async thumbnail generation task
+        self._thumbnail_thread: Optional[threading.Thread] = None
+
         # Define base pipeline steps (always included)
         step_definitions = [
             ("import_videos", {
                 "description": "Move MP4 videos from tenant's raw directory for processing",
                 "function": self._import_video
             }),
-            ("generate_thumbnail", {
-                "description": "Generate video thumbnail with 242x136 resolution",
-                "function": self._generate_video_thumbnail
-            }),
+            # Thumbnail generation now runs asynchronously alongside detections
+            # ("generate_thumbnail", {
+            #     "description": "Generate video thumbnail with 242x136 resolution",
+            #     "function": self._generate_video_thumbnail
+            # }),
             ("generate_detections", {
                 "description": "Run player detection and tracking model on whole video",
                 "function": self._get_detections_and_tracks
@@ -645,6 +650,19 @@ class TrackGeneratorPipeline(Pipeline):
             context = {"raw_video_path": video_path}
             results = super().run(context, resume_from_checkpoint=resume_from_checkpoint)
             context = results.get("context", {})
+
+            # Wait for background thumbnail generation to complete if it was started
+            if self._thumbnail_thread and self._thumbnail_thread.is_alive():
+                try:
+                    logger.info("Waiting for background thumbnail generation to complete...")
+                    self._thumbnail_thread.join(timeout=30.0)  # Wait up to 30 seconds
+                    if self._thumbnail_thread.is_alive():
+                        logger.warning("Thumbnail generation thread did not complete within timeout")
+                    else:
+                        logger.info("Background thumbnail generation completed")
+                except Exception as e:
+                    logger.error(f"Error waiting for thumbnail thread completion: {str(e)}")
+
             checkpoint_video_path = None
             if resume_from_checkpoint and context.get("resume_frame") is not None:
                 if context.get("video_blob_name"):
@@ -663,6 +681,19 @@ class TrackGeneratorPipeline(Pipeline):
             context = {}
             results = super().run(context, resume_from_checkpoint=True)
             context = results.get("context", {})
+
+            # Wait for background thumbnail generation to complete if it was started
+            if self._thumbnail_thread and self._thumbnail_thread.is_alive():
+                try:
+                    logger.info("Waiting for background thumbnail generation to complete...")
+                    self._thumbnail_thread.join(timeout=30.0)  # Wait up to 30 seconds
+                    if self._thumbnail_thread.is_alive():
+                        logger.warning("Thumbnail generation thread did not complete within timeout")
+                    else:
+                        logger.info("Background thumbnail generation completed")
+                except Exception as e:
+                    logger.error(f"Error waiting for thumbnail thread completion: {str(e)}")
+
             checkpoint_video_path = None
             if context.get("video_blob_name"):
                 checkpoint_video_path = context["video_blob_name"]
@@ -842,6 +873,26 @@ class TrackGeneratorPipeline(Pipeline):
                 raise RuntimeError(f"Failed to move video from {raw_video_path} to {imported_video_blob_name}")
        
             logger.info(f"Successfully imported to {imported_video_blob_name}")
+
+            # Update context with video information before starting thumbnail thread
+            thumbnail_context = context.copy()
+            thumbnail_context.update({
+                "video_guid": video_guid,
+                "video_folder": video_folder,
+                "video_blob_name": imported_video_blob_name
+            })
+
+            # Start thumbnail generation in a background thread (runs in parallel with detections)
+            try:
+                self._thumbnail_thread = threading.Thread(
+                    target=self._generate_video_thumbnail,
+                    args=(thumbnail_context,),
+                    daemon=True
+                )
+                self._thumbnail_thread.start()
+                logger.info("Started background thumbnail generation thread")
+            except Exception as e:
+                logger.warning(f"Could not start background thumbnail generation: {str(e)}")
 
             context.update({
                 "status": StepStatus.COMPLETED.value,

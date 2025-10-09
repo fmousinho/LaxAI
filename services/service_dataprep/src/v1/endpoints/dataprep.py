@@ -244,10 +244,14 @@ async def save_graph_image(tenant_id: str) -> SaveGraphImageResponse:
     """
     try:
         manager = get_manager(tenant_id)
-        success = manager.save_graph_image()
+        success, image_url = manager.save_graph_image()
 
         if success:
-            return SaveGraphImageResponse(success=True, message="Graph image saved successfully")
+            return SaveGraphImageResponse(
+                success=True, 
+                message="Graph image saved successfully",
+                image_url=image_url
+            )
         else:
             return SaveGraphImageResponse(success=False, message="Failed to save graph image")
 
