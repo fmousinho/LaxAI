@@ -59,7 +59,7 @@ def _ensure_test_video_assets(
     path_manager = manager.path_manager
     storage = manager.storage
 
-    project_root = Path(__file__).resolve().parents[5]
+    project_root = Path(__file__).resolve().parents[4]
     data_dir = project_root / "data"
     video_path = data_dir / "test_video.mp4"
     detections_path = data_dir / "detections.json"
@@ -577,6 +577,224 @@ class TestDataprepServiceLiveGCS:
             print("⚠️  Reached maximum iterations, workflow may not have completed")
 
         print("✅ Full workflow test completed!")
+
+    def test_dataprep_multiple_outstanding_pairs(self, dataprep_manager, test_tenant):
+        """
+        Test having multiple pairs outstanding and responding out of order.
+        """
+        print(f"Testing multiple outstanding pairs for tenant: {test_tenant}")
+
+        # Start prep
+        video_id = "test_video"
+        success = dataprep_manager.start_prep(video_id)
+        if not success:
+            pytest.skip("Cannot test multiple outstanding pairs without valid prep session")
+
+        # Mock the stitcher to return pairs for testing
+        original_get_pair = dataprep_manager.stitcher.get_pair_for_verification
+        
+        pair_counter = 0
+        def mock_get_pair_for_verification():
+            nonlocal pair_counter
+            # Use existing groups 1, 2, 3 but create pairs that don't conflict
+            # Since all tracks conflict temporally, we'll mock pairs that the stitcher would accept
+            pairs = [
+                {"status": "pending_verification", "mode": "normal", "group1_id": 1, "group2_id": 2},
+                {"status": "pending_verification", "mode": "normal", "group1_id": 1, "group2_id": 3},
+                {"status": "pending_verification", "mode": "normal", "group1_id": 2, "group2_id": 3},
+                {"status": "complete", "message": "All tracks have been assigned to players."}
+            ]
+            if pair_counter < len(pairs):
+                result = pairs[pair_counter]
+                pair_counter += 1
+                return result
+            return {"status": "complete", "message": "All tracks have been assigned to players."}
+        
+        dataprep_manager.stitcher.get_pair_for_verification = mock_get_pair_for_verification
+
+        # Also mock the respond_to_pair method to avoid validation issues
+        original_respond = dataprep_manager.stitcher.respond_to_pair
+        dataprep_manager.stitcher.respond_to_pair = lambda g1, g2, decision, mode=None: None
+
+        try:
+            # Issue 3 pairs
+            pairs = []
+            for i in range(3):
+                result = dataprep_manager.get_images_for_verification()
+                if result["status"] != "pending_verification":
+                    pytest.skip(f"Cannot issue pair {i+1}: {result.get('status')}")
+                pairs.append(result["pair_id"])
+
+            # Verify all 3 are outstanding
+            assert len(dataprep_manager._active_pairs) == 3, f"Expected 3 outstanding pairs, got {len(dataprep_manager._active_pairs)}"
+
+            # Respond to pairs out of order (middle, first, last)
+            responses = []
+            responses.append(dataprep_manager.record_response(pairs[1], "same"))  # Middle pair
+            responses.append(dataprep_manager.record_response(pairs[0], "different"))  # First pair
+            responses.append(dataprep_manager.record_response(pairs[2], "same"))  # Last pair
+
+            # Verify all responses were successful
+            for i, response in enumerate(responses):
+                assert response["success"], f"Response {i+1} failed: {response.get('message')}"
+
+            # Verify all pairs are completed
+            assert len(dataprep_manager._active_pairs) == 0, f"Expected 0 outstanding pairs after responses, got {len(dataprep_manager._active_pairs)}"
+
+            print("✅ Multiple outstanding pairs test completed!")
+        
+        finally:
+            # Restore original methods
+            dataprep_manager.stitcher.get_pair_for_verification = original_get_pair
+            dataprep_manager.stitcher.respond_to_pair = original_respond
+
+    def test_dataprep_capacity_exceeded(self, dataprep_manager, test_tenant):
+        """
+        Test behavior when max outstanding pairs limit is reached.
+        """
+        print(f"Testing capacity exceeded for tenant: {test_tenant}")
+
+        # Temporarily set low limit
+        original_limit = dataprep_manager._max_outstanding_pairs
+        dataprep_manager._max_outstanding_pairs = 2
+
+        try:
+            # Start prep
+            video_id = "test_video"
+            success = dataprep_manager.start_prep(video_id)
+            if not success:
+                pytest.skip("Cannot test capacity exceeded without valid prep session")
+
+            # Mock the stitcher to always return pairs
+            original_get_pair = dataprep_manager.stitcher.get_pair_for_verification
+            original_respond = dataprep_manager.stitcher.respond_to_pair
+            pair_counter = 0
+            def mock_get_pair_for_verification():
+                nonlocal pair_counter
+                pairs = [
+                    {"status": "pending_verification", "mode": "normal", "group1_id": 1, "group2_id": 2},
+                    {"status": "pending_verification", "mode": "normal", "group1_id": 1, "group2_id": 3},
+                ]
+                if pair_counter < len(pairs):
+                    result = pairs[pair_counter]
+                    pair_counter += 1
+                    return result
+                return {"status": "complete", "message": "All tracks have been assigned to players."}
+            
+            dataprep_manager.stitcher.get_pair_for_verification = mock_get_pair_for_verification
+            dataprep_manager.stitcher.respond_to_pair = lambda g1, g2, decision, mode=None: None
+
+            try:
+                # Issue pairs up to limit
+                issued_pairs = []
+                for i in range(2):
+                    result = dataprep_manager.get_images_for_verification()
+                    if result["status"] != "pending_verification":
+                        pytest.skip(f"Cannot issue pair {i+1}: {result.get('status')}")
+                    issued_pairs.append(result["pair_id"])
+
+                # Verify we have 2 outstanding pairs
+                assert len(dataprep_manager._active_pairs) == 2
+
+                # Next request should return capacity_exceeded
+                result = dataprep_manager.get_images_for_verification()
+                assert result["status"] == "capacity_exceeded", f"Expected capacity_exceeded, got {result['status']}"
+                assert "outstanding_pair_ids" in result
+                assert len(result["outstanding_pair_ids"]) == 2
+                assert result["max_outstanding_pairs"] == 2
+
+                # Respond to one pair to free up capacity
+                response = dataprep_manager.record_response(issued_pairs[0], "same")
+                assert response["success"]
+
+                # Now we should be able to get another pair
+                result = dataprep_manager.get_images_for_verification()
+                if result["status"] == "pending_verification":
+                    assert len(dataprep_manager._active_pairs) == 2  # Back to 2 after issuing new one
+
+                print("✅ Capacity exceeded test completed!")
+
+            finally:
+                # Restore original methods
+                dataprep_manager.stitcher.get_pair_for_verification = original_get_pair
+                dataprep_manager.stitcher.respond_to_pair = original_respond
+
+        finally:
+            # Restore original limit
+            dataprep_manager._max_outstanding_pairs = original_limit
+        """
+        Test that expired pairs are cleaned up and rejected.
+        """
+        print(f"Testing pair expiration for tenant: {test_tenant}")
+
+        # Set very short expiration
+        original_expiration = dataprep_manager._pair_expiration_seconds
+        dataprep_manager._pair_expiration_seconds = 1  # 1 second
+
+        try:
+            # Start prep
+            video_id = "test_video"
+            success = dataprep_manager.start_prep(video_id)
+            if not success:
+                pytest.skip("Cannot test pair expiration without valid prep session")
+
+            # Mock the stitcher to return a pair
+            original_get_pair = dataprep_manager.stitcher.get_pair_for_verification
+            dataprep_manager.stitcher.get_pair_for_verification = lambda: {"status": "pending_verification", "mode": "normal", "group1_id": 1, "group2_id": 2}
+
+            try:
+                # Get a pair
+                result = dataprep_manager.get_images_for_verification()
+                if result["status"] != "pending_verification":
+                    pytest.skip("Cannot get pair for expiration test")
+                pair_id = result["pair_id"]
+
+                # Verify pair is active
+                assert pair_id in dataprep_manager._active_pairs
+
+                # Wait for expiration
+                import time
+                time.sleep(2)
+
+                # Try to respond to expired pair
+                response = dataprep_manager.record_response(pair_id, "same")
+                assert not response["success"], "Should not accept response for expired pair"
+                # Note: The pair gets cleaned up by _cleanup_expired_pairs(), so it appears as "unknown"
+                assert response["pair_status"] == "unknown", f"Expected unknown status for cleaned up expired pair, got {response['pair_status']}"
+
+                # Cleanup should have removed the pair
+                assert pair_id not in dataprep_manager._active_pairs, "Expired pair should be cleaned up"
+
+                print("✅ Pair expiration test completed!")
+
+            finally:
+                # Restore original method
+                dataprep_manager.stitcher.get_pair_for_verification = original_get_pair
+
+        finally:
+            # Restore original expiration
+            dataprep_manager._pair_expiration_seconds = original_expiration
+
+    def test_dataprep_invalid_pair_response(self, dataprep_manager, test_tenant):
+        """
+        Test responding to non-existent pair IDs.
+        """
+        print(f"Testing invalid pair response for tenant: {test_tenant}")
+
+        # Start prep (even though we won't use it for verification)
+        video_id = "test_video"
+        success = dataprep_manager.start_prep(video_id)
+        if not success:
+            pytest.skip("Cannot test invalid pair response without session")
+
+        # Try to respond to fake pair
+        response = dataprep_manager.record_response("fake-pair-123", "same")
+        assert not response["success"], "Should reject fake pair ID"
+        assert response["pair_status"] == "unknown", f"Expected unknown status, got {response['pair_status']}"
+        assert "outstanding_pair_ids" in response
+        assert response["max_outstanding_pairs"] > 0
+
+        print("✅ Invalid pair response test completed!")
 
 import os
 import requests
