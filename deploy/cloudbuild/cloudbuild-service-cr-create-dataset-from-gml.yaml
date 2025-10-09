@@ -1,0 +1,51 @@
+############################################################################
+#                                                                          #
+#               BUILDER FOR SERVICE CR CREATE DATASET FROM GML            #
+#                                                                          #
+############################################################################
+
+# This Cloud Build file builds a Docker image, pushes it to Artifact
+# Registry, and deploys it to a Cloud Run service.
+
+substitutions:
+  _GOOGLE_CLOUD_PROJECT: "laxai-466119"
+  _SERVICE_ACCOUNT: "service-cr-create-dataset-from-gml@laxai-466119.iam.gserviceaccount.com"
+  _WORK_DIR: "services/service_cr_create_dataset_from_gml"
+
+steps:
+  - id: "build-and-tag-image"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-f"
+      - "${_WORK_DIR}/Dockerfile"
+      - "-t"
+      - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-cr-create-dataset-from-gml:latest"
+      - "--build-arg"
+      - "REQS=requirements.txt"
+      - "--build-arg"
+      - "GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT}"
+      - "."
+
+  - id: "push-latest-image"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-cr-create-dataset-from-gml:latest"
+
+  - id: "deploy-to-cloud-run"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "gcloud"
+    args:
+      - "run"
+      - "deploy"
+      - "laxai-service-cr-create-dataset-from-gml"
+      - "--image=us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-cr-create-dataset-from-gml:latest"
+      - "--region=us-central1"
+      - "--cpu=1"
+      - "--memory=1Gi"
+      - "--min-instances=0"
+      - "--cpu-throttling"
+      - "--service-account=${_SERVICE_ACCOUNT}"
+      - "--allow-unauthenticated"
+      - "--set-env-vars=GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT}"
