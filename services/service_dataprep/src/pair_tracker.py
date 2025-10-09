@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, List, Optional
 
 
@@ -71,7 +71,7 @@ class VerificationPairTracker:
         if not self._pairs:
             return []
 
-        now = reference_time or datetime.utcnow()
+        now = reference_time or datetime.now(timezone.utc)
         expired_ids: List[str] = []
         for pair_id, pair in list(self._pairs.items()):
             if pair.is_expired(now):
@@ -90,7 +90,7 @@ class VerificationPairTracker:
         ttl_seconds: Optional[int] = None,
     ) -> ActiveVerificationPair:
         """Register a newly issued pair and return its bookkeeping record."""
-        issued_time = issued_at or datetime.utcnow()
+        issued_time = issued_at or datetime.now(timezone.utc)
         ttl = ttl_seconds if ttl_seconds is not None else self._pair_ttl
         expires_at = issued_time + timedelta(seconds=ttl)
         pair_id = self.build_pair_id(group1_id, group2_id)
