@@ -249,7 +249,7 @@ async def save_graph_image(tenant_id: str) -> SaveGraphImageResponse:
                 image_url=image_url
             )
         else:
-            return SaveGraphImageResponse(success=False, message="Failed to save graph image")
+            return SaveGraphImageResponse(success=False, message="Failed to save graph image", image_url=None)
 
     except Exception as e:
         logger.error(f"Failed to save graph image for tenant {tenant_id}: {e}")

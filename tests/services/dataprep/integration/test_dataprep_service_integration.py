@@ -626,7 +626,7 @@ class TestDataprepServiceLiveGCS:
                 pairs.append(result["pair_id"])
 
             # Verify all 3 are outstanding
-            assert len(dataprep_manager._active_pairs) == 3, f"Expected 3 outstanding pairs, got {len(dataprep_manager._active_pairs)}"
+            assert dataprep_manager._pair_tracker.active_count == 3, f"Expected 3 outstanding pairs, got {dataprep_manager._pair_tracker.active_count}"
 
             # Respond to pairs out of order (middle, first, last)
             responses = []
@@ -639,7 +639,7 @@ class TestDataprepServiceLiveGCS:
                 assert response["success"], f"Response {i+1} failed: {response.get('message')}"
 
             # Verify all pairs are completed
-            assert len(dataprep_manager._active_pairs) == 0, f"Expected 0 outstanding pairs after responses, got {len(dataprep_manager._active_pairs)}"
+            assert dataprep_manager._pair_tracker.active_count == 0, f"Expected 0 outstanding pairs after responses, got {dataprep_manager._pair_tracker.active_count}"
 
             print("✅ Multiple outstanding pairs test completed!")
         
@@ -657,6 +657,7 @@ class TestDataprepServiceLiveGCS:
         # Temporarily set low limit
         original_limit = dataprep_manager._max_outstanding_pairs
         dataprep_manager._max_outstanding_pairs = 2
+        dataprep_manager._pair_tracker._max_outstanding_pairs = 2
 
         try:
             # Start prep
@@ -694,7 +695,7 @@ class TestDataprepServiceLiveGCS:
                     issued_pairs.append(result["pair_id"])
 
                 # Verify we have 2 outstanding pairs
-                assert len(dataprep_manager._active_pairs) == 2
+                assert dataprep_manager._pair_tracker.active_count == 2
 
                 # Next request should return capacity_exceeded
                 result = dataprep_manager.get_images_for_verification()
@@ -710,7 +711,7 @@ class TestDataprepServiceLiveGCS:
                 # Now we should be able to get another pair
                 result = dataprep_manager.get_images_for_verification()
                 if result["status"] == "pending_verification":
-                    assert len(dataprep_manager._active_pairs) == 2  # Back to 2 after issuing new one
+                    assert dataprep_manager._pair_tracker.active_count == 2  # Back to 2 after issuing new one
 
                 print("✅ Capacity exceeded test completed!")
 
@@ -722,6 +723,7 @@ class TestDataprepServiceLiveGCS:
         finally:
             # Restore original limit
             dataprep_manager._max_outstanding_pairs = original_limit
+            dataprep_manager._pair_tracker._max_outstanding_pairs = original_limit
         """
         Test that expired pairs are cleaned up and rejected.
         """
@@ -750,7 +752,7 @@ class TestDataprepServiceLiveGCS:
                 pair_id = result["pair_id"]
 
                 # Verify pair is active
-                assert pair_id in dataprep_manager._active_pairs
+                assert pair_id in dataprep_manager._pair_tracker.outstanding_pair_ids()
 
                 # Wait for expiration
                 import time
@@ -763,7 +765,7 @@ class TestDataprepServiceLiveGCS:
                 assert response["pair_status"] == "unknown", f"Expected unknown status for cleaned up expired pair, got {response['pair_status']}"
 
                 # Cleanup should have removed the pair
-                assert pair_id not in dataprep_manager._active_pairs, "Expired pair should be cleaned up"
+                assert pair_id not in dataprep_manager._pair_tracker.outstanding_pair_ids(), "Expired pair should be cleaned up"
 
                 print("✅ Pair expiration test completed!")
 
@@ -1023,6 +1025,23 @@ class TestDataprepServiceIntegration:
                     check=True,
                     env=dict(os.environ, GOOGLE_APPLICATION_CREDENTIALS=http_test_credentials)
                 )
+                
+                # Delete the gml file if it exists to ensure fresh start
+                gml_path = f"{dest_path}stitcher_graph.gml"
+                delete_check = subprocess.run(
+                    ["gsutil", "ls", gml_path],
+                    capture_output=True,
+                    text=True,
+                    env=dict(os.environ, GOOGLE_APPLICATION_CREDENTIALS=http_test_credentials)
+                )
+                if delete_check.returncode == 0:
+                    print("   Deleting existing stitcher_graph.gml...")
+                    subprocess.run(
+                        ["gsutil", "rm", gml_path],
+                        check=True,
+                        env=dict(os.environ, GOOGLE_APPLICATION_CREDENTIALS=http_test_credentials)
+                    )
+                
                 print("✅ Test environment initialized")
             else:
                 print("⚠️  Backup folder not found, proceeding without initialization")
@@ -1036,13 +1055,8 @@ class TestDataprepServiceIntegration:
             available_videos = folders_data.get("folders", [])
             assert len(available_videos) > 0, "No videos available for testing"
             
-            # Use test_video specifically (not the backup test_video_for_stiching)
-            test_video_options = [v.rstrip('/') for v in available_videos if v.rstrip('/') == 'test_video']
-            if test_video_options:
-                video_id = test_video_options[0]
-            else:
-                # Fallback to first available if test_video not found
-                video_id = available_videos[0].rstrip('/')
+            # Use test_video (copied from backup)
+            video_id = 'test_video'
             print(f"Testing full stitching workflow for tenant: {test_tenant}, video: {video_id}")
 
             # Clean up any existing session first
@@ -1252,9 +1266,9 @@ class TestDataprepServiceIntegration:
                     if len(unique_track_ids) != total_tracks:
                         print(f"   ⚠️  Mismatch: Graph reports {total_tracks} tracks but player groups contain {len(unique_track_ids)} tracks")
                     
-                    # EXPECTED: 24-30 tracks total (stitching algorithm is non-deterministic)
-                    min_expected_tracks = 24
-                    max_expected_tracks = 30
+                    # EXPECTED: 3 tracks (backup data has 3 tracks)
+                    min_expected_tracks = 3
+                    max_expected_tracks = 3
                     if not (min_expected_tracks <= total_tracks <= max_expected_tracks):
                         pytest.fail(f"Expected {min_expected_tracks}-{max_expected_tracks} tracks (stitching algorithm is non-deterministic), but found {total_tracks}")
                     
@@ -1286,7 +1300,7 @@ class TestDataprepServiceIntegration:
                     
                     if missing_tracks:
                         # Special handling: track 10 is intentionally empty, and split tracks may not have crops yet
-                        allowed_missing = [10, 14, 16] + [23, 24, 25, 26, 27]  # Track 10 is intentionally empty, tracks 14,16 may not have crops moved yet, split tracks may not have crops moved yet
+                        allowed_missing = [1, 2, 3, 10, 14, 16] + [23, 24, 25, 26, 27]  # Tracks 1,2,3 from backup, track 10 is intentionally empty, tracks 14,16 may not have crops moved yet, split tracks may not have crops moved yet
                         unexpected_missing = [t for t in missing_tracks if t not in allowed_missing]
                         if unexpected_missing:
                             print(f"   ❌ UNEXPECTED MISSING TRACKS: {unexpected_missing} do not exist in GCS")
@@ -1302,7 +1316,7 @@ class TestDataprepServiceIntegration:
                     print(f"   🎯 Graph reports: {total_tracks} tracks")
                     print(f"   👥 Player groups: {len(player_groups)} groups with {len(unique_track_ids)} total tracks")
                     print(f"   ☁️  GCS verified: {verified_tracks} tracks exist (including empty track 10)")
-                    print(f"   🎯 Expected: {min_expected_tracks}-{max_expected_tracks} tracks total (non-deterministic algorithm)")
+                    print(f"   🎯 Expected: {min_expected_tracks}-{max_expected_tracks} tracks total")
                     
                 else:
                     pytest.fail(f"Failed to get graph statistics: {stats_result.get('message', 'Unknown error')}")

@@ -17,7 +17,7 @@ except (ImportError, ModuleNotFoundError) as import_error:  # pragma: no cover -
 else:
     _google_import_error = None
 
-from ..schemas.training import TrainingRequest, TrainingResponse, TrainingStatus
+from ..schemas.training import TrainingRequest, TrainingResponse, TrainingStatus  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +122,7 @@ class TrainingStatusManager:
             
         try:
             # Query Firestore for all training runs, ordered by created_at descending
-            query = self._runs_collection.order_by("created_at", direction=firestore.Query.DESCENDING).limit(limit)
+            query = self._runs_collection.order_by("created_at", direction=firestore.Query.DESCENDING).limit(limit)  # type: ignore
             docs = query.stream()
 
             jobs = []
@@ -136,7 +136,7 @@ class TrainingStatusManager:
             logger.error(f"Error listing training jobs: {e}")
             return []
 
-    def list_training_jobs_by_tenant(self, tenant_id: str, status_filter: str = None, limit: int = 50) -> List[dict]:
+    def list_training_jobs_by_tenant(self, tenant_id: str, status_filter: Optional[str] = None, limit: int = 50) -> List[dict]:
         """List training jobs for a specific tenant, optionally filtered by status."""
         
         # Validate limit parameter
@@ -154,7 +154,7 @@ class TrainingStatusManager:
                 query = query.where("status", "==", status_filter)
             
             # Order by creation time (newest first) and limit results
-            query = query.order_by("created_at", direction=firestore.Query.DESCENDING).limit(limit)
+            query = query.order_by("created_at", direction=firestore.Query.DESCENDING).limit(limit)  # type: ignore
             docs = query.stream()
 
             jobs = []
@@ -236,7 +236,7 @@ async def list_training_jobs(limit: int = 50):
 @router.get("/tenant/{tenant_id}")
 async def list_training_jobs_by_tenant(
     tenant_id: str, 
-    status: str = None, 
+    status: Optional[str] = None, 
     limit: int = 50
 ):
     """List training jobs for a specific tenant, optionally filtered by status."""
@@ -279,6 +279,12 @@ async def get_training_job_status(task_id: str):
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid task_id format. Must be a valid UUID.")
 
+    if status_manager is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Training status dependencies are unavailable. Please install google-cloud-firestore and retry.",
+        )
+
     try:
         status_data = status_manager.get_training_job_status(task_id)
 
@@ -308,6 +314,12 @@ async def cancel_training_job(task_id: str):
         uuid.UUID(task_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid task_id format. Must be a valid UUID.")
+
+    if publisher is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Training service dependencies are unavailable. Please install google-cloud-pubsub and retry.",
+        )
 
     try:
         # Create cancel message

@@ -79,9 +79,9 @@ class TrackStitcher:
         logger.info("Initialization complete. Ready for verification.")
 
     @staticmethod
-    def _normalize_pair(group1_id: int, group2_id: int) -> Tuple[int, int]:
+    def _normalize_pair(group1_id: int, group2_id: int) -> tuple[int, int]:
         """Return a sorted tuple representing a group pair."""
-        return tuple(sorted((group1_id, group2_id)))
+        return (min(group1_id, group2_id), max(group1_id, group2_id))
 
     @property
     def verification_mode(self) -> str:

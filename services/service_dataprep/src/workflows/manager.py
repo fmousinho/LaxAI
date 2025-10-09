@@ -8,32 +8,16 @@ functionality for track stitching verification workflows.
 import logging
 import os
 import threading
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from shared_libs.common.google_storage import GCSPaths, get_storage
 from shared_libs.common.detection_utils import json_to_detections
-from ..stitcher import TrackStitcher
+from ..stitcher import TrackStitcher  # type: ignore
 from ..track_splitter import TrackSplitter
+from ..pair_tracker import VerificationPairTracker
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class ActiveVerificationPair:
-    """State for verification pairs that have been issued to clients."""
-
-    pair_id: str
-    group1_id: int
-    group2_id: int
-    mode: str
-    issued_at: datetime
-    expires_at: datetime
-
-    def as_tuple(self) -> tuple[int, int]:
-        """Return the normalized group tuple for internal tracking."""
-        return tuple(sorted((self.group1_id, self.group2_id)))
 
 
 class DataPrepManager:
@@ -58,10 +42,14 @@ class DataPrepManager:
         self.current_video_id: Optional[str] = None
 
         # Verification pair management
-        self._active_pairs: Dict[str, ActiveVerificationPair] = {}
         self._lock = threading.Lock()
         self._max_outstanding_pairs = int(os.getenv("DATAPREP_MAX_OUTSTANDING_PAIRS", "10"))
         self._pair_expiration_seconds = int(os.getenv("DATAPREP_PAIR_EXPIRATION_SECONDS", "600"))
+        self._pair_tracker = VerificationPairTracker(
+            max_outstanding_pairs=self._max_outstanding_pairs,
+            pair_ttl_seconds=self._pair_expiration_seconds,
+            release_callback=self._release_stitcher_pair,
+        )
 
     def get_process_folders(self) -> List[str]:
         """
@@ -212,36 +200,13 @@ class DataPrepManager:
     # Verification pair management helpers
     # ------------------------------------------------------------------
 
-    def _build_pair_id(self, group1_id: int, group2_id: int) -> str:
-        """Build a deterministic pair identifier for two group IDs."""
-        g1, g2 = sorted((group1_id, group2_id))
-        return f"{g1}-{g2}"
-
-    def _outstanding_pair_ids(self) -> List[str]:
-        """Return sorted list of outstanding pair IDs."""
-        return sorted(self._active_pairs.keys())
-
-    def _expire_pair(self, pair_id: str, reason: str) -> Optional[ActiveVerificationPair]:
-        """Expire a pair and release it from the stitcher."""
-        pair = self._active_pairs.pop(pair_id, None)
-        if pair and self.stitcher:
-            self.stitcher.release_in_progress_pair(pair.group1_id, pair.group2_id)
-        if pair:
-            logger.info(f"Verification pair {pair_id} {reason} for tenant {self.tenant_id}.")
-        return pair
+    def _release_stitcher_pair(self, group1_id: int, group2_id: int) -> None:
+        if self.stitcher is not None:
+            self.stitcher.release_in_progress_pair(group1_id, group2_id)
 
     def _cleanup_expired_pairs(self) -> List[str]:
         """Remove any outstanding pairs that have exceeded their TTL."""
-        if not self._active_pairs:
-            return []
-
-        now = datetime.utcnow()
-        expired_ids: List[str] = []
-        for pair_id, pair in list(self._active_pairs.items()):
-            if pair.expires_at <= now:
-                expired_ids.append(pair_id)
-                self._expire_pair(pair_id, "expired")
-
+        expired_ids = self._pair_tracker.cleanup_expired()
         if expired_ids:
             logger.info(
                 "Expired %d verification pairs for tenant %s: %s",
@@ -267,17 +232,17 @@ class DataPrepManager:
         with self._lock:
             self._cleanup_expired_pairs()
 
-            if len(self._active_pairs) >= self._max_outstanding_pairs:
+            if not self._pair_tracker.has_capacity():
                 logger.info(
                     "Outstanding verification pair limit reached (%d) for tenant %s",
-                    self._max_outstanding_pairs,
+                    self._pair_tracker.max_outstanding_pairs,
                     self.tenant_id,
                 )
                 return {
                     "status": "capacity_exceeded",
                     "message": "Too many verification pairs are pending. Please retry later.",
-                    "outstanding_pair_ids": self._outstanding_pair_ids(),
-                    "max_outstanding_pairs": self._max_outstanding_pairs,
+                    "outstanding_pair_ids": self._pair_tracker.outstanding_pair_ids(),
+                    "max_outstanding_pairs": self._pair_tracker.max_outstanding_pairs,
                 }
 
             try:
@@ -286,49 +251,43 @@ class DataPrepManager:
                 if result["status"] == "pending_verification":
                     group1_id = result["group1_id"]
                     group2_id = result["group2_id"]
-                    pair_id = self._build_pair_id(group1_id, group2_id)
                     mode = result.get("mode", self.stitcher.verification_mode)
+                    pair_entry = self._pair_tracker.register_pair(
+                        group1_id=group1_id,
+                        group2_id=group2_id,
+                        mode=mode,
+                        issued_at=datetime.utcnow(),
+                        ttl_seconds=self._pair_expiration_seconds,
+                    )
                     logger.info(
                         "Issuing verification pair %s (groups %d, %d) for tenant %s",
-                        pair_id,
+                        pair_entry.pair_id,
                         group1_id,
                         group2_id,
                         self.tenant_id,
                     )
-
-                    now = datetime.utcnow()
-                    expires_at = now + timedelta(seconds=self._pair_expiration_seconds)
 
                     # Capture track prefixes before mutation
                     group1_prefixes = self._get_group_track_prefixes(group1_id)
                     group2_prefixes = self._get_group_track_prefixes(group2_id)
                     progress_info = self.stitcher.get_verification_progress()
 
-                    pair_entry = ActiveVerificationPair(
-                        pair_id=pair_id,
-                        group1_id=group1_id,
-                        group2_id=group2_id,
-                        mode=mode,
-                        issued_at=now,
-                        expires_at=expires_at,
-                    )
-                    self._active_pairs[pair_id] = pair_entry
                     self.stitcher.mark_pair_in_progress(group1_id, group2_id)
 
                     response: Dict[str, Any] = {
                         "status": "pending_verification",
-                        "pair_id": pair_id,
+                        "pair_id": pair_entry.pair_id,
                         "group1_id": group1_id,
                         "group2_id": group2_id,
                         "mode": mode,
-                        "issued_at": now,
-                        "expires_at": expires_at,
+                        "issued_at": pair_entry.issued_at,
+                        "expires_at": pair_entry.expires_at,
                         "group1_prefixes": group1_prefixes,
                         "group2_prefixes": group2_prefixes,
                         "total_pairs": progress_info["total_possible_pairs"],
                         "verified_pairs": progress_info["verified_pairs"],
-                        "outstanding_pair_ids": self._outstanding_pair_ids(),
-                        "max_outstanding_pairs": self._max_outstanding_pairs,
+                        "outstanding_pair_ids": self._pair_tracker.outstanding_pair_ids(),
+                        "max_outstanding_pairs": self._pair_tracker.max_outstanding_pairs,
                     }
                     return response
 
@@ -337,8 +296,8 @@ class DataPrepManager:
                     if not self.save_graph():
                         logger.warning("Failed to save graph after completing verification")
 
-                result.setdefault("outstanding_pair_ids", self._outstanding_pair_ids())
-                result.setdefault("max_outstanding_pairs", self._max_outstanding_pairs)
+                result.setdefault("outstanding_pair_ids", self._pair_tracker.outstanding_pair_ids())
+                result.setdefault("max_outstanding_pairs", self._pair_tracker.max_outstanding_pairs)
                 return result
 
             except Exception as e:
@@ -355,14 +314,14 @@ class DataPrepManager:
                 "message": "No active stitcher session",
                 "pair_id": pair_id,
                 "pair_status": "error",
-                "outstanding_pair_ids": self._outstanding_pair_ids(),
-                "max_outstanding_pairs": self._max_outstanding_pairs,
+                "outstanding_pair_ids": self._pair_tracker.outstanding_pair_ids(),
+                "max_outstanding_pairs": self._pair_tracker.max_outstanding_pairs,
             }
 
         with self._lock:
             self._cleanup_expired_pairs()
 
-            pair = self._active_pairs.get(pair_id)
+            pair = self._pair_tracker.get_pair(pair_id)
             if pair is None:
                 logger.warning("Attempt to record response for unknown pair %s", pair_id)
                 return {
@@ -370,38 +329,61 @@ class DataPrepManager:
                     "message": f"Pair {pair_id} is not pending. Please request a new verification pair.",
                     "pair_id": pair_id,
                     "pair_status": "unknown",
-                    "outstanding_pair_ids": self._outstanding_pair_ids(),
-                    "max_outstanding_pairs": self._max_outstanding_pairs,
+                    "outstanding_pair_ids": self._pair_tracker.outstanding_pair_ids(),
+                    "max_outstanding_pairs": self._pair_tracker.max_outstanding_pairs,
                 }
 
             now = datetime.utcnow()
             if pair.expires_at <= now:
-                self._expire_pair(pair_id, "expired before response")
+                self._pair_tracker.expire_pair(pair_id, "expired before response")
+                logger.info(
+                    "Verification pair %s expired before response for tenant %s",
+                    pair_id,
+                    self.tenant_id,
+                )
                 return {
                     "success": False,
                     "message": f"Pair {pair_id} expired. Please request a new verification pair.",
                     "pair_id": pair_id,
                     "pair_status": "expired",
-                    "outstanding_pair_ids": self._outstanding_pair_ids(),
-                    "max_outstanding_pairs": self._max_outstanding_pairs,
+                    "outstanding_pair_ids": self._pair_tracker.outstanding_pair_ids(),
+                    "max_outstanding_pairs": self._pair_tracker.max_outstanding_pairs,
+                }
+
+            # Check if groups still exist (not merged away)
+            if pair.group1_id not in self.stitcher.player_groups or pair.group2_id not in self.stitcher.player_groups:
+                self._pair_tracker.expire_pair(pair_id, "invalidated due to merge")
+                logger.info(
+                    "Verification pair %s invalidated due to merge for tenant %s",
+                    pair_id,
+                    self.tenant_id,
+                )
+                return {
+                    "success": False,
+                    "message": f"Pair {pair_id} invalidated due to group merge. Please request a new verification pair.",
+                    "pair_id": pair_id,
+                    "pair_status": "invalidated",
+                    "outstanding_pair_ids": self._pair_tracker.outstanding_pair_ids(),
+                    "max_outstanding_pairs": self._pair_tracker.max_outstanding_pairs,
                 }
 
             try:
                 self.stitcher.respond_to_pair(pair.group1_id, pair.group2_id, decision, mode=pair.mode)
-                self._expire_pair(pair_id, "completed")
+                self._pair_tracker.complete_pair(pair_id, "completed")
                 logger.info(
-                    "Recorded decision %s for pair %s (tenant %s)",
+                    "Recorded decision %s for pair %s (tenant %s). Outstanding pairs: %d",
                     decision,
                     pair_id,
                     self.tenant_id,
+                    self._pair_tracker.active_count,
                 )
                 return {
                     "success": True,
                     "message": f"Recorded decision: {decision}",
                     "pair_id": pair_id,
                     "pair_status": "completed",
-                    "outstanding_pair_ids": self._outstanding_pair_ids(),
-                    "max_outstanding_pairs": self._max_outstanding_pairs,
+                    "outstanding_pair_ids": self._pair_tracker.outstanding_pair_ids(),
+                    "max_outstanding_pairs": self._pair_tracker.max_outstanding_pairs,
                 }
             except ValueError as exc:
                 logger.error("Invalid decision %s for pair %s: %s", decision, pair_id, exc)
@@ -410,8 +392,8 @@ class DataPrepManager:
                     "message": str(exc),
                     "pair_id": pair_id,
                     "pair_status": "error",
-                    "outstanding_pair_ids": self._outstanding_pair_ids(),
-                    "max_outstanding_pairs": self._max_outstanding_pairs,
+                    "outstanding_pair_ids": self._pair_tracker.outstanding_pair_ids(),
+                    "max_outstanding_pairs": self._pair_tracker.max_outstanding_pairs,
                 }
             except Exception as exc:
                 logger.error(f"Failed to record response '{decision}' for pair {pair_id}: {exc}")
@@ -420,8 +402,8 @@ class DataPrepManager:
                     "message": f"Failed to record response '{decision}': {exc}",
                     "pair_id": pair_id,
                     "pair_status": "error",
-                    "outstanding_pair_ids": self._outstanding_pair_ids(),
-                    "max_outstanding_pairs": self._max_outstanding_pairs,
+                    "outstanding_pair_ids": self._pair_tracker.outstanding_pair_ids(),
+                    "max_outstanding_pairs": self._pair_tracker.max_outstanding_pairs,
                 }
 
     def _get_group_track_prefixes(self, group_id: int) -> List[str]:
@@ -573,7 +555,7 @@ class DataPrepManager:
 
         except Exception as e:
             logger.error(f"Error saving graph image: {e}")
-            return False
+            return False, None
 
     def suspend_prep(self) -> bool:
         """
