@@ -149,12 +149,27 @@ class TrackStitcher:
             existing_graph: The saved graph to load
             expected_track_ids: Track IDs that should exist based on detections
         """
-        # Handle potential string node IDs from GraphML format
+        # Handle potential string node IDs from GraphML/GML format
+        # NetworkX may load node IDs as strings, but we need them as integers
         graph_nodes = list(existing_graph.nodes())
-        if graph_nodes and isinstance(graph_nodes[0], str):
-            # Convert string node IDs back to integers
-            mapping = {str(node_id): node_id for node_id in expected_track_ids}
-            existing_graph = nx.relabel_nodes(existing_graph, mapping)
+        string_nodes = [node for node in graph_nodes if isinstance(node, str)]
+        
+        if string_nodes:
+            # Convert all string node IDs that look like integers back to integers
+            mapping = {}
+            for node in string_nodes:
+                try:
+                    # Try to convert string to int
+                    int_node = int(node)
+                    mapping[node] = int_node
+                except ValueError:
+                    # If it's not a valid integer string, leave it as string
+                    # This shouldn't happen for track IDs, but handle it gracefully
+                    logger.warning(f"Found non-integer string node ID in graph: {node!r}")
+            
+            if mapping:
+                existing_graph = nx.relabel_nodes(existing_graph, mapping)
+                logger.info(f"Converted {len(mapping)} string node IDs back to integers")
         
         # Convert string relationship values back to EdgeType enums
         for u, v, data in existing_graph.edges(data=True):
