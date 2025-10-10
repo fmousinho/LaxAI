@@ -7,7 +7,9 @@ functionality for track stitching verification workflows.
 
 import logging
 import os
+import signal
 import threading
+import weakref
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -28,6 +30,10 @@ class DataPrepManager:
     get images for verification, record user responses, and suspend/resume sessions.
     """
 
+    _signal_handler_installed = False
+    _instances = weakref.WeakSet()
+    _original_signal_handlers: Dict[int, Any] = {}
+
     def __init__(self, tenant_id: str):
         """
         Initialize the DataPrep manager for a specific tenant.
@@ -42,7 +48,7 @@ class DataPrepManager:
         self.current_video_id: Optional[str] = None
 
         # Verification pair management
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._max_outstanding_pairs = int(os.getenv("DATAPREP_MAX_OUTSTANDING_PAIRS", "10"))
         self._pair_expiration_seconds = int(os.getenv("DATAPREP_PAIR_EXPIRATION_SECONDS", "600"))
         self._pair_tracker = VerificationPairTracker(
@@ -50,6 +56,134 @@ class DataPrepManager:
             pair_ttl_seconds=self._pair_expiration_seconds,
             release_callback=self._release_stitcher_pair,
         )
+
+        # Autosave configuration
+        self._autosave_interval_seconds = int(os.getenv("DATAPREP_AUTOSAVE_INTERVAL_SECONDS", "600"))
+        self._autosave_thread: Optional[threading.Thread] = None
+        self._autosave_stop_event: Optional[threading.Event] = None
+        self._shutdown_in_progress = False
+
+        # Track active instances for signal handling
+        DataPrepManager._instances.add(self)
+        self._ensure_signal_handlers_registered()
+
+    @classmethod
+    def _ensure_signal_handlers_registered(cls) -> None:
+        if cls._signal_handler_installed:
+            return
+
+        def _handle_signal(signum: int, frame) -> None:  # type: ignore[override]
+            logger.info("Received shutdown signal %s; scheduling dataprep graph persistence", signum)
+            for manager in list(cls._instances):
+                try:
+                    manager._schedule_shutdown_save(signum)
+                except Exception:
+                    logger.exception("Failed to schedule shutdown save for tenant %s", getattr(manager, "tenant_id", "unknown"))
+
+            previous = cls._original_signal_handlers.get(signum)
+            if callable(previous) and previous is not _handle_signal:
+                try:
+                    previous(signum, frame)
+                except Exception:
+                    logger.exception("Error while delegating signal %s to original handler", signum)
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                cls._original_signal_handlers[sig] = signal.getsignal(sig)
+                signal.signal(sig, _handle_signal)
+            except (ValueError, OSError) as exc:
+                logger.warning("Unable to register dataprep shutdown handler for signal %s: %s", sig, exc)
+
+        cls._signal_handler_installed = True
+
+    def _schedule_shutdown_save(self, signum: int) -> None:
+        if self._shutdown_in_progress:
+            return
+
+        if self.stitcher is None or self.current_video_id is None:
+            return
+
+        self._shutdown_in_progress = True
+
+        def _shutdown_worker() -> None:
+            try:
+                logger.info(
+                    "Shutdown signal %s received; attempting to persist dataprep state for tenant %s",
+                    signum,
+                    self.tenant_id,
+                )
+                self._stop_autosave_loop()
+                with self._lock:
+                    if self.stitcher is None or self.current_video_id is None:
+                        logger.info("No active session during shutdown for tenant %s", self.tenant_id)
+                        return
+                    success = self._save_graph_internal(reason="shutdown")
+                    if success:
+                        logger.info("Successfully saved dataprep graph during shutdown for tenant %s", self.tenant_id)
+                    else:
+                        logger.warning("Failed to save dataprep graph during shutdown for tenant %s", self.tenant_id)
+            except Exception:
+                logger.exception("Unexpected error while saving dataprep graph during shutdown for tenant %s", self.tenant_id)
+            finally:
+                self._shutdown_in_progress = False
+
+        threading.Thread(
+            target=_shutdown_worker,
+            name=f"dataprep-shutdown-save-{self.tenant_id}",
+            daemon=True,
+        ).start()
+
+    def _start_autosave_loop(self) -> None:
+        if self._autosave_interval_seconds <= 0:
+            logger.info("Autosave interval disabled (<=0); skipping background saves for tenant %s", self.tenant_id)
+            return
+
+        if self._autosave_thread and self._autosave_thread.is_alive():
+            return
+
+        self._autosave_stop_event = threading.Event()
+
+        def _autosave_loop(stop_event: threading.Event) -> None:
+            logger.info(
+                "Autosave loop started for tenant %s with interval %ss",
+                self.tenant_id,
+                self._autosave_interval_seconds,
+            )
+            try:
+                while not stop_event.wait(self._autosave_interval_seconds):
+                    if self.stitcher is None or self.current_video_id is None:
+                        continue
+                    try:
+                        with self._lock:
+                            if self.stitcher is None or self.current_video_id is None:
+                                continue
+                            success = self._save_graph_internal(reason="autosave")
+                            if success:
+                                logger.info("Autosave completed for tenant %s", self.tenant_id)
+                            else:
+                                logger.warning("Autosave failed for tenant %s", self.tenant_id)
+                    except Exception:
+                        logger.exception("Autosave encountered an error for tenant %s", self.tenant_id)
+            finally:
+                logger.info("Autosave loop exiting for tenant %s", self.tenant_id)
+
+        self._autosave_thread = threading.Thread(
+            target=_autosave_loop,
+            args=(self._autosave_stop_event,),
+            name=f"dataprep-autosave-{self.tenant_id}",
+            daemon=True,
+        )
+        self._autosave_thread.start()
+
+    def _stop_autosave_loop(self) -> None:
+        if self._autosave_stop_event is not None:
+            self._autosave_stop_event.set()
+
+        if self._autosave_thread and self._autosave_thread.is_alive():
+            self._autosave_thread.join(timeout=5)
+
+        self._autosave_thread = None
+        self._autosave_stop_event = None
 
     def get_process_folders(self) -> List[str]:
         """
@@ -188,9 +322,15 @@ class DataPrepManager:
             # Clear any outstanding verification bookkeeping from a previous session
             self._pair_tracker.reset()
 
+            # Ensure any previous autosave loop is stopped before creating a new stitcher
+            self._stop_autosave_loop()
+
             # Create the stitcher
             self.stitcher = TrackStitcher(detections=detections, existing_graph=existing_graph, storage=self.storage, video_id=video_id, path_manager=self.path_manager)
             self.current_video_id = video_id
+
+            # Begin periodic autosaves for the active session
+            self._start_autosave_loop()
 
             logger.info(f"Started prep session for video: {video_id}")
             return True
@@ -486,12 +626,16 @@ class DataPrepManager:
         Returns:
             True if the graph was successfully saved, False otherwise
         """
+        with self._lock:
+            return self._save_graph_internal(reason="manual")
+
+    def _save_graph_internal(self, reason: str) -> bool:
         if self.stitcher is None:
-            logger.error("No active stitcher session to save")
+            logger.debug("Skipping %s save attempt: no active stitcher session", reason)
             return False
 
         if self.current_video_id is None:
-            logger.error("No current video set")
+            logger.debug("Skipping %s save attempt: no current video set", reason)
             return False
 
         import tempfile
@@ -505,7 +649,7 @@ class DataPrepManager:
             # Save the graph to the temporary file
             success = self.stitcher.save_graph(temp_filepath, format="gml")
             if not success:
-                logger.error("Failed to save graph to temporary file")
+                logger.error("Failed to persist graph to temporary file during %s save", reason)
                 os.unlink(temp_filepath)
                 return False
 
@@ -516,7 +660,7 @@ class DataPrepManager:
             )
 
             if gcs_path is None:
-                logger.error("Failed to generate GCS path for saved graph")
+                logger.error("Failed to generate GCS path for saved graph during %s save", reason)
                 os.unlink(temp_filepath)
                 return False
 
@@ -527,14 +671,14 @@ class DataPrepManager:
             os.unlink(temp_filepath)
 
             if upload_success:
-                logger.info(f"Successfully saved graph to {gcs_path}")
+                logger.info("Successfully saved graph to %s via %s save", gcs_path, reason)
                 return True
             else:
-                logger.error("Failed to upload graph to GCS")
+                logger.error("Failed to upload graph to GCS during %s save", reason)
                 return False
 
         except Exception as e:
-            logger.error(f"Error saving graph: {e}")
+            logger.error("Error saving graph during %s save: %s", reason, e)
             return False
 
     def save_graph_image(self) -> tuple[bool, Optional[str]]:
@@ -610,6 +754,7 @@ class DataPrepManager:
         """
         success = self.save_graph()
         if success:
+            self._stop_autosave_loop()
             # Clear the session state to allow starting a new session
             self.stitcher = None
             self.current_video_id = None
