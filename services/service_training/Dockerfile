@@ -35,11 +35,15 @@ COPY shared_libs/requirements.txt /app/shared_libs/requirements.txt
 # Copy service-specific requirements
 COPY services/service_training/requirements.txt /app/services/service_training/requirements.txt
 
-# Install shared libraries dependencies first
-RUN pip install --no-cache-dir -r shared_libs/requirements.txt
+# Install shared libraries dependencies first (with retry logic)
+RUN pip install --no-cache-dir --timeout=300 --retries=10 -r shared_libs/requirements.txt || \
+    (echo "First attempt failed, retrying..." && sleep 5 && pip install --no-cache-dir --timeout=300 --retries=10 -r shared_libs/requirements.txt) || \
+    (echo "Second attempt failed, final retry..." && sleep 10 && pip install --no-cache-dir --timeout=300 --retries=10 -r shared_libs/requirements.txt)
 
-# Install service-specific dependencies
-RUN pip install --no-cache-dir -r services/service_training/requirements.txt
+# Install service-specific dependencies (with retry logic)
+RUN pip install --no-cache-dir --timeout=300 --retries=10 -r services/service_training/requirements.txt || \
+    (echo "First attempt failed, retrying..." && sleep 5 && pip install --no-cache-dir --timeout=300 --retries=10 -r services/service_training/requirements.txt) || \
+    (echo "Second attempt failed, final retry..." && sleep 10 && pip install --no-cache-dir --timeout=300 --retries=10 -r services/service_training/requirements.txt)
 
 # Stage 3: Application code
 FROM dependencies AS application
