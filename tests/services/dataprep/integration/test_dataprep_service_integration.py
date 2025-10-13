@@ -51,7 +51,7 @@ def _ensure_tracking_run_folder(dataprep_manager: "DataPrepManager") -> str | No
 def _ensure_test_video_assets(
     test_tenant: str,
     video_id: str = "test_video",
-    manager: "DataPrepManager" | None = None,
+    manager: "DataPrepManager | None" = None,
 ) -> bool:
     """Upload minimum assets required for dataprep start to the test tenant bucket."""
 

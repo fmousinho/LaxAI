@@ -44,7 +44,7 @@ def manager(monkeypatch):
     )
 
     mgr = DataPrepManager("tenant")
-    mgr.stitcher = object()
+    mgr.stitcher = None
     mgr.current_video_id = "video"
 
     try:

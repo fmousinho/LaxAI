@@ -966,7 +966,7 @@ class DataPrepPipeline(Pipeline):
                 players = list(players)  
                 random.shuffle(players)  
 
-                dataset_guid = create_dataset_id()
+                dataset_guid = create_dataset_id(video_guid)
                 n_train_players = int(len(players) * self.train_ratio)
                 train_players = players[:n_train_players]
                 val_players = players[n_train_players:]
