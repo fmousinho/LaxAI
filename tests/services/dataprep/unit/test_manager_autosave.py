@@ -68,11 +68,12 @@ def test_autosave_loop_triggers_periodic_saves(manager, monkeypatch):
 
     manager._start_autosave_loop()
     try:
-        assert save_event.wait(1.0), "autosave loop did not invoke save within expected time"
+        # Wait a bit longer than the interval to ensure the save happens
+        time.sleep(0.2)
+        assert reasons, "autosave loop did not invoke save"
+        assert any(reason == "autosave" for reason in reasons)
     finally:
         manager._stop_autosave_loop()
-
-    assert any(reason == "autosave" for reason in reasons)
 
 
 def test_stop_autosave_loop_cleans_up_thread(manager, monkeypatch):
@@ -90,13 +91,13 @@ def test_stop_autosave_loop_cleans_up_thread(manager, monkeypatch):
     monkeypatch.setattr(manager, "_save_graph_internal", fake_save)
 
     manager._start_autosave_loop()
-    assert first_call.wait(1.0), "autosave loop never invoked save"
+    try:
+        # Wait for at least one save call
+        time.sleep(0.2)
+        assert call_count >= 1, "autosave loop never invoked save"
+    finally:
+        manager._stop_autosave_loop()
 
-    manager._stop_autosave_loop()
-
-    time.sleep(0.2)
-
-    assert call_count >= 1
     assert manager._autosave_thread is None
     assert manager._autosave_stop_event is None
 

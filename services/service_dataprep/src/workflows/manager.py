@@ -436,6 +436,7 @@ class DataPrepManager:
                             "group2_prefixes": group2_prefixes,
                             "total_pairs": progress_info["total_possible_pairs"],
                             "verified_pairs": progress_info["verified_pairs"],
+                            "remaining_pairs": progress_info["remaining_pairs"],
                             "outstanding_pair_ids": self._pair_tracker.outstanding_pair_ids(),
                             "max_outstanding_pairs": self._pair_tracker.max_outstanding_pairs,
                         }

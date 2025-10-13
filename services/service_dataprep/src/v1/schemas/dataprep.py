@@ -51,6 +51,7 @@ class VerificationImagesResponse(BaseModel):
     group2_prefixes: Optional[List[str]] = Field(None, description="GCS prefixes for group2 tracks")
     total_pairs: Optional[int] = Field(None, description="Total number of possible pairs")
     verified_pairs: Optional[int] = Field(None, description="Number of pairs already verified")
+    remaining_pairs: Optional[int] = Field(None, description="Number of pairs that still need classification")
     outstanding_pair_ids: Optional[List[str]] = Field(None, description="List of currently outstanding pair IDs")
     max_outstanding_pairs: Optional[int] = Field(None, description="Maximum number of outstanding pairs allowed")
 
