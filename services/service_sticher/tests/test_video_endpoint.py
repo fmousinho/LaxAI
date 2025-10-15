@@ -86,3 +86,50 @@ def test_session_cleanup_mechanism():
         assert len(video_managers) == 1
         assert "expired-session" not in video_managers
         assert "recent-session" in video_managers
+
+
+def test_stop_and_save_endpoint_success():
+    """Test successful deletion of a video session."""
+    from services.service_sticher.src.v1.endpoints.video_endpoint import stop_and_save, video_managers
+    import time
+    
+    # Clear any existing sessions
+    video_managers.clear()
+    
+    # Mock VideoManager
+    with patch('services.service_sticher.src.v1.endpoints.video_endpoint.VideoManager') as mock_manager_class:
+        mock_manager = MagicMock()
+        mock_manager_class.return_value = mock_manager
+        
+        # Set up a session in video_managers
+        session_id = "test-session-123"
+        video_managers[session_id] = (mock_manager, time.time())
+        
+        # Verify session exists
+        assert session_id in video_managers
+        
+        # Call stop_and_save
+        result = stop_and_save(session_id)
+        
+        # Verify session was removed
+        assert session_id not in video_managers
+        assert len(video_managers) == 0
+        
+        # Verify function returns None
+        assert result is None
+
+
+def test_stop_and_save_endpoint_session_not_found():
+    """Test deletion of a non-existent video session returns 404."""
+    from services.service_sticher.src.v1.endpoints.video_endpoint import stop_and_save, video_managers
+    
+    # Clear any existing sessions
+    video_managers.clear()
+    
+    # Try to delete a non-existent session
+    with pytest.raises(HTTPException) as exc_info:
+        stop_and_save("non-existent-session")
+    
+    # Should get a 404 error
+    assert exc_info.value.status_code == 404
+    assert "Session not found" in str(exc_info.value.detail)

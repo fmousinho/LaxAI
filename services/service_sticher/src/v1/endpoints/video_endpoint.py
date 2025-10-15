@@ -150,6 +150,9 @@ def stop_and_save (session_id: str):
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
         del video_managers[session_id]
+    except HTTPException:
+        # Re-raise HTTPExceptions as-is (don't wrap them in 500 errors)
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     return
