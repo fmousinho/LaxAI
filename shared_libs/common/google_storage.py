@@ -33,7 +33,6 @@ from google.cloud.exceptions import Forbidden, NotFound
 from google.cloud.storage import Blob
 from google.oauth2 import service_account
 
-from shared_libs.common.detection_format import Detections
 from shared_libs.config.all_config import google_storage_config
 
 logger = logging.getLogger(__name__)

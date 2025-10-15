@@ -6,6 +6,17 @@ import typing
 
 import shared_libs.config.logging_config 
 from shared_libs.common.google_storage import get_storage
+from shared_libs.common.google_storage import GCSPaths as path_manager
+
+try:
+    from shared_libs.common.detection import DetectionModel as detector
+except ImportError:
+    raise ImportError("DetectionModel could not be imported. Ensure the module is available.")
+
+try:
+    from shared_libs.common.tracker import AffineAwareByteTrack as tracker
+except ImportError:
+    raise ImportError("AffineAwareByteTrack could not be imported. Ensure the module is available.")
 
 FRAME_SKIP_INTERVAL = 30  # Default frame skip interval
 
