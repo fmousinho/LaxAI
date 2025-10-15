@@ -41,7 +41,7 @@ class VideoFrameResponse(BaseModel):
     """Response model for frame operations."""
 
     frame_id: int = Field(..., description="The current frame index")
-    frame_data: Any = Field(..., description="Frame image data (base64 encoded or binary)")
+    frame_data: Any = Field(..., description="Frame image data (numpy array format)")
     has_next_frame: bool = Field(..., description="Whether there are more frames to read")
     has_previous_frame: bool = Field(..., description="Whether there are previous frames")
 
@@ -49,7 +49,7 @@ class VideoFrameResponse(BaseModel):
         schema_extra = {
             "example": {
                 "frame_id": 30,
-                "frame_data": "base64_encoded_frame_data",
+                "frame_data": "numpy array",
                 "has_next_frame": True,
                 "has_previous_frame": True,
             }

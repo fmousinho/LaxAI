@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import MagicMock, patch
 from fastapi.exceptions import HTTPException
 from services.service_sticher.src.v1.endpoints.video_endpoint import load
 from services.service_sticher.src.v1.schemas.video_schema import VideoLoadRequest, VideoLoadResponse

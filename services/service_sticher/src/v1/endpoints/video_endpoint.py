@@ -58,18 +58,29 @@ def next_frame(session_id: str) -> VideoFrameResponse:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-
-def previous_frame (session_id: str):
+@router.get(
+    "/previous-frame/{session_id}",
+    response_model=VideoFrameResponse,
+    summary="Rewinds to the previous frame",
+    description="Rewind to the previous frame in the loaded video session.",
+)
+def previous_frame (session_id: str) -> VideoFrameResponse:
     """Go back to the previous frame in the video."""
-    # Placeholder implementation
-    response = {
-        "success": True,
-        "frame_id": 0,
-        "frame_data": "base64_encoded_frame_data",
-        "has_next_frame": True,
-        "has_previous_frame": False,
-    }
-    return response
+    try:
+        manager = video_managers.get(session_id)
+        if not manager:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        result = manager.previous_frame()
+        return VideoFrameResponse(
+            frame_id=result["frame_id"],
+            frame_data=result["frame_data"],
+            has_next_frame=result["has_next_frame"],
+            has_previous_frame=result["has_previous_frame"],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 def stop_and_save (session_id: str, save_path: str):
     """Stop the session and save the processed video."""
