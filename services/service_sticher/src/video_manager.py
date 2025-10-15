@@ -10,7 +10,7 @@ import numpy as np
 from supervision import Detections
 
 import shared_libs.config.logging_config 
-from shared_libs.common.player_manager import Player, PlayerManager
+from shared_libs.common.player_manager import initialize_player_manager, load_player_manager
 from shared_libs.common.google_storage import get_storage, GCSPaths
 from shared_libs.common.detection_utils import json_to_detections, detections_to_json
 
@@ -67,12 +67,12 @@ class VideoManager:
         if not self.storage or not self.session_id: 
             raise ValueError("Failed to initialize storage backend.")
         self.cap = None
-        self.current_frame_id_id = None
+        self.current_frame_id = None
         self.total_frames = 0
         self.frame_skip_interval = frame_skip_interval
         self.video_id = None
         self.detections: Detections = Detections.empty()
-        self.playerManager = None
+        self.player_manager = None
 
     def __del__(self):
         """Cleanup method to properly close video capture when VideoManager is destroyed."""
@@ -106,18 +106,19 @@ class VideoManager:
             ValueError: If video file is not found or cannot be loaded
         """
         try:
-            self.video_id = video_path.split("/")[-1]
-            
+            self.video_id = os.path.basename(video_path).split(".")[0]
+
             # Run detections loading and video capture setup in parallel
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
                 # Submit both tasks
                 detections_future = executor.submit(self._load_detections, self.video_id)
                 capture_future = executor.submit(self._setup_video_capture, video_path)
+                players_future = executor.submit(self._load_players_if_json_exists, self.video_id)
                 
                 # Wait for both to complete
                 detections_result = detections_future.result()
                 capture_result = capture_future.result()
-            
+                players_result = players_future.result()
             # Check if detections loading succeeded
             if not detections_result:
                 # Clean up video capture if detections failed
@@ -165,34 +166,35 @@ class VideoManager:
             raise ValueError("No video loaded for this session.")
         
         # Finds the next frame position and sets the cap
-        if self.current_frame_id_id is None:
-            self.current_frame_id_id = 0
+        if self.current_frame_id is None:
+            self.current_frame_id = 0
             self.player_manager = initialize_player_manager(self.video_id, )
         else:
-            self.current_frame_id_id += self.frame_skip_interval
-            if self.current_frame_id_id >= self.total_frames:
+            self.current_frame_id += self.frame_skip_interval
+            if self.current_frame_id >= self.total_frames:
                 raise ValueError("End of video reached")
-            if not self.cap.set("CAP_PROP_POS_FRAMES", self.current_frame_id_id):
-                raise ValueError(f"Failed to set frame position to {self.current_frame_id_id}")
+            if not self.cap.set("CAP_PROP_POS_FRAMES", self.current_frame_id):
+                raise ValueError(f"Failed to set frame position to {self.current_frame_id}")
 
         # Read the frame
         success, frame_data = self.cap.read(return_format="rgb")
         if not success or frame_data is None:
-            raise ValueError(f"Failed to read frame at position {self.current_frame_id_id}")
-        mask = self.detections.data["frame_index"] == self.current_frame_id_id
+            raise ValueError(f"Failed to read frame at position {self.current_frame_id}")
+        mask = self.detections.data["frame_index"] == self.current_frame_id
         frame_detections = self.detections[mask]
-        frame_detections = playerManager.add_player_info(frame_detections)
-        
-        frame_with_detections, players_positions = add_players(frame_data, frame_detections, self.current_frame_id_id)
+
+        if not self.player_manager:
+            self.player_manager = initialize_player_manager(self.video_id, self.current_frame_id, frame_detections)
+    
 
         # Check if there are more frames available
-        has_next_frame = (self.current_frame_id_id + self.frame_skip_interval) < self.total_frames
-        
+        has_next_frame = (self.current_frame_id + self.frame_skip_interval) < self.total_frames
+
         result = {
-            "frame_id": self.current_frame_id_id,
+            "frame_id": self.current_frame_id,
             "frame_data": frame_data,
             "has_next_frame": has_next_frame,
-            "has_previous_frame": self.current_frame_id_id > 0,
+            "has_previous_frame": self.current_frame_id > 0,
         }
 
         return result
@@ -214,14 +216,14 @@ class VideoManager:
             raise ValueError("No video loaded for this session.")
         
         # Finds the previous frame position and sets the cap
-        if self.current_frame_id_id is None:
-            self.current_frame_id_id = 0
+        if self.current_frame_id is None:
+            self.current_frame_id = 0
         else:
-            self.current_frame_id_id -= self.frame_skip_interval
-            if self.current_frame_id_id < 0:
-                self.current_frame_id_id = 0
-            if not self.cap.set("CAP_PROP_POS_FRAMES", self.current_frame_id_id):
-                raise ValueError(f"Failed to set frame position to {self.current_frame_id_id}")
+            self.current_frame_id -= self.frame_skip_interval
+            if self.current_frame_id < 0:
+                self.current_frame_id = 0
+            if not self.cap.set("CAP_PROP_POS_FRAMES", self.current_frame_id):
+                raise ValueError(f"Failed to set frame position to {self.current_frame_id}")
 
         # Read the frame
         success, frame_data = self.cap.read(return_format="rgb")
@@ -296,6 +298,30 @@ class VideoManager:
             return session_id
 
 
+    def _load_players_if_json_exists(self, video_id: str) -> None:
+        """Retrieve the PlayerManager for the video if players JSON exists."""
+        players_path = self.path_manager.get_path("players_data_path", video_id=video_id)
+        if not players_path:
+            raise ValueError(f"Can't find players data path for video_id: {video_id}")
+
+        players_json_str = self.storage.download_as_string(players_path)
+        if not players_json_str:
+            logger.info(f"No players data found for video: {video_id}")
+            return 
+
+        try:
+            players_json = json.loads(players_json_str)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse players JSON, creating new manager for: {video_id}: {e}")
+            return
+        
+        try:
+            self.player_manager = load_player_manager(players_json)
+        except Exception as e:
+            logger.error(f"Failed to load player manager for video: {video_id}: {e}")
+            return
+
+
     def _load_detections(self, video_path: str) -> bool:
         """Load detections from Google Cloud Storage.
 
@@ -306,14 +332,11 @@ class VideoManager:
             bool: True if detections were loaded successfully, False otherwise.
         """
         try:
-            # Extract video ID from path (filename without extension)
-            self.video_id = os.path.basename(video_path).split(".")[0]
 
             # Get the path to the detections file
             detections_path = self.path_manager.get_path("detections_path", video_id=self.video_id)
             if not detections_path:
-                logger.warning(f"No detections path found for video_id: {self.video_id}")
-                return False
+                raise ValueError(f"No detections path found for video_id: {self.video_id}")
 
             # Download detections JSON from GCS
             detections_json_str = self.storage.download_as_string(detections_path)
@@ -325,8 +348,7 @@ class VideoManager:
             try:
                 detections_json = json.loads(detections_json_str)
             except json.JSONDecodeError as e:
-                logger.error(f"Invalid JSON format in detections file for video_id: {self.video_id}: {e}")
-                return False
+                raise ValueError(f"Invalid JSON format in detections file for video_id: {self.video_id}: {e}")
 
             # Validate that we have a list of detection data or a single detection dict
             if isinstance(detections_json, dict):

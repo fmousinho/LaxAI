@@ -6,6 +6,8 @@ from typing import Dict, List, Optional
 
 import shared_libs.config.logging_config
 
+from supervision import Detections
+
 logger = logging.getLogger(__name__)
 
 
@@ -62,24 +64,34 @@ class PlayerManager:
     Thread-safe for concurrent operations.
     """
 
-    def __init__(self, video_id: str, storage_path: Optional[Path] = None):
+    def __init__(self, video_id: str):
         """
         Initialize PlayerManager for a video.
 
         Args:
             video_id: Unique identifier for the video
-            storage_path: Optional path to store player data (defaults to current directory)
         """
         self.video_id = video_id
-        self.storage_path = storage_path or Path.cwd()
         self.players: Dict[int, Player] = {}
         self.track_to_player: Dict[int, int] = {}  # track_id -> player_id
         self._next_player_id = 1
         self._lock = threading.Lock()
 
-    def _get_player_file_path(self) -> Path:
-        """Get the file path for storing player data."""
-        return self.storage_path / f"{self.video_id}_players.json"
+    def initialize(self, init_detections: Detections) -> None:
+        """Create initial players from detections if none exist."""
+        with self._lock:
+            if self.players:
+                logger.info(f"PlayerManager for video {self.video_id} already initialized with players.")
+                return
+
+            track_ids = init_detections.data.get("track_id", [])
+            unique_track_ids = set(track_ids) if track_ids is not None else set()
+
+            for track_id in unique_track_ids:
+                new_player = self.create_player()
+                self.add_track_to_player(new_player.id, track_id)
+
+            logger.info(f"Initialized PlayerManager for video {self.video_id} with {len(self.players)} players.")
 
     def create_player(self, name: Optional[str] = None) -> Player:
         """
@@ -307,3 +319,43 @@ class PlayerManager:
         except Exception as e:
             logger.error(f"Failed to load player data for video {self.video_id}: {e}")
             return False
+
+
+def initialize_player_manager(video_id: str, current_frame_id: int, frame_detections: Detections) -> PlayerManager:
+    """
+    Initialize a PlayerManager for a given video ID, loading existing data if available.
+
+    Args:
+        video_id: Unique identifier for the video
+        current_frame_id: The current frame ID being processed
+        frame_detections: Detections for the current frame
+
+    Returns:
+        Initialized PlayerManager instance
+    """
+    try:
+        manager = PlayerManager(video_id=video_id)
+        manager.initialize(frame_detections)
+        return manager
+    except Exception as e:
+        raise RuntimeError(f"Failed to initialize PlayerManager for video {video_id}: {e}")
+    
+
+def load_player_manager(file_path: Path) -> PlayerManager:
+    """
+    Load a PlayerManager from a JSON file.
+
+    Args:
+        file_path: Path to the JSON file
+
+    Returns:
+        Loaded PlayerManager instance
+    """
+    try:                        
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+        manager = PlayerManager(video_id=data["video_id"])
+        manager.load_from_dict(data)
+        return manager
+    except Exception as e:
+        raise RuntimeError(f"Failed to load PlayerManager from {file_path}: {e}")

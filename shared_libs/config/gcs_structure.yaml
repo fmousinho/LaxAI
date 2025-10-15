@@ -6,6 +6,7 @@ gcs:
     process_root: "process/"
     process_folder: "process/{video_id}/"
     detections_path: "process/{video_id}/detections.json"
+    players_data_path: "process/{video_id}/player_manager.json"
     saved_graph: "process/{video_id}/stitcher_graph.gml"
     imported_video: "process/{video_id}/imported/"
     extracted_frames: "process/{video_id}/{frame_id}/"
