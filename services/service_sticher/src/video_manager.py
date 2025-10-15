@@ -7,8 +7,10 @@ import typing
 import logging
 import concurrent.futures
 import numpy as np
+from supervision import Detections
 
 import shared_libs.config.logging_config 
+from shared_libs.common.player_manager import Player, PlayerManager
 from shared_libs.common.google_storage import get_storage, GCSPaths
 from shared_libs.common.detection_utils import json_to_detections, detections_to_json
 
@@ -22,10 +24,6 @@ try:
 except ImportError:
     raise ImportError("AffineAwareByteTrack could not be imported. Ensure the module is available.")
 
-try:
-    from supervision import Detections
-except ImportError:
-    raise ImportError("supervision could not be imported. Ensure the module is available.")
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +42,7 @@ class VideoManager:
         session_id (str): Unique identifier for this video session
         storage (GoogleStorageClient): GCS client for video access
         cap (GCSVideoCapture): Video capture object for frame access
-        current_frame (int): Current frame position in the video
+        current_frame_id (int): Current frame position in the video
         total_frames (int): Total number of frames in the loaded video
         frame_skip_interval (int): Number of frames to skip between reads for performance
     """
@@ -69,11 +67,12 @@ class VideoManager:
         if not self.storage or not self.session_id: 
             raise ValueError("Failed to initialize storage backend.")
         self.cap = None
-        self.current_frame = None
+        self.current_frame_id_id = None
         self.total_frames = 0
         self.frame_skip_interval = frame_skip_interval
         self.video_id = None
         self.detections: Detections = Detections.empty()
+        self.playerManager = None
 
     def __del__(self):
         """Cleanup method to properly close video capture when VideoManager is destroyed."""
@@ -166,31 +165,34 @@ class VideoManager:
             raise ValueError("No video loaded for this session.")
         
         # Finds the next frame position and sets the cap
-        if self.current_frame is None:
-            self.current_frame = 0
+        if self.current_frame_id_id is None:
+            self.current_frame_id_id = 0
+            self.player_manager = initialize_player_manager(self.video_id, )
         else:
-            self.current_frame += self.frame_skip_interval
-            if self.current_frame >= self.total_frames:
+            self.current_frame_id_id += self.frame_skip_interval
+            if self.current_frame_id_id >= self.total_frames:
                 raise ValueError("End of video reached")
-            if not self.cap.set("CAP_PROP_POS_FRAMES", self.current_frame):
-                raise ValueError(f"Failed to set frame position to {self.current_frame}")
+            if not self.cap.set("CAP_PROP_POS_FRAMES", self.current_frame_id_id):
+                raise ValueError(f"Failed to set frame position to {self.current_frame_id_id}")
 
         # Read the frame
         success, frame_data = self.cap.read(return_format="rgb")
         if not success or frame_data is None:
-            raise ValueError(f"Failed to read frame at position {self.current_frame}")
-        mask = self.detections.data["frame_index"] == self.current_frame
-        frame_detections = self.detections.data["frame_index"][mask]
-        frame_with_detections, players_positions = add_players(frame_data, frame_detections, self.current_frame)
+            raise ValueError(f"Failed to read frame at position {self.current_frame_id_id}")
+        mask = self.detections.data["frame_index"] == self.current_frame_id_id
+        frame_detections = self.detections[mask]
+        frame_detections = playerManager.add_player_info(frame_detections)
+        
+        frame_with_detections, players_positions = add_players(frame_data, frame_detections, self.current_frame_id_id)
 
         # Check if there are more frames available
-        has_next_frame = (self.current_frame + self.frame_skip_interval) < self.total_frames
+        has_next_frame = (self.current_frame_id_id + self.frame_skip_interval) < self.total_frames
         
         result = {
-            "frame_id": self.current_frame,
+            "frame_id": self.current_frame_id_id,
             "frame_data": frame_data,
             "has_next_frame": has_next_frame,
-            "has_previous_frame": self.current_frame > 0,
+            "has_previous_frame": self.current_frame_id_id > 0,
         }
 
         return result
@@ -212,25 +214,25 @@ class VideoManager:
             raise ValueError("No video loaded for this session.")
         
         # Finds the previous frame position and sets the cap
-        if self.current_frame is None:
-            self.current_frame = 0
+        if self.current_frame_id_id is None:
+            self.current_frame_id_id = 0
         else:
-            self.current_frame -= self.frame_skip_interval
-            if self.current_frame < 0:
-                self.current_frame = 0
-            if not self.cap.set("CAP_PROP_POS_FRAMES", self.current_frame):
-                raise ValueError(f"Failed to set frame position to {self.current_frame}")
+            self.current_frame_id_id -= self.frame_skip_interval
+            if self.current_frame_id_id < 0:
+                self.current_frame_id_id = 0
+            if not self.cap.set("CAP_PROP_POS_FRAMES", self.current_frame_id_id):
+                raise ValueError(f"Failed to set frame position to {self.current_frame_id_id}")
 
         # Read the frame
         success, frame_data = self.cap.read(return_format="rgb")
         if not success or frame_data is None:
-            raise ValueError(f"Failed to read frame at position {self.current_frame}")
+            raise ValueError(f"Failed to read frame at position {self.current_frame_id}")
         
         result = {
-            "frame_id": self.current_frame,
+            "frame_id": self.current_frame_id,
             "frame_data": frame_data,
-            "has_next_frame": (self.current_frame + self.frame_skip_interval) < self.total_frames,
-            "has_previous_frame": self.current_frame > 0,
+            "has_next_frame": (self.current_frame_id + self.frame_skip_interval) < self.total_frames,
+            "has_previous_frame": self.current_frame_id > 0,
         }
 
         return result

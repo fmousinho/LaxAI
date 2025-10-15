@@ -5,7 +5,7 @@ This module provides functionality to map tracking IDs from detections to Player
 ensuring that each detection is associated with a Player instance in the registry.
 
 Key Features:
-    - Maps track_ids to existing or new Player objects
+    - Maps track_ids to existing or new Player objects using PlayerManager
     - Adds player_id to detection data for downstream processing
     - Handles both existing and new players efficiently
     - Maintains Player registry consistency
@@ -13,9 +13,11 @@ Key Features:
 Example:
     ```python
     from common.track_to_player import map_detections_to_players
+    from common.player import PlayerManager
 
+    manager = PlayerManager(video_id="video_123")
     # detections is sv.Detections with tracker_id
-    detections_with_players = map_detections_to_players(detections)
+    detections_with_players = map_detections_to_players(detections, manager)
     print(detections_with_players.data['player_id'])  # Array of player IDs
     ```
 """
@@ -26,40 +28,28 @@ from typing import Optional
 import numpy as np
 import supervision as sv
 
-from shared_libs.common.player import Player
+from common.player_manager import Player, PlayerManager
 
 logger = logging.getLogger(__name__)
 
 
-def map_detections_to_players(detections: sv.Detections) -> sv.Detections:
+def map_detections_to_players(detections: sv.Detections, player_manager: PlayerManager) -> sv.Detections:
     """
     Map tracking IDs in detections to Player objects and add player_id to detection data.
 
     This function processes a set of detections and ensures each track_id is associated
-    with a Player object. For existing players in the registry, it uses their existing ID.
+    with a Player object. For existing players in the manager, it uses their existing ID.
     For new track_ids, it creates new Player objects and uses their IDs.
 
     Args:
         detections: Supervision Detections object containing tracker_id information
+        player_manager: PlayerManager instance to manage players
 
     Returns:
         sv.Detections: The same detections object with 'player_id' added to the data field
 
     Raises:
         ValueError: If detections is None or doesn't contain tracker_id information
-
-    Example:
-        ```python
-        detections = sv.Detections(
-            xyxy=np.array([[10, 10, 20, 20]]),
-            confidence=np.array([0.9]),
-            class_id=np.array([0]),
-            tracker_id=np.array([5])
-        )
-
-        detections_with_players = map_detections_to_players(detections)
-        player_ids = detections_with_players.data['player_id']
-        ```
     """
     if detections is None:
         raise ValueError("Detections cannot be None")
@@ -80,16 +70,17 @@ def map_detections_to_players(detections: sv.Detections) -> sv.Detections:
 
     # Process each track_id
     for i, track_id in enumerate(track_ids):
-        # Check if player already exists in registry
-        existing_player = Player.get_player_by_tid(track_id)
+        # Check if player already exists for this track
+        existing_player = player_manager.get_player_by_track_id(track_id)
 
         if existing_player is not None:
             # Use existing player's ID
             player_ids[i] = existing_player.id
             logger.debug(f"Using existing player {existing_player.id} for track_id {track_id}")
         else:
-            # Create new player
-            new_player = Player(tracker_id=track_id)
+            # Create new player and associate track
+            new_player = player_manager.create_player()
+            player_manager.add_track_to_player(new_player.id, track_id)
             player_ids[i] = new_player.id
             logger.debug(f"Created new player {new_player.id} for track_id {track_id}")
 
@@ -128,12 +119,13 @@ def get_player_ids_from_detections(detections: sv.Detections) -> Optional[np.nda
     return player_ids
 
 
-def get_unique_players_from_detections(detections: sv.Detections) -> set:
+def get_unique_players_from_detections(detections: sv.Detections, player_manager: PlayerManager) -> set:
     """
     Get a set of unique Player objects from detections.
 
     Args:
         detections: Supervision Detections object with player_id in data
+        player_manager: PlayerManager instance
 
     Returns:
         set: Set of unique Player objects
@@ -144,7 +136,7 @@ def get_unique_players_from_detections(detections: sv.Detections) -> set:
 
     unique_players = set()
     for player_id in np.unique(player_ids):
-        player = Player.get_player_by_id(player_id)
+        player = player_manager.get_player_by_id(player_id)
         if player is not None:
             unique_players.add(player)
 
