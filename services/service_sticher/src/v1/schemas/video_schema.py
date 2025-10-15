@@ -16,7 +16,6 @@ class VideoLoadRequest(BaseModel):
             }
         }
 
-
 class VideoLoadResponse(BaseModel):
     """Response model for loading a video."""
 

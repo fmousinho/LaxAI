@@ -27,8 +27,10 @@ def load (req: VideoLoadRequest) -> VideoLoadResponse:
             has_next_frame=result["has_next_frame"],
             has_previous_frame=result["has_previous_frame"],
         )
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        if "not found" in str(e).lower():
+            raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
