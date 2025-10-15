@@ -260,7 +260,7 @@ class PlayerManager:
         with self._lock:
             return list(self.players.values())
 
-    def save_to_disk(self) -> bool:
+    def serialize_to_save(self) -> str:
         """
         Save player data to JSON file.
 
@@ -274,17 +274,11 @@ class PlayerManager:
                 "players": [player.to_dict() for player in self.players.values()],
                 "track_to_player": self.track_to_player
             }
-
-            file_path = self._get_player_file_path()
-            with open(file_path, 'w') as f:
-                json.dump(data, f, indent=2)
-
-            logger.info(f"Saved player data for video {self.video_id} to {file_path}")
-            return True
-
+            return json.dumps(data)
         except Exception as e:
-            logger.error(f"Failed to save player data for video {self.video_id}: {e}")
-            return False
+            logger.error(f"Failed to serialize player data for video {self.video_id}: {e}")
+            return ""
+
 
     def load_from_disk(self) -> bool:
         """
@@ -311,7 +305,7 @@ class PlayerManager:
                     player = Player.from_dict(player_data)
                     self.players[player.id] = player
 
-                self.track_to_player = data["track_to_player"]
+                self.track_to_player = {int(k): v for k, v in data["track_to_player"].items()}
 
             logger.info(f"Loaded player data for video {self.video_id} from {file_path}")
             return True
@@ -319,6 +313,38 @@ class PlayerManager:
         except Exception as e:
             logger.error(f"Failed to load player data for video {self.video_id}: {e}")
             return False
+        
+    def load_players_from_json(self, json_object: str):
+        """
+        Load player data from a JSON object.
+
+        Args:
+            data: JSON object containing player data
+
+        Returns:
+            True if loaded successfully, False otherwise
+        """
+        try:
+            with self._lock:
+                data = json.loads(json_object)
+                file_video_id = data["video_id"]
+                if file_video_id != self.video_id:
+                    raise ValueError(f"Video ID mismatch: expected {self.video_id}, found {file_video_id}")
+
+                self._next_player_id = data["next_player_id"]
+
+                self.players = {}
+                for player_data in data["players"]:
+                    player = Player.from_dict(player_data)
+                    self.players[player.id] = player
+
+                self.track_to_player = {int(k): v for k, v in data["track_to_player"].items()}
+
+            logger.info(f"Loaded player data for video {self.video_id} from JSON")
+            return 
+
+        except Exception as e:
+            raise RuntimeError(f"Failed to load player data for video {self.video_id} from JSON: {e}")
 
 
 def initialize_player_manager(video_id: str, current_frame_id: int, frame_detections: Detections) -> PlayerManager:
@@ -341,21 +367,22 @@ def initialize_player_manager(video_id: str, current_frame_id: int, frame_detect
         raise RuntimeError(f"Failed to initialize PlayerManager for video {video_id}: {e}")
     
 
-def load_player_manager(file_path: Path) -> PlayerManager:
+def load_player_manager(video_id: str, players_json: str) -> Optional[PlayerManager]:
     """
-    Load a PlayerManager from a JSON file.
+    Load a PlayerManager from a JSON object.
 
     Args:
-        file_path: Path to the JSON file
+        video_id: Unique identifier for the video
+        players_json: JSON object containing player data
 
     Returns:
         Loaded PlayerManager instance
     """
     try:                        
-        with open(file_path, 'r') as f:
-            data = json.load(f)
-        manager = PlayerManager(video_id=data["video_id"])
-        manager.load_from_dict(data)
+        manager = PlayerManager(video_id)
+        manager.load_players_from_json(players_json)
         return manager
+    
     except Exception as e:
-        raise RuntimeError(f"Failed to load PlayerManager from {file_path}: {e}")
+        logger.error (f"Failed to load PlayerManager for video {video_id}: {e}")
+        return None

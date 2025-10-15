@@ -132,7 +132,6 @@ class VideoManager:
             
             result = {
                 "session_id": self.session_id,
-                "video_path": video_path,
                 "total_frames": self.total_frames,
                 "has_next_frame": self.total_frames > self.frame_skip_interval,
                 "has_previous_frame": False,
@@ -165,10 +164,12 @@ class VideoManager:
         if not self.cap:
             raise ValueError("No video loaded for this session.")
         
+        if not self.video_id:
+            raise ValueError("Video ID is not set for this session.")
+        
         # Finds the next frame position and sets the cap
         if self.current_frame_id is None:
             self.current_frame_id = 0
-            self.player_manager = initialize_player_manager(self.video_id, )
         else:
             self.current_frame_id += self.frame_skip_interval
             if self.current_frame_id >= self.total_frames:
@@ -182,6 +183,8 @@ class VideoManager:
             raise ValueError(f"Failed to read frame at position {self.current_frame_id}")
         mask = self.detections.data["frame_index"] == self.current_frame_id
         frame_detections = self.detections[mask]
+        if type(frame_detections) is not Detections:
+            raise ValueError("Frame detections is not a valid Detections object")
 
         if not self.player_manager:
             self.player_manager = initialize_player_manager(self.video_id, self.current_frame_id, frame_detections)
@@ -298,27 +301,26 @@ class VideoManager:
             return session_id
 
 
-    def _load_players_if_json_exists(self, video_id: str) -> None:
+    def _load_players_if_json_exists(self) -> None:
         """Retrieve the PlayerManager for the video if players JSON exists."""
-        players_path = self.path_manager.get_path("players_data_path", video_id=video_id)
+
+        if not self.video_id:
+            raise ValueError("Video ID is not set, cannot load players.")
+
+        players_path = self.path_manager.get_path("players_data_path", video_id=self.video_id)
         if not players_path:
-            raise ValueError(f"Can't find players data path for video_id: {video_id}")
+            raise ValueError(f"Can't find players data path for video_id: {self.video_id}")
 
         players_json_str = self.storage.download_as_string(players_path)
         if not players_json_str:
-            logger.info(f"No players data found for video: {video_id}")
-            return 
+            logger.info(f"No players data found for video: {self.video_id}")
+            return
+
 
         try:
-            players_json = json.loads(players_json_str)
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse players JSON, creating new manager for: {video_id}: {e}")
-            return
-        
-        try:
-            self.player_manager = load_player_manager(players_json)
+            self.player_manager = load_player_manager(self.video_id, players_json_str)
         except Exception as e:
-            logger.error(f"Failed to load player manager for video: {video_id}: {e}")
+            logger.error(f"Failed to load player manager for video: {self.video_id}: {e}")
             return
 
 
