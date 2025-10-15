@@ -114,7 +114,6 @@ from shared_libs.config.all_config import DetectionConfig, detection_config, mod
 from shared_libs.utils.id_generator import create_video_id, create_run_id
 from shared_libs.common.tracker import AffineAwareByteTrack
 from shared_libs.common.detection_utils import detections_to_json
-from shared_libs.common.track_to_player import map_detections_to_players
 
 logger = logging.getLogger(__name__)
 

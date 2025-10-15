@@ -6,6 +6,7 @@ import threading
 import typing
 import logging
 import concurrent.futures
+import numpy as np
 
 import shared_libs.config.logging_config 
 from shared_libs.common.google_storage import get_storage, GCSPaths
@@ -72,7 +73,7 @@ class VideoManager:
         self.total_frames = 0
         self.frame_skip_interval = frame_skip_interval
         self.video_id = None
-        self.detections = None
+        self.detections: Detections = Detections.empty()
 
     def __del__(self):
         """Cleanup method to properly close video capture when VideoManager is destroyed."""
@@ -178,7 +179,10 @@ class VideoManager:
         success, frame_data = self.cap.read(return_format="rgb")
         if not success or frame_data is None:
             raise ValueError(f"Failed to read frame at position {self.current_frame}")
-        
+        mask = self.detections.data["frame_index"] == self.current_frame
+        frame_detections = self.detections.data["frame_index"][mask]
+        frame_with_detections, players_positions = add_players(frame_data, frame_detections, self.current_frame)
+
         # Check if there are more frames available
         has_next_frame = (self.current_frame + self.frame_skip_interval) < self.total_frames
         
@@ -339,9 +343,15 @@ class VideoManager:
             self.detections = json_to_detections(detections_json)
 
             # Validate the resulting detections object
-            if self.detections is None:
+            if self.detections is None or not isinstance(self.detections, Detections):
                 logger.error(f"Failed to create Detections object from JSON for video_id: {self.video_id}")
                 return False
+
+            # Check if detections have frame_index data
+            if "frame_index" not in self.detections.data or len(self.detections.data["frame_index"]) == 0:
+                logger.warning(f"Detections object has no valid frame_index data for video_id: {self.video_id}")
+                self.detections = Detections.empty()
+                return True
 
             logger.info(f"Successfully loaded {len(self.detections)} detections for video_id: {self.video_id}")
             return True

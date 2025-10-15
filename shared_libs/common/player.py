@@ -1,4 +1,4 @@
-import logging
+import shared_libs.config.logging_config
 from typing import Dict, List, Literal, Optional
 
 import numpy as np
