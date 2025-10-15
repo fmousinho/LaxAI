@@ -1,22 +1,32 @@
-import uuid
+import os
+import json
 import time
 import random
 import threading
 import typing
+import logging
+import concurrent.futures
 
 import shared_libs.config.logging_config 
-from shared_libs.common.google_storage import get_storage
-from shared_libs.common.google_storage import GCSPaths as path_manager
+from shared_libs.common.google_storage import get_storage, GCSPaths
+from shared_libs.common.detection_utils import json_to_detections, detections_to_json
 
 try:
-    from shared_libs.common.detection import DetectionModel as detector
+    from shared_libs.common.detection import DetectionModel
 except ImportError:
     raise ImportError("DetectionModel could not be imported. Ensure the module is available.")
 
 try:
-    from shared_libs.common.tracker import AffineAwareByteTrack as tracker
+    from shared_libs.common.tracker import AffineAwareByteTrack
 except ImportError:
     raise ImportError("AffineAwareByteTrack could not be imported. Ensure the module is available.")
+
+try:
+    from supervision import Detections
+except ImportError:
+    raise ImportError("supervision could not be imported. Ensure the module is available.")
+
+logger = logging.getLogger(__name__)
 
 FRAME_SKIP_INTERVAL = 30  # Default frame skip interval
 
@@ -37,6 +47,9 @@ class VideoManager:
         total_frames (int): Total number of frames in the loaded video
         frame_skip_interval (int): Number of frames to skip between reads for performance
     """
+    path_manager = GCSPaths()
+    detector = DetectionModel()
+    tracker = AffineAwareByteTrack()
 
     def __init__(self, tenant_id: str, frame_skip_interval: int = FRAME_SKIP_INTERVAL):
         """Initialize a new VideoManager instance.
@@ -58,6 +71,8 @@ class VideoManager:
         self.current_frame = None
         self.total_frames = 0
         self.frame_skip_interval = frame_skip_interval
+        self.video_id = None
+        self.detections = None
 
     def __del__(self):
         """Cleanup method to properly close video capture when VideoManager is destroyed."""
@@ -91,29 +106,29 @@ class VideoManager:
             ValueError: If video file is not found or cannot be loaded
         """
         try:
-            # GCSVideoCapture is a context manager - we need to enter it to initialize
-            self.cap = self.storage.get_video_capture(video_path)
-            self.cap.__enter__()  # Manually enter the context to initialize cv2.VideoCapture
+            self.video_id = video_path.split("/")[-1]
             
-            self.total_frames = self.cap.get("CAP_PROP_FRAME_COUNT") or 0
+            # Run detections loading and video capture setup in parallel
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                # Submit both tasks
+                detections_future = executor.submit(self._load_detections, self.video_id)
+                capture_future = executor.submit(self._setup_video_capture, video_path)
+                
+                # Wait for both to complete
+                detections_result = detections_future.result()
+                capture_result = capture_future.result()
             
-            # For some video formats, frame count is only available after reading frames
-            if self.total_frames <= 0:
-                # Try reading the first frame to initialize video properties
-                ret, frame = self.cap.read()
-                if ret:
-                    # Reset to beginning
-                    self.cap.set("CAP_PROP_POS_FRAMES", 0)
-                    # Try getting frame count again
-                    self.total_frames = self.cap.get("CAP_PROP_FRAME_COUNT") or 0
-                else:
-                    pass
+            # Check if detections loading succeeded
+            if not detections_result:
+                # Clean up video capture if detections failed
+                if "cap" in capture_result:
+                    capture_result["cap"].__exit__(None, None, None)
+                raise ValueError("Detections could not be loaded for the video.")
             
-            if self.total_frames <= 0:
-                # Clean up if we failed
-                self.cap.__exit__(None, None, None)
-                self.cap = None
-                raise ValueError("Could not retrieve total frame count.")
+            # Set up video capture properties
+            self.cap = capture_result["cap"]
+            self.total_frames = capture_result["total_frames"]
+            
             result = {
                 "session_id": self.session_id,
                 "video_path": video_path,
@@ -217,6 +232,44 @@ class VideoManager:
         return result
 
 
+    def _setup_video_capture(self, video_path: str) -> dict:
+        """Set up video capture and retrieve video properties.
+        
+        Args:
+            video_path: GCS path to the video file
+            
+        Returns:
+            dict: Video properties containing total_frames and cap object
+            
+        Raises:
+            ValueError: If video setup fails
+        """
+        # GCSVideoCapture is a context manager - we need to enter it to initialize
+        cap = self.storage.get_video_capture(video_path)
+        cap.__enter__()  # Manually enter the context to initialize cv2.VideoCapture
+        
+        total_frames = cap.get("CAP_PROP_FRAME_COUNT") or 0
+        
+        # For some video formats, frame count is only available after reading frames
+        if total_frames <= 0:
+            # Try reading the first frame to initialize video properties
+            ret, frame = cap.read()
+            if ret:
+                # Reset to beginning
+                cap.set("CAP_PROP_POS_FRAMES", 0)
+                # Try getting frame count again
+                total_frames = cap.get("CAP_PROP_FRAME_COUNT") or 0
+            else:
+                pass
+        
+        if total_frames <= 0:
+            # Clean up if we failed
+            cap.__exit__(None, None, None)
+            raise ValueError("Could not retrieve total frame count.")
+            
+        return {"cap": cap, "total_frames": total_frames}
+
+
     def _generate_session_id(self) -> str:
         """Generate a short, unique session ID.
         
@@ -235,3 +288,60 @@ class VideoManager:
             random_part = random.randint(0, 0xFF)  # 8-bit random
             session_id = f"{timestamp:08d}-{random_part:02X}"
             return session_id
+
+
+    def _load_detections(self, video_path: str) -> bool:
+        """Load detections from Google Cloud Storage.
+
+        Args:
+            video_path: Path to the video file (used to derive detection file path)
+
+        Returns:
+            bool: True if detections were loaded successfully, False otherwise.
+        """
+        try:
+            # Extract video ID from path (filename without extension)
+            self.video_id = os.path.basename(video_path).split(".")[0]
+
+            # Get the path to the detections file
+            detections_path = self.path_manager.get_path("detections", video_id=self.video_id)
+            if not detections_path:
+                logger.warning(f"No detections path found for video_id: {self.video_id}")
+                return False
+
+            # Download detections JSON from GCS
+            detections_json = self.storage.download_as_string(detections_path)
+            if not detections_json:
+                logger.warning(f"No detections data found at path: {detections_path}")
+                return False
+
+            # Validate that we have a list of detection data
+            if not isinstance(detections_json, list):
+                logger.error(f"Invalid detections format for {detections_path}: expected list, got {type(detections_json)}")
+                return False
+
+            if not detections_json:  # Empty list
+                logger.info(f"Empty detections list for video_id: {self.video_id}")
+                self.detections = Detections.empty()
+                return True
+
+            # Convert JSON to Detections object
+            self.detections = json_to_detections(detections_json)
+
+            # Validate the resulting detections object
+            if self.detections is None:
+                logger.error(f"Failed to create Detections object from JSON for video_id: {self.video_id}")
+                return False
+
+            logger.info(f"Successfully loaded {len(self.detections)} detections for video_id: {self.video_id}")
+            return True
+
+        except FileNotFoundError:
+            logger.warning(f"Detections file not found for video_id: {self.video_id} at path: {detections_path if 'detections_path' in locals() else 'unknown'}")
+            return False
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON format in detections file for video_id: {self.video_id}: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error loading detections for video_id: {self.video_id}: {e}")
+            return False
