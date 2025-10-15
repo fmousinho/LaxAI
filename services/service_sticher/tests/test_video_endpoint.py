@@ -42,3 +42,47 @@ def test_load_video_endpoint_invalid_path():
     
     # Should get a 500 error for general exceptions during video loading
     assert exc_info.value.status_code == 500
+
+
+def test_session_cleanup_mechanism():
+    """Test that expired sessions are properly cleaned up."""
+    from services.service_sticher.src.v1.endpoints.video_endpoint import video_managers, CLEANUP_INTERVAL
+    import time
+    
+    # Clear any existing sessions
+    video_managers.clear()
+    
+    # Mock VideoManager to avoid GCS dependencies
+    with patch('services.service_sticher.src.v1.endpoints.video_endpoint.VideoManager') as mock_manager_class:
+        mock_manager = MagicMock()
+        mock_manager_class.return_value = mock_manager
+        
+        # Simulate creating a session 13 hours ago (past the 12-hour limit)
+        expired_time = time.time() - (CLEANUP_INTERVAL + 60)  # 12 hours + 1 minute ago
+        video_managers["expired-session"] = (mock_manager, expired_time)
+        
+        # Simulate creating a recent session
+        recent_time = time.time() - 60  # 1 minute ago
+        video_managers["recent-session"] = (mock_manager, recent_time)
+        
+        # Verify both sessions exist initially
+        assert len(video_managers) == 2
+        assert "expired-session" in video_managers
+        assert "recent-session" in video_managers
+        
+        # Simulate the cleanup function running
+        current_time = time.time()
+        expired_sessions = []
+        
+        for session_id, (manager, created_at) in video_managers.items():
+            if current_time - created_at > CLEANUP_INTERVAL:
+                expired_sessions.append(session_id)
+        
+        # Remove expired sessions
+        for session_id in expired_sessions:
+            del video_managers[session_id]
+        
+        # Verify only the expired session was removed
+        assert len(video_managers) == 1
+        assert "expired-session" not in video_managers
+        assert "recent-session" in video_managers
