@@ -304,20 +304,30 @@ class VideoManager:
             self.video_id = os.path.basename(video_path).split(".")[0]
 
             # Get the path to the detections file
-            detections_path = self.path_manager.get_path("detections", video_id=self.video_id)
+            detections_path = self.path_manager.get_path("detections_path", video_id=self.video_id)
             if not detections_path:
                 logger.warning(f"No detections path found for video_id: {self.video_id}")
                 return False
 
             # Download detections JSON from GCS
-            detections_json = self.storage.download_as_string(detections_path)
-            if not detections_json:
+            detections_json_str = self.storage.download_as_string(detections_path)
+            if not detections_json_str:
                 logger.warning(f"No detections data found at path: {detections_path}")
                 return False
 
-            # Validate that we have a list of detection data
-            if not isinstance(detections_json, list):
-                logger.error(f"Invalid detections format for {detections_path}: expected list, got {type(detections_json)}")
+            # Parse the JSON string
+            try:
+                detections_json = json.loads(detections_json_str)
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON format in detections file for video_id: {self.video_id}: {e}")
+                return False
+
+            # Validate that we have a list of detection data or a single detection dict
+            if isinstance(detections_json, dict):
+                # Single frame detection - wrap in list
+                detections_json = [detections_json]
+            elif not isinstance(detections_json, list):
+                logger.error(f"Invalid detections format for {detections_path}: expected list or dict, got {type(detections_json)}")
                 return False
 
             if not detections_json:  # Empty list
