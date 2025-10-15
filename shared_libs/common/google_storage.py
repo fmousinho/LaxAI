@@ -853,7 +853,7 @@ class GoogleStorageClient:
             # Clear the video data from memory
             self.video_data = None
 
-        def read(self):
+        def read(self, return_format: Optional[str]="bgr"):
             """
             Reads the next frame from the video.
 
@@ -862,10 +862,14 @@ class GoogleStorageClient:
                        and frame is the video frame as numpy array
             """
             if self.cap:
-                return self.cap.read()
+                ret, frame = self.cap.read()
+                if return_format == "bgr":
+                    return ret, frame
+                elif return_format == "rgb":
+                    return ret, cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             return False, None
 
-        def get(self, prop_id):
+        def get(self, prop_id: int | str):
             """
             Gets a property from the video capture.
 
@@ -874,12 +878,17 @@ class GoogleStorageClient:
 
             Returns:
                 Property value
-            """
+            """ 
             if self.cap:
+                if isinstance(prop_id, str):
+                    prop_id_int = getattr(cv2, prop_id, None)
+                    if prop_id_int is None:
+                        raise ValueError(f"Invalid property name: {prop_id}")
+                    return self.cap.get(prop_id_int)
                 return self.cap.get(prop_id)
             return None
 
-        def set(self, prop_id, value):
+        def set(self, prop_id: int | str, value: int) -> bool:
             """
             Sets a property of the video capture.
 
@@ -891,6 +900,11 @@ class GoogleStorageClient:
                 bool: True if successful, False otherwise
             """
             if self.cap:
+                if isinstance(prop_id, str):
+                    prop_id_int = getattr(cv2, prop_id, None)
+                    if prop_id_int is None:
+                        return False
+                    return self.cap.set(prop_id_int, value)
                 return self.cap.set(prop_id, value)
             return False
 
