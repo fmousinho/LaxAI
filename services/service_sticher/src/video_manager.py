@@ -24,6 +24,7 @@ try:
 except ImportError:
     raise ImportError("AffineAwareByteTrack could not be imported. Ensure the module is available.")
 
+from player_annotator import annotate_with_players
 
 logger = logging.getLogger(__name__)
 
@@ -156,8 +157,42 @@ class VideoManager:
                 - frame_id (int): The current frame index after advancement
                 - frame_data: numpy array frame image data (RGB format)
                 - has_next_frame (bool): Whether there are more frames to read
-                - has_previous_frame (bool): Whether there are pr   evious frames
+                - has_previous_frame (bool): Whether there are previous frames
                 
+        Raises:
+            ValueError: If no video is loaded or frame reading fails
+        """
+        return self._navigate_to_frame(self.frame_skip_interval)
+
+    def previous_frame(self) -> dict:        
+        """Go back to the previous frame in the video.
+        
+        Moves the current frame position back by frame_skip_interval frames
+        (default 30) and reads that frame from the video capture object.
+        
+        Returns:
+            dict: Frame rewind result containing:
+                - frame_id (int): The current frame index after rewinding
+                - frame_data: numpy array frame image data (RGB format)
+                - has_next_frame (bool): Whether there are more frames to read
+                - has_previous_frame (bool): Whether there are previous frames
+                
+        Raises:
+            ValueError: If no video is loaded or frame reading fails
+        """
+        return self._navigate_to_frame(-self.frame_skip_interval)
+
+    def _navigate_to_frame(self, frame_offset: int) -> dict:
+        """Navigate to a frame relative to the current position.
+        
+        Common method for frame navigation used by next_frame and previous_frame.
+        
+        Args:
+            frame_offset: Number of frames to advance (positive) or rewind (negative)
+            
+        Returns:
+            dict: Frame navigation result
+            
         Raises:
             ValueError: If no video is loaded or frame reading fails
         """
@@ -167,15 +202,25 @@ class VideoManager:
         if not self.video_id:
             raise ValueError("Video ID is not set for this session.")
         
-        # Find the next frame position and sets the cap
+        # Calculate new frame position
         if self.current_frame_id is None:
             self.current_frame_id = 0
         else:
-            self.current_frame_id += self.frame_skip_interval
-            if self.current_frame_id >= self.total_frames:
-                raise ValueError("End of video reached")
-            if not self.cap.set("CAP_PROP_POS_FRAMES", self.current_frame_id):
-                raise ValueError(f"Failed to set frame position to {self.current_frame_id}")
+            new_frame_id = self.current_frame_id + frame_offset
+            
+            # Handle boundary conditions
+            if frame_offset > 0:  # next_frame
+                if new_frame_id >= self.total_frames:
+                    raise ValueError("End of video reached")
+            else:  # previous_frame
+                if new_frame_id < 0:
+                    new_frame_id = 0
+            
+            self.current_frame_id = new_frame_id
+            
+        # Set frame position
+        if not self.cap.set("CAP_PROP_POS_FRAMES", self.current_frame_id):
+            raise ValueError(f"Failed to set frame position to {self.current_frame_id}")
 
         # Read the frame
         success, frame_data = self.cap.read(return_format="rgb")
@@ -188,68 +233,28 @@ class VideoManager:
         if type(frame_detections) is not Detections or frame_detections.tracker_id is None:
             raise ValueError("Frame detections is not a valid Detections object")
 
+        # Initialize player manager if needed
         if not self.player_manager:
             self.player_manager = initialize_player_manager(self.video_id, self.current_frame_id, frame_detections)
 
         # Replace tracker_id with player_id using track_to_player mapping
         for det_idx in range(len(frame_detections)):
             tracker_id = frame_detections.tracker_id[det_idx]
-            player_id = self.player_manager.track_to_player[tracker_id]
-            if not player_id:
-                player_id = 0
+            player_id = self.player_manager.track_to_player.get(tracker_id, 0)
             frame_detections.tracker_id[det_idx] = player_id
 
-        frame_data = 
-            
+        # Draw annotations on the frame
+        frame_data = annotate_with_players(frame_data, frame_detections)
 
-        # Check if there are more frames available
+        # Check navigation possibilities
         has_next_frame = (self.current_frame_id + self.frame_skip_interval) < self.total_frames
+        has_previous_frame = self.current_frame_id > 0
 
         result = {
             "frame_id": self.current_frame_id,
             "frame_data": frame_data,
             "has_next_frame": has_next_frame,
-            "has_previous_frame": self.current_frame_id > 0,
-        }
-
-        return result
-
-
-
-    def previous_frame(self) -> dict:        
-        """Go back to the previous frame in the video.
-        
-        Moves the current frame position back by frame_skip_interval frames
-        (default 30) and reads that frame from the video capture object.
-        
-        Returns:
-            dict: Frame rewind result containing:
-                - frame_id (int): The current frame index after rewinding
-                - frame_data: numpy array frame image data (RGB format)
-        """
-        if not self.cap:
-            raise ValueError("No video loaded for this session.")
-        
-        # Finds the previous frame position and sets the cap
-        if self.current_frame_id is None:
-            self.current_frame_id = 0
-        else:
-            self.current_frame_id -= self.frame_skip_interval
-            if self.current_frame_id < 0:
-                self.current_frame_id = 0
-            if not self.cap.set("CAP_PROP_POS_FRAMES", self.current_frame_id):
-                raise ValueError(f"Failed to set frame position to {self.current_frame_id}")
-
-        # Read the frame
-        success, frame_data = self.cap.read(return_format="rgb")
-        if not success or frame_data is None:
-            raise ValueError(f"Failed to read frame at position {self.current_frame_id}")
-        
-        result = {
-            "frame_id": self.current_frame_id,
-            "frame_data": frame_data,
-            "has_next_frame": (self.current_frame_id + self.frame_skip_interval) < self.total_frames,
-            "has_previous_frame": self.current_frame_id > 0,
+            "has_previous_frame": has_previous_frame,
         }
 
         return result
