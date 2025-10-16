@@ -52,7 +52,7 @@ steps:
       - "--timeout=300s"
       - "--concurrency=10"
       - "--service-account=${_SERVICE_ACCOUNT}"
-      - "--set-env-vars=GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT},SERVICE_DATAPREP_NAME=${_SERVICE_DATAPREP_NAME},SERVICE_DATAPREP_PORT=${_SERVICE_DATAPREP_PORT}"
+      - "--set-env-vars=GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT}"
       - "--no-allow-unauthenticated"
       - "--quiet"
 
