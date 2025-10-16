@@ -236,18 +236,21 @@ class VideoManager:
         # Extract detections for the current frame
         mask = self.detections.data["frame_index"] == self.current_frame_id
         frame_detections = self.detections[mask]
-        if frame_detections.tracker_id is None:
-            raise ValueError("Frame detections is not a valid Detections object")
+        
+        # Ensure frame_detections is a valid Detections object
+        if not isinstance(frame_detections, Detections):
+            raise ValueError("Frame detections extraction failed - not a Detections object")
 
         # Initialize player manager if needed
         if not self.player_manager:
             self.player_manager = initialize_player_manager(self.video_id, self.current_frame_id, frame_detections)
 
         # Replace tracker_id with player_id using track_to_player mapping
-        for det_idx in range(len(frame_detections)):
-            tracker_id = frame_detections.tracker_id[det_idx]
-            player_id = self.player_manager.track_to_player.get(tracker_id, 0)
-            frame_detections.tracker_id[det_idx] = player_id
+        if frame_detections.tracker_id is not None:
+            for det_idx in range(len(frame_detections)):
+                tracker_id = frame_detections.tracker_id[det_idx]
+                player_id = self.player_manager.track_to_player.get(tracker_id, 0)
+                frame_detections.tracker_id[det_idx] = player_id
 
         # Draw annotations on the frame
         frame_data = annotate_with_players(frame_data, frame_detections)
