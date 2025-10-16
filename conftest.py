@@ -32,6 +32,7 @@ source_dirs = [
     "services/service_dataprep/src",
     "services/service_tracking/src",
     "services/service_training/src",
+    "services/service_sticher/src",
 ]
 
 # Convert the relative paths to absolute paths.
@@ -48,7 +49,7 @@ existing_paths = [p for p in existing_python_path.split(os.pathsep) if p]
 
 # For absolute imports from the workspace root, we need the project root in PYTHONPATH
 # Combine the project root with the existing paths.
-combined_paths = set([str(project_root)] + existing_paths)
+combined_paths = set([str(project_root)] + existing_paths + absolute_source_paths)
 
 # Join the unique paths back into a single string using the OS separator.
 new_python_path = os.pathsep.join(sorted(list(combined_paths)))
@@ -59,6 +60,9 @@ os.environ["PYTHONPATH"] = new_python_path
 # Also update sys.path directly for the current process.
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
+for path in absolute_source_paths:
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 # Set environment variables for tests
 os.environ.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")

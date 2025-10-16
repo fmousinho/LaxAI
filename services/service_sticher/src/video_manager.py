@@ -24,7 +24,7 @@ try:
 except ImportError:
     raise ImportError("AffineAwareByteTrack could not be imported. Ensure the module is available.")
 
-from player_annotator import annotate_with_players
+from .player_annotator import annotate_with_players
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,13 @@ class VideoManager:
             ValueError: If video file is not found or cannot be loaded
         """
         try:
-            self.video_id = os.path.basename(video_path).split(".")[0]
+            # Extract video_id from path: tenant/process/{video_id}/imported/filename.mp4
+            path_parts = video_path.split("/")
+            if len(path_parts) >= 4 and path_parts[1] == "process":
+                self.video_id = path_parts[2]
+            else:
+                # Fallback to basename if path doesn't match expected structure
+                self.video_id = os.path.basename(video_path).split(".")[0]
 
             # Run detections loading and video capture setup in parallel
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
@@ -230,7 +236,7 @@ class VideoManager:
         # Extract detections for the current frame
         mask = self.detections.data["frame_index"] == self.current_frame_id
         frame_detections = self.detections[mask]
-        if type(frame_detections) is not Detections or frame_detections.tracker_id is None:
+        if frame_detections.tracker_id is None:
             raise ValueError("Frame detections is not a valid Detections object")
 
         # Initialize player manager if needed
