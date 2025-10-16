@@ -6,12 +6,13 @@ Proxies requests to service_dataprep FastAPI service.
 
 import logging
 import os
-from typing import List
+import time
+from typing import Optional
 
 import google.auth.transport.requests
 import google.oauth2.id_token
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
 
 from ..schemas.dataprep import (
     ErrorResponse,
@@ -31,61 +32,96 @@ from ..schemas.dataprep import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/dataprep", tags=["dataprep"])
+router = APIRouter(prefix="/dataprep", tags=["DataPrep"])
 
 
-class DataPrepClient:
-    """HTTP client for communicating with service_dataprep."""
+class ServiceHTTPClient:
+    """Base HTTP client for communicating with LaxAI microservices with token caching."""
 
-    def __init__(self):
-        service_name = os.getenv("SERVICE_DATAPREP_NAME", "laxai-service-dataprep")
-        port = os.getenv("SERVICE_DATAPREP_PORT", "8080")
-        project_id = os.getenv("GOOGLE_CLOUD_PROJECT", "laxai-466119")
-        region = "us-central1"  # Cloud Run region
-
+    def __init__(self, service_name: str, default_url: str, service_url_env_var: str):
         # Allow explicit override via environment variable (for local/dev environments)
-        explicit_url = os.getenv("SERVICE_DATAPREP_URL")
+        explicit_url = os.getenv(service_url_env_var)
 
         if explicit_url:
-            dataprep_service_url = explicit_url.rstrip("/")
-            self._target_audience = dataprep_service_url  # Use ID token for external URLs
+            service_url = explicit_url.rstrip("/")
+            self._target_audience = service_url  # Use ID token for external URLs
         else:
             # Use external Cloud Run service URL with proper authentication
-            dataprep_service_url = "https://laxai-service-dataprep-kfccnooita-uc.a.run.app"
-            self._target_audience = dataprep_service_url  # Required for external service authentication
+            service_url = default_url
+            self._target_audience = service_url  # Required for external service authentication
 
-        self.base_url = dataprep_service_url
-        self.client = httpx.AsyncClient(base_url=dataprep_service_url, timeout=30.0)
+        self.base_url = service_url
+        self.client = httpx.AsyncClient(base_url=service_url, timeout=30.0)
+
+        # Token caching
+        self._cached_token: Optional[str] = None
+        self._token_expiry: Optional[float] = None
 
     async def close(self):
         """Close the HTTP client."""
         await self.client.aclose()
 
-    async def _proxy_request(self, method: str, path: str, **kwargs) -> dict:
-        """Proxy a request to service_dataprep."""
+    def _get_cached_token(self) -> str:
+        """Get a cached ID token, refreshing if necessary."""
+        current_time = time.time()
+
+        # Check if we have a valid cached token
+        if self._cached_token and self._token_expiry and current_time < self._token_expiry:
+            return self._cached_token
+
+        # Fetch new token
+        if self._target_audience:
+            auth_req = google.auth.transport.requests.Request()
+            token = google.oauth2.id_token.fetch_id_token(auth_req, self._target_audience)
+            if token:
+                self._cached_token = token
+                # ID tokens typically expire in 1 hour (3600 seconds)
+                # We'll refresh 5 minutes early to be safe
+                self._token_expiry = current_time + 3300  # 55 minutes
+                return token
+
+        return ""
+
+    async def _proxy_request(self, method: str, path: str, service_prefix: str, **kwargs) -> dict:
+        """Proxy a request to the target service."""
         try:
             headers = {"Content-Type": "application/json"}
 
-            if self._target_audience:
-                auth_req = google.auth.transport.requests.Request()
-                id_token = google.oauth2.id_token.fetch_id_token(auth_req, self._target_audience)
-                headers["Authorization"] = f"Bearer {id_token}"
-            
+            # Get cached token instead of fetching new one
+            token = self._get_cached_token()
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+
             # Merge with any existing headers from kwargs (if provided)
             if "headers" in kwargs:
                 headers.update(kwargs["headers"])
             kwargs["headers"] = headers
-            
-            url = f"/api/v1/dataprep{path}"
+
+            url = f"/api/v1/{service_prefix}{path}"
             response = await self.client.request(method, url, **kwargs)
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as e:
-            logger.error("HTTP error from service_dataprep: %s", e)
+            logger.error("HTTP error from %s service: %s", service_prefix, e)
             raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
         except httpx.RequestError as e:
-            logger.error("Request error to service_dataprep (base_url=%s): %s", self.base_url, repr(e))
+            logger.error("Request error to %s service (base_url=%s): %s", service_prefix, self.base_url, repr(e))
             raise HTTPException(status_code=503, detail="Service unavailable")
+
+
+class DataPrepClient(ServiceHTTPClient):
+    """HTTP client for communicating with service_dataprep."""
+
+    def __init__(self):
+        super().__init__(
+            service_name="laxai-service-dataprep",
+            default_url="https://laxai-service-dataprep-kfccnooita-uc.a.run.app",
+            service_url_env_var="SERVICE_DATAPREP_URL"
+        )
+
+    async def _proxy_request(self, method: str, path: str, **kwargs) -> dict:
+        """Proxy a request to service_dataprep."""
+        return await super()._proxy_request(method, path, "dataprep", **kwargs)
 
 
 # Global client instance
