@@ -108,8 +108,8 @@ class StitchClient(ServiceHTTPClient):
 
     def __init__(self):
         super().__init__(
-            service_name="laxai-service-stitch",
-            default_url="https://laxai-service-stitch-kfccnooita-uc.a.run.app",
+            service_name="laxai-service-stitcher",
+            default_url="https://laxai-service-stitcher-517529966392.us-central1.run.app",
             service_url_env_var="SERVICE_STITCH_URL"
         )
 
