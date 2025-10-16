@@ -24,7 +24,7 @@ steps:
       - "-f"
       - "${_WORK_DIR}/Dockerfile"
       - "-t"
-      - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-api:latest"
+      - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-stitcher:latest"
       - "--build-arg"
       - "GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT}"
       - "."
@@ -33,7 +33,7 @@ steps:
     name: "gcr.io/cloud-builders/docker"
     args:
       - "push"
-      - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-api:latest"
+      - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-stitcher:latest"
 
   - id: "deploy-to-cloud-run"
     name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
@@ -41,8 +41,8 @@ steps:
     args:
       - "run"
       - "deploy"
-      - "laxai-api"
-      - "--image=us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-api:latest"
+      - "laxai-service-stitcher"
+      - "--image=us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-stitcher:latest"
       - "--region=us-central1"
       - "--cpu=2"
       - "--memory=4Gi"
