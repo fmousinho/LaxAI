@@ -2,7 +2,7 @@ import pytest
 import numpy as np
 from unittest.mock import MagicMock, patch
 import supervision as sv
-from services.service_sticher.src.video_manager import VideoManager
+from services.service_stitcher.src.video_manager import VideoManager
 
 
 @pytest.mark.integration

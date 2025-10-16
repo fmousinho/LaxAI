@@ -1,8 +1,8 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from fastapi.exceptions import HTTPException
-from services.service_sticher.src.v1.endpoints.video_endpoint import load
-from services.service_sticher.src.v1.schemas.video_schema import VideoLoadRequest, VideoLoadResponse
+from services.service_stitcher.src.v1.endpoints.video_endpoint import load
+from services.service_stitcher.src.v1.schemas.video_schema import VideoLoadRequest, VideoLoadResponse
 
 
 def test_load_video_endpoint_real():
@@ -46,7 +46,7 @@ def test_load_video_endpoint_invalid_path():
 
 def test_session_cleanup_mechanism():
     """Test that expired sessions are properly cleaned up."""
-    from services.service_sticher.src.v1.endpoints.video_endpoint import video_managers, CLEANUP_INTERVAL
+    from services.service_stitcher.src.v1.endpoints.video_endpoint import video_managers, CLEANUP_INTERVAL
     import time
     
     # Clear any existing sessions
@@ -90,7 +90,7 @@ def test_session_cleanup_mechanism():
 
 def test_stop_and_save_endpoint_success():
     """Test successful deletion of a video session."""
-    from services.service_sticher.src.v1.endpoints.video_endpoint import stop_and_save, video_managers
+    from services.service_stitcher.src.v1.endpoints.video_endpoint import stop_and_save, video_managers
     import time
     
     # Clear any existing sessions
@@ -121,7 +121,7 @@ def test_stop_and_save_endpoint_success():
 
 def test_stop_and_save_endpoint_session_not_found():
     """Test deletion of a non-existent video session returns 404."""
-    from services.service_sticher.src.v1.endpoints.video_endpoint import stop_and_save, video_managers
+    from services.service_stitcher.src.v1.endpoints.video_endpoint import stop_and_save, video_managers
     
     # Clear any existing sessions
     video_managers.clear()
