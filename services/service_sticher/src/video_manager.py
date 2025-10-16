@@ -111,9 +111,9 @@ class VideoManager:
             # Run detections loading and video capture setup in parallel
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
                 # Submit both tasks
-                detections_future = executor.submit(self._load_detections, self.video_id)
+                detections_future = executor.submit(self._load_detections)
                 capture_future = executor.submit(self._setup_video_capture, video_path)
-                players_future = executor.submit(self._load_players_if_json_exists, self.video_id)
+                players_future = executor.submit(self._load_players_if_json_exists)
                 
                 # Wait for both to complete
                 detections_result = detections_future.result()
@@ -167,7 +167,7 @@ class VideoManager:
         if not self.video_id:
             raise ValueError("Video ID is not set for this session.")
         
-        # Finds the next frame position and sets the cap
+        # Find the next frame position and sets the cap
         if self.current_frame_id is None:
             self.current_frame_id = 0
         else:
@@ -181,14 +181,26 @@ class VideoManager:
         success, frame_data = self.cap.read(return_format="rgb")
         if not success or frame_data is None:
             raise ValueError(f"Failed to read frame at position {self.current_frame_id}")
+        
+        # Extract detections for the current frame
         mask = self.detections.data["frame_index"] == self.current_frame_id
         frame_detections = self.detections[mask]
-        if type(frame_detections) is not Detections:
+        if type(frame_detections) is not Detections or frame_detections.tracker_id is None:
             raise ValueError("Frame detections is not a valid Detections object")
 
         if not self.player_manager:
             self.player_manager = initialize_player_manager(self.video_id, self.current_frame_id, frame_detections)
-    
+
+        # Replace tracker_id with player_id using track_to_player mapping
+        for det_idx in range(len(frame_detections)):
+            tracker_id = frame_detections.tracker_id[det_idx]
+            player_id = self.player_manager.track_to_player[tracker_id]
+            if not player_id:
+                player_id = 0
+            frame_detections.tracker_id[det_idx] = player_id
+
+        frame_data = 
+            
 
         # Check if there are more frames available
         has_next_frame = (self.current_frame_id + self.frame_skip_interval) < self.total_frames
@@ -316,7 +328,6 @@ class VideoManager:
             logger.info(f"No players data found for video: {self.video_id}")
             return
 
-
         try:
             self.player_manager = load_player_manager(self.video_id, players_json_str)
         except Exception as e:
@@ -324,7 +335,7 @@ class VideoManager:
             return
 
 
-    def _load_detections(self, video_path: str) -> bool:
+    def _load_detections(self) -> bool:
         """Load detections from Google Cloud Storage.
 
         Args:
@@ -334,6 +345,9 @@ class VideoManager:
             bool: True if detections were loaded successfully, False otherwise.
         """
         try:
+            if not self.video_id:
+                logger.warning("Video ID is not set, cannot load detections.")
+                return False
 
             # Get the path to the detections file
             detections_path = self.path_manager.get_path("detections_path", video_id=self.video_id)
@@ -372,6 +386,10 @@ class VideoManager:
             if self.detections is None or not isinstance(self.detections, Detections):
                 logger.error(f"Failed to create Detections object from JSON for video_id: {self.video_id}")
                 return False
+            
+            # Backup old tracker IDs if not already present
+            if self.detections.tracker_id is not None:
+                self.detections.data["old_tracker_id"] = self.detections.tracker_id
 
             # Check if detections have frame_index data
             if "frame_index" not in self.detections.data or len(self.detections.data["frame_index"]) == 0:

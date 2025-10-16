@@ -279,40 +279,6 @@ class PlayerManager:
             logger.error(f"Failed to serialize player data for video {self.video_id}: {e}")
             return ""
 
-
-    def load_from_disk(self) -> bool:
-        """
-        Load player data from JSON file.
-
-        Returns:
-            True if loaded successfully, False otherwise
-        """
-        try:
-            file_path = self._get_player_file_path()
-            if not file_path.exists():
-                logger.info(f"No player data file found for video {self.video_id}")
-                return True  # Not an error, just no data
-
-            with open(file_path, 'r') as f:
-                data = json.load(f)
-
-            with self._lock:
-                self.video_id = data["video_id"]
-                self._next_player_id = data["next_player_id"]
-
-                self.players = {}
-                for player_data in data["players"]:
-                    player = Player.from_dict(player_data)
-                    self.players[player.id] = player
-
-                self.track_to_player = {int(k): v for k, v in data["track_to_player"].items()}
-
-            logger.info(f"Loaded player data for video {self.video_id} from {file_path}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to load player data for video {self.video_id}: {e}")
-            return False
         
     def load_players_from_json(self, json_object: str):
         """
