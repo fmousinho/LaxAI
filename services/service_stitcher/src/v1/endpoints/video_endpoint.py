@@ -6,8 +6,6 @@ import time
 from typing import Dict, Tuple
 from contextlib import asynccontextmanager
 
-router = APIRouter(prefix="/video", tags=["video"])
-
 # Store managers with creation timestamps: session_id -> (manager, created_at)
 video_managers: Dict[str, Tuple[VideoManager, float]] = {}
 
