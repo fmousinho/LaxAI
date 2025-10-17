@@ -229,7 +229,8 @@ def get_style_config_for_preset(preset: str, base_color: Tuple[int, int, int]) -
         )
     elif preset == StylePreset.DIMMED.value:
         # Dim the color by reducing intensity
-        dimmed_color = tuple(int(c * 0.5) for c in base_color)
+        dimmed_color: Tuple = tuple(int(c * 0.5) for c in base_color)
+
         return StyleConfig(
             bbox_color=dimmed_color,
             bbox_thickness=1,
