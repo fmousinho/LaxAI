@@ -326,6 +326,8 @@ class DataPrepManager:
             self._stop_autosave_loop()
 
             # Create the stitcher
+            if isinstance(detections, tuple):
+                detections = detections[0]
             self.stitcher = TrackStitcher(detections=detections, existing_graph=existing_graph, storage=self.storage, video_id=video_id, path_manager=self.path_manager)
             self.current_video_id = video_id
 

@@ -5,7 +5,7 @@ from ..schemas.video_schema import (
     VideoLoadRequest, 
     VideoLoadResponse, 
     FrameMetadataResponse,
-    AnnotationRecipeResponse,
+    AnnotationDataResponse,
     VideoGenerationRequest,
     VideoGenerationResponse,
     ImageFormat
@@ -140,11 +140,11 @@ def previous_frame (session_id: str) -> FrameMetadataResponse:
 @router.get(
     "/frames/{session_id}/{frame_id}/metadata",
     response_model=FrameMetadataResponse,
-    summary="Get frame metadata",
-    description="Get metadata for a specific frame including detections and player mappings.",
+    summary="Get frame navigation metadata",
+    description="Get navigation and session metadata for a frame (no detection data). Use /recipe endpoint for annotations.",
 )
 def get_frame_metadata(session_id: str, frame_id: int) -> FrameMetadataResponse:
-    """Get metadata for a specific frame."""
+    """Get navigation metadata for a specific frame (no detection/annotation data)."""
     try:
         session_data = video_managers.get(session_id)
         if not session_data:
@@ -200,46 +200,48 @@ def get_frame_image(
 
 
 @router.get(
-    "/frames/{session_id}/{frame_id}/recipe",
-    response_model=AnnotationRecipeResponse,
-    summary="Get annotation recipe for frame",
-    description="Get declarative annotation recipe that can be rendered on client or server.",
+    "/frames/{session_id}/{frame_id}/annotations",
+    response_model=AnnotationDataResponse,
+    summary="Get frame annotation data (detections + rendering config)",
+    description="Get supervision.Detections and rendering configuration for a frame. This is the single source of truth for annotation data.",
 )
-def get_frame_annotation_recipe(
+def get_frame_annotations(
     session_id: str,
     frame_id: int
-) -> AnnotationRecipeResponse:
-    """Get annotation recipe for a specific frame."""
+) -> AnnotationDataResponse:
+    """Get annotation data for a specific frame (detections + rendering config)."""
     try:
         session_data = video_managers.get(session_id)
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
         
         manager, _ = session_data
-        recipe = manager.get_frame_annotation_recipe(frame_id)
+        annotation_data = manager.get_frame_annotation_data(frame_id)
         
-        return AnnotationRecipeResponse(
-            frame_id=frame_id,
-            recipe=recipe.to_dict()
-        )
+        return AnnotationDataResponse(**annotation_data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post(
-    "/{session_id}/generate-video",
-    response_model=VideoGenerationResponse,
-    summary="Generate annotated video with user edits",
-    description="Queue video generation task using user-edited annotation recipes.",
+@router.put(
+    "/frames/{session_id}/{frame_id}/annotations",
+    response_model=AnnotationDataResponse,
+    summary="Update frame annotation data",
+    description="Update detections and rendering configuration for a frame. This allows the web app to modify player mappings and other annotation data.",
 )
-async def generate_annotated_video(
+def update_frame_annotations(
     session_id: str,
-    request: VideoGenerationRequest,
-    background_tasks: BackgroundTasks
-) -> VideoGenerationResponse:
-    """Generate video with client-modified annotations."""
+    frame_id: int,
+    annotation_data: AnnotationDataResponse
+) -> AnnotationDataResponse:
+    """Update annotation data for a specific frame.
+    
+    The web application can use this to update player IDs, modify detections,
+    or change rendering styles. The updated data is stored in the VideoManager's
+    in-memory detections.
+    """
     try:
         session_data = video_managers.get(session_id)
         if not session_data:
@@ -247,100 +249,20 @@ async def generate_annotated_video(
         
         manager, _ = session_data
         
-        # Generate unique task ID
-        task_id = str(uuid.uuid4())
-        
-        # Queue background task for video generation
-        background_tasks.add_task(
-            render_video_with_recipes,
-            manager,
-            task_id,
-            request.frame_recipes,
-            request.output_format,
-            request.fps
+        # Update the detections in the video manager
+        updated_data = manager.update_frame_annotation_data(
+            frame_id=frame_id,
+            annotation_data=annotation_data.model_dump()
         )
         
-        return VideoGenerationResponse(
-            task_id=task_id,
-            status="queued",
-            message=f"Video generation task {task_id} queued successfully"
-        )
+        return AnnotationDataResponse(**updated_data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def render_video_with_recipes(
-    manager: VideoManager,
-    task_id: str,
-    frame_recipes: Dict[int, Dict],
-    output_format: str,
-    fps: int
-):
-    """Background task to render final video with annotation recipes.
-    
-    Args:
-        manager: VideoManager instance
-        task_id: Unique task identifier
-        frame_recipes: Dictionary mapping frame_id to recipe dict
-        output_format: Output video format (mp4, avi, etc.)
-        fps: Frames per second
-    """
-    import cv2
-    from shared_libs.common.annotation_schema import AnnotationRecipe
-    from services.service_stitcher.src.annotation_renderer import AnnotationRenderer
-    
-    try:
-        renderer = AnnotationRenderer()
-        output_path = f"{manager.storage.user_id}/rendered/{task_id}.{output_format}"
-        
-        # Initialize video writer
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v' if output_format == 'mp4' else 'XVID')
-        
-        # Get first frame to determine dimensions
-        first_frame = manager._load_raw_frame(0)
-        height, width = first_frame.shape[:2]
-        
-        # Create temporary local file
-        temp_output = f"/tmp/{task_id}.{output_format}"
-        out = cv2.VideoWriter(temp_output, fourcc, float(fps), (width, height))
-        
-        # Process each frame with its recipe
-        for frame_id in sorted(frame_recipes.keys()):
-            try:
-                # Load raw frame
-                frame_rgb = manager._load_raw_frame(frame_id)
-                
-                # Parse recipe from dict
-                recipe_dict = frame_recipes[frame_id]
-                recipe = AnnotationRecipe.from_dict(recipe_dict)
-                
-                # Render annotations
-                annotated_rgb = renderer.render_recipe(frame_rgb, recipe)
-                
-                # Convert to BGR for video writer
-                annotated_bgr = cv2.cvtColor(annotated_rgb, cv2.COLOR_RGB2BGR)
-                
-                # Write frame
-                out.write(annotated_bgr)
-                
-            except Exception as e:
-                print(f"Error processing frame {frame_id}: {e}")
-                continue
-        
-        # Release video writer
-        out.release()
-        
-        # Upload to GCS
-        manager.storage.upload_file(temp_output, output_path)
-        
-        # Clean up temporary file
-        import os
-        os.remove(temp_output)
-        
-        print(f"Video generation task {task_id} completed: {output_path}")
-        
-    except Exception as e:
-        print(f"Error in video generation task {task_id}: {e}")
+
 
 
 @router.delete(

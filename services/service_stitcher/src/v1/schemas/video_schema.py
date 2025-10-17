@@ -63,13 +63,16 @@ class DetectionInfo(BaseModel):
 
 
 class FrameMetadataResponse(BaseModel):
-    """Response model for frame metadata (for client-side annotation)."""
+    """Response model for frame navigation metadata.
+    
+    Note: This endpoint returns ONLY navigation/session metadata.
+    For detection/annotation data, use the /frames/{session_id}/{frame_id}/recipe endpoint.
+    This ensures a single source of truth for annotation data.
+    """
     
     frame_id: int = Field(..., description="The current frame index")
     video_id: str = Field(..., description="Video identifier")
     session_id: str = Field(..., description="Session identifier")
-    detections: List[DetectionInfo] = Field(default_factory=list, description="Detection data for the frame")
-    player_mappings: Dict[int, int] = Field(default_factory=dict, description="Tracker ID to Player ID mappings")
     has_next_frame: bool = Field(..., description="Whether there are more frames to read")
     has_previous_frame: bool = Field(..., description="Whether there are previous frames")
     total_frames: int = Field(..., description="Total number of frames in the video")
@@ -80,15 +83,6 @@ class FrameMetadataResponse(BaseModel):
                 "frame_id": 150,
                 "video_id": "test_video",
                 "session_id": "12345678-01",
-                "detections": [
-                    {
-                        "bbox": [100.0, 150.0, 200.0, 350.0],
-                        "tracker_id": 42,
-                        "player_id": 5,
-                        "confidence": 0.95
-                    }
-                ],
-                "player_mappings": {42: 5, 43: 7},
                 "has_next_frame": True,
                 "has_previous_frame": True,
                 "total_frames": 300
@@ -96,30 +90,47 @@ class FrameMetadataResponse(BaseModel):
         }
 
 
-class AnnotationRecipeResponse(BaseModel):
-    """Response model for annotation recipe."""
+class AnnotationDataResponse(BaseModel):
+    """Response model for frame annotation data (detections + rendering config).
+    
+    This is the single source of truth for detection and annotation data.
+    Contains supervision.Detections serialized to JSON plus lightweight rendering configuration.
+    """
     
     frame_id: int = Field(..., description="Frame identifier")
-    recipe: Dict = Field(..., description="Declarative annotation recipe")
+    video_id: str = Field(..., description="Video identifier")
+    session_id: str = Field(..., description="Session identifier")
+    detections: Dict[str, Any] = Field(..., description="Serialized supervision.Detections object")
+    rendering_config: Dict[str, Any] = Field(..., description="Rendering/style configuration")
+    has_next: bool = Field(..., description="Whether there are more frames")
+    has_previous: bool = Field(..., description="Whether there are previous frames")
+    total_frames: int = Field(..., description="Total number of frames in the video")
     
     class ConfigDict:
         json_schema_extra = {
             "example": {
                 "frame_id": 150,
-                "recipe": {
-                    "frame_id": 150,
-                    "instructions": [
-                        {
-                            "type": "bbox",
-                            "coords": [100.0, 150.0, 200.0, 350.0],
-                            "player_id": 5,
-                            "tracker_id": 42,
-                            "style_preset": "default",
-                            "confidence": 0.95
-                        }
-                    ],
-                    "metadata": {}
-                }
+                "video_id": "test_video",
+                "session_id": "12345678-01",
+                "detections": {
+                    "xyxy": [[100.0, 150.0, 200.0, 350.0]],
+                    "confidence": [0.95],
+                    "tracker_id": [42],
+                    "class_id": [0],
+                    "data": {
+                        "player_id": [5]
+                    }
+                },
+                "rendering_config": {
+                    "player_styles": {
+                        "5": {"preset": "default", "color": "#FF5733"}
+                    },
+                    "tracker_styles": {},
+                    "custom_colors": {}
+                },
+                "has_next": True,
+                "has_previous": True,
+                "total_frames": 300
             }
         }
 

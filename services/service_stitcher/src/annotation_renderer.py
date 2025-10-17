@@ -2,12 +2,15 @@
 
 This module provides native OpenCV/PIL rendering of declarative annotation
 instructions, ensuring consistent visual output with client-side rendering.
+
+Supports both legacy AnnotationRecipe format and new supervision.Detections + RenderingConfig format.
 """
 
 import cv2
 import numpy as np
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 import logging
+import supervision as sv
 
 from shared_libs.common.annotation_schema import (
     AnnotationRecipe,
@@ -15,6 +18,7 @@ from shared_libs.common.annotation_schema import (
     AnnotationType,
     StylePreset
 )
+from shared_libs.common.rendering_config import RenderingConfig, StylePreset as RenderStylePreset
 from shared_libs.common.player_color_palette import player_color_palette
 
 logger = logging.getLogger(__name__)
@@ -374,3 +378,147 @@ class AnnotationRenderer:
         annotated = self.render_recipe(frame_rgb, recipe)
         
         return annotated, recipe
+    
+    def render_detections(
+        self,
+        frame_rgb: np.ndarray,
+        detections: sv.Detections,
+        rendering_config: Optional[RenderingConfig] = None
+    ) -> np.ndarray:
+        """Render frame with supervision.Detections + RenderingConfig.
+        
+        This is the preferred method for rendering annotations using the
+        supervision.Detections data structure with separate rendering configuration.
+        
+        Args:
+            frame_rgb: Frame in RGB format
+            detections: supervision.Detections object
+            rendering_config: Optional rendering configuration (uses defaults if None)
+            
+        Returns:
+            Annotated frame in RGB format
+        """
+        # Convert to BGR for OpenCV
+        frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+        
+        # Use default config if none provided
+        if rendering_config is None:
+            rendering_config = RenderingConfig()
+        
+        # Extract detection data
+        xyxy = detections.xyxy
+        confidences = detections.confidence if detections.confidence is not None else [None] * len(xyxy)
+        tracker_ids = detections.tracker_id if detections.tracker_id is not None else [None] * len(xyxy)
+        
+        # Get player IDs from data dict
+        player_ids = detections.data.get('player_id', [None] * len(xyxy)) if detections.data else [None] * len(xyxy)
+        
+        # Render each detection
+        for i, bbox in enumerate(xyxy):
+            try:
+                x1, y1, x2, y2 = map(int, bbox)
+                player_id = player_ids[i]
+                tracker_id = tracker_ids[i]
+                confidence = confidences[i]
+                
+                # Get style preset name
+                if player_id is not None:
+                    preset_name = rendering_config.get_style_for_player(player_id)
+                elif tracker_id is not None:
+                    preset_name = rendering_config.get_style_for_tracker(tracker_id)
+                else:
+                    preset_name = rendering_config.default_style
+                
+                # Map preset to StylePreset enum
+                try:
+                    preset = RenderStylePreset(preset_name)
+                except ValueError:
+                    preset = RenderStylePreset.DEFAULT
+                
+                # Check for custom color override
+                custom_color = None
+                if player_id is not None:
+                    custom_color_rgb = rendering_config.get_color_for_player(player_id)
+                    if custom_color_rgb:
+                        # Convert RGB to BGR for OpenCV
+                        custom_color = (custom_color_rgb[2], custom_color_rgb[1], custom_color_rgb[0])
+                
+                # Get color
+                if custom_color:
+                    color_bgr = custom_color
+                else:
+                    # Use palette
+                    color = self.color_palette.by_idx(player_id if player_id is not None else 0)
+                    color_bgr = color.as_bgr()
+                
+                # Map preset to thickness and font settings
+                if preset == RenderStylePreset.HIGHLIGHTED:
+                    thickness = 3
+                    font_scale = 0.6
+                elif preset == RenderStylePreset.DIMMED:
+                    thickness = 1
+                    font_scale = 0.4
+                    # Dim the color
+                    color_bgr = tuple(int(c * 0.5 + 128 * 0.5) for c in color_bgr)
+                elif preset == RenderStylePreset.WARNING:
+                    thickness = 2
+                    font_scale = 0.5
+                    color_bgr = (0, 165, 255)  # Orange in BGR
+                elif preset == RenderStylePreset.SUCCESS:
+                    thickness = 2
+                    font_scale = 0.5
+                    color_bgr = (0, 255, 0)  # Green in BGR
+                else:  # DEFAULT
+                    thickness = 2
+                    font_scale = 0.5
+                
+                # Draw rectangle
+                cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), color_bgr, thickness)
+                
+                # Build label text
+                label_parts = []
+                if player_id is not None:
+                    label_parts.append(f"P{player_id}")
+                if tracker_id is not None:
+                    label_parts.append(f"T{tracker_id}")
+                if confidence is not None:
+                    label_parts.append(f"{confidence:.2f}")
+                
+                label_text = " ".join(label_parts) if label_parts else "Unknown"
+                
+                # Calculate label size
+                (label_w, label_h), baseline = cv2.getTextSize(
+                    label_text,
+                    self.font,
+                    font_scale,
+                    1
+                )
+                
+                # Draw label background
+                label_y1 = max(y1 - label_h - baseline - 5, 0)
+                label_y2 = y1
+                cv2.rectangle(
+                    frame_bgr,
+                    (x1, label_y1),
+                    (x1 + label_w + 5, label_y2),
+                    color_bgr,
+                    -1  # Filled
+                )
+                
+                # Draw label text
+                cv2.putText(
+                    frame_bgr,
+                    label_text,
+                    (x1 + 2, y1 - baseline - 2),
+                    self.font,
+                    font_scale,
+                    (255, 255, 255),  # White text
+                    1
+                )
+                
+            except Exception as e:
+                logger.error(f"Error rendering detection {i}: {e}")
+                continue
+        
+        # Convert back to RGB
+        return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)

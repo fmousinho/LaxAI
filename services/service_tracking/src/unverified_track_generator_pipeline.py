@@ -271,6 +271,9 @@ def extract_crops_from_frame(
             num_detections,
         )
 
+        if isinstance(detections, Tuple):
+            detections = detections[0]
+
         for xyxy, _mask, confidence, class_id, tracker_id, data in detections:
             try:
                 crop = crop_image(frame, xyxy.astype(int))

@@ -8,6 +8,7 @@ import logging
 import concurrent.futures
 import io
 import numpy as np
+from typing import Dict, Tuple, cast, Any
 from PIL import Image
 from supervision import Detections
 
@@ -15,7 +16,8 @@ import shared_libs.config.logging_config
 from shared_libs.common.player_manager import initialize_player_manager, load_player_manager
 from shared_libs.common.google_storage import get_storage, GCSPaths
 from shared_libs.common.detection_utils import json_to_detections, detections_to_json
-from shared_libs.common.annotation_schema import AnnotationRecipe, StylePreset
+from shared_libs.common.rendering_config import RenderingConfig
+from shared_libs.common.detection_utils import create_frame_response
 
 try:
     from shared_libs.common.detection import DetectionModel
@@ -301,13 +303,17 @@ class VideoManager:
     # ========== Public API Methods ==========
     
     def get_frame_metadata(self, frame_id: int) -> dict:
-        """Get frame metadata with detection info for client-side annotation.
+        """Get frame navigation metadata (without detection data).
+        
+        This method returns ONLY navigation and session metadata.
+        For detection/annotation data, use get_frame_annotation_data() instead.
+        This separation ensures a single source of truth for annotation data.
         
         Args:
             frame_id: Frame index to get metadata for
             
         Returns:
-            dict: Frame metadata including detections and player mappings
+            dict: Frame navigation metadata (no detection data)
             
         Raises:
             ValueError: If frame_id is invalid or video not loaded
@@ -318,38 +324,10 @@ class VideoManager:
         if frame_id < 0 or frame_id >= self.total_frames:
             raise ValueError(f"Invalid frame_id: {frame_id}. Must be between 0 and {self.total_frames - 1}")
         
-        # Get detections for this frame
-        detections = self._get_frame_detections(frame_id)
-        
-        # Initialize player manager if needed
-        self._ensure_player_manager(frame_id, detections)
-        
-        # Apply player mapping
-        detections = self._apply_player_mapping(detections)
-        
-        # Serialize detections for JSON response
-        detection_list = []
-        for i in range(len(detections)):
-            detection_info = {
-                "bbox": detections.xyxy[i].tolist() if detections.xyxy is not None else [],
-                "tracker_id": int(detections.tracker_id[i]) if detections.tracker_id is not None else None,
-                "confidence": float(detections.confidence[i]) if detections.confidence is not None else 1.0
-            }
-            
-            # Add player_id if available
-            if "player_id" in detections.data and len(detections.data["player_id"]) > i:
-                detection_info["player_id"] = int(detections.data["player_id"][i])
-            else:
-                detection_info["player_id"] = None
-            
-            detection_list.append(detection_info)
-        
         return {
             "frame_id": frame_id,
             "video_id": self.video_id,
             "session_id": self.session_id,
-            "detections": detection_list,
-            "player_mappings": dict(self.player_manager.track_to_player) if self.player_manager else {},
             "has_next_frame": (frame_id + self.frame_skip_interval) < self.total_frames,
             "has_previous_frame": frame_id > 0,
             "total_frames": self.total_frames
@@ -381,17 +359,17 @@ class VideoManager:
         # Encode to requested format
         return self._encode_image(frame_rgb, format, quality)
 
-    def get_frame_annotation_recipe(self, frame_id: int) -> AnnotationRecipe:
-        """Get declarative annotation recipe for client-side rendering.
+    def get_frame_annotation_data(self, frame_id: int) -> Dict:
+        """Get frame annotation data with Detections + RenderingConfig.
         
-        This returns a platform-agnostic recipe that can be rendered identically
-        on both client (Canvas) and server (OpenCV/PIL).
+        Returns detection data in JSON format suitable for client rendering.
+        This maintains supervision.Detections as the single source of truth.
         
         Args:
             frame_id: Frame index to get annotations for
             
         Returns:
-            AnnotationRecipe with declarative annotation instructions
+            Dict with annotations and rendering config
             
         Raises:
             ValueError: If frame_id is invalid or video not loaded
@@ -411,36 +389,122 @@ class VideoManager:
         # Apply player mapping
         detections = self._apply_player_mapping(detections)
         
-        # Build annotation recipe
-        recipe = AnnotationRecipe(frame_id=frame_id)
-        recipe.metadata = {
-            "video_id": self.video_id,
-            "session_id": self.session_id,
-            "total_frames": self.total_frames
-        }
+        # Create default rendering config
+        rendering_config = RenderingConfig.create_default()
         
-        # Add bbox annotation for each detection
-        for i in range(len(detections)):
-            bbox = detections.xyxy[i].tolist() if detections.xyxy is not None else []
-            tracker_id = int(detections.tracker_id[i]) if detections.tracker_id is not None else None
-            confidence = float(detections.confidence[i]) if detections.confidence is not None else None
-            
-            # Get player_id
-            player_id = -1
-            if "player_id" in detections.data and len(detections.data["player_id"]) > i:
-                player_id = int(detections.data["player_id"][i])
-            
-            # Add bbox with label
-            if len(bbox) == 4:
-                recipe.add_bbox(
-                    bbox=bbox,
-                    player_id=player_id,
-                    tracker_id=tracker_id,
-                    style=StylePreset.DEFAULT,
-                    confidence=confidence
-                )
+        # Serialize to JSON format
+        session_id_str = self.session_id if self.session_id else ""
+        video_id_str = self.video_id if self.video_id else ""
         
-        return recipe
+        return create_frame_response(
+            frame_id=frame_id,
+            video_id=video_id_str,
+            session_id=session_id_str,
+            detections=detections,
+            rendering_config=rendering_config,
+            has_next=(frame_id + self.frame_skip_interval) < self.total_frames,
+            has_previous=frame_id > 0,
+            total_frames=self.total_frames
+        )
+    
+    def get_frame_detections_with_config(self, frame_id: int) -> Tuple[Detections, RenderingConfig]:
+        """Get Detections and RenderingConfig for a frame.
+        
+        This returns the raw Detections object and rendering config,
+        useful for server-side rendering.
+        
+        Args:
+            frame_id: Frame index
+            
+        Returns:
+            Tuple of (Detections, RenderingConfig)
+            
+        Raises:
+            ValueError: If frame_id is invalid or video not loaded
+        """
+        if not self.video_id:
+            raise ValueError("Video ID is not set for this session")
+        
+        if frame_id < 0 or frame_id >= self.total_frames:
+            raise ValueError(f"Invalid frame_id: {frame_id}. Must be between 0 and {self.total_frames - 1}")
+        
+        # Get detections
+        detections = self._get_frame_detections(frame_id)
+        self._ensure_player_manager(frame_id, detections)
+        detections = self._apply_player_mapping(detections)
+        
+        # Create rendering config
+        rendering_config = RenderingConfig.create_default()
+        
+        return detections, rendering_config
+    
+    def update_frame_annotation_data(self, frame_id: int, annotation_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Update detections and rendering config for a specific frame.
+        
+        This method allows the web application to modify detection data (e.g., player IDs)
+        and have those changes reflected in the VideoManager's in-memory detections.
+        
+        Args:
+            frame_id: Frame index to update
+            annotation_data: Dictionary with "detections" and "rendering_config" keys
+            
+        Returns:
+            Updated annotation data as dictionary (same format as get_frame_annotation_data)
+            
+        Raises:
+            ValueError: If frame_id is invalid, video not loaded, or data format is invalid
+        """
+        from shared_libs.common.detection_utils import json_to_detections
+        
+        if not self.video_id:
+            raise ValueError("Video ID is not set for this session")
+        
+        if frame_id < 0 or frame_id >= self.total_frames:
+            raise ValueError(f"Invalid frame_id: {frame_id}. Must be between 0 and {self.total_frames - 1}")
+        
+        # Parse the incoming annotation data
+        if "detections" not in annotation_data:
+            raise ValueError("annotation_data must contain 'detections' key")
+        
+        # Convert JSON back to Detections object
+        detections, rendering_config = json_to_detections(annotation_data, return_rendering_config=True)
+        
+        if not isinstance(detections, Detections):
+            raise ValueError("Failed to parse detections from annotation_data")
+        
+        # Update the in-memory detections for this frame
+        # We need to find which detections in self.detections belong to this frame
+        # and replace them with the updated detections
+        
+        if self.detections is None or len(self.detections) == 0:
+            # If no detections exist, just set the new ones
+            self.detections = detections
+        else:
+            # Get the frame_id data from existing detections
+            if "frame_id" in self.detections.data:
+                frame_ids = self.detections.data["frame_id"]
+                # Find indices for this frame
+                frame_mask = frame_ids == frame_id
+                
+                # Get detections for other frames
+                other_frames_mask = ~frame_mask
+                other_detections = self.detections[other_frames_mask]
+                
+                # Add frame_id to new detections if not present
+                if "frame_id" not in detections.data:
+                    detections.data["frame_id"] = np.full(len(detections), frame_id, dtype=int)
+                
+                # Merge: other frames + updated frame
+                if isinstance(other_detections, Detections) and len(other_detections) > 0:
+                    self.detections = Detections.merge([other_detections, detections])
+                else:
+                    self.detections = detections
+            else:
+                # No frame_id tracking, replace all detections (shouldn't happen in normal use)
+                self.detections = detections
+        
+        # Return the updated annotation data in the same format
+        return self.get_frame_annotation_data(frame_id)
 
 
     def _setup_video_capture(self, video_path: str) -> dict:
@@ -568,7 +632,9 @@ class VideoManager:
                 return True
 
             # Convert JSON to Detections object
-            self.detections = json_to_detections(detections_json)
+            detections_result = json_to_detections(detections_json, return_rendering_config=False)
+            # Cast to Detections since return_rendering_config=False guarantees Detections type
+            self.detections = cast(Detections, detections_result)
 
             # Validate the resulting detections object
             if self.detections is None or not isinstance(self.detections, Detections):

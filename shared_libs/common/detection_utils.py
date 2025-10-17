@@ -2,14 +2,18 @@
 Detection utilities for the LaxAI project.
 
 This module provides functions for converting detection objects to/from JSON format.
+Supports both basic Detections serialization and enhanced serialization with RenderingConfig.
 """
 
 import json
 import logging
-from typing import Dict, Any, List, Union, Optional
+from typing import Dict, Any, List, Union, Optional, TYPE_CHECKING
 
 import numpy as np
 from supervision import Detections
+
+if TYPE_CHECKING:
+    from shared_libs.common.rendering_config import RenderingConfig
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +180,11 @@ def _normalize_data_value(value: Any) -> List[Any]:
     return [value]
 
 
-def detections_to_json(detections: Union[Detections, List[Any]]) -> List[Dict[str, Any]]:
+def detections_to_json(
+    detections: Union[Detections, List[Any]],
+    rendering_config: Optional['RenderingConfig'] = None,
+    include_rendering_config: bool = False
+) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
     """Convert detections into a list of JSON-serializable dictionaries.
 
     This implementation avoids repeatedly slicing the Supervision ``Detections`` object, which
@@ -185,16 +193,48 @@ def detections_to_json(detections: Union[Detections, List[Any]]) -> List[Dict[st
 
     Args:
         detections: Either a ``Detections`` object or an empty list of detections.
+        rendering_config: Optional RenderingConfig for styling/colors (only used if include_rendering_config=True)
+        include_rendering_config: If True, returns dict with "detections" and "rendering_config" keys.
+                                 If False (default), returns list of detection dicts (backward compatible)
 
     Returns:
-        List of dictionaries ready for JSON serialization.
+        List of dictionaries ready for JSON serialization (default behavior)
+        OR dict with "detections" and "rendering_config" keys (if include_rendering_config=True)
     """
 
     if not detections:
+        if include_rendering_config:
+            from shared_libs.common.rendering_config import RenderingConfig
+            config = rendering_config or RenderingConfig()
+            return {
+                "detections": {
+                    "xyxy": [],
+                    "confidence": [],
+                    "class_id": [],
+                    "tracker_id": [],
+                    "data": {},
+                    "metadata": {}
+                },
+                "rendering_config": config.to_dict()
+            }
         return []
 
     if isinstance(detections, list):
         if len(detections) == 0:
+            if include_rendering_config:
+                from shared_libs.common.rendering_config import RenderingConfig
+                config = rendering_config or RenderingConfig()
+                return {
+                    "detections": {
+                        "xyxy": [],
+                        "confidence": [],
+                        "class_id": [],
+                        "tracker_id": [],
+                        "data": {},
+                        "metadata": {}
+                    },
+                    "rendering_config": config.to_dict()
+                }
             return []
         if len(detections) == 1 and isinstance(detections[0], Detections):
             detections = detections[0]
@@ -224,32 +264,108 @@ def detections_to_json(detections: Union[Detections, List[Any]]) -> List[Dict[st
 
         result.append(entry)
 
+    # If rendering config requested, aggregate into single dict with config
+    if include_rendering_config:
+        from shared_libs.common.rendering_config import RenderingConfig
+        
+        # Combine all detections into single structure
+        detections_dict: Dict[str, Any] = {
+            "xyxy": [],
+            "confidence": [],
+            "class_id": [],
+            "tracker_id": [],
+            "data": {},
+            "metadata": {}
+        }
+        
+        for det in result:
+            detections_dict["xyxy"].extend(det.get("xyxy", []))
+            detections_dict["confidence"].extend(det.get("confidence", []))
+            detections_dict["class_id"].extend(det.get("class_id", []))
+            detections_dict["tracker_id"].extend(det.get("tracker_id", []))
+            
+            # Merge data
+            for key, value in det.get("data", {}).items():
+                if key not in detections_dict["data"]:
+                    detections_dict["data"][key] = []
+                if isinstance(value, list):
+                    detections_dict["data"][key].extend(value)
+                else:
+                    detections_dict["data"][key].append(value)
+            
+            # Update metadata (take last)
+            detections_dict["metadata"].update(det.get("metadata", {}))
+        
+        # Add rendering config
+        config = rendering_config or RenderingConfig()
+        return {
+            "detections": detections_dict,
+            "rendering_config": config.to_dict()
+        }
+
     return result
 
-def json_to_detections(json_list: List[Dict[str, Any]]) -> Detections:
+def json_to_detections(
+    json_data: Union[List[Dict[str, Any]], Dict[str, Any]],
+    return_rendering_config: bool = False
+) -> Union[Detections, tuple[Detections, 'RenderingConfig']]:
     """Convert a list of JSON dictionaries back to a Detections object.
     
-    Each dictionary in the list represents detections from one frame.
-    This function concatenates all detections from all frames into a single Detections object.
+    Supports two input formats:
+    1. List of detection dicts (backward compatible, original format)
+    2. Dict with "detections" and "rendering_config" keys (new enhanced format)
     
     Args:
-        json_list: List of dictionaries containing detection data per frame
+        json_data: Either:
+                  - List of dictionaries containing detection data per frame (original)
+                  - Dict with "detections" and "rendering_config" keys (enhanced)
+        return_rendering_config: If True, returns tuple (Detections, RenderingConfig)
+                                If False (default), returns only Detections (backward compatible)
         
     Returns:
-        A single Detections object with all detections concatenated
+        A single Detections object (default)
+        OR tuple of (Detections, RenderingConfig) if return_rendering_config=True
     """
-    if not json_list:
-        return Detections.empty()
+    from shared_libs.common.rendering_config import RenderingConfig
+    
+    rendering_config: Optional[RenderingConfig] = None
+    json_list: List[Dict[str, Any]]
+    
+    # Handle new enhanced format with rendering_config
+    if isinstance(json_data, dict) and "detections" in json_data:
+        detections_data = json_data["detections"]
+        
+        # Convert single detections dict to list format
+        json_list = [detections_data] if detections_data else []
+        
+        # Parse rendering config if present
+        if "rendering_config" in json_data:
+            rendering_config = RenderingConfig.from_dict(json_data["rendering_config"])
+        
+        # Process detections using existing logic below
+        json_data_list = json_list
+    else:
+        # Original list format processing
+        if not isinstance(json_data, list):
+            json_data_list = [json_data]
+        else:
+            json_data_list = json_data
+    
+    if not json_data_list:
+        detections = Detections.empty()
+        if return_rendering_config:
+            return detections, rendering_config or RenderingConfig()
+        return detections
     
     # Collect all data across frames
-    all_xyxy = []
-    all_confidence = []
-    all_class_id = []
-    all_tracker_id = []
-    all_data = {}
-    all_metadata = {}
+    all_xyxy: List[Any] = []
+    all_confidence: List[float] = []
+    all_class_id: List[int] = []
+    all_tracker_id: List[int] = []
+    all_data: Dict[str, List[Any]] = {}
+    all_metadata: Dict[str, Any] = {}
     
-    for frame_data in json_list:
+    for frame_data in json_data_list:
         # Extract frame-level data
         xyxy = frame_data.get("xyxy", [])
         confidence = frame_data.get("confidence", [])
@@ -302,4 +418,114 @@ def json_to_detections(json_list: List[Dict[str, Any]]) -> Detections:
     # Set metadata
     detection.metadata.update(all_metadata)
     
+    # Return with or without rendering config
+    if return_rendering_config:
+        config_to_return = rendering_config if rendering_config is not None else RenderingConfig()
+        return detection, config_to_return
+    
     return detection
+
+
+# ============================================================================
+# Helper/convenience functions
+# ============================================================================
+
+def create_frame_response(
+    frame_id: int,
+    video_id: str,
+    session_id: str,
+    detections: Detections,
+    rendering_config: Optional['RenderingConfig'] = None,
+    has_next: bool = False,
+    has_previous: bool = False,
+    total_frames: int = 0
+) -> Dict[str, Any]:
+    """Create a complete frame annotation response with metadata.
+    
+    This is a convenience function for API responses that includes both
+    detection/rendering data and navigation metadata.
+    
+    Args:
+        frame_id: Frame identifier
+        video_id: Video identifier
+        session_id: Session identifier
+        detections: supervision.Detections object
+        rendering_config: Optional rendering configuration
+        has_next: Whether there are more frames
+        has_previous: Whether there are previous frames
+        total_frames: Total number of frames
+        
+    Returns:
+        Complete dictionary ready for API response
+        
+    Example:
+        >>> response = create_frame_response(
+        ...     frame_id=0,
+        ...     video_id="test_video",
+        ...     session_id="12345",
+        ...     detections=detections,
+        ...     rendering_config=config
+        ... )
+    """
+    # Get detections and rendering config as dict
+    data = detections_to_json(detections, rendering_config, include_rendering_config=True)
+    
+    # data should be a dict with "detections" and "rendering_config" when include_rendering_config=True
+    if not isinstance(data, dict):
+        raise TypeError("Expected dict from detections_to_json with include_rendering_config=True")
+    
+    # Add metadata
+    result: Dict[str, Any] = {
+        "frame_id": frame_id,
+        "video_id": video_id,
+        "session_id": session_id,
+        "has_next": has_next,
+        "has_previous": has_previous,
+        "total_frames": total_frames
+    }
+    result.update(data)  # Add "detections" and "rendering_config"
+    
+    return result
+
+
+def update_player_mapping(
+    detections: Detections,
+    rendering_config: 'RenderingConfig',
+    tracker_id: int,
+    new_player_id: int,
+    style_preset: str = "default"
+) -> tuple[Detections, 'RenderingConfig']:
+    """Update player mapping for a tracker and apply style.
+    
+    This is a convenience function for updating both the detection data
+    (player_id in data dict) and rendering config (style mapping) together.
+    
+    Args:
+        detections: supervision.Detections object
+        rendering_config: RenderingConfig object
+        tracker_id: Tracker ID to update
+        new_player_id: New player ID to assign
+        style_preset: Style preset to apply (default, highlighted, etc.)
+        
+    Returns:
+        Tuple of (updated_detections, updated_rendering_config)
+        
+    Example:
+        >>> detections, config = update_player_mapping(
+        ...     detections, config,
+        ...     tracker_id=42,
+        ...     new_player_id=7,
+        ...     style_preset="highlighted"
+        ... )
+    """
+    # Update detections data
+    if detections.tracker_id is not None and "player_id" in detections.data:
+        player_ids = detections.data["player_id"]
+        for i, tid in enumerate(detections.tracker_id):
+            if tid == tracker_id:
+                player_ids[i] = new_player_id
+    
+    # Update rendering config
+    rendering_config.set_style_for_player(new_player_id, style_preset)
+    
+    return detections, rendering_config
