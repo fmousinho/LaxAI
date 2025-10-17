@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LaxAI Video Annotation - Client Example</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            padding: 10px 20px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        button:hover {
+            background: #45a049;
+        }
+        
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .canvas-container {
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 20px;
+            background: #000;
+        }
+        
+        canvas {
+            display: block;
+            max-width: 100%;
+            height: auto;
+        }
+        
+        .info-panel {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        
+        .info-panel h3 {
+            margin-top: 0;
+            color: #555;
+        }
+        
+        .detection-editor {
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 10px;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        
+        input, select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        
+        .status.info {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+        
+        .status.success {
+            background: #e8f5e9;
+            color: #388e3c;
+        }
+        
+        .status.error {
+            background: #ffebee;
+            color: #c62828;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🥍 LaxAI Video Annotation Tool</h1>
+        
+        <div id="status" class="status info" style="display: none;"></div>
+        
+        <div class="controls">
+            <button id="loadVideoBtn">Load Video</button>
+            <button id="prevFrameBtn" disabled>← Previous Frame</button>
+            <button id="nextFrameBtn" disabled>Next Frame →</button>
+            <button id="generateVideoBtn" disabled>Generate Annotated Video</button>
+        </div>
+        
+        <div class="info-panel">
+            <h3>Video Info</h3>
+            <div id="videoInfo">
+                <p><strong>Session ID:</strong> <span id="sessionId">-</span></p>
+                <p><strong>Current Frame:</strong> <span id="currentFrame">-</span> / <span id="totalFrames">-</span></p>
+                <p><strong>Video ID:</strong> <span id="videoId">-</span></p>
+            </div>
+        </div>
+        
+        <div class="canvas-container">
+            <canvas id="annotationCanvas"></canvas>
+        </div>
+        
+        <div class="detection-editor" id="detectionEditor" style="display: none;">
+            <h3>Edit Detection</h3>
+            <div class="form-group">
+                <label>Tracker ID:</label>
+                <input type="text" id="trackerIdInput" readonly>
+            </div>
+            <div class="form-group">
+                <label>Player ID:</label>
+                <input type="number" id="playerIdInput" min="-1" max="99">
+            </div>
+            <div class="form-group">
+                <label>Bounding Box:</label>
+                <input type="text" id="bboxInput" readonly>
+            </div>
+            <button id="updatePlayerBtn">Update Player ID</button>
+        </div>
+    </div>
+    
+    <script src="annotation_canvas.js"></script>
+    <script>
+        // Initialize annotation canvas
+        const API_BASE_URL = 'http://localhost:8000/api/v1';  // Update with your API URL
+        const annotationCanvas = new AnnotationCanvas('annotationCanvas', API_BASE_URL);
+        
+        // Store edited recipes for video generation
+        const editedRecipes = {};
+        
+        // UI Elements
+        const loadVideoBtn = document.getElementById('loadVideoBtn');
+        const prevFrameBtn = document.getElementById('prevFrameBtn');
+        const nextFrameBtn = document.getElementById('nextFrameBtn');
+        const generateVideoBtn = document.getElementById('generateVideoBtn');
+        const detectionEditor = document.getElementById('detectionEditor');
+        const updatePlayerBtn = document.getElementById('updatePlayerBtn');
+        const statusDiv = document.getElementById('status');
+        
+        // Load video
+        loadVideoBtn.addEventListener('click', async () => {
+            try {
+                showStatus('Loading video...', 'info');
+                
+                const tenantId = prompt('Enter tenant ID:', 'test_tenant');
+                const videoPath = prompt('Enter video path:', 'process/test_unit_test_video_service/imported/test_video.mp4');
+                
+                const videoData = await annotationCanvas.loadVideo(tenantId, videoPath);
+                
+                document.getElementById('sessionId').textContent = videoData.session_id;
+                document.getElementById('totalFrames').textContent = videoData.total_frames;
+                
+                // Load first frame
+                await annotationCanvas.loadFrame(0);
+                updateVideoInfo();
+                
+                // Enable controls
+                nextFrameBtn.disabled = !videoData.has_next_frame;
+                prevFrameBtn.disabled = !videoData.has_previous_frame;
+                generateVideoBtn.disabled = false;
+                
+                showStatus('Video loaded successfully!', 'success');
+                
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+                console.error(error);
+            }
+        });
+        
+        // Previous frame
+        prevFrameBtn.addEventListener('click', async () => {
+            try {
+                const metadata = await annotationCanvas.previousFrame();
+                updateVideoInfo(metadata);
+                updateNavigationButtons(metadata);
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+                console.error(error);
+            }
+        });
+        
+        // Next frame
+        nextFrameBtn.addEventListener('click', async () => {
+            try {
+                const metadata = await annotationCanvas.nextFrame();
+                updateVideoInfo(metadata);
+                updateNavigationButtons(metadata);
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+                console.error(error);
+            }
+        });
+        
+        // Detection selected
+        document.getElementById('annotationCanvas').addEventListener('detectionSelected', (event) => {
+            const { tracker_id, player_id, bbox } = event.detail;
+            
+            // Show editor
+            detectionEditor.style.display = 'block';
+            document.getElementById('trackerIdInput').value = tracker_id || 'N/A';
+            document.getElementById('playerIdInput').value = player_id;
+            document.getElementById('bboxInput').value = bbox.map(v => v.toFixed(1)).join(', ');
+            
+            showStatus('Detection selected. Edit player ID and click Update.', 'info');
+        });
+        
+        // Update player ID
+        updatePlayerBtn.addEventListener('click', () => {
+            const trackerId = parseInt(document.getElementById('trackerIdInput').value);
+            const newPlayerId = parseInt(document.getElementById('playerIdInput').value);
+            
+            if (isNaN(trackerId) || isNaN(newPlayerId)) {
+                showStatus('Invalid tracker or player ID', 'error');
+                return;
+            }
+            
+            // Update in canvas
+            const updated = annotationCanvas.updatePlayerMapping(trackerId, newPlayerId);
+            
+            if (updated) {
+                // Store edited recipe for this frame
+                editedRecipes[annotationCanvas.currentFrameId] = annotationCanvas.currentRecipe;
+                
+                showStatus(`Updated tracker ${trackerId} to player ${newPlayerId}`, 'success');
+            } else {
+                showStatus('Failed to update player ID', 'error');
+            }
+        });
+        
+        // Generate video
+        generateVideoBtn.addEventListener('click', async () => {
+            try {
+                if (Object.keys(editedRecipes).length === 0) {
+                    showStatus('No edits made yet. Edit some detections first.', 'info');
+                    return;
+                }
+                
+                showStatus('Generating video with your edits...', 'info');
+                
+                const result = await annotationCanvas.generateVideo(editedRecipes, 30);
+                
+                showStatus(`Video generation started! Task ID: ${result.task_id}`, 'success');
+                console.log('Video generation result:', result);
+                
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+                console.error(error);
+            }
+        });
+        
+        // Helper functions
+        function updateVideoInfo(metadata = null) {
+            if (metadata) {
+                document.getElementById('currentFrame').textContent = metadata.frame_id;
+                document.getElementById('videoId').textContent = metadata.video_id;
+            } else if (annotationCanvas.currentFrameId !== null) {
+                document.getElementById('currentFrame').textContent = annotationCanvas.currentFrameId;
+            }
+        }
+        
+        function updateNavigationButtons(metadata) {
+            prevFrameBtn.disabled = !metadata.has_previous_frame;
+            nextFrameBtn.disabled = !metadata.has_next_frame;
+        }
+        
+        function showStatus(message, type = 'info') {
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+            statusDiv.style.display = 'block';
+            
+            if (type === 'success' || type === 'error') {
+                setTimeout(() => {
+                    statusDiv.style.display = 'none';
+                }, 5000);
+            }
+        }
+    </script>
+</body>
+</html>

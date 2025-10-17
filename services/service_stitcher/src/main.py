@@ -6,6 +6,22 @@ Main FastAPI entry point for LaxAI Stitcher Service.
 import sys
 import os
 
+# Add workspace root to Python path for local development
+# Find the directory containing shared_libs by walking up from current file
+current_dir = os.path.dirname(os.path.abspath(__file__))
+workspace_root = None
+for _ in range(10):  # Prevent infinite loop
+    if os.path.exists(os.path.join(current_dir, 'shared_libs')):
+        workspace_root = current_dir
+        break
+    parent_dir = os.path.dirname(current_dir)
+    if parent_dir == current_dir:  # Reached filesystem root
+        break
+    current_dir = parent_dir
+
+if workspace_root and workspace_root not in sys.path:
+    sys.path.insert(0, workspace_root)
+
 # For Docker, /app is already the root
 if '/app' not in sys.path:
     sys.path.insert(0, '/app')

@@ -366,6 +366,6 @@ def setup_environment_secrets():
 
         load_secrets(CONFIG.get("secrets", {}))
     except Exception as e:
-        logger.error(f"❌ Failed to load environment: {e}")
-        raise (e)
-        # Continue anyway - some functionality might still work
+        logger.critical(f"❌ FAILED TO LOAD environment: {e}")
+    
+

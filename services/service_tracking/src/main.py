@@ -13,6 +13,7 @@ import sys
 import warnings
 
 import torch
+from torch.jit import TracerWarning
 
 # Ensure shared_libs can be imported
 sys.path.insert(0, '/app')
@@ -31,7 +32,13 @@ warnings.filterwarnings(
 )
 warnings.filterwarnings(
     "ignore",
-    message=r".*torch\.tensor results are registered as constants in the trace.*"
+    message=r".*torch\.tensor results are registered as constants in the trace.*",
+    category=TracerWarning
+)
+warnings.filterwarnings(
+    "ignore",
+    message=r".*TracerWarning.*torch\.tensor.*",
+    category=TracerWarning
 )
 
 # Set up logging

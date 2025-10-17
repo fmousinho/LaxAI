@@ -6,13 +6,16 @@ import threading
 import typing
 import logging
 import concurrent.futures
+import io
 import numpy as np
+from PIL import Image
 from supervision import Detections
 
 import shared_libs.config.logging_config 
 from shared_libs.common.player_manager import initialize_player_manager, load_player_manager
 from shared_libs.common.google_storage import get_storage, GCSPaths
 from shared_libs.common.detection_utils import json_to_detections, detections_to_json
+from shared_libs.common.annotation_schema import AnnotationRecipe, StylePreset
 
 try:
     from shared_libs.common.detection import DetectionModel
@@ -23,8 +26,6 @@ try:
     from shared_libs.common.tracker import AffineAwareByteTrack
 except ImportError:
     raise ImportError("AffineAwareByteTrack could not be imported. Ensure the module is available.")
-
-from .player_annotator import annotate_with_players
 
 logger = logging.getLogger(__name__)
 
@@ -153,120 +154,293 @@ class VideoManager:
     
 
     def next_frame(self) -> dict:
-        """Advance to the next frame in the video using frame skipping.
-        
-        Reads the next frame from the video capture object, advancing by
-        frame_skip_interval frames (default 30) for performance optimization.
+        """Navigate to next frame and return metadata only.
         
         Returns:
-            dict: Frame advancement result containing:
-                - frame_id (int): The current frame index after advancement
-                - frame_data: numpy array frame image data (RGB format)
-                - has_next_frame (bool): Whether there are more frames to read
-                - has_previous_frame (bool): Whether there are previous frames
+            dict: Frame metadata for client-side annotation
                 
         Raises:
-            ValueError: If no video is loaded or frame reading fails
+            ValueError: If no video is loaded or end of video reached
         """
-        return self._navigate_to_frame(self.frame_skip_interval)
-
-    def previous_frame(self) -> dict:        
-        """Go back to the previous frame in the video.
+        if self.current_frame_id is None:
+            new_frame_id = 0
+        else:
+            new_frame_id = self.current_frame_id + self.frame_skip_interval
+            if new_frame_id >= self.total_frames:
+                raise ValueError("End of video reached")
         
-        Moves the current frame position back by frame_skip_interval frames
-        (default 30) and reads that frame from the video capture object.
+        self.current_frame_id = new_frame_id
+        return self.get_frame_metadata(new_frame_id)
+
+    def previous_frame(self) -> dict:
+        """Navigate to previous frame and return metadata only.
         
         Returns:
-            dict: Frame rewind result containing:
-                - frame_id (int): The current frame index after rewinding
-                - frame_data: numpy array frame image data (RGB format)
-                - has_next_frame (bool): Whether there are more frames to read
-                - has_previous_frame (bool): Whether there are previous frames
+            dict: Frame metadata for client-side annotation
                 
         Raises:
-            ValueError: If no video is loaded or frame reading fails
+            ValueError: If no video is loaded
         """
-        return self._navigate_to_frame(-self.frame_skip_interval)
-
-    def _navigate_to_frame(self, frame_offset: int) -> dict:
-        """Navigate to a frame relative to the current position.
+        if self.current_frame_id is None:
+            new_frame_id = 0
+        else:
+            new_frame_id = max(0, self.current_frame_id - self.frame_skip_interval)
         
-        Common method for frame navigation used by next_frame and previous_frame.
+        self.current_frame_id = new_frame_id
+        return self.get_frame_metadata(new_frame_id)
+
+    # ========== Private Helper Methods ==========
+    
+    def _load_raw_frame(self, frame_id: int) -> np.ndarray:
+        """Load raw RGB frame from video without processing.
         
         Args:
-            frame_offset: Number of frames to advance (positive) or rewind (negative)
+            frame_id: Frame index to load
             
         Returns:
-            dict: Frame navigation result
+            np.ndarray: Raw RGB frame data
             
         Raises:
-            ValueError: If no video is loaded or frame reading fails
+            ValueError: If frame cannot be loaded
         """
         if not self.cap:
-            raise ValueError("No video loaded for this session.")
+            raise ValueError("No video loaded for this session")
         
-        if not self.video_id:
-            raise ValueError("Video ID is not set for this session.")
+        if not self.cap.set("CAP_PROP_POS_FRAMES", frame_id):
+            raise ValueError(f"Failed to seek to frame {frame_id}")
         
-        # Calculate new frame position
-        if self.current_frame_id is None:
-            self.current_frame_id = 0
-        else:
-            new_frame_id = self.current_frame_id + frame_offset
-            
-            # Handle boundary conditions
-            if frame_offset > 0:  # next_frame
-                if new_frame_id >= self.total_frames:
-                    raise ValueError("End of video reached")
-            else:  # previous_frame
-                if new_frame_id < 0:
-                    new_frame_id = 0
-            
-            self.current_frame_id = new_frame_id
-            
-        # Set frame position
-        if not self.cap.set("CAP_PROP_POS_FRAMES", self.current_frame_id):
-            raise ValueError(f"Failed to set frame position to {self.current_frame_id}")
-
-        # Read the frame
-        success, frame_data = self.cap.read(return_format="rgb")
-        if not success or frame_data is None:
-            raise ValueError(f"Failed to read frame at position {self.current_frame_id}")
+        success, frame_rgb = self.cap.read(return_format="rgb")
+        if not success or frame_rgb is None:
+            raise ValueError(f"Failed to read frame {frame_id}")
         
-        # Extract detections for the current frame
-        mask = self.detections.data["frame_index"] == self.current_frame_id
+        return frame_rgb
+    
+    def _get_frame_detections(self, frame_id: int) -> Detections:
+        """Get detections for specific frame from pre-loaded data.
+        
+        Args:
+            frame_id: Frame index
+            
+        Returns:
+            Detections: Detection objects for the frame
+            
+        Raises:
+            ValueError: If detection extraction fails
+        """
+        mask = self.detections.data["frame_index"] == frame_id
         frame_detections = self.detections[mask]
         
-        # Ensure frame_detections is a valid Detections object
         if not isinstance(frame_detections, Detections):
-            raise ValueError("Frame detections extraction failed - not a Detections object")
-
+            raise ValueError("Detection extraction failed - not a Detections object")
+        
+        return frame_detections
+    
+    def _ensure_player_manager(self, frame_id: int, detections: Detections) -> None:
+        """Initialize player_manager if not already initialized.
+        
+        Args:
+            frame_id: Current frame index
+            detections: Detections for initialization
+        """
+        if not self.player_manager and self.video_id is not None:
+            self.player_manager = initialize_player_manager(
+                self.video_id, 
+                frame_id, 
+                detections
+            )
+    
+    def _apply_player_mapping(self, detections: Detections) -> Detections:
+        """Map tracker_id to player_id in detections.
+        
+        Args:
+            detections: Detections with tracker_ids
+            
+        Returns:
+            Detections: Detections with player_ids mapped
+        """
+        if detections.tracker_id is not None and self.player_manager:
+            player_ids = np.array([
+                self.player_manager.track_to_player.get(int(tid), -1)
+                for tid in detections.tracker_id
+            ])
+            detections.data["player_id"] = player_ids
+        
+        return detections
+    
+    def _encode_image(self, frame: np.ndarray, format: str, quality: int) -> bytes:
+        """Encode numpy array to image bytes.
+        
+        Args:
+            frame: RGB numpy array
+            format: Image format ("png" or "jpeg")
+            quality: Compression quality (1-100, for JPEG)
+            
+        Returns:
+            bytes: Encoded image data
+            
+        Raises:
+            ValueError: If format is unsupported
+        """
+        # Convert numpy array to PIL Image
+        pil_image = Image.fromarray(frame.astype('uint8'), 'RGB')
+        
+        # Encode to bytes
+        buffer = io.BytesIO()
+        format_lower = format.lower()
+        
+        if format_lower == "png":
+            pil_image.save(buffer, format="PNG")
+        elif format_lower == "jpeg" or format_lower == "jpg":
+            pil_image.save(buffer, format="JPEG", quality=quality)
+        else:
+            raise ValueError(f"Unsupported image format: {format}. Use 'png' or 'jpeg'")
+        
+        buffer.seek(0)
+        return buffer.getvalue()
+    
+    # ========== Public API Methods ==========
+    
+    def get_frame_metadata(self, frame_id: int) -> dict:
+        """Get frame metadata with detection info for client-side annotation.
+        
+        Args:
+            frame_id: Frame index to get metadata for
+            
+        Returns:
+            dict: Frame metadata including detections and player mappings
+            
+        Raises:
+            ValueError: If frame_id is invalid or video not loaded
+        """
+        if not self.video_id:
+            raise ValueError("Video ID is not set for this session")
+        
+        if frame_id < 0 or frame_id >= self.total_frames:
+            raise ValueError(f"Invalid frame_id: {frame_id}. Must be between 0 and {self.total_frames - 1}")
+        
+        # Get detections for this frame
+        detections = self._get_frame_detections(frame_id)
+        
         # Initialize player manager if needed
-        if not self.player_manager:
-            self.player_manager = initialize_player_manager(self.video_id, self.current_frame_id, frame_detections)
-
-        # Replace tracker_id with player_id using track_to_player mapping
-        if frame_detections.tracker_id is not None:
-            for det_idx in range(len(frame_detections)):
-                tracker_id = frame_detections.tracker_id[det_idx]
-                player_id = self.player_manager.track_to_player.get(tracker_id, 0)
-                frame_detections.tracker_id[det_idx] = player_id
-
-        # Draw annotations on the frame
-        frame_data = annotate_with_players(frame_data, frame_detections)
-
-        # Check navigation possibilities
-        has_next_frame = (self.current_frame_id + self.frame_skip_interval) < self.total_frames
-        has_previous_frame = self.current_frame_id > 0
-
-        result = {
-            "frame_id": self.current_frame_id,
-            "frame_data": frame_data,
-            "has_next_frame": has_next_frame,
-            "has_previous_frame": has_previous_frame,
+        self._ensure_player_manager(frame_id, detections)
+        
+        # Apply player mapping
+        detections = self._apply_player_mapping(detections)
+        
+        # Serialize detections for JSON response
+        detection_list = []
+        for i in range(len(detections)):
+            detection_info = {
+                "bbox": detections.xyxy[i].tolist() if detections.xyxy is not None else [],
+                "tracker_id": int(detections.tracker_id[i]) if detections.tracker_id is not None else None,
+                "confidence": float(detections.confidence[i]) if detections.confidence is not None else 1.0
+            }
+            
+            # Add player_id if available
+            if "player_id" in detections.data and len(detections.data["player_id"]) > i:
+                detection_info["player_id"] = int(detections.data["player_id"][i])
+            else:
+                detection_info["player_id"] = None
+            
+            detection_list.append(detection_info)
+        
+        return {
+            "frame_id": frame_id,
+            "video_id": self.video_id,
+            "session_id": self.session_id,
+            "detections": detection_list,
+            "player_mappings": dict(self.player_manager.track_to_player) if self.player_manager else {},
+            "has_next_frame": (frame_id + self.frame_skip_interval) < self.total_frames,
+            "has_previous_frame": frame_id > 0,
+            "total_frames": self.total_frames
         }
+    
+    def get_raw_frame_image(self, frame_id: int, format: str = "png", quality: int = 95) -> bytes:
+        """Get raw frame image without annotations for client-side rendering.
+        
+        Args:
+            frame_id: Frame index to retrieve
+            format: Image format ("png" or "jpeg"), default "png"
+            quality: JPEG compression quality (1-100), default 95
+            
+        Returns:
+            bytes: Encoded image data ready for streaming
+            
+        Raises:
+            ValueError: If frame cannot be loaded or format invalid
+        """
+        if not self.video_id:
+            raise ValueError("Video ID is not set for this session")
+        
+        if frame_id < 0 or frame_id >= self.total_frames:
+            raise ValueError(f"Invalid frame_id: {frame_id}. Must be between 0 and {self.total_frames - 1}")
+        
+        # Load raw frame (fast - no annotation processing)
+        frame_rgb = self._load_raw_frame(frame_id)
+        
+        # Encode to requested format
+        return self._encode_image(frame_rgb, format, quality)
 
-        return result
+    def get_frame_annotation_recipe(self, frame_id: int) -> AnnotationRecipe:
+        """Get declarative annotation recipe for client-side rendering.
+        
+        This returns a platform-agnostic recipe that can be rendered identically
+        on both client (Canvas) and server (OpenCV/PIL).
+        
+        Args:
+            frame_id: Frame index to get annotations for
+            
+        Returns:
+            AnnotationRecipe with declarative annotation instructions
+            
+        Raises:
+            ValueError: If frame_id is invalid or video not loaded
+        """
+        if not self.video_id:
+            raise ValueError("Video ID is not set for this session")
+        
+        if frame_id < 0 or frame_id >= self.total_frames:
+            raise ValueError(f"Invalid frame_id: {frame_id}. Must be between 0 and {self.total_frames - 1}")
+        
+        # Get detections for this frame
+        detections = self._get_frame_detections(frame_id)
+        
+        # Initialize player manager if needed
+        self._ensure_player_manager(frame_id, detections)
+        
+        # Apply player mapping
+        detections = self._apply_player_mapping(detections)
+        
+        # Build annotation recipe
+        recipe = AnnotationRecipe(frame_id=frame_id)
+        recipe.metadata = {
+            "video_id": self.video_id,
+            "session_id": self.session_id,
+            "total_frames": self.total_frames
+        }
+        
+        # Add bbox annotation for each detection
+        for i in range(len(detections)):
+            bbox = detections.xyxy[i].tolist() if detections.xyxy is not None else []
+            tracker_id = int(detections.tracker_id[i]) if detections.tracker_id is not None else None
+            confidence = float(detections.confidence[i]) if detections.confidence is not None else None
+            
+            # Get player_id
+            player_id = -1
+            if "player_id" in detections.data and len(detections.data["player_id"]) > i:
+                player_id = int(detections.data["player_id"][i])
+            
+            # Add bbox with label
+            if len(bbox) == 4:
+                recipe.add_bbox(
+                    bbox=bbox,
+                    player_id=player_id,
+                    tracker_id=tracker_id,
+                    style=StylePreset.DEFAULT,
+                    confidence=confidence
+                )
+        
+        return recipe
 
 
     def _setup_video_capture(self, video_path: str) -> dict:

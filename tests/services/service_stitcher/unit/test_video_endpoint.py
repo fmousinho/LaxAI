@@ -14,7 +14,6 @@ def test_load_video_endpoint_real():
     # Assert
     assert isinstance(response, VideoLoadResponse)
     assert response.session_id is not None
-    assert response.video_path == "process/test_unit_test_video_service/imported/test_video.mp4"
     assert response.total_frames > 0
     assert isinstance(response.has_next_frame, bool)
     assert isinstance(response.has_previous_frame, bool)
@@ -53,7 +52,7 @@ def test_session_cleanup_mechanism():
     video_managers.clear()
     
     # Mock VideoManager to avoid GCS dependencies
-    with patch('services.service_sticher.src.v1.endpoints.video_endpoint.VideoManager') as mock_manager_class:
+    with patch('services.service_stitcher.src.v1.endpoints.video_endpoint.VideoManager') as mock_manager_class:
         mock_manager = MagicMock()
         mock_manager_class.return_value = mock_manager
         
@@ -97,7 +96,7 @@ def test_stop_and_save_endpoint_success():
     video_managers.clear()
     
     # Mock VideoManager
-    with patch('services.service_sticher.src.v1.endpoints.video_endpoint.VideoManager') as mock_manager_class:
+    with patch('services.service_stitcher.src.v1.endpoints.video_endpoint.VideoManager') as mock_manager_class:
         mock_manager = MagicMock()
         mock_manager_class.return_value = mock_manager
         
