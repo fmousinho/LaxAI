@@ -1,7 +1,8 @@
-# Multi-stage Dockerfile for service_sticher
+# Multi-stage Dockerfile for service_stitcher
 # API service for track stitching verification workflows
 
 FROM python:3.12-slim AS base
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \

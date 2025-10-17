@@ -1,5 +1,5 @@
 """
-Main FastAPI entry point for LaxAI Sticher Service.
+Main FastAPI entry point for LaxAI Stitcher Service.
 """
 
 # Ensure shared_libs can be imported
@@ -34,7 +34,7 @@ class Settings:
     """Application settings with environment variable support."""
 
     def __init__(self):
-        self.app_name: str = "LaxAI Sticher Service"
+        self.app_name: str = "LaxAI Stitcher Service"
         self.app_version: str = "1.0.0"
         self.debug: bool = os.getenv("DEBUG", "false").lower() == "true"
         self.host: str = os.getenv("HOST", "0.0.0.0")
@@ -133,7 +133,7 @@ def create_application() -> FastAPI:
     @app.get("/health")
     async def health_check():
         """Health check endpoint."""
-        return {"status": "healthy", "service": "sticher"}
+        return {"status": "healthy", "service": "stitcher"}
 
     return app
 
@@ -145,7 +145,7 @@ if __name__ == "__main__":
     import uvicorn
     settings = Settings()
     uvicorn.run(
-        "services.service_sticher.src.main:app",
+        "services.service_stitcher.src.main:app",
         host=settings.host,
         port=settings.port,
         reload=settings.reload,

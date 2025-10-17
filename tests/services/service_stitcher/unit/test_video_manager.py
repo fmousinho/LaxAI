@@ -20,7 +20,7 @@ class TestVideoManager:
 
     def test_next_frame_no_video_loaded(self):
         """Test next_frame when no video is loaded."""
-        with patch('services.service_sticher.src.video_manager.get_storage'):
+        with patch('services.service_stitcher.src.video_manager.get_storage'):
             manager = VideoManager("test_tenant")
             manager.cap = None  # No video loaded
 
@@ -94,7 +94,7 @@ class TestVideoManager:
 
     def test_previous_frame_no_video_loaded(self):
         """Test previous_frame when no video is loaded."""
-        with patch('services.service_sticher.src.video_manager.get_storage'):
+        with patch('services.service_stitcher.src.video_manager.get_storage'):
             manager = VideoManager("test_tenant")
             manager.cap = None
 

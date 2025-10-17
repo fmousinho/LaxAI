@@ -32,7 +32,7 @@ source_dirs = [
     "services/service_dataprep/src",
     "services/service_tracking/src",
     "services/service_training/src",
-    "services/service_sticher/src",
+    "services/service_stitcher/src",
 ]
 
 # Convert the relative paths to absolute paths.

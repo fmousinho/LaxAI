@@ -1,3 +1,5 @@
 fastapi
 pydantic
 pytest
+rfdetr
+uvicorn
