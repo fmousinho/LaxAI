@@ -48,7 +48,17 @@ class StyleConfig:
     @classmethod
     def from_dict(cls, data: dict) -> 'StyleConfig':
         """Create from dictionary."""
-        return cls(**data)
+        # Convert lists to tuples for tuple fields
+        processed_data = {}
+        for key, value in data.items():
+            if key in ['bbox_color', 'label_text_color'] and isinstance(value, list):
+                processed_data[key] = tuple(value)
+            elif key == 'label_bg_color' and isinstance(value, list):
+                processed_data[key] = tuple(value)
+            else:
+                processed_data[key] = value
+        
+        return cls(**processed_data)
 
 
 @dataclass
@@ -219,6 +229,10 @@ def get_style_config_for_preset(preset: str, base_color: Tuple[int, int, int]) -
     Returns:
         StyleConfig with appropriate settings
     """
+    # Validate that base_color is exactly 3 elements
+    if not isinstance(base_color, (tuple, list)) or len(base_color) != 3:
+        raise ValueError(f"base_color must be a tuple/list of exactly 3 integers, got {len(base_color) if hasattr(base_color, '__len__') else 'non-sequence'}")
+    
     if preset == StylePreset.HIGHLIGHTED.value:
         return StyleConfig(
             bbox_color=base_color,

@@ -5,6 +5,7 @@ from services.service_stitcher.src.v1.endpoints.video_endpoint import load
 from services.service_stitcher.src.v1.schemas.video_schema import VideoLoadRequest, VideoLoadResponse
 
 
+@pytest.mark.skip(reason="Requires valid GCS credentials - run as integration test only")
 def test_load_video_endpoint_real():
     req = VideoLoadRequest(tenant_id="test_tenant", video_path="process/test_unit_test_video_service/imported/test_video.mp4")
 
@@ -132,3 +133,275 @@ def test_stop_and_save_endpoint_session_not_found():
     # Should get a 404 error
     assert exc_info.value.status_code == 404
     assert "Session not found" in str(exc_info.value.detail)
+
+
+# Tests for new annotation endpoints
+def test_get_frame_annotations_success():
+    """Test successful GET frame annotations."""
+    from services.service_stitcher.src.v1.endpoints.video_endpoint import get_frame_annotations, video_managers
+    from services.service_stitcher.src.v1.schemas.video_schema import AnnotationDataResponse
+    import time
+
+    # Clear any existing sessions
+    video_managers.clear()
+
+    # Mock VideoManager
+    mock_manager = MagicMock()
+    mock_annotation_data = {
+        "frame_id": 42,
+        "video_id": "test_video",
+        "session_id": "test-session",
+        "detections": {
+            "xyxy": [[100, 200, 150, 250]],
+            "confidence": [0.9],
+            "class_id": [1],
+            "tracker_id": [123],
+            "data": {"player_id": [5]}
+        },
+        "rendering_config": {
+            "player_styles": {"5": "highlighted"},
+            "tracker_styles": {},
+            "default_style": "default",
+            "custom_colors": {}
+        },
+        "has_next": True,
+        "has_previous": True,
+        "total_frames": 100
+    }
+    mock_manager.get_frame_annotation_data.return_value = mock_annotation_data
+
+    # Set up a session in video_managers
+    session_id = "test-session"
+    video_managers[session_id] = (mock_manager, time.time())
+
+    # Call the endpoint
+    response = get_frame_annotations(session_id, 42)
+
+    # Verify response
+    assert isinstance(response, AnnotationDataResponse)
+    assert response.frame_id == 42
+    assert response.video_id == "test_video"
+    assert response.session_id == "test-session"
+    assert response.has_next is True
+    assert response.has_previous is True
+    assert response.total_frames == 100
+
+    # Verify VideoManager method was called correctly
+    mock_manager.get_frame_annotation_data.assert_called_once_with(42)
+
+
+def test_get_frame_annotations_session_not_found():
+    """Test GET frame annotations with non-existent session."""
+    from services.service_stitcher.src.v1.endpoints.video_endpoint import get_frame_annotations, video_managers
+
+    # Clear any existing sessions
+    video_managers.clear()
+
+    # Try to get annotations for non-existent session
+    with pytest.raises(HTTPException) as exc_info:
+        get_frame_annotations("non-existent-session", 42)
+
+    assert exc_info.value.status_code == 404
+    assert "Session not found" in str(exc_info.value.detail)
+
+
+def test_get_frame_annotations_invalid_frame_id():
+    """Test GET frame annotations with invalid frame_id."""
+    from services.service_stitcher.src.v1.endpoints.video_endpoint import get_frame_annotations, video_managers
+    import time
+
+    # Clear any existing sessions
+    video_managers.clear()
+
+    # Mock VideoManager that raises ValueError for invalid frame_id
+    mock_manager = MagicMock()
+    mock_manager.get_frame_annotation_data.side_effect = ValueError("Invalid frame_id: 999")
+
+    # Set up a session in video_managers
+    session_id = "test-session"
+    video_managers[session_id] = (mock_manager, time.time())
+
+    # Try to get annotations with invalid frame_id
+    with pytest.raises(HTTPException) as exc_info:
+        get_frame_annotations(session_id, 999)
+
+    assert exc_info.value.status_code == 400
+    assert "Invalid frame_id: 999" in str(exc_info.value.detail)
+
+
+def test_update_frame_annotations_success():
+    """Test successful PUT frame annotations."""
+    from services.service_stitcher.src.v1.endpoints.video_endpoint import update_frame_annotations, video_managers
+    from services.service_stitcher.src.v1.schemas.video_schema import AnnotationDataResponse
+    import time
+
+    # Clear any existing sessions
+    video_managers.clear()
+
+    # Mock VideoManager
+    mock_manager = MagicMock()
+    mock_updated_data = {
+        "frame_id": 42,
+        "video_id": "test_video",
+        "session_id": "test-session",
+        "detections": {
+            "xyxy": [[100, 200, 150, 250]],
+            "confidence": [0.9],
+            "class_id": [1],
+            "tracker_id": [123],
+            "data": {"player_id": [7]}  # Updated player_id
+        },
+        "rendering_config": {
+            "player_styles": {"7": "highlighted"},
+            "tracker_styles": {},
+            "default_style": "default",
+            "custom_colors": {}
+        },
+        "has_next": True,
+        "has_previous": True,
+        "total_frames": 100
+    }
+    mock_manager.update_frame_annotation_data.return_value = mock_updated_data
+
+    # Set up a session in video_managers
+    session_id = "test-session"
+    video_managers[session_id] = (mock_manager, time.time())
+
+    # Create request data
+    request_data = AnnotationDataResponse(
+        frame_id=42,
+        video_id="test_video",
+        session_id="test-session",
+        detections={
+            "xyxy": [[100, 200, 150, 250]],
+            "confidence": [0.9],
+            "class_id": [1],
+            "tracker_id": [123],
+            "data": {"player_id": [7]}
+        },
+        rendering_config={
+            "player_styles": {"7": "highlighted"},
+            "tracker_styles": {},
+            "default_style": "default",
+            "custom_colors": {}
+        },
+        has_next=True,
+        has_previous=True,
+        total_frames=100
+    )
+
+    # Call the endpoint
+    response = update_frame_annotations(session_id, 42, request_data)
+
+    # Verify response
+    assert isinstance(response, AnnotationDataResponse)
+    assert response.frame_id == 42
+    assert response.detections["data"]["player_id"] == [7]  # Updated player_id
+
+    # Verify VideoManager method was called correctly
+    mock_manager.update_frame_annotation_data.assert_called_once_with(
+        frame_id=42,
+        annotation_data=request_data.model_dump()
+    )
+
+
+def test_update_frame_annotations_session_not_found():
+    """Test PUT frame annotations with non-existent session."""
+    from services.service_stitcher.src.v1.endpoints.video_endpoint import update_frame_annotations, video_managers
+    from services.service_stitcher.src.v1.schemas.video_schema import AnnotationDataResponse
+
+    # Clear any existing sessions
+    video_managers.clear()
+
+    # Create request data
+    request_data = AnnotationDataResponse(
+        frame_id=42,
+        video_id="test_video",
+        session_id="test-session",
+        detections={"xyxy": [], "confidence": [], "class_id": [], "tracker_id": [], "data": {}},
+        rendering_config={"player_styles": {}, "tracker_styles": {}, "default_style": "default", "custom_colors": {}},
+        has_next=True,
+        has_previous=True,
+        total_frames=100
+    )
+
+    # Try to update annotations for non-existent session
+    with pytest.raises(HTTPException) as exc_info:
+        update_frame_annotations("non-existent-session", 42, request_data)
+
+    assert exc_info.value.status_code == 404
+    assert "Session not found" in str(exc_info.value.detail)
+
+
+def test_update_frame_annotations_invalid_frame_id():
+    """Test PUT frame annotations with invalid frame_id."""
+    from services.service_stitcher.src.v1.endpoints.video_endpoint import update_frame_annotations, video_managers
+    from services.service_stitcher.src.v1.schemas.video_schema import AnnotationDataResponse
+    import time
+
+    # Clear any existing sessions
+    video_managers.clear()
+
+    # Mock VideoManager that raises ValueError for invalid frame_id
+    mock_manager = MagicMock()
+    mock_manager.update_frame_annotation_data.side_effect = ValueError("Invalid frame_id: 999")
+
+    # Set up a session in video_managers
+    session_id = "test-session"
+    video_managers[session_id] = (mock_manager, time.time())
+
+    # Create request data
+    request_data = AnnotationDataResponse(
+        frame_id=999,
+        video_id="test_video",
+        session_id="test-session",
+        detections={"xyxy": [], "confidence": [], "class_id": [], "tracker_id": [], "data": {}},
+        rendering_config={"player_styles": {}, "tracker_styles": {}, "default_style": "default", "custom_colors": {}},
+        has_next=True,
+        has_previous=True,
+        total_frames=100
+    )
+
+    # Try to update annotations with invalid frame_id
+    with pytest.raises(HTTPException) as exc_info:
+        update_frame_annotations(session_id, 999, request_data)
+
+    assert exc_info.value.status_code == 400
+    assert "Invalid frame_id: 999" in str(exc_info.value.detail)
+
+
+def test_update_frame_annotations_invalid_data():
+    """Test PUT frame annotations with invalid data format."""
+    from services.service_stitcher.src.v1.endpoints.video_endpoint import update_frame_annotations, video_managers
+    from services.service_stitcher.src.v1.schemas.video_schema import AnnotationDataResponse
+    import time
+
+    # Clear any existing sessions
+    video_managers.clear()
+
+    # Mock VideoManager that raises ValueError for invalid data
+    mock_manager = MagicMock()
+    mock_manager.update_frame_annotation_data.side_effect = ValueError("annotation_data must contain 'detections' key")
+
+    # Set up a session in video_managers
+    session_id = "test-session"
+    video_managers[session_id] = (mock_manager, time.time())
+
+    # Create request data with missing detections
+    request_data = AnnotationDataResponse(
+        frame_id=42,
+        video_id="test_video",
+        session_id="test-session",
+        detections={},  # Invalid: missing required fields
+        rendering_config={"player_styles": {}, "tracker_styles": {}, "default_style": "default", "custom_colors": {}},
+        has_next=True,
+        has_previous=True,
+        total_frames=100
+    )
+
+    # Try to update annotations with invalid data
+    with pytest.raises(HTTPException) as exc_info:
+        update_frame_annotations(session_id, 42, request_data)
+
+    assert exc_info.value.status_code == 400
+    assert "annotation_data must contain 'detections' key" in str(exc_info.value.detail)

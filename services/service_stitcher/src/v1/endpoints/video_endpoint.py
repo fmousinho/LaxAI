@@ -219,6 +219,8 @@ def get_frame_annotations(
         annotation_data = manager.get_frame_annotation_data(frame_id)
         
         return AnnotationDataResponse(**annotation_data)
+    except HTTPException:
+        raise  # Re-raise HTTPException as-is
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -256,6 +258,8 @@ def update_frame_annotations(
         )
         
         return AnnotationDataResponse(**updated_data)
+    except HTTPException:
+        raise  # Re-raise HTTPException as-is
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
