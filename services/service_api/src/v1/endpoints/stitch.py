@@ -145,7 +145,8 @@ async def proxy_to_stitch(path: str, request: Request):
         body = await request.body()
 
         # Forward the request to stitch service
-        url = f"/api/v1/stitch/{path}"
+        # The path already includes the route after /stitch/, so we prepend /api/v1/
+        url = f"/api/v1/{path}"
         response = await stitch_client.client.request(
             method=request.method,
             url=url,
