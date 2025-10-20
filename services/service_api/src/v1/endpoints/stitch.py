@@ -7,12 +7,14 @@ Proxies requests to service_stitch FastAPI service.
 import logging
 import os
 import time
+import traceback
 from contextlib import asynccontextmanager
 from typing import Optional
 
 import google.auth.transport.requests
 import google.oauth2.id_token
 import httpx
+import requests
 from fastapi import APIRouter, HTTPException, Request, Response
 
 logger = logging.getLogger(__name__)
@@ -27,30 +29,25 @@ async def lifespan(app):
     await stitch_client.close()
 
 
-router = APIRouter(prefix="/stitch", tags=["Stitch"], lifespan=lifespan)
+router = APIRouter(prefix="/stitcher", tags=["Stitcher"], lifespan=lifespan)
 
 
 class ServiceHTTPClient:
     """Base HTTP client for communicating with LaxAI microservices with token caching."""
 
-    def __init__(self, service_name: str, default_url: str, service_url_env_var: str):
-        # Allow explicit override via environment variable (for local/dev environments)
-        explicit_url = os.getenv(service_url_env_var)
-
-        if explicit_url:
-            service_url = explicit_url.rstrip("/")
-            self._target_audience = service_url  # Use ID token for external URLs
-        else:
-            # Use external Cloud Run service URL with proper authentication
-            service_url = default_url
-            self._target_audience = service_url  # Required for external service authentication
-
+    def __init__(self, service_name: str, service_url: str):
         self.base_url = service_url
+        self._target_audience = service_url  # Required for service-to-service authentication
         self.client = httpx.AsyncClient(base_url=service_url, timeout=30.0)
 
         # Token caching
         self._cached_token: Optional[str] = None
         self._token_expiry: Optional[float] = None
+        
+        logger.info(
+            "Initialized %s client | Base URL: %s | Target audience: %s",
+            service_name, self.base_url, self._target_audience
+        )
 
     async def close(self):
         """Close the HTTP client."""
@@ -62,46 +59,59 @@ class ServiceHTTPClient:
 
         # Check if we have a valid cached token
         if self._cached_token and self._token_expiry and current_time < self._token_expiry:
+            logger.debug("Using cached token (expires in %.0f seconds)", self._token_expiry - current_time)
             return self._cached_token
 
-        # Fetch new token
+        # Fetch new token from metadata server (official method for Cloud Run)
         if self._target_audience:
-            auth_req = google.auth.transport.requests.Request()
-            token = google.oauth2.id_token.fetch_id_token(auth_req, self._target_audience)
-            if token:
-                self._cached_token = token
-                # ID tokens typically expire in 1 hour (3600 seconds)
-                # We'll refresh 5 minutes early to be safe
-                self._token_expiry = current_time + 3300  # 55 minutes
-                return token
+            try:
+                logger.info("Fetching new ID token for audience: %s", self._target_audience)
+                
+                # Official Cloud Run service-to-service authentication method
+                metadata_url = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity"
+                headers = {"Metadata-Flavor": "Google"}
+                params = {"audience": self._target_audience}
+                
+                response = requests.get(metadata_url, headers=headers, params=params, timeout=5)
+                response.raise_for_status()
+                token = response.text
+                
+                if token:
+                    self._cached_token = token
+                    # ID tokens typically expire in 1 hour (3600 seconds)
+                    # We'll refresh 5 minutes early to be safe
+                    self._token_expiry = current_time + 3300  # 55 minutes
+                    
+                    # Decode token to log claims for debugging
+                    import base64
+                    import json
+                    try:
+                        parts = token.split('.')
+                        if len(parts) == 3:
+                            payload = parts[1]
+                            payload += '=' * (4 - len(payload) % 4)
+                            decoded = json.loads(base64.urlsafe_b64decode(payload))
+                            logger.info(
+                                "Successfully fetched ID token | Length: %d | aud: %s | iss: %s | email: %s",
+                                len(token), 
+                                decoded.get('aud'), 
+                                decoded.get('iss'), 
+                                decoded.get('email', 'N/A')
+                            )
+                    except Exception as decode_err:
+                        logger.warning("Could not decode token for logging: %s", decode_err)
+                        logger.info("Successfully fetched ID token from metadata server (length: %d)", len(token))
+                    
+                    return token
+                else:
+                    logger.error("Metadata server returned empty token for audience: %s", self._target_audience)
+            except Exception as e:
+                logger.error("Error fetching ID token from metadata server for audience %s: %s\n%s", 
+                           self._target_audience, e, traceback.format_exc())
+        else:
+            logger.error("No target audience configured for token generation")
 
         return ""
-
-    async def _proxy_request(self, method: str, path: str, service_prefix: str, **kwargs) -> dict:
-        """Proxy a request to the target service."""
-        try:
-            headers = {"Content-Type": "application/json"}
-
-            # Get cached token instead of fetching new one
-            token = self._get_cached_token()
-            if token:
-                headers["Authorization"] = f"Bearer {token}"
-
-            # Merge with any existing headers from kwargs (if provided)
-            if "headers" in kwargs:
-                headers.update(kwargs["headers"])
-            kwargs["headers"] = headers
-
-            url = f"/api/v1/{service_prefix}{path}"
-            response = await self.client.request(method, url, **kwargs)
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPStatusError as e:
-            logger.error("HTTP error from %s service: %s", service_prefix, e)
-            raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
-        except httpx.RequestError as e:
-            logger.error("Request error to %s service (base_url=%s): %s", service_prefix, self.base_url, repr(e))
-            raise HTTPException(status_code=503, detail="Service unavailable")
 
 class StitchClient(ServiceHTTPClient):
     """HTTP client for communicating with service_stitch."""
@@ -109,14 +119,8 @@ class StitchClient(ServiceHTTPClient):
     def __init__(self):
         super().__init__(
             service_name="laxai-service-stitcher",
-            default_url="https://laxai-service-stitcher-517529966392.us-central1.run.app",
-            service_url_env_var="SERVICE_STITCH_URL"
+            service_url="https://laxai-service-stitcher-kfccnooita-uc.a.run.app"
         )
-
-    async def _proxy_request(self, method: str, path: str, **kwargs) -> dict:
-        """Proxy a request to service_stitch."""
-        return await super()._proxy_request(method, path, "stitch", **kwargs)
-
 
 # Global client instance
 stitch_client = StitchClient()
@@ -126,27 +130,46 @@ stitch_client = StitchClient()
 async def proxy_to_stitch(path: str, request: Request):
     """
     Catch-all proxy endpoint that forwards all requests to the stitch service.
-
     Automatically adds authentication headers using cached tokens.
     """
+    url = f"/api/v1/stitcher/{path}"
     try:
-        # Get the authorization token
         token = stitch_client._get_cached_token()
-
-        # Prepare headers - copy original headers and add auth
-        headers = dict(request.headers)
-        if token:
+        
+        # Build headers - copy all from request EXCEPT Authorization and Host
+        # The host header must match the target service, not the incoming request
+        headers = {k: v for k, v in request.headers.items() if k.lower() not in ("authorization", "host")}
+        
+        # Set the correct host header for the target service
+        headers["host"] = "laxai-service-stitcher-kfccnooita-uc.a.run.app"
+        
+        # Always set outgoing Authorization header to service account token
+        if not token:
+            logger.error(
+                "No valid token available | Method: %s | URL: %s | Base URL: %s",
+                request.method, url, stitch_client.base_url
+            )
+        else:
             headers["Authorization"] = f"Bearer {token}"
-        # Ensure Content-Type is set for JSON requests
+        
         if "content-type" not in [h.lower() for h in headers.keys()]:
             headers["Content-Type"] = "application/json"
-
-        # Get request body
+        
         body = await request.body()
-
-        # Forward the request to stitch service
-        # The path already includes the route after /stitch/, so we prepend /api/v1/
-        url = f"/api/v1/{path}"
+        
+        # Log detailed request info for debugging auth issues
+        logger.info(
+            "Proxying request | Method: %s | URL: %s | Has token: %s | Token prefix: %s",
+            request.method, 
+            url, 
+            bool(token),
+            token[:50] + "..." if token else "None"
+        )
+        logger.info(
+            "Outgoing headers: %s",
+            {k: (v[:50] + "..." if len(v) > 50 else v) for k, v in headers.items()}
+        )
+        
         response = await stitch_client.client.request(
             method=request.method,
             url=url,
@@ -154,21 +177,43 @@ async def proxy_to_stitch(path: str, request: Request):
             content=body,
             params=request.query_params,
         )
-
-        # Return the response
+        
+        logger.info(
+            "Proxy response received | Status: %s | URL: %s | Content-Length: %s",
+            response.status_code, 
+            url,
+            response.headers.get('content-length', 'N/A')
+        )
+        
+        # Log additional details for auth failures
+        if response.status_code == 401:
+            logger.error(
+                "Authentication failed (401) | URL: %s | Response: %s",
+                url,
+                response.text[:500] if response.text else "No response body"
+            )
+        
         return Response(
             content=response.content,
             status_code=response.status_code,
             headers=dict(response.headers),
         )
-
     except httpx.HTTPStatusError as e:
-        logger.error("HTTP error proxying to stitch service: %s", e)
+        logger.error(
+            "HTTP error proxying to stitch service | URL: %s | Status: %s | Response: %s\n%s",
+            url,
+            e.response.status_code if e.response else "N/A",
+            e.response.text if e.response else "N/A",
+            traceback.format_exc()
+        )
         return Response(
-            content=e.response.content,
-            status_code=e.response.status_code,
-            headers=dict(e.response.headers),
+            content=e.response.content if e.response else b"",
+            status_code=e.response.status_code if e.response else 500,
+            headers=dict(e.response.headers) if e.response else {},
         )
     except Exception as e:
-        logger.error("Error proxying request to stitch service: %s", e)
-        raise HTTPException(status_code=500, detail="Internal proxy error")
+        logger.error(
+            "Error proxying request to stitch service | URL: %s | Exception: %s\n%s",
+            url, str(e), traceback.format_exc()
+        )
+        raise HTTPException(status_code=500, detail=f"Internal proxy error: {str(e)}")
