@@ -64,7 +64,7 @@ async def lifespan(app):
     except asyncio.CancelledError:
         pass
 
-router = APIRouter(prefix="/video", tags=["video"], lifespan=lifespan)
+router = APIRouter(prefix="/stitcher/video", tags=["stitcher-video"], lifespan=lifespan)
 
 @router.post(
     "/load",
