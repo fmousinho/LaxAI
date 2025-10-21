@@ -8,15 +8,20 @@ from ..schemas.video_schema import (
     AnnotationDataResponse,
     ImageFormat
 )
+import logging
 import asyncio
 import time
- 
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 from typing import Dict, Tuple
 from contextlib import asynccontextmanager
 import io
 
 # Store managers with creation timestamps and a lock: session_id -> (manager, created_at, lock)
 from threading import Lock
+
 video_managers: Dict[str, Tuple[VideoManager, float, Lock]] = {}
 
 # Cleanup interval in seconds (12 hours)

@@ -70,32 +70,40 @@ warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 
-# Setup Google Cloud Logging if in cloud environment
-if os.getenv('K_SERVICE') or os.getenv('GAE_ENV') or os.getenv('ENV_TYPE') == 'gcp':
+"""Logging configuration
+
+In Cloud Run/GCP, prefer stdout/stderr for log collection. Attempt to set up
+google-cloud-logging as a secondary path, but never remove stdout handlers to
+avoid dropping logs if the API client fails or lacks permissions.
+"""
+
+is_cloud_env = os.getenv('K_SERVICE') or os.getenv('GAE_ENV') or os.getenv('ENV_TYPE') == 'gcp'
+
+if is_cloud_env:
     try:
-        from google.cloud import logging as cloud_logging
+        from google.cloud import logging as cloud_logging  # type: ignore
         client = cloud_logging.Client()
         client.setup_logging(log_level=logging.INFO)
-
-        # Remove stdout handler from root logger to avoid logs in stdout (GCS)
-        LOGGING["loggers"][""]["handlers"] = []
-        logging.config.dictConfig(LOGGING)
-
-        # Ensure framework loggers propagate to root
-        framework_loggers = [
-            "uvicorn", "uvicorn.error", "uvicorn.access", "uvicorn.asgi", "uvicorn.lifespan",
-            "gunicorn", "gunicorn.error", "gunicorn.access", "fastapi",
-        ]
-        for name in framework_loggers:
-            lg = logging.getLogger(name)
-            lg.handlers = []
-            lg.propagate = True
-            lg.setLevel(logging.INFO)
-
-    except ImportError:
+    except Exception:
+        # If Cloud Logging client isn't available or fails, silently fall back to stdout
+        # We still configure stdout below.
         pass
-else:
-    logging.config.dictConfig(LOGGING)
+
+# Always configure logging with our dictConfig (keep stdout handler intact)
+logging.config.dictConfig(LOGGING)
+
+# Ensure framework loggers propagate to root and don't carry duplicate handlers
+framework_loggers = [
+    "uvicorn", "uvicorn.error", "uvicorn.access", "uvicorn.asgi", "uvicorn.lifespan",
+    "gunicorn", "gunicorn.error", "gunicorn.access", "fastapi",
+]
+for name in framework_loggers:
+    lg = logging.getLogger(name)
+    lg.propagate = True
+    # Don't forcibly clear handlers here; let dictConfig manage root handlers
+    # and avoid stripping handlers that frameworks may rely on.
+    if is_cloud_env:
+        lg.setLevel(logging.INFO)
 
 
 def print_banner() -> None:
