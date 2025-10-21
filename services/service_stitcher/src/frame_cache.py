@@ -38,7 +38,8 @@ class RollingFrameCache:
         window_size: int = 5,
         max_workers: int = 2,
         format: str = "jpeg",
-        quality: int = 85
+        quality: int = 85,
+        frame_skip_interval: int = 1
     ):
         """Initialize rolling frame cache.
         
@@ -47,6 +48,7 @@ class RollingFrameCache:
             max_workers: Number of background threads for prefetching
             format: Default image format ('jpeg' or 'png')
             quality: Default JPEG quality (1-100)
+            frame_skip_interval: Interval between frames to cache (for skipping frames)
         """
         self.window_size = window_size
         self.max_cache_size = window_size * 2  # Keep window_size before + window_size after
@@ -60,6 +62,7 @@ class RollingFrameCache:
         # Prefetch management
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="frame-prefetch")
         self._prefetch_futures = {}  # frame_id -> Future
+        self.frame_skip_interval = frame_skip_interval
         
         # Statistics
         self._stats = {
@@ -138,13 +141,14 @@ class RollingFrameCache:
         """Trigger background prefetching for next N frames.
         
         Prefetches frames [current+1, current+window_size] in background.
+        Frames fetched in self.frame_skip_interval steps.
         Skips frames already cached or being prefetched.
         """
         frames_to_prefetch = []
         
         with self._lock:
             for offset in range(1, self.window_size + 1):
-                next_frame = current_frame + offset
+                next_frame = current_frame + offset * self.frame_skip_interval
                 
                 # Stop at video boundary
                 if next_frame >= total_frames:

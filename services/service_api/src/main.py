@@ -19,7 +19,7 @@ from shared_libs.config import logging_config
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 # Import API routers
-from services.service_api.src.v1 import router
+from v1 import router
 
 logger = logging.getLogger(__name__)
 

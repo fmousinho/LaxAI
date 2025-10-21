@@ -55,12 +55,39 @@
   "typeCheckingMode": "basic", // Or "strict", "off", depending on your preference
   "extraPaths": [
     "shared_libs",
-    "services/service-tracking/src",
-    "services/service-training/src",
-    "services/service-api/src",
-    "services/service-cloud/src",
-    "services/service_cr_train_proxy/src"
-  ], // Add paths for multi-service architecture
+    "services/service_api/src",
+    "services/service_stitcher/src",
+    "services/service_tracking/src",
+    "services/service_training/src",
+    "services/service_dataprep/src",
+    "services/service_cr_train_proxy/src",
+    "services/service_cr_tracking_proxy/src",
+    "services/service_cr_create_dataset_from_gml/src",
+    "services/service_gml_to_dataset/src"
+  ],
+
+  "executionEnvironments": [
+    {
+      "root": "services/service_stitcher/src",
+      "extraPaths": ["."]
+    },
+    {
+      "root": "services/service_api/src",
+      "extraPaths": ["."]
+    },
+    {
+      "root": "services/service_tracking/src",
+      "extraPaths": ["."]
+    },
+    {
+      "root": "services/service_training/src",
+      "extraPaths": ["."]
+    },
+    {
+      "root": "services/service_dataprep/src",
+      "extraPaths": ["."]
+    }
+  ],
 
   "overrides": [
     {

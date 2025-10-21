@@ -69,7 +69,6 @@ else:
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-logging.config.dictConfig(LOGGING)
 
 # Setup Google Cloud Logging if in cloud environment
 if os.getenv('K_SERVICE') or os.getenv('GAE_ENV') or os.getenv('ENV_TYPE') == 'gcp':
@@ -77,7 +76,11 @@ if os.getenv('K_SERVICE') or os.getenv('GAE_ENV') or os.getenv('ENV_TYPE') == 'g
         from google.cloud import logging as cloud_logging
         client = cloud_logging.Client()
         client.setup_logging(log_level=logging.INFO)
-        
+
+        # Remove stdout handler from root logger to avoid logs in stdout (GCS)
+        LOGGING["loggers"][""]["handlers"] = []
+        logging.config.dictConfig(LOGGING)
+
         # Ensure framework loggers propagate to root
         framework_loggers = [
             "uvicorn", "uvicorn.error", "uvicorn.access", "uvicorn.asgi", "uvicorn.lifespan",
@@ -88,9 +91,11 @@ if os.getenv('K_SERVICE') or os.getenv('GAE_ENV') or os.getenv('ENV_TYPE') == 'g
             lg.handlers = []
             lg.propagate = True
             lg.setLevel(logging.INFO)
-                
+
     except ImportError:
         pass
+else:
+    logging.config.dictConfig(LOGGING)
 
 
 def print_banner() -> None:

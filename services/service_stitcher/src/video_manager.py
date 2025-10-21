@@ -12,7 +12,7 @@ from typing import Dict, Tuple, cast, Any
 from PIL import Image
 from supervision import Detections
 
-from .frame_cache import RollingFrameCache
+from frame_cache import RollingFrameCache
 
 import shared_libs.config.logging_config 
 from shared_libs.common.player_manager import initialize_player_manager, load_player_manager
@@ -73,7 +73,8 @@ class VideoManager:
             window_size=5,
             max_workers=2,
             format="jpeg",
-            quality=85
+            quality=85,
+            frame_skip_interval=self.frame_skip_interval
         )
 
     def __del__(self):
@@ -372,22 +373,11 @@ class VideoManager:
     
     def _encode_frame_for_cache(self, frame_id: int, format: str, quality: int) -> bytes:
         """Encode a frame for caching (used by cache prefetch).
-        
-        This method is called by the cache system and should not be called directly.
-        
-        Args:
-            frame_id: Frame index to encode
-            format: Image format ('jpeg' or 'png')
-            quality: Compression quality
-            
-        Returns:
-            bytes: Encoded image data
+        Ensures thread safety for decoder access by acquiring the session lock.
         """
-        # Load raw frame (fast - no annotation processing)
-        frame_rgb = self._load_raw_frame(frame_id)
-        
-        # Encode to requested format
-        return self._encode_image(frame_rgb, format, quality)
+        with self.lock:
+            frame_rgb = self._load_raw_frame(frame_id)
+            return self._encode_image(frame_rgb, format, quality)
 
     def get_frame_annotation_data(self, frame_id: int) -> Dict:
         """Get frame annotation data with Detections + RenderingConfig.
@@ -484,7 +474,6 @@ class VideoManager:
         Raises:
             ValueError: If frame_id is invalid, video not loaded, or data format is invalid
         """
-        from shared_libs.common.detection_utils import json_to_detections
         
         if not self.video_id:
             raise ValueError("Video ID is not set for this session")
