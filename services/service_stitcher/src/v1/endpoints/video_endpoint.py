@@ -167,8 +167,8 @@ def get_frame_metadata(session_id: str, frame_id: int) -> FrameMetadataResponse:
 def get_frame_image(
     session_id: str, 
     frame_id: int,
-    format: ImageFormat = Query(ImageFormat.PNG, description="Image format (png or jpeg)"),
-    quality: int = Query(95, ge=1, le=100, description="JPEG quality (1-100, only for JPEG format)")
+    format: ImageFormat = Query(ImageFormat.JPEG, description="Image format (png or jpeg)"),  # Changed default to JPEG
+    quality: int = Query(85, ge=1, le=100, description="JPEG quality (1-100, only for JPEG format)")
 ) -> StreamingResponse:
     """Get raw frame image for client-side annotation."""
     try:
@@ -195,6 +195,24 @@ def get_frame_image(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/frames/{session_id}/cache-stats",
+    summary="Get frame cache statistics",
+    description="Get performance statistics for the rolling frame cache (hit rate, prefetch effectiveness, etc.)",
+)
+def get_cache_stats(session_id: str) -> dict:
+    """Get cache performance statistics for a session."""
+    try:
+        session_data = video_managers.get(session_id)
+        if not session_data:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        manager, _ = session_data
+        return manager.frame_cache.get_stats()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

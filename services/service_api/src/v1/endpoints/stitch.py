@@ -16,8 +16,15 @@ import google.oauth2.id_token
 import httpx
 import requests
 from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger(__name__)
+
+# Get service URL from environment variable
+STITCHER_SERVICE_URL = os.getenv(
+    "STITCHER_SERVICE_URL",
+    "https://laxai-service-stitcher-kfccnooita-uc.a.run.app"
+)
 
 
 @asynccontextmanager
@@ -35,19 +42,20 @@ router = APIRouter(prefix="/stitcher", tags=["Stitcher"], lifespan=lifespan)
 class ServiceHTTPClient:
     """Base HTTP client for communicating with LaxAI microservices with token caching."""
 
-    def __init__(self, service_name: str, service_url: str):
+    def __init__(self, service_name: str, service_url: str, timeout: float = 120.0):
+        self.service_name = service_name
         self.base_url = service_url
         self._target_audience = service_url  # Required for service-to-service authentication
-        # Increase timeout to 120 seconds to account for cold starts and artifact downloads
-        self.client = httpx.AsyncClient(base_url=service_url, timeout=120.0)
+        # Use httpx client WITHOUT base_url to allow full URL construction
+        self.client = httpx.AsyncClient(timeout=timeout)
 
         # Token caching
         self._cached_token: Optional[str] = None
         self._token_expiry: Optional[float] = None
         
         logger.info(
-            "Initialized %s client | Base URL: %s | Target audience: %s",
-            service_name, self.base_url, self._target_audience
+            "Initialized %s client | Service URL: %s | Target audience: %s | Timeout: %.0fs",
+            service_name, self.base_url, self._target_audience, timeout
         )
 
     async def close(self):
@@ -120,7 +128,8 @@ class StitchClient(ServiceHTTPClient):
     def __init__(self):
         super().__init__(
             service_name="laxai-service-stitcher",
-            service_url="https://laxai-service-stitcher-kfccnooita-uc.a.run.app"
+            service_url=STITCHER_SERVICE_URL,
+            timeout=120.0  # Allow time for cold starts and artifact downloads
         )
 
 # Global client instance
@@ -130,10 +139,16 @@ stitch_client = StitchClient()
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
 async def proxy_to_stitch(path: str, request: Request):
     """
-    Catch-all proxy endpoint that forwards all requests to the stitch service.
-    Automatically adds authentication headers using cached tokens.
+    Transparent proxy endpoint that forwards requests to the stitcher service.
+    
+    Request flow:
+    - Client: POST /api/v1/stitcher/video/load
+    - Router strips prefix: video/load
+    - Proxy forwards to: {STITCHER_SERVICE_URL}/api/v1/stitcher/video/load
     """
-    url = f"{path}"
+    # Build full URL by combining service URL with the full expected path
+    # We need to reconstruct /api/v1/stitcher/{path} because the router stripped /stitcher
+    full_url = f"{stitch_client.base_url}/api/v1/stitcher/{path}"
     try:
         token = stitch_client._get_cached_token()
         
@@ -148,7 +163,7 @@ async def proxy_to_stitch(path: str, request: Request):
         if not token:
             logger.error(
                 "No valid token available | Method: %s | URL: %s | Base URL: %s",
-                request.method, url, stitch_client.base_url
+                request.method, full_url, stitch_client.base_url
             )
         else:
             headers["Authorization"] = f"Bearer {token}"
@@ -162,7 +177,7 @@ async def proxy_to_stitch(path: str, request: Request):
         logger.info(
             "Proxying request | Method: %s | URL: %s | Has token: %s | Token prefix: %s",
             request.method, 
-            url, 
+            full_url, 
             bool(token),
             token[:50] + "..." if token else "None"
         )
@@ -173,7 +188,7 @@ async def proxy_to_stitch(path: str, request: Request):
         
         response = await stitch_client.client.request(
             method=request.method,
-            url=url,
+            url=full_url,
             headers=headers,
             content=body,
             params=request.query_params,
@@ -182,7 +197,7 @@ async def proxy_to_stitch(path: str, request: Request):
         logger.info(
             "Proxy response received | Status: %s | URL: %s | Content-Length: %s",
             response.status_code, 
-            url,
+            full_url,
             response.headers.get('content-length', 'N/A')
         )
         
@@ -190,10 +205,25 @@ async def proxy_to_stitch(path: str, request: Request):
         if response.status_code == 401:
             logger.error(
                 "Authentication failed (401) | URL: %s | Response: %s",
-                url,
+                full_url,
                 response.text[:500] if response.text else "No response body"
             )
         
+        # For image endpoints, stream the response to avoid buffering large payloads
+        # This significantly reduces latency for large responses (600KB+ images)
+        if "/image" in path and response.status_code == 200:
+            async def stream_response():
+                async for chunk in response.aiter_bytes(chunk_size=8192):
+                    yield chunk
+            
+            return StreamingResponse(
+                stream_response(),
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                media_type=response.headers.get('content-type', 'application/octet-stream')
+            )
+        
+        # For non-image endpoints, return as regular response
         return Response(
             content=response.content,
             status_code=response.status_code,
@@ -202,7 +232,7 @@ async def proxy_to_stitch(path: str, request: Request):
     except httpx.HTTPStatusError as e:
         logger.error(
             "HTTP error proxying to stitch service | URL: %s | Status: %s | Response: %s\n%s",
-            url,
+            full_url,
             e.response.status_code if e.response else "N/A",
             e.response.text if e.response else "N/A",
             traceback.format_exc()
@@ -215,6 +245,6 @@ async def proxy_to_stitch(path: str, request: Request):
     except Exception as e:
         logger.error(
             "Error proxying request to stitch service | URL: %s | Exception: %s\n%s",
-            url, str(e), traceback.format_exc()
+            full_url, str(e), traceback.format_exc()
         )
         raise HTTPException(status_code=500, detail=f"Internal proxy error: {str(e)}")

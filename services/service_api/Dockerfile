@@ -11,7 +11,8 @@ ENV PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive \
     TZ=UTC \
     SERVICE_DATAPREP_NAME=laxai-service-dataprep \
-    SERVICE_DATAPREP_PORT=8080
+    SERVICE_DATAPREP_PORT=8080 \
+    STITCHER_SERVICE_URL=https://laxai-service-stitcher-kfccnooita-uc.a.run.app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \

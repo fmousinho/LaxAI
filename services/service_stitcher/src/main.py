@@ -5,6 +5,16 @@ Main FastAPI entry point for LaxAI Stitcher Service.
 # Ensure shared_libs can be imported
 import sys
 import os
+import warnings
+
+# Silence noisy Torch JIT trace warnings (e.g., "TracerWarning: Converting a tensor to a Python boolean...")
+# Must be configured BEFORE importing routers that load detection models.
+try:
+    from torch.jit import TracerWarning  # type: ignore
+except Exception:
+    class TracerWarning(Warning):
+        pass
+warnings.filterwarnings("ignore", category=TracerWarning)
 
 # Add workspace root to Python path for local development
 # Find the directory containing shared_libs by walking up from current file

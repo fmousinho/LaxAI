@@ -12,22 +12,14 @@ from typing import Dict, Tuple, cast, Any
 from PIL import Image
 from supervision import Detections
 
+from .frame_cache import RollingFrameCache
+
 import shared_libs.config.logging_config 
 from shared_libs.common.player_manager import initialize_player_manager, load_player_manager
 from shared_libs.common.google_storage import get_storage, GCSPaths
 from shared_libs.common.detection_utils import json_to_detections, detections_to_json
 from shared_libs.common.rendering_config import RenderingConfig
 from shared_libs.common.detection_utils import create_frame_response
-
-try:
-    from shared_libs.common.detection import DetectionModel
-except ImportError:
-    raise ImportError("DetectionModel could not be imported. Ensure the module is available.")
-
-try:
-    from shared_libs.common.tracker import AffineAwareByteTrack
-except ImportError:
-    raise ImportError("AffineAwareByteTrack could not be imported. Ensure the module is available.")
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +43,6 @@ class VideoManager:
         frame_skip_interval (int): Number of frames to skip between reads for performance
     """
     path_manager = GCSPaths()
-    detector = DetectionModel()
-    tracker = AffineAwareByteTrack()
 
     def __init__(self, tenant_id: str, frame_skip_interval: int = FRAME_SKIP_INTERVAL):
         """Initialize a new VideoManager instance.
@@ -77,9 +67,19 @@ class VideoManager:
         self.video_id = None
         self.detections: Detections = Detections.empty()
         self.player_manager = None
+        
+        # Initialize rolling frame cache (5 frames before/after)
+        self.frame_cache = RollingFrameCache(
+            window_size=5,
+            max_workers=2,
+            format="jpeg",
+            quality=85
+        )
 
     def __del__(self):
         """Cleanup method to properly close video capture when VideoManager is destroyed."""
+        if self.frame_cache:
+            self.frame_cache.shutdown()
         if self.cap:
             try:
                 self.cap.__exit__(None, None, None)
@@ -291,7 +291,9 @@ class VideoManager:
         format_lower = format.lower()
         
         if format_lower == "png":
-            pil_image.save(buffer, format="PNG")
+            # Use compress_level=1 for faster encoding (default is 6)
+            # Lower compression = faster encoding but larger files
+            pil_image.save(buffer, format="PNG", compress_level=1)
         elif format_lower == "jpeg" or format_lower == "jpg":
             pil_image.save(buffer, format="JPEG", quality=quality)
         else:
@@ -333,13 +335,19 @@ class VideoManager:
             "total_frames": self.total_frames
         }
     
-    def get_raw_frame_image(self, frame_id: int, format: str = "png", quality: int = 95) -> bytes:
+    def get_raw_frame_image(self, frame_id: int, format: str = "jpeg", quality: int = 85) -> bytes:
         """Get raw frame image without annotations for client-side rendering.
+        
+        Uses intelligent rolling cache with prefetching for optimal performance:
+        - Checks cache first (instant if hit)
+        - On miss: encodes synchronously
+        - Prefetches next 5 frames in background
+        - Keeps previous 5 frames in memory
         
         Args:
             frame_id: Frame index to retrieve
-            format: Image format ("png" or "jpeg"), default "png"
-            quality: JPEG compression quality (1-100), default 95
+            format: Image format ("jpeg" or "png"), default "jpeg"
+            quality: JPEG compression quality (1-100), default 85
             
         Returns:
             bytes: Encoded image data ready for streaming
@@ -353,6 +361,28 @@ class VideoManager:
         if frame_id < 0 or frame_id >= self.total_frames:
             raise ValueError(f"Invalid frame_id: {frame_id}. Must be between 0 and {self.total_frames - 1}")
         
+        # Use cache with automatic prefetching
+        # The cache will handle encoding if needed and trigger background prefetch
+        return self.frame_cache.get(
+            frame_id=frame_id,
+            encode_func=self._encode_frame_for_cache,
+            total_frames=self.total_frames,
+            trigger_prefetch=True
+        )
+    
+    def _encode_frame_for_cache(self, frame_id: int, format: str, quality: int) -> bytes:
+        """Encode a frame for caching (used by cache prefetch).
+        
+        This method is called by the cache system and should not be called directly.
+        
+        Args:
+            frame_id: Frame index to encode
+            format: Image format ('jpeg' or 'png')
+            quality: Compression quality
+            
+        Returns:
+            bytes: Encoded image data
+        """
         # Load raw frame (fast - no annotation processing)
         frame_rgb = self._load_raw_frame(frame_id)
         
