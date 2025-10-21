@@ -38,7 +38,8 @@ class ServiceHTTPClient:
     def __init__(self, service_name: str, service_url: str):
         self.base_url = service_url
         self._target_audience = service_url  # Required for service-to-service authentication
-        self.client = httpx.AsyncClient(base_url=service_url, timeout=30.0)
+        # Increase timeout to 120 seconds to account for cold starts and artifact downloads
+        self.client = httpx.AsyncClient(base_url=service_url, timeout=120.0)
 
         # Token caching
         self._cached_token: Optional[str] = None
@@ -132,7 +133,7 @@ async def proxy_to_stitch(path: str, request: Request):
     Catch-all proxy endpoint that forwards all requests to the stitch service.
     Automatically adds authentication headers using cached tokens.
     """
-    url = f"/api/v1/stitcher/{path}"
+    url = f"{path}"
     try:
         token = stitch_client._get_cached_token()
         
