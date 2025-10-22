@@ -1,4 +1,4 @@
-from fastapi import HTTPException, APIRouter, Query, BackgroundTasks
+from fastapi import HTTPException, APIRouter, Query
 from fastapi.responses import StreamingResponse
 from ...video_manager import VideoManager
 from ..schemas.video_schema import (
@@ -6,19 +6,23 @@ from ..schemas.video_schema import (
     VideoLoadResponse, 
     FrameMetadataResponse,
     AnnotationDataResponse,
-    VideoGenerationRequest,
-    VideoGenerationResponse,
     ImageFormat
 )
+import logging
 import asyncio
 import time
-import uuid
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 from typing import Dict, Tuple
 from contextlib import asynccontextmanager
 import io
 
-# Store managers with creation timestamps: session_id -> (manager, created_at)
-video_managers: Dict[str, Tuple[VideoManager, float]] = {}
+# Store managers with creation timestamps and a lock: session_id -> (manager, created_at, lock)
+from threading import Lock
+
+video_managers: Dict[str, Tuple[VideoManager, float, Lock]] = {}
 
 # Cleanup interval in seconds (12 hours)
 CLEANUP_INTERVAL = 12 * 60 * 60  # 12 hours in seconds
@@ -29,9 +33,8 @@ async def cleanup_expired_sessions():
         try:
             current_time = time.time()
             expired_sessions = []
-
             # Find expired sessions (older than 12 hours)
-            for session_id, (manager, created_at) in video_managers.items():
+            for session_id, (manager, created_at, lock) in list(video_managers.items()):
                 if current_time - created_at > CLEANUP_INTERVAL:
                     expired_sessions.append(session_id)
 
@@ -42,7 +45,6 @@ async def cleanup_expired_sessions():
             # Log cleanup if any sessions were removed
             if expired_sessions:
                 print(f"Cleaned up {len(expired_sessions)} expired video sessions")
-
         except Exception as e:
             print(f"Error during session cleanup: {e}")
 
@@ -64,7 +66,7 @@ async def lifespan(app):
     except asyncio.CancelledError:
         pass
 
-router = APIRouter(prefix="/video", tags=["video"], lifespan=lifespan)
+router = APIRouter(prefix="/stitcher/video", tags=["stitcher-video"], lifespan=lifespan)
 
 @router.post(
     "/load",
@@ -82,7 +84,7 @@ def load (req: VideoLoadRequest) -> VideoLoadResponse:
             raise ValueError("Failed to get session ID from video manager")
         
         # Store manager with creation timestamp
-        video_managers[session_id] = (manager, time.time())
+        video_managers[session_id] = (manager, time.time(), Lock())
         
         return VideoLoadResponse(
             session_id=result["session_id"],
@@ -110,8 +112,9 @@ def next_frame(session_id: str) -> FrameMetadataResponse:
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        manager, _ = session_data
-        result = manager.next_frame()
+        manager, _, lock = session_data
+        with lock:
+            result = manager.next_frame()
         return FrameMetadataResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -130,8 +133,9 @@ def previous_frame (session_id: str) -> FrameMetadataResponse:
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
 
-        manager, _ = session_data
-        result = manager.previous_frame()
+        manager, _, lock = session_data
+        with lock:
+            result = manager.previous_frame()
         return FrameMetadataResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -150,14 +154,14 @@ def get_frame_metadata(session_id: str, frame_id: int) -> FrameMetadataResponse:
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        manager, _ = session_data
-        result = manager.get_frame_metadata(frame_id)
+        manager, _, lock = session_data
+        with lock:
+            result = manager.get_frame_metadata(frame_id)
         return FrameMetadataResponse(**result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get(
     "/frames/{session_id}/{frame_id}/image",
@@ -167,8 +171,8 @@ def get_frame_metadata(session_id: str, frame_id: int) -> FrameMetadataResponse:
 def get_frame_image(
     session_id: str, 
     frame_id: int,
-    format: ImageFormat = Query(ImageFormat.PNG, description="Image format (png or jpeg)"),
-    quality: int = Query(95, ge=1, le=100, description="JPEG quality (1-100, only for JPEG format)")
+    img_format: ImageFormat = Query(ImageFormat.JPEG, description="Image format (png or jpeg)"),
+    quality: int = Query(85, ge=1, le=100, description="JPEG quality (1-100, only for JPEG format)")
 ) -> StreamingResponse:
     """Get raw frame image for client-side annotation."""
     try:
@@ -176,21 +180,16 @@ def get_frame_image(
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        manager, _ = session_data
-        
-        # Get encoded image bytes
-        image_bytes = manager.get_raw_frame_image(frame_id, format.value, quality)
-        
-        # Determine media type
-        media_type = "image/png" if format == ImageFormat.PNG else "image/jpeg"
-        
-        # Return as streaming response
+        manager, _, lock = session_data
+        with lock:
+            image_bytes = manager.get_raw_frame_image(frame_id, img_format.value, quality)
+        media_type = "image/png" if img_format == ImageFormat.PNG else "image/jpeg"
         return StreamingResponse(
             io.BytesIO(image_bytes),
             media_type=media_type,
             headers={
                 "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
-                "Content-Disposition": f"inline; filename=frame_{frame_id}.{format.value}"
+                "Content-Disposition": f"inline; filename=frame_{frame_id}.{img_format.value}"
             }
         )
     except ValueError as e:
@@ -198,6 +197,25 @@ def get_frame_image(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.get(
+    "/frames/{session_id}/cache-stats",
+    summary="Get frame cache statistics",
+    description="Get performance statistics for the rolling frame cache (hit rate, prefetch effectiveness, etc.)",
+)
+def get_cache_stats(session_id: str) -> dict:
+    """Get cache performance statistics for a session."""
+    try:
+        session_data = video_managers.get(session_id)
+        if not session_data:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        manager, _, lock = session_data
+        with lock:
+            stats = manager.frame_cache.get_stats()
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get(
     "/frames/{session_id}/{frame_id}/annotations",
@@ -215,9 +233,9 @@ def get_frame_annotations(
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        manager, _ = session_data
-        annotation_data = manager.get_frame_annotation_data(frame_id)
-        
+        manager, _, lock = session_data
+        with lock:
+            annotation_data = manager.get_frame_annotation_data(frame_id)
         return AnnotationDataResponse(**annotation_data)
     except HTTPException:
         raise  # Re-raise HTTPException as-is
@@ -249,14 +267,13 @@ def update_frame_annotations(
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        manager, _ = session_data
-        
+        manager, _, lock = session_data
         # Update the detections in the video manager
-        updated_data = manager.update_frame_annotation_data(
-            frame_id=frame_id,
-            annotation_data=annotation_data.model_dump()
-        )
-        
+        with lock:
+            updated_data = manager.update_frame_annotation_data(
+                frame_id=frame_id,
+                annotation_data=annotation_data.model_dump()
+            )
         return AnnotationDataResponse(**updated_data)
     except HTTPException:
         raise  # Re-raise HTTPException as-is

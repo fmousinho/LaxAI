@@ -2,7 +2,7 @@ import numpy as np
 import shared_libs.config.logging_config
 
 import supervision as sv
-from common.player_color_palette import player_color_palette
+from shared_libs.common.player_color_palette import player_color_palette
 
 def annotate_with_players(
     frame: np.ndarray,

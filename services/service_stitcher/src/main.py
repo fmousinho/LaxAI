@@ -5,6 +5,16 @@ Main FastAPI entry point for LaxAI Stitcher Service.
 # Ensure shared_libs can be imported
 import sys
 import os
+import warnings
+
+# Silence noisy Torch JIT trace warnings (e.g., "TracerWarning: Converting a tensor to a Python boolean...")
+# Must be configured BEFORE importing routers that load detection models.
+try:
+    from torch.jit import TracerWarning  # type: ignore
+except Exception:
+    class TracerWarning(Warning):
+        pass
+warnings.filterwarnings("ignore", category=TracerWarning)
 
 # Add workspace root to Python path for local development
 # Find the directory containing shared_libs by walking up from current file
@@ -31,8 +41,6 @@ setup_environment_secrets()
 
 import logging
 import os
-import signal
-import asyncio
 from contextlib import asynccontextmanager
 from typing import List
 
@@ -73,54 +81,17 @@ class Settings:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan context manager."""
-    logger.info("Starting LaxAI DataPrep Service...")
-    
-    # Set up signal handlers for graceful shutdown
-    shutdown_event = asyncio.Event()
-    
-    def signal_handler(signum, frame):
-        logger.info(f"Received signal {signum}, initiating graceful shutdown...")
-        shutdown_event.set()
-    
-    # Register signal handlers
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
-    
-    # Create a task to wait for shutdown signal
-    async def wait_for_shutdown():
-        await shutdown_event.wait()
-        logger.info("Shutdown signal received, saving graphs...")
-        try:
-            from services.service_dataprep.src.v1.endpoints.dataprep import (
-                save_all_active_graphs,
-            )
-            await save_all_active_graphs()
-        except Exception as e:
-            logger.error(f"Error during signal-triggered graph save: {e}")
-    
-    shutdown_task = asyncio.create_task(wait_for_shutdown())
+    logger.info("Starting LaxAI Stitcher Service...")
     
     try:
         yield
     finally:
-        # Cancel the shutdown task if it's still running
-        if not shutdown_task.done():
-            shutdown_task.cancel()
-            try:
-                await shutdown_task
-            except asyncio.CancelledError:
-                pass
-        
-        logger.info("Shutting down LaxAI DataPrep Service...")
-        
-        # Attempt to save all active graphs before shutdown
-        try:
-            from services.service_dataprep.src.v1.endpoints.dataprep import (
-                save_all_active_graphs,
-            )
-            await save_all_active_graphs()
-        except Exception as e:
-            logger.error(f"Error during graph save on shutdown: {e}")
+        logger.info("Shutting down LaxAI Stitcher Service...")
+        # Cleanup video sessions on shutdown
+        from .v1.endpoints.video_endpoint import video_managers
+        if video_managers:
+            logger.info(f"Cleaning up {len(video_managers)} active video sessions...")
+            video_managers.clear()
 
 
 def create_application() -> FastAPI:

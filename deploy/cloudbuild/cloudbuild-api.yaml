@@ -16,6 +16,7 @@ substitutions:
   _WORK_DIR: "services/service_api"
   _SERVICE_DATAPREP_NAME: "laxai-service-dataprep"
   _SERVICE_DATAPREP_PORT: "80"
+  _STITCHER_SERVICE_URL: "https://laxai-service-stitcher-kfccnooita-uc.a.run.app"
 
 steps:
   - id: "build-and-tag-image"
@@ -55,7 +56,7 @@ steps:
       - "--timeout=300s"
       - "--concurrency=10"
       - "--service-account=${_SERVICE_ACCOUNT}"
-      - "--set-env-vars=GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT},SERVICE_DATAPREP_NAME=${_SERVICE_DATAPREP_NAME},SERVICE_DATAPREP_PORT=${_SERVICE_DATAPREP_PORT}"
+      - "--set-env-vars=GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT},SERVICE_DATAPREP_NAME=${_SERVICE_DATAPREP_NAME},SERVICE_DATAPREP_PORT=${_SERVICE_DATAPREP_PORT},STITCHER_SERVICE_URL=${_STITCHER_SERVICE_URL}"
       - "--no-allow-unauthenticated"
       - "--quiet"
 

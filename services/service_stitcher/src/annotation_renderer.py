@@ -383,7 +383,7 @@ class AnnotationRenderer:
         self,
         frame_rgb: np.ndarray,
         detections: sv.Detections,
-        rendering_config: Optional[RenderingConfig] = None
+        rendering_config: RenderingConfig
     ) -> np.ndarray:
         """Render frame with supervision.Detections + RenderingConfig.
         
@@ -393,17 +393,13 @@ class AnnotationRenderer:
         Args:
             frame_rgb: Frame in RGB format
             detections: supervision.Detections object
-            rendering_config: Optional rendering configuration (uses defaults if None)
+            rendering_config: Rendering configuration (required)
             
         Returns:
             Annotated frame in RGB format
         """
         # Convert to BGR for OpenCV
         frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-        
-        # Use default config if none provided
-        if rendering_config is None:
-            rendering_config = RenderingConfig()
         
         # Extract detection data
         xyxy = detections.xyxy

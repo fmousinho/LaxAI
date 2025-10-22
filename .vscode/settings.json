@@ -4,5 +4,13 @@
     "python.testing.pytestArgs": [
         "tests"
     ],
-    "workbench.colorTheme": "Monokai Dimmed"
+    "workbench.colorTheme": "Monokai Dimmed",
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/shared_libs",
+        "${workspaceFolder}/services/service_stitcher/src",
+        "${workspaceFolder}/services/service_api/src",
+        "${workspaceFolder}/services/service_tracking/src",
+        "${workspaceFolder}/services/service_training/src",
+        "${workspaceFolder}/services/service_dataprep/src"
+    ]
 }

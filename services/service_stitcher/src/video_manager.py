@@ -12,6 +12,8 @@ from typing import Dict, Tuple, cast, Any
 from PIL import Image
 from supervision import Detections
 
+from frame_cache import RollingFrameCache
+
 import shared_libs.config.logging_config 
 from shared_libs.common.player_manager import initialize_player_manager, load_player_manager
 from shared_libs.common.google_storage import get_storage, GCSPaths
@@ -65,9 +67,20 @@ class VideoManager:
         self.video_id = None
         self.detections: Detections = Detections.empty()
         self.player_manager = None
+        
+        # Initialize rolling frame cache (5 frames before/after)
+        self.frame_cache = RollingFrameCache(
+            window_size=5,
+            max_workers=2,
+            format="jpeg",
+            quality=85,
+            frame_skip_interval=self.frame_skip_interval
+        )
 
     def __del__(self):
         """Cleanup method to properly close video capture when VideoManager is destroyed."""
+        if self.frame_cache:
+            self.frame_cache.shutdown()
         if self.cap:
             try:
                 self.cap.__exit__(None, None, None)
@@ -279,7 +292,9 @@ class VideoManager:
         format_lower = format.lower()
         
         if format_lower == "png":
-            pil_image.save(buffer, format="PNG")
+            # Use compress_level=1 for faster encoding (default is 6)
+            # Lower compression = faster encoding but larger files
+            pil_image.save(buffer, format="PNG", compress_level=1)
         elif format_lower == "jpeg" or format_lower == "jpg":
             pil_image.save(buffer, format="JPEG", quality=quality)
         else:
@@ -321,13 +336,19 @@ class VideoManager:
             "total_frames": self.total_frames
         }
     
-    def get_raw_frame_image(self, frame_id: int, format: str = "png", quality: int = 95) -> bytes:
+    def get_raw_frame_image(self, frame_id: int, format: str = "jpeg", quality: int = 85) -> bytes:
         """Get raw frame image without annotations for client-side rendering.
+        
+        Uses intelligent rolling cache with prefetching for optimal performance:
+        - Checks cache first (instant if hit)
+        - On miss: encodes synchronously
+        - Prefetches next 5 frames in background
+        - Keeps previous 5 frames in memory
         
         Args:
             frame_id: Frame index to retrieve
-            format: Image format ("png" or "jpeg"), default "png"
-            quality: JPEG compression quality (1-100), default 95
+            format: Image format ("jpeg" or "png"), default "jpeg"
+            quality: JPEG compression quality (1-100), default 85
             
         Returns:
             bytes: Encoded image data ready for streaming
@@ -341,11 +362,22 @@ class VideoManager:
         if frame_id < 0 or frame_id >= self.total_frames:
             raise ValueError(f"Invalid frame_id: {frame_id}. Must be between 0 and {self.total_frames - 1}")
         
-        # Load raw frame (fast - no annotation processing)
-        frame_rgb = self._load_raw_frame(frame_id)
-        
-        # Encode to requested format
-        return self._encode_image(frame_rgb, format, quality)
+        # Use cache with automatic prefetching
+        # The cache will handle encoding if needed and trigger background prefetch
+        return self.frame_cache.get(
+            frame_id=frame_id,
+            encode_func=self._encode_frame_for_cache,
+            total_frames=self.total_frames,
+            trigger_prefetch=True
+        )
+    
+    def _encode_frame_for_cache(self, frame_id: int, format: str, quality: int) -> bytes:
+        """Encode a frame for caching (used by cache prefetch).
+        Ensures thread safety for decoder access by acquiring the session lock.
+        """
+        with self.lock:
+            frame_rgb = self._load_raw_frame(frame_id)
+            return self._encode_image(frame_rgb, format, quality)
 
     def get_frame_annotation_data(self, frame_id: int) -> Dict:
         """Get frame annotation data with Detections + RenderingConfig.
@@ -442,7 +474,6 @@ class VideoManager:
         Raises:
             ValueError: If frame_id is invalid, video not loaded, or data format is invalid
         """
-        from shared_libs.common.detection_utils import json_to_detections
         
         if not self.video_id:
             raise ValueError("Video ID is not set for this session")
