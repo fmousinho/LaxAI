@@ -140,6 +140,7 @@ class VideoManager:
             # Set up video capture properties
             self.cap = capture_result["cap"]
             self.total_frames = capture_result["total_frames"]
+            self.current_frame_id = 0  
             
             result = {
                 "session_id": self.session_id,
