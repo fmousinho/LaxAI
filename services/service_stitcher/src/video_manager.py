@@ -409,7 +409,7 @@ class VideoManager:
         self._ensure_player_manager(frame_id, detections)
         
         # Apply player mapping
-        detections = self._apply_player_mapping(detections)x
+        detections = self._apply_player_mapping(detections)
         
         # Create default rendering config
         rendering_config = RenderingConfig.create_default()

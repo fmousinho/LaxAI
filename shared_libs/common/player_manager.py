@@ -326,8 +326,6 @@ def initialize_player_manager(video_id: str, current_frame_id: int, frame_detect
         Initialized PlayerManager instance if there are detections.tracker_id in frame, None otherwise
     """
     try:
-        manager = PlayerManager(video_id=video_id)
-        manager.initialize(frame_detections)
         if not frame_detections.tracker_id or len(frame_detections.tracker_id) == 0:
             return None
         else:
