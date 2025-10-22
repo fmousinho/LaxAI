@@ -267,7 +267,7 @@ class VideoManager:
                 self.player_manager.track_to_player.get(int(tid), -1)
                 for tid in detections.tracker_id
             ])
-            detections.data["player_id"] = player_ids
+            detections.tracker_id = player_ids
         
         return detections
     
@@ -403,6 +403,7 @@ class VideoManager:
         
         # Get detections for this frame
         detections = self._get_frame_detections(frame_id)
+        logger.info(f"Frame {frame_id} has {len(detections)} detections before player mapping.")
         
         # Initialize player manager if needed
         self._ensure_player_manager(frame_id, detections)
