@@ -19,16 +19,6 @@ from shared_libs.common.detection_utils import json_to_detections, detections_to
 from shared_libs.common.rendering_config import RenderingConfig
 from shared_libs.common.detection_utils import create_frame_response
 
-try:
-    from shared_libs.common.detection import DetectionModel
-except ImportError:
-    raise ImportError("DetectionModel could not be imported. Ensure the module is available.")
-
-try:
-    from shared_libs.common.tracker import AffineAwareByteTrack
-except ImportError:
-    raise ImportError("AffineAwareByteTrack could not be imported. Ensure the module is available.")
-
 logger = logging.getLogger(__name__)
 
 FRAME_SKIP_INTERVAL = 30  # Default frame skip interval
@@ -51,8 +41,6 @@ class VideoManager:
         frame_skip_interval (int): Number of frames to skip between reads for performance
     """
     path_manager = GCSPaths()
-    detector = DetectionModel()
-    tracker = AffineAwareByteTrack()
 
     def __init__(self, tenant_id: str, frame_skip_interval: int = FRAME_SKIP_INTERVAL):
         """Initialize a new VideoManager instance.
