@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 JOB_NAME = "training-jobs"
 
-router = APIRouter(prefix="/train", tags=["Training"])
+router = APIRouter(prefix="/training", tags=["Training"])
 
 
 class PubSubPublisher:

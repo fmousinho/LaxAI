@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 JOB_NAME = "tracking-jobs"
 
-router = APIRouter(prefix="/track", tags=["Tracking"])
+router = APIRouter(prefix="/tracking", tags=["Tracking"])
 
 
 class PubSubPublisher:
