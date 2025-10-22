@@ -12,6 +12,9 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Flag to ensure setup_environment_secrets is only called once per process
+_already_setup = False
+
 # Load configuration from config.toml - REQUIRED
 
 
@@ -353,6 +356,12 @@ def setup_environment_secrets():
     2. Google Colab (with userdata API and Secret Manager fallback)
     3. Google Cloud Platform (with metadata service, default credentials, and Secret Manager)
     """
+    global _already_setup
+    if _already_setup:
+        logger.debug("setup_environment_secrets already called, skipping.")
+        return
+    _already_setup = True
+    
     try:
         if is_running_in_colab():
             set_google_application_credentials()
@@ -367,5 +376,4 @@ def setup_environment_secrets():
         load_secrets(CONFIG.get("secrets", {}))
     except Exception as e:
         logger.critical(f"❌ FAILED TO LOAD environment: {e}")
-    
 

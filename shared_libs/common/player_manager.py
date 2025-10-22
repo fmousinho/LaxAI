@@ -90,7 +90,7 @@ class PlayerManager:
             for track_id in unique_track_ids:
                 new_player = self.create_player()
                 self.add_track_to_player(new_player.id, track_id)
-
+            # Given frame 0 does not contain tracks, the initialization usually creates 0 players
             logger.info(f"Initialized PlayerManager for video {self.video_id} with {len(self.players)} players.")
 
     def create_player(self, name: Optional[str] = None) -> Player:
@@ -313,7 +313,7 @@ class PlayerManager:
             raise RuntimeError(f"Failed to load player data for video {self.video_id} from JSON: {e}")
 
 
-def initialize_player_manager(video_id: str, current_frame_id: int, frame_detections: Detections) -> PlayerManager:
+def initialize_player_manager(video_id: str, current_frame_id: int, frame_detections: Detections) -> Optional[PlayerManager]:
     """
     Initialize a PlayerManager for a given video ID, loading existing data if available.
 
@@ -323,11 +323,16 @@ def initialize_player_manager(video_id: str, current_frame_id: int, frame_detect
         frame_detections: Detections for the current frame
 
     Returns:
-        Initialized PlayerManager instance
+        Initialized PlayerManager instance if there are detections.tracker_id in frame, None otherwise
     """
     try:
         manager = PlayerManager(video_id=video_id)
         manager.initialize(frame_detections)
+        if not frame_detections.tracker_id or len(frame_detections.tracker_id) == 0:
+            return None
+        else:
+            manager = PlayerManager(video_id=video_id)
+            manager.initialize(frame_detections)
         return manager
     except Exception as e:
         raise RuntimeError(f"Failed to initialize PlayerManager for video {video_id}: {e}")
