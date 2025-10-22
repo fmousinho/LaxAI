@@ -196,6 +196,7 @@ def get_frame_image(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        logger.error(f"Unexpected error in get_frame_image for session {session_id}, frame {frame_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

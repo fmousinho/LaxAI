@@ -369,7 +369,7 @@ class VideoManager:
             frame_id=frame_id,
             encode_func=self._encode_frame_for_cache,
             total_frames=self.total_frames,
-            trigger_prefetch=True
+            trigger_prefetch=False  # Disable prefetch to avoid potential race conditions
         )
     
     def _encode_frame_for_cache(self, frame_id: int, format: str, quality: int) -> bytes:
