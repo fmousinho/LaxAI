@@ -15,9 +15,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import psutil
 import torch
 
-from shared_libs.utils.env_secrets import setup_environment_secrets
-
-setup_environment_secrets()
+# from shared_libs.utils.env_secrets import setup_environment_secrets
+# setup_environment_secrets()
 
 from shared_libs.config.all_config import wandb_config
 

@@ -81,6 +81,7 @@ def load (req: VideoLoadRequest) -> VideoLoadResponse:
         result = manager.load_video(req.video_path)
         session_id = result.get("session_id")
         if not session_id:
+            logger.error("Failed to get session ID from video manager after loading video")
             raise ValueError("Failed to get session ID from video manager")
         
         # Store manager with creation timestamp
@@ -231,6 +232,7 @@ def get_frame_annotations(
     try:
         session_data = video_managers.get(session_id)
         if not session_data:
+            logger.error(f"Session ID {session_id} not found when fetching annotations for frame {frame_id}")
             raise HTTPException(status_code=404, detail="Session not found")
         
         manager, _, lock = session_data

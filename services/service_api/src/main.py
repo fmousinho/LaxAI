@@ -8,7 +8,6 @@ import sys
 sys.path.insert(0, '/app')
 
 from shared_libs.utils.env_secrets import setup_environment_secrets
-
 setup_environment_secrets()
 
 import logging

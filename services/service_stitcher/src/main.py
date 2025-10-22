@@ -32,9 +32,12 @@ for _ in range(10):  # Prevent infinite loop
 if workspace_root and workspace_root not in sys.path:
     sys.path.insert(0, workspace_root)
 
+
 # For Docker, /app is already the root
 if '/app' not in sys.path:
     sys.path.insert(0, '/app')
+
+import shared_libs.config.logging_config
 
 from shared_libs.utils.env_secrets import setup_environment_secrets
 setup_environment_secrets()
@@ -49,7 +52,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # Import API routers
 from .v1 import router
 
-import shared_libs.config.logging_config
+
 
 logger = logging.getLogger(__name__)
 
