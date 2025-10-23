@@ -84,13 +84,13 @@ class PlayerManager:
                 logger.info(f"PlayerManager for video {self.video_id} already initialized with players.")
                 return
 
-            track_ids = init_detections.data.get("track_id", [])
+            track_ids = init_detections.tracker_id
             unique_track_ids = set(track_ids) if track_ids is not None else set()
 
             for track_id in unique_track_ids:
                 new_player = self.create_player()
                 self.add_track_to_player(new_player.id, track_id)
-            # Given frame 0 does not contain tracks, the initialization usually creates 0 players
+            
             logger.info(f"Initialized PlayerManager for video {self.video_id} with {len(self.players)} players.")
 
     def create_player(self, name: Optional[str] = None) -> Player:
@@ -327,6 +327,7 @@ def initialize_player_manager(video_id: str, current_frame_id: int, frame_detect
     """
     try:
         if frame_detections.tracker_id is None or len(frame_detections.tracker_id) == 0:
+            logger.info(f"No tracker IDs in detections for video {video_id} at frame {current_frame_id}. Skipping PlayerManager initialization.")
             return None
         else:
             manager = PlayerManager(video_id=video_id)
