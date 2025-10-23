@@ -83,14 +83,14 @@ class PlayerManager:
             if self.players:
                 logger.info(f"PlayerManager for video {self.video_id} already initialized with players.")
                 return
-
+            logger.info(f"Analyzing detections to initialize PlayerManager for video {self.video_id}.")
             track_ids = init_detections.tracker_id
             unique_track_ids = set(track_ids) if track_ids is not None else set()
 
             for track_id in unique_track_ids:
-                new_player = self.create_player()
-                self.add_track_to_player(new_player.id, track_id)
-            
+                new_player = self._create_player()
+                self._add_track_to_player(new_player.id, track_id)
+
             logger.info(f"Initialized PlayerManager for video {self.video_id} with {len(self.players)} players.")
 
     def create_player(self, name: Optional[str] = None) -> Player:
@@ -104,14 +104,28 @@ class PlayerManager:
             The newly created Player instance
         """
         with self._lock:
-            player_id = self._next_player_id
-            self._next_player_id += 1
+            player = self._create_player(name=name)
+            return player        
 
-            player = Player(player_id=player_id, name=name)
-            self.players[player_id] = player
+    def _create_player(self, name: Optional[str] = None) -> Player:
+        """
+        Internal method to create a new player. Does not acquire lock.
 
-            logger.info(f"Created player {player_id} for video {self.video_id}")
-            return player
+        Args:
+            name: Optional name for the player
+
+        Returns:
+            The newly created Player instance
+        """
+     
+        player_id = self._next_player_id
+        self._next_player_id += 1
+
+        player = Player(player_id=player_id, name=name)
+        self.players[player_id] = player
+
+        logger.info(f"Created player {player_id} for video {self.video_id}")
+        return player
 
     def delete_player(self, player_id: int) -> bool:
         """
@@ -172,27 +186,41 @@ class PlayerManager:
             True if added, False if player not found or track already associated
         """
         with self._lock:
-            if player_id not in self.players:
-                logger.warning(f"Player {player_id} not found for track association")
+           return self._add_track_to_player(player_id, track_id)
+
+
+    def _add_track_to_player(self, player_id: int, track_id: int) -> bool:
+        """
+        Internal method to associate a track ID with a player, without acquiring lock.
+
+        Args:
+            player_id: ID of the player
+            track_id: Track ID to associate
+
+        Returns:
+            True if added, False if player not found or track already associated
+        """
+        if player_id not in self.players:
+            logger.warning(f"Player {player_id} not found for track association")
+            return False
+
+        player = self.players[player_id]
+        if track_id in player.track_ids:
+            logger.warning(f"Track {track_id} already associated with player {player_id}")
+            return False
+
+        # Check if track is already associated with another player
+        if track_id in self.track_to_player:
+            existing_player_id = self.track_to_player[track_id]
+            if existing_player_id != player_id:
+                logger.warning(f"Track {track_id} already associated with player {existing_player_id}")
                 return False
 
-            player = self.players[player_id]
-            if track_id in player.track_ids:
-                logger.warning(f"Track {track_id} already associated with player {player_id}")
-                return False
+        player.track_ids.append(track_id)
+        self.track_to_player[track_id] = player_id
 
-            # Check if track is already associated with another player
-            if track_id in self.track_to_player:
-                existing_player_id = self.track_to_player[track_id]
-                if existing_player_id != player_id:
-                    logger.warning(f"Track {track_id} already associated with player {existing_player_id}")
-                    return False
-
-            player.track_ids.append(track_id)
-            self.track_to_player[track_id] = player_id
-
-            logger.info(f"Associated track {track_id} with player {player_id}")
-            return True
+        logger.info(f"Associated track {track_id} with player {player_id}")
+        return True
 
     def remove_track_from_player(self, player_id: int, track_id: int) -> bool:
         """
