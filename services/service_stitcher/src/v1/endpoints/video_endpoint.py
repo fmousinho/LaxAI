@@ -339,8 +339,9 @@ def update_player(session_id: str, player_id: int, player_data: PlayerCreate) ->
     manager, _ = session_data
     player = manager.update_player(
         player_id,
-        player_data.player_name,
-        player_data.tracker_ids
+        name=player_data.player_name,
+        tracker_ids=player_data.tracker_ids,
+        image_path=player_data.image_path,
     )
     return PlayerListItem(**player.to_dict() if player else {})
 

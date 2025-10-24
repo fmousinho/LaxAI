@@ -1,0 +1,544 @@
+{
+  "title": "LaxAI Video Stitcher API",
+  "version": "1.0.0",
+  "base_url": "https://your-service-url",
+  "endpoints": [
+    {
+      "method": "POST",
+      "path": "/stitcher/video/load",
+      "function": "load",
+      "summary": "Loads video for stitching analysis",
+      "description": "Start a track stitching verification session for a specific video.",
+      "response_model": "VideoLoadResponse",
+      "path_parameters": [],
+      "query_parameters": [
+        {
+          "name": "req",
+          "type": "VideoLoadRequest) -> VideoLoadResponse:",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "try",
+          "type": "manager",
+          "required": false,
+          "default": "VideoManager(req.tenant_id"
+        },
+        {
+          "name": "e",
+          "type": "if \"not found\" in str(e).lower(",
+          "required": true,
+          "default": null
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/stitcher/video/next-frame/{session_id}",
+      "function": "next_frame",
+      "summary": "Advances to the next frame after skips",
+      "description": "Advance to the next frame in the loaded video session and return metadata.",
+      "response_model": "FrameMetadataResponse",
+      "path_parameters": [
+        {
+          "name": "session_id",
+          "type": "string"
+        }
+      ],
+      "query_parameters": [
+        {
+          "name": "try",
+          "type": "session_data",
+          "required": false,
+          "default": "video_managers.get(session_id"
+        },
+        {
+          "name": "session_data",
+          "type": "raise HTTPException(status_code",
+          "required": false,
+          "default": "404"
+        },
+        {
+          "name": "e",
+          "type": "raise HTTPException(status_code",
+          "required": false,
+          "default": "500"
+        },
+        {
+          "name": "try",
+          "type": "session_data",
+          "required": false,
+          "default": "video_managers.get(session_id"
+        },
+        {
+          "name": "session_data",
+          "type": "raise HTTPException(status_code",
+          "required": false,
+          "default": "404"
+        },
+        {
+          "name": "e",
+          "type": "raise HTTPException(status_code",
+          "required": false,
+          "default": "500"
+        },
+        {
+          "name": "try",
+          "type": "session_data",
+          "required": false,
+          "default": "video_managers.get(session_id"
+        },
+        {
+          "name": "session_data",
+          "type": "raise HTTPException(status_code",
+          "required": false,
+          "default": "404"
+        },
+        {
+          "name": "e",
+          "type": "raise HTTPException(status_code",
+          "required": false,
+          "default": "400"
+        },
+        {
+          "name": "e",
+          "type": "raise HTTPException(status_code",
+          "required": false,
+          "default": "500"
+        },
+        {
+          "name": "img_format",
+          "type": "ImageFormat",
+          "required": false,
+          "default": "Query(ImageFormat.JPEG"
+        },
+        {
+          "name": "quality",
+          "type": "int",
+          "required": false,
+          "default": "Query(85"
+        },
+        {
+          "name": "StreamingResponse",
+          "type": "\"\"\"Get raw frame image for client-side annotation.\"\"\"",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "try",
+          "type": "session_data",
+          "required": false,
+          "default": "video_managers.get(session_id"
+        },
+        {
+          "name": "session_data",
+          "type": "raise HTTPException(status_code",
+          "required": false,
+          "default": "404"
+        },
+        {
+          "name": "e",
+          "type": "raise HTTPException(status_code",
+          "required": false,
+          "default": "400"
+        },
+        {
+          "name": "e",
+          "type": "logger.error(f\"Unexpected error in get_frame_image for session {session_id}, frame {frame_id}: {e}\", exc_info",
+          "required": false,
+          "default": "True"
+        },
+        {
+          "name": "try",
+          "type": "session_data",
+          "required": false,
+          "default": "video_managers.get(session_id"
+        },
+        {
+          "name": "session_data",
+          "type": "raise HTTPException(status_code",
+          "required": false,
+          "default": "404"
+        },
+        {
+          "name": "e",
+          "type": "raise HTTPException(status_code",
+          "required": false,
+          "default": "500"
+        },
+        {
+          "name": "AnnotationDataResponse",
+          "type": "\"\"\"Get annotation data for a specific frame (detections + rendering config).\"\"\"",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "try",
+          "type": "session_data",
+          "required": false,
+          "default": "video_managers.get(session_id"
+        },
+        {
+          "name": "session_data",
+          "type": "logger.error(f\"Session ID {session_id} not found when fetching annotations for frame {frame_id}\")",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "HTTPException",
+          "type": "raise  # Re-raise HTTPException as-is",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "e",
+          "type": "raise HTTPException(status_code",
+          "required": false,
+          "default": "400"
+        },
+        {
+          "name": "e",
+          "type": "logger.error(f\"Unexpected error in get_frame_annotations for session {session_id}, frame {frame_id}: {e}\", exc_info",
+          "required": false,
+          "default": "True"
+        },
+        {
+          "name": "annotation_data",
+          "type": "AnnotationDataResponse",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "AnnotationDataResponse",
+          "type": "\"\"\"Update annotation data for a specific frame.",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "try",
+          "type": "session_data",
+          "required": false,
+          "default": "video_managers.get(session_id"
+        },
+        {
+          "name": "session_data",
+          "type": "raise HTTPException(status_code",
+          "required": false,
+          "default": "404"
+        },
+        {
+          "name": "HTTPException",
+          "type": "raise  # Re-raise HTTPException as-is",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "e",
+          "type": "raise HTTPException(status_code",
+          "required": false,
+          "default": "400"
+        },
+        {
+          "name": "e",
+          "type": "raise HTTPException(status_code",
+          "required": false,
+          "default": "500"
+        },
+        {
+          "name": "session_data",
+          "type": "raise HTTPException(status_code",
+          "required": false,
+          "default": "404"
+        },
+        {
+          "name": "players",
+          "type": "return GetPlayersResponse(players",
+          "required": false,
+          "default": "player_list"
+        },
+        {
+          "name": "players",
+          "type": "player",
+          "required": false,
+          "default": "player.to_dict("
+        },
+        {
+          "name": "session_data",
+          "type": "raise HTTPException(status_code",
+          "required": false,
+          "default": "404"
+        },
+        {
+          "name": "session_data",
+          "type": "raise HTTPException(status_code",
+          "required": false,
+          "default": "404"
+        }
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/stitcher/video/stop-and-save/{session_id}",
+      "function": "stop_and_save",
+      "summary": "Stops the session and saves the processed video",
+      "description": "Stop the session and save the processed video.",
+      "response_model": null,
+      "path_parameters": [
+        {
+          "name": "session_id",
+          "type": "string"
+        }
+      ],
+      "query_parameters": []
+    }
+  ],
+  "models": {
+    "VideoLoadRequest": [],
+    "VideoLoadResponse": [],
+    "DetectionInfo": [
+      {
+        "name": "bbox",
+        "type": "List[float]",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "tracker_id",
+        "type": "Optional[int]",
+        "required": false,
+        "default": null
+      },
+      {
+        "name": "player_id",
+        "type": "Optional[int]",
+        "required": false,
+        "default": null
+      },
+      {
+        "name": "confidence",
+        "type": "float",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "ConfigDict",
+        "type": "json_schema_extra",
+        "required": false,
+        "default": "{"
+      }
+    ],
+    "FrameMetadataResponse": [
+      {
+        "name": "Note",
+        "type": "This endpoint returns ONLY navigation/session metadata.",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "frame_id",
+        "type": "int",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "video_id",
+        "type": "str",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "session_id",
+        "type": "str",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "has_next_frame",
+        "type": "bool",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "has_previous_frame",
+        "type": "bool",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "total_frames",
+        "type": "int",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "ConfigDict",
+        "type": "json_schema_extra",
+        "required": false,
+        "default": "{"
+      }
+    ],
+    "AnnotationDataResponse": [
+      {
+        "name": "frame_id",
+        "type": "int",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "video_id",
+        "type": "str",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "session_id",
+        "type": "str",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "detections",
+        "type": "Dict[str, Any]",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "rendering_config",
+        "type": "Dict[str, Any]",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "has_next",
+        "type": "bool",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "has_previous",
+        "type": "bool",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "total_frames",
+        "type": "int",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "ConfigDict",
+        "type": "json_schema_extra",
+        "required": false,
+        "default": "{"
+      }
+    ],
+    "VideoGenerationRequest": [
+      {
+        "name": "frame_recipes",
+        "type": "Dict[int, Dict]",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "output_format",
+        "type": "str",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "fps",
+        "type": "int",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "ConfigDict",
+        "type": "json_schema_extra",
+        "required": false,
+        "default": "{"
+      }
+    ],
+    "VideoGenerationResponse": [
+      {
+        "name": "task_id",
+        "type": "str",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "status",
+        "type": "str",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "message",
+        "type": "Optional[str]",
+        "required": false,
+        "default": null
+      },
+      {
+        "name": "ConfigDict",
+        "type": "json_schema_extra",
+        "required": false,
+        "default": "{"
+      }
+    ],
+    "PlayerListItem": [
+      {
+        "name": "player_id",
+        "type": "int",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "tracker_ids",
+        "type": "List[int]",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "player_name",
+        "type": "Optional[str]",
+        "required": false,
+        "default": null
+      }
+    ],
+    "PlayerCreate": [
+      {
+        "name": "player_name",
+        "type": "Optional[str]",
+        "required": false,
+        "default": null
+      },
+      {
+        "name": "tracker_ids",
+        "type": "List[int]",
+        "required": true,
+        "default": null
+      }
+    ],
+    "GetPlayersResponse": [],
+    "PatchUpdatePlayerRequest": [
+      {
+        "name": "player_id",
+        "type": "int",
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "player_name",
+        "type": "Optional[str]",
+        "required": false,
+        "default": null
+      },
+      {
+        "name": "tracker_ids",
+        "type": "Optional[List[int]]",
+        "required": false,
+        "default": null
+      }
+    ]
+  }
+}

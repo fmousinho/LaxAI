@@ -4,6 +4,8 @@ import threading
 from pathlib import Path
 from typing import Dict, List, Optional
 
+
+from shared_libs.common.google_storage import GCSPaths
 import shared_libs.config.logging_config
 
 from supervision import Detections
@@ -20,8 +22,17 @@ class Player:
         name: Optional name of the player
         track_ids: List of track IDs associated with this player
     """
+    
+    # Define which attributes can be updated externally (track_ids have dedicated methods)
+    UPDATABLE_ATTRIBUTES = {'name', 'image_path'}
 
-    def __init__(self, player_id: int, name: Optional[str] = None, track_ids: Optional[List[int]] = None):
+    def __init__(
+            self, 
+            player_id: int, 
+            name: Optional[str] = None, 
+            track_ids: Optional[List[int]] = None,
+            image_path: Optional[str] = None
+    ):
         """
         Initialize a Player instance.
 
@@ -29,17 +40,20 @@ class Player:
             player_id: Unique identifier for the player
             name: Optional name for the player
             track_ids: Optional list of associated track IDs
+            image_path: Optional path to the player's image
         """
         self.id = player_id
         self.name = name
         self.track_ids = track_ids if track_ids is not None else []
+        self.image_path = image_path
 
     def to_dict(self) -> Dict:
         """Convert player to dictionary for JSON serialization."""
         return {
             "id": self.id,
             "name": self.name,
-            "track_ids": self.track_ids
+            "track_ids": self.track_ids,
+            "image_path": self.image_path
         }
 
     @classmethod
@@ -48,12 +62,13 @@ class Player:
         return cls(
             player_id=data["id"],
             name=data["name"],
-            track_ids=data["track_ids"]
+            track_ids=data["track_ids"],
+            image_path=data["image_path"]
         )
 
     def __repr__(self) -> str:
         """Return a string representation of the Player."""
-        return f"Player(id={self.id}, name={self.name}, track_ids={self.track_ids})"
+        return f"Player(id={self.id}, name={self.name}, track_ids={self.track_ids}, image_path={self.image_path})"
 
 
 class PlayerManager:
@@ -63,8 +78,9 @@ class PlayerManager:
     Maintains both player objects and track-to-player mappings for efficient lookups.
     Thread-safe for concurrent operations.
     """
+    path_manager = GCSPaths()
 
-    def __init__(self, video_id: str):
+    def __init__(self, video_id: str, storage):
         """
         Initialize PlayerManager for a video.
 
@@ -76,6 +92,7 @@ class PlayerManager:
         self.track_to_player: Dict[int, int] = {}  # track_id -> player_id
         self._next_player_id = 1
         self._lock = threading.Lock()
+        self.storage = storage
 
     def initialize(self, init_detections: Detections) -> None:
         """Create initial players from detections if none exist."""
@@ -93,26 +110,28 @@ class PlayerManager:
 
             logger.info(f"Initialized PlayerManager for video {self.video_id} with {len(self.players)} players.")
 
-    def create_player(self, name: Optional[str] = None) -> Player:
+    def create_player(self, name: Optional[str] = None, image_path: Optional[str] = None) -> Player:
         """
         Create a new player.
 
         Args:
             name: Optional name for the player
+            image_path: Optional path to the player's image
 
         Returns:
             The newly created Player instance
         """
         with self._lock:
-            player = self._create_player(name=name)
+            player = self._create_player(name=name, image_path=image_path)
             return player        
 
-    def _create_player(self, name: Optional[str] = None) -> Player:
+    def _create_player(self, name: Optional[str] = None, image_path: Optional[str] = None) -> Player:
         """
         Internal method to create a new player. Does not acquire lock.
 
         Args:
             name: Optional name for the player
+            image_path: Optional path to the player's image
 
         Returns:
             The newly created Player instance
@@ -121,7 +140,7 @@ class PlayerManager:
         player_id = self._next_player_id
         self._next_player_id += 1
 
-        player = Player(player_id=player_id, name=name)
+        player = Player(player_id=player_id, name=name, image_path=image_path)
         self.players[player_id] = player
 
         logger.info(f"Created player {player_id} for video {self.video_id}")
@@ -154,25 +173,39 @@ class PlayerManager:
             logger.info(f"Deleted player {player_id} from video {self.video_id}")
             return True
 
-    def update_player_name(self, player_id: int, name: Optional[str]) -> bool:
+    def update_player(self, player_id: int, **kwargs) -> Optional[Player]:
         """
-        Update a player's name.
+        Update a player's attributes.
 
         Args:
             player_id: ID of the player to update
-            name: New name for the player
+            **kwargs: Attributes to update (name, track_ids, image_path)
 
         Returns:
-            True if updated, False if player not found
+            Updated Player instance if successful, None if player not found or invalid attributes
         """
         with self._lock:
             if player_id not in self.players:
-                logger.warning(f"Player {player_id} not found for name update")
-                return False
+                logger.warning(f"Player {player_id} not found for update")
+                return None
+            
+            # track_ids should not be updated directly
+            if "track_ids" in kwargs:
+                logger.warning(f"Direct update of 'track_ids' is not allowed for player {player_id}. Use add_track_to_player/remove_track_from_player methods.")
+                return None
 
-            self.players[player_id].name = name
-            logger.info(f"Updated name for player {player_id} to '{name}'")
-            return True
+            # Check for invalid attributes
+            invalid_keys = set(kwargs.keys()) - Player.UPDATABLE_ATTRIBUTES
+            if invalid_keys:
+                logger.warning(f"Attempted to update invalid attributes {invalid_keys} for player {player_id}. Allowed attributes: {Player.UPDATABLE_ATTRIBUTES}")
+                return None
+            
+            # Perform updates if all keys are valid
+            for key, value in kwargs.items():
+                setattr(self.players[player_id], key, value)
+                logger.info(f"Updated {key} for player {player_id} to '{value}'")
+            
+            return self.players[player_id]
 
     def add_track_to_player(self, player_id: int, track_id: int) -> bool:
         """
@@ -218,6 +251,15 @@ class PlayerManager:
 
         player.track_ids.append(track_id)
         self.track_to_player[track_id] = player_id
+
+        # Sets initial player image path if not already set
+        if player.image_path is None:
+            track_path = PlayerManager.path_manager.get_path("unverified_tracks", video_id=self.video_id, track_id=track_id)
+            track_pics = self.storage.list_blobs(track_path)
+            if not track_pics or len(track_pics) == 0:
+                logger.warning(f"No track pictures found for track {track_id} in video {self.video_id}")
+            else:
+                player.image_path = track_pics[0] if track_pics else None
 
         logger.info(f"Associated track {track_id} with player {player_id}")
         return True
@@ -341,7 +383,7 @@ class PlayerManager:
             raise RuntimeError(f"Failed to load player data for video {self.video_id} from JSON: {e}")
 
 
-def initialize_player_manager(video_id: str, current_frame_id: int, frame_detections: Detections) -> Optional[PlayerManager]:
+def initialize_player_manager(video_id: str, current_frame_id: int, frame_detections: Detections, storage) -> Optional[PlayerManager]:
     """
     Initialize a PlayerManager for a given video ID, loading existing data if available.
 
@@ -358,26 +400,27 @@ def initialize_player_manager(video_id: str, current_frame_id: int, frame_detect
             logger.info(f"No tracker IDs in detections for video {video_id} at frame {current_frame_id}. Skipping PlayerManager initialization.")
             return None
         else:
-            manager = PlayerManager(video_id=video_id)
+            manager = PlayerManager(video_id=video_id, storage=storage)
             manager.initialize(frame_detections)
         return manager
     except Exception as e:
         raise RuntimeError(f"Failed to initialize PlayerManager for video {video_id}: {e}")
     
 
-def load_player_manager(video_id: str, players_json: str) -> Optional[PlayerManager]:
+def load_player_manager(video_id: str, players_json: str, storage) -> Optional[PlayerManager]:
     """
     Load a PlayerManager from a JSON object.
 
     Args:
         video_id: Unique identifier for the video
         players_json: JSON object containing player data
+        storage: Google Storage client instance
 
     Returns:
         Loaded PlayerManager instance
     """
-    try:                        
-        manager = PlayerManager(video_id)
+    try:
+        manager = PlayerManager(video_id, storage=storage)
         manager.load_players_from_json(players_json)
         return manager
     

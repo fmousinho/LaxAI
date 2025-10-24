@@ -7,6 +7,7 @@ import typing
 import logging
 import concurrent.futures
 import io
+import copy
 import numpy as np
 from typing import Dict, Tuple, cast, Any, Optional, List
 from PIL import Image
@@ -253,7 +254,8 @@ class VideoManager:
             self.player_manager = initialize_player_manager(
                 self.video_id, 
                 frame_id, 
-                detections
+                detections,
+                self.storage
             )
     
     def _apply_player_mapping(self, detections: Detections) -> Detections:
@@ -390,7 +392,7 @@ class VideoManager:
             return
 
         try:
-            self.player_manager = load_player_manager(self.video_id, players_json_str)
+            self.player_manager = load_player_manager(self.video_id, players_json_str, self.storage)
         except Exception as e:
             logger.error(f"Failed to load player manager for video: {self.video_id}: {e}")
             return
@@ -719,8 +721,8 @@ class VideoManager:
             for tracker_id in tracker_ids:
                 self.player_manager.add_track_to_player(player.id, tracker_id)
             return player
-        
-    def update_player(self, player_id: int, name: Optional[str], tracker_ids: Optional[List[int]]) -> Optional[Player]:
+
+    def update_player(self, player_id: int, **kwargs) -> Optional[Player]:
         """Update an existing player's information.
 
         Args:
@@ -731,17 +733,49 @@ class VideoManager:
         with self.lock:
             if not self.player_manager:
                 raise ValueError("Player manager is not initialized.")
+            
+            # Create a deep copy of the player manager state for rollback
+            player_manager_backup = copy.deepcopy(self.player_manager)
+            
             player = self.player_manager.get_player_by_id(player_id)
             if not player:
                 logger.warning(f"Player with ID {player_id} not found for update.")
                 return None
-            if name is not None:
-                player.name = name
-            if tracker_ids is not None:
-                for tid in player.track_ids:
-                    self.player_manager.remove_track_from_player(player.id, tid)
-                for tracker_id in tracker_ids:
-                    self.player_manager.add_track_to_player(player.id, tracker_id)
+            
+            issue_found = False
+
+            # Handle track_ids separately since it requires special logic
+            track_ids = kwargs.pop("track_ids", None)
+            if track_ids:
+                # Remove existing tracker associations
+                for tid in player.track_ids[:]:  # Copy list to avoid modification during iteration
+                    success = self.player_manager.remove_track_from_player(player.id, tid)
+                    if not success:
+                        logger.warning(f"Failed to remove tracker ID {tid} from player ID {player.id}")
+                        issue_found = True
+                        break
+                        
+                # Add new tracker associations
+                if not issue_found:
+                    for track_id in track_ids:
+                        success = self.player_manager.add_track_to_player(player.id, track_id)
+                        if not success:
+                            logger.warning(f"Failed to add tracker ID {track_id} to player ID {player.id}")
+                            issue_found = True
+                            break
+
+            # Update other attributes via player manager
+            if not issue_found and kwargs:
+                player = self.player_manager.update_player(player_id, **kwargs)
+                if player is None:
+                    logger.warning(f"Failed to update player ID {player_id} with attributes {kwargs}")
+                    issue_found = True
+            
+            if issue_found:
+                # Restore player manager from deep copy
+                self.player_manager = player_manager_backup
+                return None
+            
             return player
         
     def delete_player(self, player_id: int) -> bool:

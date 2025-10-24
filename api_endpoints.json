@@ -1,0 +1,98 @@
+{
+  "title": "LaxAI Video Stitcher API",
+  "version": "1.0.0",
+  "base_url": "https://your-service-url",
+  "endpoints": [
+    {
+      "method": "POST",
+      "path": "/stitcher/video/load",
+      "function": "load",
+      "summary": "Loads video for stitching analysis",
+      "description": "Start a track stitching verification session for a specific video."
+    },
+    {
+      "method": "GET",
+      "path": "/stitcher/video/next-frame/{session_id}",
+      "function": "next_frame",
+      "summary": "Advances to the next frame after skips",
+      "description": "Advance to the next frame in the loaded video session and return metadata."
+    },
+    {
+      "method": "GET",
+      "path": "/stitcher/video/previous-frame/{session_id}",
+      "function": "previous_frame",
+      "summary": "Rewinds to the previous frame",
+      "description": "Rewind to the previous frame in the loaded video session and return metadata."
+    },
+    {
+      "method": "GET",
+      "path": "/stitcher/video/frames/{session_id}/{frame_id}/metadata",
+      "function": "get_frame_metadata",
+      "summary": "Get frame navigation metadata",
+      "description": "Get navigation and session metadata for a frame (no detection data)."
+    },
+    {
+      "method": "GET",
+      "path": "/stitcher/video/frames/{session_id}/{frame_id}/image",
+      "function": "get_frame_image",
+      "summary": "Get raw frame image",
+      "description": "Stream raw frame image in PNG or JPEG format for client-side annotation."
+    },
+    {
+      "method": "GET",
+      "path": "/stitcher/video/frames/{session_id}/cache-stats",
+      "function": "get_cache_stats",
+      "summary": "Get frame cache statistics",
+      "description": "Get performance statistics for the rolling frame cache (hit rate, prefetch effectiveness, etc.)"
+    },
+    {
+      "method": "GET",
+      "path": "/stitcher/video/frames/{session_id}/{frame_id}/annotations",
+      "function": "get_frame_annotations",
+      "summary": "Get frame annotation data (detections + rendering config)",
+      "description": "Get supervision.Detections and rendering configuration for a frame. This is the single source of truth for annotation data."
+    },
+    {
+      "method": "PUT",
+      "path": "/stitcher/video/frames/{session_id}/{frame_id}/annotations",
+      "function": "update_frame_annotations",
+      "summary": "Update frame annotation data",
+      "description": "Update detections and rendering configuration for a frame. This allows the web app to modify player mappings and other annotation data."
+    },
+    {
+      "method": "GET",
+      "path": "/stitcher/video/players/{session_id}",
+      "function": "get_players",
+      "summary": "Get list of players in the session",
+      "description": "Retrieve the list of players currently tracked in the video session."
+    },
+    {
+      "method": "POST",
+      "path": "/stitcher/video/player/{session_id}",
+      "function": "add_player",
+      "summary": "Add a player to the session",
+      "description": "Add a new player to the video session."
+    },
+    {
+      "method": "PATCH",
+      "path": "/stitcher/video/player/{session_id}/{player_id}",
+      "function": "update_player",
+      "summary": "Update a player",
+      "description": "Update an existing player"
+    },
+    {
+      "method": "DELETE",
+      "path": "/stitcher/video/player/{session_id}/{player_id}",
+      "function": "delete_player",
+      "summary": "Delete a player from the session",
+      "description": "Delete a player from the video session."
+    },
+    {
+      "method": "DELETE",
+      "path": "/stitcher/video/stop-and-save/{session_id}",
+      "function": "stop_and_save",
+      "summary": "Stops the session and saves the processed video",
+      "description": "Stop the session and save the processed video."
+    }
+  ]
+}

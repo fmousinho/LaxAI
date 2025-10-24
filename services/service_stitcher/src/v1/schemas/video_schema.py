@@ -197,7 +197,8 @@ class VideoGenerationResponse(BaseModel):
 PLAYER_LIST_ITEM_EXAMPLE = {
     "player_id": 5,
     "tracker_ids": [42],
-    "player_name": "John Doe"
+    "player_name": "John Doe",
+    "image_path": "/path/to/player_image.png"
 }
 
 class PlayerListItem(BaseModel):
@@ -205,6 +206,7 @@ class PlayerListItem(BaseModel):
     player_id: int = Field(..., description="Unique player ID")
     tracker_ids: List[int] = Field(..., description="Tracker IDs associated with the player")
     player_name: Optional[str] = Field(..., description="Name of the player")
+    image_path: Optional[str] = Field(..., description="Path to the player's image")
 
     class ConfigDict:
         json_schema_extra = {
@@ -215,12 +217,14 @@ class PlayerCreate(BaseModel):
     """Model for creating a new player in the session."""
     player_name: Optional[str] = Field(None, description="Name of the player to add")
     tracker_ids: List[int] = Field(..., description="List of tracker IDs to associate with the player")
+    image_path: Optional[str] = Field(None, description="Path to the player's image")
 
     class ConfigDict:
         json_schema_extra = {
             "example": {
                 "player_name": "John Doe",
-                "tracker_ids": [42]
+                "tracker_ids": [42],
+                "image_path": "/path/to/player_image.png"
             }
         }
 
@@ -242,6 +246,7 @@ class PatchUpdatePlayerRequest(BaseModel):
     player_id: int = Field(..., description="Unique player ID to update")
     player_name: Optional[str] = Field(None, description="Updated name of the player")
     tracker_ids: Optional[List[int]] = Field(None, description="Updated list of tracker IDs associated with the player")
+    image_path: Optional[str] = Field(None, description="Updated path to the player's image")
 
     class ConfigDict:
         json_schema_extra = {
