@@ -3,6 +3,9 @@ from typing import Any, List, Dict, Optional
 from enum import Enum
 
 
+
+
+
 class ImageFormat(str, Enum):
     """Supported image formats for frame streaming."""
     PNG = "png"
@@ -190,21 +193,57 @@ class VideoGenerationResponse(BaseModel):
             }
         }
 
+# Example data constants to avoid repetition
+PLAYER_LIST_ITEM_EXAMPLE = {
+    "player_id": 5,
+    "tracker_ids": [42],
+    "player_name": "John Doe"
+}
 
-class VideoFrameResponse(BaseModel):
-    """Response model for frame operations (deprecated - kept for compatibility)."""
+class PlayerListItem(BaseModel):
+    """Model representing a single player in the session."""
+    player_id: int = Field(..., description="Unique player ID")
+    tracker_ids: List[int] = Field(..., description="Tracker IDs associated with the player")
+    player_name: Optional[str] = Field(..., description="Name of the player")
 
-    frame_id: int = Field(..., description="The current frame index")
-    frame_data: Any = Field(..., description="Frame image data (numpy array format)")
-    has_next_frame: bool = Field(..., description="Whether there are more frames to read")
-    has_previous_frame: bool = Field(..., description="Whether there are previous frames")
+    class ConfigDict:
+        json_schema_extra = {
+            "example": PLAYER_LIST_ITEM_EXAMPLE
+        }
+
+class PlayerCreate(BaseModel):
+    """Model for creating a new player in the session."""
+    player_name: Optional[str] = Field(None, description="Name of the player to add")
+    tracker_ids: List[int] = Field(..., description="List of tracker IDs to associate with the player")
 
     class ConfigDict:
         json_schema_extra = {
             "example": {
-                "frame_id": 30,
-                "frame_data": "numpy array",
-                "has_next_frame": True,
-                "has_previous_frame": True,
+                "player_name": "John Doe",
+                "tracker_ids": [42]
             }
+        }
+
+
+class GetPlayersResponse(BaseModel):
+    """Model representing a list of players identified in the session."""
+
+    players: List[PlayerListItem] = Field(..., description="List of players in the session")
+
+    class ConfigDict:
+        json_schema_extra = {
+            "example": {
+                "players": [PLAYER_LIST_ITEM_EXAMPLE]
+            }
+        }
+
+class PatchUpdatePlayerRequest(BaseModel):
+    """Model for updating an existing player's information in the session."""
+    player_id: int = Field(..., description="Unique player ID to update")
+    player_name: Optional[str] = Field(None, description="Updated name of the player")
+    tracker_ids: Optional[List[int]] = Field(None, description="Updated list of tracker IDs associated with the player")
+
+    class ConfigDict:
+        json_schema_extra = {
+            "example": PLAYER_LIST_ITEM_EXAMPLE
         }

@@ -288,7 +288,7 @@ class PlayerManager:
         with self._lock:
             return list(self.players.values())
 
-    def serialize_to_save(self) -> str:
+    def serialize(self) -> str:
         """
         Save player data to JSON file.
 

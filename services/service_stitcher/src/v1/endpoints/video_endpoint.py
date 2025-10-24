@@ -2,6 +2,9 @@ from fastapi import HTTPException, APIRouter, Query
 from fastapi.responses import StreamingResponse
 from ...video_manager import VideoManager
 from ..schemas.video_schema import (
+    GetPlayersResponse,
+    PlayerCreate,
+    PlayerListItem,
     VideoLoadRequest, 
     VideoLoadResponse, 
     FrameMetadataResponse,
@@ -19,10 +22,9 @@ from typing import Dict, Tuple
 from contextlib import asynccontextmanager
 import io
 
-# Store managers with creation timestamps and a lock: session_id -> (manager, created_at, lock)
-from threading import Lock
+# Store managers with creation timestamps: session_id -> (manager, created_at)
 
-video_managers: Dict[str, Tuple[VideoManager, float, Lock]] = {}
+video_managers: Dict[str, Tuple[VideoManager, float]] = {}
 
 # Cleanup interval in seconds (12 hours)
 CLEANUP_INTERVAL = 12 * 60 * 60  # 12 hours in seconds
@@ -34,7 +36,7 @@ async def cleanup_expired_sessions():
             current_time = time.time()
             expired_sessions = []
             # Find expired sessions (older than 12 hours)
-            for session_id, (manager, created_at, lock) in list(video_managers.items()):
+            for session_id, (manager, created_at) in list(video_managers.items()):
                 if current_time - created_at > CLEANUP_INTERVAL:
                     expired_sessions.append(session_id)
 
@@ -85,7 +87,7 @@ def load (req: VideoLoadRequest) -> VideoLoadResponse:
             raise ValueError("Failed to get session ID from video manager")
         
         # Store manager with creation timestamp
-        video_managers[session_id] = (manager, time.time(), Lock())
+        video_managers[session_id] = (manager, time.time())
         
         return VideoLoadResponse(
             session_id=result["session_id"],
@@ -113,9 +115,8 @@ def next_frame(session_id: str) -> FrameMetadataResponse:
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        manager, _, lock = session_data
-        with lock:
-            result = manager.next_frame()
+        manager, _ = session_data
+        result = manager.next_frame()
         return FrameMetadataResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -134,9 +135,8 @@ def previous_frame (session_id: str) -> FrameMetadataResponse:
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
 
-        manager, _, lock = session_data
-        with lock:
-            result = manager.previous_frame()
+        manager, _ = session_data
+        result = manager.previous_frame()
         return FrameMetadataResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -146,7 +146,7 @@ def previous_frame (session_id: str) -> FrameMetadataResponse:
     "/frames/{session_id}/{frame_id}/metadata",
     response_model=FrameMetadataResponse,
     summary="Get frame navigation metadata",
-    description="Get navigation and session metadata for a frame (no detection data). Use /recipe endpoint for annotations.",
+    description="Get navigation and session metadata for a frame (no detection data).",
 )
 def get_frame_metadata(session_id: str, frame_id: int) -> FrameMetadataResponse:
     """Get navigation metadata for a specific frame (no detection/annotation data)."""
@@ -155,9 +155,8 @@ def get_frame_metadata(session_id: str, frame_id: int) -> FrameMetadataResponse:
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        manager, _, lock = session_data
-        with lock:
-            result = manager.get_frame_metadata(frame_id)
+        manager, _ = session_data
+        result = manager.get_frame_metadata(frame_id)
         return FrameMetadataResponse(**result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -181,9 +180,8 @@ def get_frame_image(
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        manager, _, lock = session_data
-        with lock:
-            image_bytes = manager.get_raw_frame_image(frame_id, img_format.value, quality)
+        manager, _ = session_data
+        image_bytes = manager.get_raw_frame_image(frame_id, img_format.value, quality)
         media_type = "image/png" if img_format == ImageFormat.PNG else "image/jpeg"
         return StreamingResponse(
             io.BytesIO(image_bytes),
@@ -212,9 +210,8 @@ def get_cache_stats(session_id: str) -> dict:
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        manager, _, lock = session_data
-        with lock:
-            stats = manager.frame_cache.get_stats()
+        manager, _ = session_data
+        stats = manager.frame_cache.get_stats()
         return stats
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -236,9 +233,8 @@ def get_frame_annotations(
             logger.error(f"Session ID {session_id} not found when fetching annotations for frame {frame_id}")
             raise HTTPException(status_code=404, detail="Session not found")
         
-        manager, _, lock = session_data
-        with lock:
-            annotation_data = manager.get_frame_annotation_data(frame_id)
+        manager, _ = session_data
+        annotation_data = manager.get_frame_annotation_data(frame_id)
         return AnnotationDataResponse(**annotation_data)
     except HTTPException:
         raise  # Re-raise HTTPException as-is
@@ -271,13 +267,12 @@ def update_frame_annotations(
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        manager, _, lock = session_data
+        manager, _ = session_data
         # Update the detections in the video manager
-        with lock:
-            updated_data = manager.update_frame_annotation_data(
-                frame_id=frame_id,
-                annotation_data=annotation_data.model_dump()
-            )
+        updated_data = manager.update_frame_annotation_data(
+            frame_id=frame_id,
+            annotation_data=annotation_data.model_dump()
+        )
         return AnnotationDataResponse(**updated_data)
     except HTTPException:
         raise  # Re-raise HTTPException as-is
@@ -286,9 +281,93 @@ def update_frame_annotations(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get(
+    "/players/{session_id}",
+    response_model=GetPlayersResponse,
+    summary="Get list of players in the session",
+    description="Retrieve the list of players currently tracked in the video session.",
+)
+def get_players(session_id: str) -> GetPlayersResponse:
+    """Get the list of players for a specific session."""
+    session_data = video_managers.get(session_id)
+    if not session_data:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    manager, _ = session_data
+    player_list = []
+    players = manager.get_players()
+    if not players:
+        return GetPlayersResponse(players=player_list)
+    for player in players:
+        player = player.to_dict()
+        player_list.append(PlayerListItem(**player))
+    return GetPlayersResponse(players=player_list)
 
 
+@router.post(
+    "/player/{session_id}",
+    response_model=PlayerListItem,
+    summary="Add a player to the session",
+    description="Add a new player to the video session."
+)
+def add_player(session_id: str, player_data: PlayerCreate) -> PlayerListItem:
+    """Add a new player to the session."""
+    session_data = video_managers.get(session_id)
+    if not session_data:
+        raise HTTPException(status_code=404, detail="Session not found")
 
+    manager, _ = session_data
+    player = manager.add_player(
+        player_data.player_name if player_data.player_name else "Unknown", 
+        player_data.tracker_ids
+        )
+    return PlayerListItem(**player.to_dict())
+
+
+@router.patch(
+    "/player/{session_id}/{player_id}",
+    response_model=PlayerListItem,
+    summary="Update a player's information in the session",
+    description="Update an existing player's information in the video session." 
+)
+def update_player(session_id: str, player_id: int, player_data: PlayerCreate) -> PlayerListItem:
+    """Update an existing player's information in the session."""
+    session_data = video_managers.get(session_id)
+    if not session_data:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    manager, _ = session_data
+    player = manager.update_player(
+        player_id,
+        player_data.player_name,
+        player_data.tracker_ids
+    )
+    return PlayerListItem(**player.to_dict() if player else {})
+
+@router.delete(
+    "/player/{session_id}/{player_id}",
+    summary="Delete a player from the session",
+    description="Delete a player from the video session."
+)
+def delete_player(session_id: str, player_id: int):
+    """Delete a player from the session."""
+    try:
+        session_data = video_managers.get(session_id)
+        if not session_data:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        manager, _ = session_data
+        success = manager.delete_player(player_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Player not found")
+        else:
+            return
+    except HTTPException:
+        # Re-raise HTTPExceptions as-is (don't wrap them in 500 errors)
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
 
 @router.delete(
     "/stop-and-save/{session_id}",

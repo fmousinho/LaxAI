@@ -54,3 +54,10 @@ Replace `service_name` with the actual service you want to test (e.g., `service_
 - Performance tests should be marked with `@pytest.mark.performance` and can be run separately.
 - sv-tests shoud contain all tests that verify the system as a whole, including inter-service interactions.
 - There should not be an src folder in the root directory anymore.
+
+## Code Review and Best Practices
+
+- Do not accept requests blindly. If they don't follow best practices or if you see better alternatives, provide that critique before continuing.
+- Always follow architecture best practices. This includes avoiding redundant/repeated code and having constants spread throughout the code.
+- If you see opportunities to structure the code in a more elegant and easy to maintain way, you should suggest them before pursuing it.
+- You don't need to generate documentation with every change. As a matter of fact, I will let you know if documentation is needed.
