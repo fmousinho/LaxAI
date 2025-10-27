@@ -251,6 +251,8 @@ class PlayerManager:
 
         player.track_ids.append(track_id)
         self.track_to_player[track_id] = player_id
+        track_pics = set()
+
 
         # Sets initial player image path if not already set
         if player.image_path is None:
@@ -259,7 +261,7 @@ class PlayerManager:
             if not track_pics or len(track_pics) == 0:
                 logger.warning(f"No track pictures found for track {track_id} in video {self.video_id}")
             else:
-                player.image_path = track_pics[0] if track_pics else None
+                player.image_path = track_pics.pop() if track_pics else None
 
         logger.info(f"Associated track {track_id} with player {player_id}")
         return True

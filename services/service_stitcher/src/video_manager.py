@@ -796,3 +796,21 @@ class VideoManager:
                 return False
             self.player_manager.delete_player(player.id)
             return True
+        
+    def get_player(self, player_id: int) -> Optional[Player]:
+        """Retrieve a player by their unique ID.
+
+        Args:
+            player_id (int): Unique player ID to retrieve
+
+        Returns:
+            Optional[Player]: Player object if found, else None.
+        """
+        with self.lock:
+            if not self.player_manager:
+                raise ValueError("Player manager is not initialized.")
+            player = self.player_manager.get_player_by_id(player_id)
+            if not player:
+                logger.warning(f"Player with ID {player_id} not found.")
+                return None
+            return player

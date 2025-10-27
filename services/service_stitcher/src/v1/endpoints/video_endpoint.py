@@ -324,6 +324,25 @@ def add_player(session_id: str, player_data: PlayerCreate) -> PlayerListItem:
     return PlayerListItem(**player.to_dict())
 
 
+@router.get(
+    "/player/{session_id}/{player_id}",
+    response_model=PlayerListItem,
+    summary="Get a player's information in the session",
+    description="Retrieve a specific player's information in the video session."
+)
+def get_player(session_id: str, player_id: int) -> PlayerListItem:
+    """Get a specific player's information in the session."""
+    session_data = video_managers.get(session_id)
+    if not session_data:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    manager, _ = session_data
+    player = manager.get_player(player_id)
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return PlayerListItem(**player.to_dict())
+
+
 @router.patch(
     "/player/{session_id}/{player_id}",
     response_model=PlayerListItem,
