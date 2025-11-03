@@ -760,8 +760,8 @@ class VideoManager:
             
             issue_found = False
 
-            # Handle track_ids separately since it requires special logic
-            track_ids = kwargs.pop("track_ids", None)
+            # Handle tracker_ids separately since it requires special logic
+            track_ids = kwargs.pop("tracker_ids", None)
             if track_ids:
                 # Remove existing tracker associations
                 for tid in player.track_ids[:]:  # Copy list to avoid modification during iteration
@@ -788,12 +788,12 @@ class VideoManager:
                     issue_found = True
             
             if issue_found:
-                    # Restore player manager from serialized backup
-                    try:
-                        self.player_manager.load_players_from_json(player_manager_backup)
-                        logger.info(f"Rolled back player manager state after failed update for player {player_id}")
-                    except Exception as e:
-                        logger.error(f"Failed to rollback player manager state: {e}")
+                # Restore player manager from serialized backup
+                try:
+                    self.player_manager.load_players_from_json(player_manager_backup)
+                    logger.info(f"Rolled back player manager state after failed update for player {player_id}")
+                except Exception as e:
+                    logger.error(f"Failed to rollback player manager state: {e}")
                 return None
             
             return player

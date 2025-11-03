@@ -343,7 +343,11 @@ def update_player(session_id: str, player_id: int, player_data: PlayerCreate) ->
         image_path=player_data.image_path,
         player_number=player_data.player_number,
     )
-    return PlayerListItem(**player.to_dict() if player else {})
+    if not player:
+        # Update failed (invalid attributes or operation). Return 400 instead of constructing an empty PlayerListItem
+        # to avoid Pydantic validation errors on required fields.
+        raise HTTPException(status_code=400, detail="Failed to update player")
+    return PlayerListItem(**player.to_dict())
 
 @router.delete(
     "/player/{session_id}/{player_id}",
