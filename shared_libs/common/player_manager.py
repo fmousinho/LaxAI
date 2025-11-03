@@ -50,20 +50,25 @@ class Player:
     def to_dict(self) -> Dict:
         """Convert player to dictionary for JSON serialization."""
         return {
-            "id": self.id,
-            "name": self.name,
-            "track_ids": self.track_ids,
+            "player_id": self.id,
+            "player_name": self.name,
+            "tracker_ids": self.track_ids,
             "image_path": self.image_path
         }
 
     @classmethod
     def from_dict(cls, data: Dict) -> "Player":
         """Create player from dictionary."""
+        # Support both old format (id) and new format (player_id) for backwards compatibility
+        player_id = data.get("player_id", data.get("id"))
+        player_name = data.get("player_name", data.get("name"))
+        if player_id is None:
+            raise ValueError("Player data must contain 'player_id' or 'id'")
         return cls(
-            player_id=data["id"],
-            name=data["name"],
-            track_ids=data["track_ids"],
-            image_path=data["image_path"]
+            player_id=int(player_id),
+            name=player_name,
+            track_ids=data.get("tracker_ids", []),
+            image_path=data.get("image_path")
         )
 
     def __repr__(self) -> str:
