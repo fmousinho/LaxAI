@@ -750,8 +750,8 @@ class VideoManager:
             if not self.player_manager:
                 raise ValueError("Player manager is not initialized.")
             
-            # Create a deep copy of the player manager state for rollback
-            player_manager_backup = copy.deepcopy(self.player_manager)
+                # Create a serialized backup for rollback (avoids threading.Lock pickle issues)
+                player_manager_backup = self.player_manager.serialize()
             
             player = self.player_manager.get_player_by_id(player_id)
             if not player:
@@ -788,8 +788,12 @@ class VideoManager:
                     issue_found = True
             
             if issue_found:
-                # Restore player manager from deep copy
-                self.player_manager = player_manager_backup
+                    # Restore player manager from serialized backup
+                    try:
+                        self.player_manager.load_players_from_json(player_manager_backup)
+                        logger.info(f"Rolled back player manager state after failed update for player {player_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to rollback player manager state: {e}")
                 return None
             
             return player
