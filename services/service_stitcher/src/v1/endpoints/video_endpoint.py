@@ -12,14 +12,13 @@ from ..schemas.video_schema import (
     ImageFormat
 )
 import logging
-import asyncio
+import os
 import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 from typing import Dict, Tuple
-from contextlib import asynccontextmanager
 import io
 
 # Store managers with creation timestamps: session_id -> (manager, created_at)
@@ -29,46 +28,19 @@ video_managers: Dict[str, Tuple[VideoManager, float]] = {}
 # Cleanup interval in seconds (12 hours)
 CLEANUP_INTERVAL = 12 * 60 * 60  # 12 hours in seconds
 
-async def cleanup_expired_sessions():
-    """Background task to clean up expired video sessions."""
-    while True:
-        try:
-            current_time = time.time()
-            expired_sessions = []
-            # Find expired sessions (older than 12 hours)
-            for session_id, (manager, created_at) in list(video_managers.items()):
-                if current_time - created_at > CLEANUP_INTERVAL:
-                    expired_sessions.append(session_id)
-
-            # Remove expired sessions
-            for session_id in expired_sessions:
-                del video_managers[session_id]
-
-            # Log cleanup if any sessions were removed
-            if expired_sessions:
-                print(f"Cleaned up {len(expired_sessions)} expired video sessions")
-        except Exception as e:
-            print(f"Error during session cleanup: {e}")
-
-        # Wait 1 hour before next cleanup check
-        await asyncio.sleep(60 * 60)  # 1 hour
-
-@asynccontextmanager
-async def lifespan(app):
-    """Handle application startup and shutdown events."""
-    # Startup: start the cleanup task
-    cleanup_task = asyncio.create_task(cleanup_expired_sessions())
-    
-    yield
-    
-    # Shutdown: cancel the cleanup task
-    cleanup_task.cancel()
+def _log_sessions(context: str) -> None:
     try:
-        await cleanup_task
-    except asyncio.CancelledError:
+        logger.info(
+            f"[{context}] Active sessions count={len(video_managers)} keys={list(video_managers.keys())}"
+        )
+    except Exception:
+        # Avoid logging-related crashes
         pass
 
-router = APIRouter(prefix="/stitcher/video", tags=["stitcher-video"], lifespan=lifespan)
+router = APIRouter(prefix="/stitcher/video", tags=["stitcher-video"])
+
+# Log when the endpoint module loads
+logger.warning("video_endpoint module loaded, router created with prefix /stitcher/video")
 
 @router.post(
     "/load",
@@ -78,23 +50,28 @@ router = APIRouter(prefix="/stitcher/video", tags=["stitcher-video"], lifespan=l
 )
 def load (req: VideoLoadRequest) -> VideoLoadResponse:
     """Load a video from a given path or URL."""
+    logger.warning(f"LOAD ENDPOINT CALLED: tenant_id={req.tenant_id}, video_path={req.video_path}")
     try:
+
         manager = VideoManager(req.tenant_id)
         result = manager.load_video(req.video_path)
         session_id = result.get("session_id")
         if not session_id:
             logger.error("Failed to get session ID from video manager after loading video")
             raise ValueError("Failed to get session ID from video manager")
-        
+
         # Store manager with creation timestamp
         video_managers[session_id] = (manager, time.time())
-        
+        _log_sessions(f"session-registered {session_id}")
+
         return VideoLoadResponse(
             session_id=result["session_id"],
             total_frames=result["total_frames"],
             has_next_frame=result["has_next_frame"],
             has_previous_frame=result["has_previous_frame"],
         )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         if "not found" in str(e).lower():
             raise HTTPException(status_code=404, detail=str(e))
@@ -291,6 +268,7 @@ def get_players(session_id: str) -> GetPlayersResponse:
     """Get the list of players for a specific session."""
     session_data = video_managers.get(session_id)
     if not session_data:
+        _log_sessions(f"session-lookup-miss {session_id}")
         raise HTTPException(status_code=404, detail="Session not found")
 
     manager, _ = session_data
@@ -318,9 +296,11 @@ def add_player(session_id: str, player_data: PlayerCreate) -> PlayerListItem:
 
     manager, _ = session_data
     player = manager.add_player(
-        player_data.player_name if player_data.player_name else "Unknown", 
-        player_data.tracker_ids
-        )
+        player_data.player_name if player_data.player_name else "Unknown",
+        player_data.tracker_ids,
+        player_number=player_data.player_number,
+        image_path=player_data.image_path,
+    )
     return PlayerListItem(**player.to_dict())
 
 
@@ -361,6 +341,7 @@ def update_player(session_id: str, player_id: int, player_data: PlayerCreate) ->
         name=player_data.player_name,
         tracker_ids=player_data.tracker_ids,
         image_path=player_data.image_path,
+        player_number=player_data.player_number,
     )
     return PlayerListItem(**player.to_dict() if player else {})
 

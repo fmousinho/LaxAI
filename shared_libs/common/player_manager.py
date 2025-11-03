@@ -24,14 +24,15 @@ class Player:
     """
     
     # Define which attributes can be updated externally (track_ids have dedicated methods)
-    UPDATABLE_ATTRIBUTES = {'name', 'image_path'}
+    UPDATABLE_ATTRIBUTES = {'name', 'image_path', 'player_number'}
 
     def __init__(
             self, 
             player_id: int, 
             name: Optional[str] = None, 
             track_ids: Optional[List[int]] = None,
-            image_path: Optional[str] = None
+            image_path: Optional[str] = None,
+            player_number: Optional[int] = None,
     ):
         """
         Initialize a Player instance.
@@ -41,11 +42,13 @@ class Player:
             name: Optional name for the player
             track_ids: Optional list of associated track IDs
             image_path: Optional path to the player's image
+            player_number: Optional jersey number of the player (non-negative integer)
         """
         self.id = player_id
         self.name = name
         self.track_ids = track_ids if track_ids is not None else []
         self.image_path = image_path
+        self.player_number = player_number
 
     def to_dict(self) -> Dict:
         """Convert player to dictionary for JSON serialization."""
@@ -53,7 +56,8 @@ class Player:
             "player_id": self.id,
             "player_name": self.name,
             "tracker_ids": self.track_ids,
-            "image_path": self.image_path
+            "image_path": self.image_path,
+            "player_number": self.player_number,
         }
 
     @classmethod
@@ -68,12 +72,13 @@ class Player:
             player_id=int(player_id),
             name=player_name,
             track_ids=data.get("tracker_ids", []),
-            image_path=data.get("image_path")
+            image_path=data.get("image_path"),
+            player_number=data.get("player_number")
         )
 
     def __repr__(self) -> str:
         """Return a string representation of the Player."""
-        return f"Player(id={self.id}, name={self.name}, track_ids={self.track_ids}, image_path={self.image_path})"
+        return f"Player(id={self.id}, name={self.name}, number={self.player_number}, track_ids={self.track_ids}, image_path={self.image_path})"
 
 
 class PlayerManager:
@@ -115,28 +120,34 @@ class PlayerManager:
 
             logger.info(f"Initialized PlayerManager for video {self.video_id} with {len(self.players)} players.")
 
-    def create_player(self, name: Optional[str] = None, image_path: Optional[str] = None) -> Player:
+    def create_player(self, name: Optional[str] = None, image_path: Optional[str] = None, player_number: Optional[int] = None) -> Player:
         """
         Create a new player.
 
         Args:
             name: Optional name for the player
             image_path: Optional path to the player's image
+            player_number: Optional jersey number of the player (non-negative integer)
 
         Returns:
             The newly created Player instance
         """
         with self._lock:
-            player = self._create_player(name=name, image_path=image_path)
+            # Basic validation for player_number
+            if player_number is not None and player_number < 0:
+                raise ValueError("player_number must be a non-negative integer")
+
+            player = self._create_player(name=name, image_path=image_path, player_number=player_number)
             return player        
 
-    def _create_player(self, name: Optional[str] = None, image_path: Optional[str] = None) -> Player:
+    def _create_player(self, name: Optional[str] = None, image_path: Optional[str] = None, player_number: Optional[int] = None) -> Player:
         """
         Internal method to create a new player. Does not acquire lock.
 
         Args:
             name: Optional name for the player
             image_path: Optional path to the player's image
+            player_number: Optional jersey number of the player (non-negative integer)
 
         Returns:
             The newly created Player instance
@@ -145,7 +156,7 @@ class PlayerManager:
         player_id = self._next_player_id
         self._next_player_id += 1
 
-        player = Player(player_id=player_id, name=name, image_path=image_path)
+        player = Player(player_id=player_id, name=name, image_path=image_path, player_number=player_number)
         self.players[player_id] = player
 
         logger.info(f"Created player {player_id} for video {self.video_id}")
@@ -198,6 +209,13 @@ class PlayerManager:
             if "track_ids" in kwargs:
                 logger.warning(f"Direct update of 'track_ids' is not allowed for player {player_id}. Use add_track_to_player/remove_track_from_player methods.")
                 return None
+
+            # Validate player_number if provided
+            if "player_number" in kwargs:
+                value = kwargs["player_number"]
+                if value is not None and (not isinstance(value, int) or value < 0):
+                    logger.warning(f"Invalid player_number '{value}' for player {player_id}. Must be non-negative integer or None.")
+                    return None
 
             # Check for invalid attributes
             invalid_keys = set(kwargs.keys()) - Player.UPDATABLE_ATTRIBUTES

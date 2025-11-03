@@ -13,7 +13,7 @@ from typing import Dict, Tuple, cast, Any, Optional, List
 from PIL import Image
 from supervision import Detections
 
-from frame_cache import RollingFrameCache
+from .frame_cache import RollingFrameCache
 
 import shared_libs.config.logging_config 
 from shared_libs.common.player_manager import initialize_player_manager, load_player_manager, Player
@@ -707,17 +707,19 @@ class VideoManager:
                 return self.player_manager.get_all_players()
             return None
 
-    def add_player(self, name: str, tracker_ids: List[int]) -> Player:
+    def add_player(self, name: str, tracker_ids: List[int], player_number: Optional[int] = None, image_path: Optional[str] = None) -> Player:
         """Add a new player to the player manager.
 
         Args:
             name (str): Name of the player to add
             tracker_ids (List[int]): List of tracker IDs associated with the player
+            player_number (Optional[int]): Jersey number of the player
+            image_path (Optional[str]): Initial image path for the player
         """
         with self.lock:
             if not self.player_manager:
                 raise ValueError("Player manager is not initialized.")
-            player = self.player_manager.create_player(name)
+            player = self.player_manager.create_player(name, image_path=image_path, player_number=player_number)
             for tracker_id in tracker_ids:
                 self.player_manager.add_track_to_player(player.id, tracker_id)
             return player

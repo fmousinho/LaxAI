@@ -198,7 +198,8 @@ PLAYER_LIST_ITEM_EXAMPLE = {
     "player_id": 5,
     "tracker_ids": [42],
     "player_name": "John Doe",
-    "image_path": "/path/to/player_image.png"
+    "image_path": "/path/to/player_image.png",
+    "player_number": 23
 }
 
 class PlayerListItem(BaseModel):
@@ -207,6 +208,7 @@ class PlayerListItem(BaseModel):
     tracker_ids: List[int] = Field(..., description="Tracker IDs associated with the player")
     player_name: Optional[str] = Field(..., description="Name of the player")
     image_path: Optional[str] = Field(..., description="Path to the player's image")
+    player_number: Optional[int] = Field(None, description="Jersey number of the player")
 
     class ConfigDict:
         json_schema_extra = {
@@ -218,6 +220,7 @@ class PlayerCreate(BaseModel):
     player_name: Optional[str] = Field(None, description="Name of the player to add")
     tracker_ids: List[int] = Field(..., description="List of tracker IDs to associate with the player")
     image_path: Optional[str] = Field(None, description="Path to the player's image")
+    player_number: Optional[int] = Field(None, description="Jersey number of the player")
 
     class ConfigDict:
         json_schema_extra = {
@@ -247,6 +250,7 @@ class PatchUpdatePlayerRequest(BaseModel):
     player_name: Optional[str] = Field(None, description="Updated name of the player")
     tracker_ids: Optional[List[int]] = Field(None, description="Updated list of tracker IDs associated with the player")
     image_path: Optional[str] = Field(None, description="Updated path to the player's image")
+    player_number: Optional[int] = Field(None, description="Updated jersey number of the player")
 
     class ConfigDict:
         json_schema_extra = {

@@ -120,6 +120,23 @@ def create_application() -> FastAPI:
     # Include API routers
     app.include_router(router, prefix="/api/v1")
 
+    # Log available routes at startup for diagnostics
+    try:
+        target_path = "/api/v1/stitcher/video/load"
+        routes_info = []
+        has_target = False
+        for r in app.routes:
+            path = getattr(r, 'path', None)
+            methods = sorted(list(getattr(r, 'methods', []))) if hasattr(r, 'methods') else []
+            if path:
+                routes_info.append({"path": path, "methods": methods})
+                if path == target_path and (not methods or "POST" in methods):
+                    has_target = True
+        logger.warning(f"ROUTES REGISTERED ({len(routes_info)}): {routes_info}")
+        logger.warning(f"ROUTE CHECK: {target_path} present={has_target}")
+    except Exception as e:
+        logger.warning(f"Failed to log routes: {e}")
+
     @app.get("/health")
     async def health_check():
         """Health check endpoint."""
