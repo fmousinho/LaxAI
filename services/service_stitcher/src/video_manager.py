@@ -8,6 +8,9 @@ import logging
 import concurrent.futures
 import io
 import copy
+import atexit
+import signal
+import weakref
 import numpy as np
 from typing import Dict, Tuple, cast, Any, Optional, List
 from PIL import Image
@@ -44,6 +47,8 @@ class VideoManager:
         frame_skip_interval (int): Number of frames to skip between reads for performance
     """
     path_manager = GCSPaths()
+    # Track live instances for graceful persistence on shutdown/crash
+    _instances: "weakref.WeakSet[VideoManager]" = weakref.WeakSet()
 
     def __init__(self, tenant_id: str, frame_skip_interval: int = FRAME_SKIP_INTERVAL):
         """Initialize a new VideoManager instance.
@@ -78,8 +83,20 @@ class VideoManager:
             frame_skip_interval=self.frame_skip_interval
         )
 
+        # Register this instance for shutdown persistence
+        try:
+            VideoManager._instances.add(self)
+        except Exception:
+            # Non-fatal; persistence is best-effort
+            pass
+
     def __del__(self):
         """Cleanup method to properly close video capture when VideoManager is destroyed."""
+        # Best-effort: persist players before tearing down resources
+        try:
+            self._persist_players_state(reason="__del__")
+        except Exception:
+            pass
         if self.frame_cache:
             self.frame_cache.shutdown()
         if self.cap:
@@ -309,7 +326,6 @@ class VideoManager:
         buffer.seek(0)
         return buffer.getvalue()
     
-
     def _encode_frame_for_cache(self, frame_id: int, format: str, quality: int) -> bytes:
         """Encode a frame for caching (used by cache prefetch).
         Ensures thread safety for decoder access by acquiring the session lock.
@@ -355,7 +371,6 @@ class VideoManager:
             
         return {"cap": cap, "total_frames": total_frames}
 
-
     def _generate_session_id(self) -> str:
         """Generate a short, unique session ID.
         
@@ -374,7 +389,6 @@ class VideoManager:
             random_part = random.randint(0, 0xFF)  # 8-bit random
             session_id = f"{timestamp:08d}-{random_part:02X}"
             return session_id
-
 
     def _load_players_if_json_exists(self) -> None:
         """Retrieve the PlayerManager for the video if players JSON exists."""
@@ -816,3 +830,84 @@ class VideoManager:
                 logger.warning(f"Player with ID {player_id} not found.")
                 return None
             return player
+
+    def _persist_players_state(self, reason: str = "manual") -> None:
+        """Persist players JSON to storage if available.
+
+        Args:
+            reason: Diagnostic reason for the persistence trigger.
+        """
+        # Avoid exceptions bubbling up from shutdown paths
+        if not getattr(self, "video_id", None):
+            return
+        if not getattr(self, "player_manager", None):
+            return
+
+        try:
+            players_path = self.path_manager.get_path("players_data_path", video_id=self.video_id)
+            if not players_path:
+                logger.warning(f"[{reason}] No players_data_path resolved for video_id={self.video_id}")
+                return
+
+            json_str = self.player_manager.serialize()
+            if not json_str:
+                logger.warning(f"[{reason}] PlayerManager serialize returned empty for video_id={self.video_id}")
+                return
+
+            ok = self.storage.upload_from_string(players_path, json_str)
+            if ok:
+                logger.info(f"[{reason}] Persisted players to {players_path} for video_id={self.video_id}")
+            else:
+                logger.error(f"[{reason}] Failed to upload players JSON to {players_path} for video_id={self.video_id}")
+        except Exception as e:
+            # Log and continue; shutdown paths should be resilient
+            logger.error(f"[{reason}] Exception while persisting players for video_id={self.video_id}: {e}")
+
+
+# ========= Module-level shutdown handling =========
+
+_signals_installed = False
+
+
+def _persist_all_video_managers(reason: str = "atexit") -> None:
+    try:
+        instances = list(VideoManager._instances)
+    except Exception:
+        instances = []
+    for vm in instances:
+        try:
+            vm._persist_players_state(reason=reason)
+        except Exception:
+            # Best-effort; continue persisting others
+            pass
+
+
+def _install_signal_handlers_once() -> None:
+    global _signals_installed
+    if _signals_installed:
+        return
+    _signals_installed = True
+
+    def _handler(signum, frame):  # type: ignore[no-untyped-def]
+        try:
+            logger.warning(f"Received signal {signum}; persisting VideoManager player states...")
+        except Exception:
+            pass
+        _persist_all_video_managers(reason=f"signal:{signum}")
+        # Exit gracefully to trigger atexit as well (idempotent persistence)
+        raise SystemExit(0)
+
+    # Register handlers for graceful shutdown signals where available
+    for _sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)):
+        if _sig is not None:
+            try:
+                signal.signal(_sig, _handler)
+            except Exception:
+                # Ignore environments where setting signal handlers is not allowed
+                pass
+
+
+# Register atexit persistence and install signal handlers at import time
+atexit.register(_persist_all_video_managers, "atexit")
+_install_signal_handlers_once()
+
