@@ -736,6 +736,10 @@ class VideoManager:
             player = self.player_manager.create_player(name, image_path=image_path, player_number=player_number, team_id=team_id)
             for tracker_id in tracker_ids:
                 self.player_manager.add_track_to_player(player.id, tracker_id)
+            
+            # Trigger asynchronous persistence after adding player
+            self._trigger_async_persistence(reason=f"player_added:{player.id}")
+            
             return player
 
     def update_player(self, player_id: int, **kwargs) -> Optional[Player]:
@@ -796,6 +800,9 @@ class VideoManager:
                     logger.error(f"Failed to rollback player manager state: {e}")
                 return None
             
+            # Trigger asynchronous persistence after successful update
+            self._trigger_async_persistence(reason=f"player_update:{player_id}")
+            
             return player
         
     def delete_player(self, player_id: int) -> bool:
@@ -815,6 +822,10 @@ class VideoManager:
                 logger.warning(f"Player with ID {player_id} not found for deletion.")
                 return False
             self.player_manager.delete_player(player.id)
+            
+            # Trigger asynchronous persistence after deleting player
+            self._trigger_async_persistence(reason=f"player_deleted:{player_id}")
+            
             return True
         
     def get_player(self, player_id: int) -> Optional[Player]:
@@ -834,6 +845,24 @@ class VideoManager:
                 logger.warning(f"Player with ID {player_id} not found.")
                 return None
             return player
+
+    def _trigger_async_persistence(self, reason: str = "manual") -> None:
+        """Trigger asynchronous player state persistence in a background thread.
+        
+        Non-blocking: spawns a daemon thread to persist without blocking the caller.
+        
+        Args:
+            reason: Diagnostic reason for the persistence trigger.
+        """
+        # Use daemon thread so it doesn't prevent shutdown
+        persist_thread = threading.Thread(
+            target=self._persist_players_state,
+            args=(reason,),
+            daemon=True,
+            name=f"persist-{self.session_id or 'unknown'}"
+        )
+        persist_thread.start()
+        logger.debug(f"[{reason}] Triggered async persistence for video_id={self.video_id}")
 
     def _persist_players_state(self, reason: str = "manual") -> None:
         """Persist players JSON to storage if available.

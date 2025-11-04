@@ -54,13 +54,14 @@ class Player:
 
     def to_dict(self) -> Dict:
         """Convert player to dictionary for JSON serialization."""
+        # Convert numpy types to native Python types for JSON serialization
         return {
-            "player_id": self.id,
+            "player_id": int(self.id) if self.id is not None else None,
             "player_name": self.name,
-            "tracker_ids": self.track_ids,
+            "tracker_ids": [int(tid) for tid in self.track_ids],
             "image_path": self.image_path,
-            "player_number": self.player_number,
-            "team_id": self.team_id,
+            "player_number": int(self.player_number) if self.player_number is not None else None,
+            "team_id": int(self.team_id) if self.team_id is not None else None,
         }
 
     @classmethod
@@ -374,11 +375,17 @@ class PlayerManager:
             True if saved successfully, False otherwise
         """
         try:
+            # Convert track_to_player dict keys/values to native Python ints for JSON serialization
+            track_to_player_serializable = {
+                int(track_id): int(player_id) 
+                for track_id, player_id in self.track_to_player.items()
+            }
+            
             data = {
                 "video_id": self.video_id,
-                "next_player_id": self._next_player_id,
+                "next_player_id": int(self._next_player_id),
                 "players": [player.to_dict() for player in self.players.values()],
-                "track_to_player": self.track_to_player
+                "track_to_player": track_to_player_serializable
             }
             return json.dumps(data)
         except Exception as e:
