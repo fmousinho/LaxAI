@@ -721,7 +721,7 @@ class VideoManager:
                 return self.player_manager.get_all_players()
             return None
 
-    def add_player(self, name: str, tracker_ids: List[int], player_number: Optional[int] = None, image_path: Optional[str] = None) -> Player:
+    def add_player(self, name: str, tracker_ids: List[int], player_number: Optional[int] = None, image_path: Optional[str] = None, team_id: Optional[int] = None) -> Player:
         """Add a new player to the player manager.
 
         Args:
@@ -733,7 +733,7 @@ class VideoManager:
         with self.lock:
             if not self.player_manager:
                 raise ValueError("Player manager is not initialized.")
-            player = self.player_manager.create_player(name, image_path=image_path, player_number=player_number)
+            player = self.player_manager.create_player(name, image_path=image_path, player_number=player_number, team_id=team_id)
             for tracker_id in tracker_ids:
                 self.player_manager.add_track_to_player(player.id, tracker_id)
             return player

@@ -24,7 +24,7 @@ class Player:
     """
     
     # Define which attributes can be updated externally (track_ids have dedicated methods)
-    UPDATABLE_ATTRIBUTES = {'name', 'image_path', 'player_number'}
+    UPDATABLE_ATTRIBUTES = {'name', 'image_path', 'player_number', 'team_id'}
 
     def __init__(
             self, 
@@ -33,6 +33,7 @@ class Player:
             track_ids: Optional[List[int]] = None,
             image_path: Optional[str] = None,
             player_number: Optional[int] = None,
+            team_id: Optional[int] = None
     ):
         """
         Initialize a Player instance.
@@ -49,6 +50,7 @@ class Player:
         self.track_ids = track_ids if track_ids is not None else []
         self.image_path = image_path
         self.player_number = player_number
+        self.team_id = team_id
 
     def to_dict(self) -> Dict:
         """Convert player to dictionary for JSON serialization."""
@@ -58,6 +60,7 @@ class Player:
             "tracker_ids": self.track_ids,
             "image_path": self.image_path,
             "player_number": self.player_number,
+            "team_id": self.team_id,
         }
 
     @classmethod
@@ -73,12 +76,13 @@ class Player:
             name=player_name,
             track_ids=data.get("tracker_ids", []),
             image_path=data.get("image_path"),
-            player_number=data.get("player_number")
+            player_number=data.get("player_number"),
+            team_id=data.get("team_id"),
         )
 
     def __repr__(self) -> str:
         """Return a string representation of the Player."""
-        return f"Player(id={self.id}, name={self.name}, number={self.player_number}, track_ids={self.track_ids}, image_path={self.image_path})"
+        return f"Player(id={self.id}, name={self.name}, number={self.player_number}, team_id={self.team_id}, track_ids={self.track_ids}, image_path={self.image_path})"
 
 
 class PlayerManager:
@@ -120,7 +124,7 @@ class PlayerManager:
 
             logger.info(f"Initialized PlayerManager for video {self.video_id} with {len(self.players)} players.")
 
-    def create_player(self, name: Optional[str] = None, image_path: Optional[str] = None, player_number: Optional[int] = None) -> Player:
+    def create_player(self, name: Optional[str] = None, image_path: Optional[str] = None, player_number: Optional[int] = None, team_id: Optional[int] = None) -> Player:
         """
         Create a new player.
 
@@ -137,10 +141,10 @@ class PlayerManager:
             if player_number is not None and player_number < 0:
                 raise ValueError("player_number must be a non-negative integer")
 
-            player = self._create_player(name=name, image_path=image_path, player_number=player_number)
+            player = self._create_player(name=name, image_path=image_path, player_number=player_number, team_id=team_id)
             return player        
 
-    def _create_player(self, name: Optional[str] = None, image_path: Optional[str] = None, player_number: Optional[int] = None) -> Player:
+    def _create_player(self, name: Optional[str] = None, image_path: Optional[str] = None, player_number: Optional[int] = None, team_id: Optional[int] = None) -> Player:
         """
         Internal method to create a new player. Does not acquire lock.
 
@@ -156,7 +160,7 @@ class PlayerManager:
         player_id = self._next_player_id
         self._next_player_id += 1
 
-        player = Player(player_id=player_id, name=name, image_path=image_path, player_number=player_number)
+        player = Player(player_id=player_id, name=name, image_path=image_path, player_number=player_number, team_id=team_id)
         self.players[player_id] = player
 
         logger.info(f"Created player {player_id} for video {self.video_id}")
@@ -215,6 +219,13 @@ class PlayerManager:
                 value = kwargs["player_number"]
                 if value is not None and (not isinstance(value, int) or value < 0):
                     logger.warning(f"Invalid player_number '{value}' for player {player_id}. Must be non-negative integer or None.")
+                    return None
+
+            # Validate team_id if provided
+            if "team_id" in kwargs:
+                value = kwargs["team_id"]
+                if value is not None and (not isinstance(value, int) or value < 0):
+                    logger.warning(f"Invalid team_id '{value}' for player {player_id}. Must be non-negative integer or None.")
                     return None
 
             # Check for invalid attributes

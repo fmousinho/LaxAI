@@ -300,6 +300,7 @@ def add_player(session_id: str, player_data: PlayerCreate) -> PlayerListItem:
         player_data.tracker_ids,
         player_number=player_data.player_number,
         image_path=player_data.image_path,
+        team_id=player_data.team_id,
     )
     return PlayerListItem(**player.to_dict())
 
@@ -342,6 +343,7 @@ def update_player(session_id: str, player_id: int, player_data: PlayerCreate) ->
         tracker_ids=player_data.tracker_ids,
         image_path=player_data.image_path,
         player_number=player_data.player_number,
+        team_id=player_data.team_id,
     )
     if not player:
         # Update failed (invalid attributes or operation). Return 400 instead of constructing an empty PlayerListItem
