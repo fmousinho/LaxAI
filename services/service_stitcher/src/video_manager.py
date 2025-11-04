@@ -887,7 +887,8 @@ class VideoManager:
                 logger.warning(f"[{reason}] PlayerManager serialize returned empty for video_id={self.video_id}")
                 return
 
-            ok = self.storage.upload_from_string(players_path, json_str)
+            # Use bytes upload with explicit JSON content type to ensure application/json in GCS
+            ok = self.storage.upload_from_bytes(players_path, json_str.encode("utf-8"), content_type="application/json")
             if ok:
                 logger.info(f"[{reason}] Persisted players to {players_path} for video_id={self.video_id}")
             else:
