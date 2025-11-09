@@ -1,5 +1,5 @@
-# Dockerfile for service_cr_create_dataset_from_gml
-# Cloud Run service for creating datasets from GML graphs
+# Dockerfile for service_cr_create_dataset_from_player_mgr
+# Cloud Run service for creating datasets from player manager data
 
 FROM python:3.12-slim
 
@@ -17,7 +17,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy shared_libs
-COPY shared_libs ./shared_libs
+COPY ../shared_libs ./shared_libs
 
 # Copy service code
 COPY main.py .

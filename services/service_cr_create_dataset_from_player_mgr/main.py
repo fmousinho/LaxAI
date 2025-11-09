@@ -1,9 +1,10 @@
 """
-Cloud Run Function to Create Dataset from GML Graph.
+Cloud Run Function to Create Dataset from Player Manager Data.
 
-This HTTP-triggered Cloud Function processes a GML graph file from a completed
+This HTTP-triggered Cloud Function processes player data from a completed
 dataprep session and creates a structured dataset for training by grouping
-verified track crops into connected component folders.
+player images into train/validation splits and organizing verified track crops
+into connected component folders.
 
 Environment Variables:
     - GOOGLE_CLOUD_PROJECT: Automatically populated by GCP with the project ID.
@@ -12,6 +13,7 @@ Environment Variables:
 import logging
 from typing import Dict, Any
 import json
+import random
 from fastapi import FastAPI, HTTPException
 import networkx as nx
 
@@ -21,13 +23,14 @@ from shared_libs.utils.id_generator import create_dataset_id
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Create Dataset from GML", version="1.0.0")
+app = FastAPI(title="Create Dataset from Player Manager Data", version="1.0.0")
 
+TRAINING_RATIO = 0.8
 
 @app.post("/create-dataset-from-player-mgr")
 async def create_dataset(request: Dict[str, str]) -> Dict[str, Any]:
     """
-    Create a training dataset from a GML graph file.
+    Create a training dataset from player manager data.
 
     Expects JSON: {"tenant_id": "tenant123", "video_id": "video_abc"}
     """
@@ -55,64 +58,68 @@ async def create_dataset(request: Dict[str, str]) -> Dict[str, Any]:
             raise HTTPException(status_code=500, detail="Failed to download player data file")
         player_json = json.loads(player_data_content)
         # Extract track_to_player mapping as Python dictionary
-        track_to_player = player_json.get("track_to_player", {})
-        if not track_to_player or len(track_to_player) == 0:
-            raise HTTPException(status_code=404, detail="No track to player mapping found")
-        logger.info(f"Loaded track to player mapping with {len(track_to_player)} entries")
+        players_data = player_json.get("players", {})
+        if not players_data or len(players_data) == 0:
+            raise HTTPException(status_code=404, detail="No players mapping found")
+        logger.info(f"Loaded players mapping with {len(players_data)} entries")
 
-        # Get unverified tracks root path
-        unverified_tracks_root = path_manager.get_path("unverified_tracks_root", video_id=video_id)
-        if not unverified_tracks_root:
-            raise HTTPException(status_code=404, detail="Unverified tracks root path not found")
-
-        gml_path = f"{unverified_tracks_root}{video_id}/stitcher_graph.gml"
-        unverified_tracks_path = f"{unverified_tracks_root}{video_id}/unverified_tracks/"
-
-        # Validate required files/folders exist
-        if not storage.blob_exists(gml_path):
-            raise HTTPException(status_code=400, detail="GML file not found in process folder")
-
-        if not storage.list_blobs(prefix=unverified_tracks_path):
-            raise HTTPException(status_code=400, detail="Unverified tracks folder not found")
-
-        # Load and parse GML graph
-        gml_content = storage.download_as_string(gml_path)
-        G = nx.parse_gml(gml_content)
-
-        # Identify verified tracks (those with edges)
-        verified_tracks = set()
-        for u, v in G.edges():
-            verified_tracks.add(u)
-            verified_tracks.add(v)
-
-        # Get connected components
-        components = list(nx.connected_components(G))
-
-        # Create dataset
+        # Create dataset folder
         dataset_id = create_dataset_id(video_id)
-        dataset_path = path_manager.get_path("dataset_folder", dataset_id=dataset_id, tenant_id=tenant_id)
 
-        component_num = 1
-        for component in components:
-            # Skip components with no verified tracks
-            if not any(track in verified_tracks for track in component):
-                continue
+        train_img_count = 0
+        val_img_count = 0
 
-            component_folder = f"{dataset_path}{component_num}/"
+        for player_data in players_data:
 
-            # Copy crops from verified tracks in this component
-            for track in component:
-                if track in verified_tracks:
-                    track_folder = f"{unverified_tracks_path}{track}/"
-                    crops = storage.list_blobs(prefix=track_folder)
-                    for crop_name in crops:
-                        dest_path = crop_name.replace(track_folder, component_folder)
-                        storage.copy_blob(crop_name, dest_path)
+            #Get list of images for the player
+            images = set()
+            player_id = player_data.get("player_id")
+            player_tracks = player_data.get("tracker_ids", [])
+            logger.info(f"Processing player {player_id} with {len(player_tracks)} tracks")
+            for track in player_tracks:
+                path = path_manager.get_path("unverified_tracks", video_id=video_id, track_id=track)
+                if path is None or not storage.blob_exists(path):
+                    logger.warning(f"Track path {path} does not exist for track {track}")
+                    continue
+                track_images = storage.list_blobs(prefix=path)
+                images.update(track_images)
+            logger.info(f"Player {player_id} has {len(images)} images across tracks")
 
-            component_num += 1
+            #Create train and val splits
+            if len(images) < 3:
+                continue  # Skip players with less than 3 images
+            elif len(images) < 15:
+                train_images = images  # Not enough players for a val dataset (min of 3)
+                val_images = None
+            else:
+                train_images = []
+                val_images = []
+                images_list = list(images)
+                random.shuffle(images_list)
+                num_train = int(len(images_list) * TRAINING_RATIO)
+                train_images.extend(images_list[:num_train])
+                val_images.extend(images_list[num_train:])
 
-        logger.info(f"Dataset {dataset_id} created successfully with {component_num-1} components")
-        return {"success": True, "dataset_id": dataset_id, "components": component_num-1}
+
+            # Create player dataset folders and copy images
+            train_player_folder = path_manager.get_path("train_player_folder",
+                                                        dataset_id=dataset_id,
+                                                        orig_crop_id=player_id)
+            for img_path in train_images:
+                img_filename = img_path.split('/')[-1]
+                storage.copy_blob(img_path, f"{train_player_folder}{img_filename}")
+                train_img_count += 1
+            if val_images:
+                val_player_folder = path_manager.get_path("val_player_folder",
+                                                          dataset_id=dataset_id,
+                                                          orig_crop_id=player_id)
+                for img_path in val_images:
+                    img_filename = img_path.split('/')[-1]
+                    storage.copy_blob(img_path, f"{val_player_folder}{img_filename}")
+                    val_img_count += 1
+
+        logger.info(f"Created dataset {dataset_id} with {train_img_count} training images and {val_img_count} validation images.")
+        return {"success": True, "dataset_id": dataset_id, "train": train_img_count, "val": val_img_count}
 
     except HTTPException:
         raise

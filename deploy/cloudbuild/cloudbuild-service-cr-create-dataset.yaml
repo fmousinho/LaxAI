@@ -1,6 +1,6 @@
 ############################################################################
 #                                                                          #
-#               BUILDER FOR SERVICE CR CREATE DATASET FROM GML            #
+#               BUILDER FOR SERVICE CR CREATE DATASET FROM PLAYER MGR     #
 #                                                                          #
 ############################################################################
 
@@ -9,8 +9,8 @@
 
 substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"
-  _SERVICE_ACCOUNT: "service-cr-create-dataset-from-gml@laxai-466119.iam.gserviceaccount.com"
-  _WORK_DIR: "services/service_cr_create_dataset_from_gml"
+  _SERVICE_ACCOUNT: "service-cr-create-dataset@laxai-466119.iam.gserviceaccount.com"
+  _WORK_DIR: "services/service_cr_create_dataset_from_player_mgr"
 
 steps:
   - id: "build-and-tag-image"
@@ -20,18 +20,18 @@ steps:
       - "-f"
       - "${_WORK_DIR}/Dockerfile"
       - "-t"
-      - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-cr-create-dataset-from-gml:latest"
+      - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-cr-create-dataset:latest"
       - "--build-arg"
       - "REQS=requirements.txt"
       - "--build-arg"
       - "GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT}"
-      - "."
+      - "${_WORK_DIR}"
 
   - id: "push-latest-image"
     name: "gcr.io/cloud-builders/docker"
     args:
       - "push"
-      - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-cr-create-dataset-from-gml:latest"
+      - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-cr-create-dataset:latest"
 
   - id: "deploy-to-cloud-run"
     name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
@@ -39,8 +39,8 @@ steps:
     args:
       - "run"
       - "deploy"
-      - "laxai-service-cr-create-dataset-from-gml"
-      - "--image=us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-cr-create-dataset-from-gml:latest"
+      - "laxai-service-cr-create-dataset"
+      - "--image=us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-cr-create-dataset:latest"
       - "--region=us-central1"
       - "--cpu=1"
       - "--memory=1Gi"
