@@ -77,11 +77,11 @@ class TrainingConfig:
     lr_scheduler_threshold: float = 1e-5  # More sensitive threshold
     lr_scheduler_factor: float = 0.3  # More conservative reduction
     lr_scheduler_min_lr: float = 1e-8  # Lower minimum LR
-    num_epochs: int = 100  # Increased epochs for fine-tuning
+    num_epochs: int = 200  # Increased epochs for fine-tuning
     margin: float = 0.5  # Increased from 0.2 for better separation
     weight_decay: float = 5e-5  # Reduced L2 regularization
     train_ratio: float = 0.8
-    min_images_per_player: int = 3  # Increased minimum images per player
+    min_images_per_player: int = 10  # Increased minimum images per player
     force_pretraining: bool = False  # Force using ResNet defaults for pretraining
     early_stopping_patience: Optional[int] = 15  # More patience for convergence
     margin_decay_rate: float = 0.995  # Slower margin decay

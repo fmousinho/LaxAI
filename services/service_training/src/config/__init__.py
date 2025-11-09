@@ -15,55 +15,27 @@ from .all_config import (ClusteringConfig, DebugConfig, DetectionConfig,
                          player_config, track_stitching_config, tracker_config,
                          training_config, transform_config)
 
-# Lazily import transform-related functions and instances from transforms.py.
-# The transforms module imports heavy dependencies (OpenCV / torchvision).
-# Importing it at package import time causes those libraries to be loaded in
-# environments (Cloud Run / Cloud Functions) where they may not be available.
-#
-# We use module-level __getattr__ (PEP 562) to defer importing until the
-# attribute is actually accessed.
-_TRANSFORM_EXPORTS = {
-    'get_transforms',
-    'TRANSFORMS',
-    'training_transforms',
-    'inference_transforms',
-    'validation_transforms',
-    'opencv_safe_transforms',
-    'opencv_safe_training_transforms',
-    'tensor_to_pil',
-    'ensure_rgb_format',
-    'BackgroundRemovalTransform',
-    'create_background_removal_transform',
-    'create_transforms_with_background_removal',
-    'set_global_background_detector',
-    'get_global_background_detector',
-    'initialize_background_removal',
-    'is_background_removal_enabled',
-    'refresh_transform_instances',
-    'create_background_detector_from_images',
-}
-
-
-def __getattr__(name: str):
-    """Lazily load transform attributes from .transforms on first access.
-
-    This prevents importing heavy ML/image libraries when simple config values
-    are requested (for example, by services that only need configuration).
-    """
-    if name in _TRANSFORM_EXPORTS:
-        from importlib import import_module
-
-        mod = import_module(f"{__name__}.transforms")
-        val = getattr(mod, name)
-        # Cache on the module for subsequent attribute access
-        globals()[name] = val
-        return val
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-def __dir__():
-    base = globals().keys()
-    return sorted(list(base) + list(_TRANSFORM_EXPORTS))
+# Import transform-related functions and instances from shared_libs
+from shared_libs.config.transforms import (
+    BackgroundRemovalTransform,
+    TRANSFORMS,
+    create_background_detector_from_images,
+    create_background_removal_transform,
+    create_transforms_with_background_removal,
+    ensure_rgb_format,
+    get_global_background_detector,
+    get_transforms,
+    inference_transforms,
+    initialize_background_removal,
+    is_background_removal_enabled,
+    opencv_safe_training_transforms,
+    opencv_safe_transforms,
+    refresh_transform_instances,
+    set_global_background_detector,
+    tensor_to_pil,
+    training_transforms,
+    validation_transforms,
+)
 
 # Import logging configuration (inferred from usage in dataprep_pipeline.py)
 from shared_libs.config import logging_config

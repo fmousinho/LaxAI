@@ -11,7 +11,7 @@ Environment Variables:
 
 import logging
 from typing import Dict, Any
-
+import json
 from fastapi import FastAPI, HTTPException
 import networkx as nx
 
@@ -24,30 +24,49 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Create Dataset from GML", version="1.0.0")
 
 
-@app.post("/create-dataset-from-gml")
-async def create_dataset_from_gml(request: Dict[str, str]) -> Dict[str, Any]:
+@app.post("/create-dataset-from-player-mgr")
+async def create_dataset(request: Dict[str, str]) -> Dict[str, Any]:
     """
     Create a training dataset from a GML graph file.
 
-    Expects JSON: {"tenant_id": "tenant123", "video_name": "video_abc"}
+    Expects JSON: {"tenant_id": "tenant123", "video_id": "video_abc"}
     """
     try:
         tenant_id = request.get("tenant_id")
-        video_name = request.get("video_name")
+        video_id = request.get("video_id")
 
-        if not tenant_id or not video_name:
-            raise HTTPException(status_code=400, detail="Missing tenant_id or video_name")
+        if not tenant_id or not video_id:
+            raise HTTPException(status_code=400, detail="Missing tenant_id or video_id")
 
-        logger.info(f"Processing dataset creation for tenant {tenant_id}, video {video_name}")
+        logger.info(f"Processing dataset creation for tenant {tenant_id}, video {video_id}")
 
         # Initialize path manager and storage
         path_manager = GCSPaths()
         storage = get_storage(tenant_id)
 
-        # Get paths
-        process_root = path_manager.get_path("process_root", tenant_id=tenant_id)
-        gml_path = f"{process_root}{video_name}/stitcher_graph.gml"
-        unverified_tracks_path = f"{process_root}{video_name}/unverified_tracks/"
+        # Load player data dictionary
+        player_data_path = path_manager.get_path("players_data_path", video_id=video_id)
+        if not player_data_path:
+            raise HTTPException(status_code=404, detail="Player data path not found")
+        if not storage.blob_exists(player_data_path):
+            raise HTTPException(status_code=404, detail="Player data file not found")
+        player_data_content = storage.download_as_string(player_data_path)
+        if player_data_content is None:
+            raise HTTPException(status_code=500, detail="Failed to download player data file")
+        player_json = json.loads(player_data_content)
+        # Extract track_to_player mapping as Python dictionary
+        track_to_player = player_json.get("track_to_player", {})
+        if not track_to_player or len(track_to_player) == 0:
+            raise HTTPException(status_code=404, detail="No track to player mapping found")
+        logger.info(f"Loaded track to player mapping with {len(track_to_player)} entries")
+
+        # Get unverified tracks root path
+        unverified_tracks_root = path_manager.get_path("unverified_tracks_root", video_id=video_id)
+        if not unverified_tracks_root:
+            raise HTTPException(status_code=404, detail="Unverified tracks root path not found")
+
+        gml_path = f"{unverified_tracks_root}{video_id}/stitcher_graph.gml"
+        unverified_tracks_path = f"{unverified_tracks_root}{video_id}/unverified_tracks/"
 
         # Validate required files/folders exist
         if not storage.blob_exists(gml_path):
@@ -70,7 +89,7 @@ async def create_dataset_from_gml(request: Dict[str, str]) -> Dict[str, Any]:
         components = list(nx.connected_components(G))
 
         # Create dataset
-        dataset_id = create_dataset_id(video_name)
+        dataset_id = create_dataset_id(video_id)
         dataset_path = path_manager.get_path("dataset_folder", dataset_id=dataset_id, tenant_id=tenant_id)
 
         component_num = 1

@@ -9,8 +9,11 @@ import numpy as np
 import random
 from typing import List
 
-
 def augment_images(images: List[np.ndarray]) -> List[np.ndarray]:
+    return images
+    
+
+def old_augment_images(images: List[np.ndarray]) -> List[np.ndarray]:
     """
     Perform various augmentations on a list of RGB images using numpy and random.
     
