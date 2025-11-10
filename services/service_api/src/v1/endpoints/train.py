@@ -60,6 +60,7 @@ class PubSubPublisher:
             "custom_name": request.custom_name,
             "tenant_id": request.tenant_id,
             "resume_from_checkpoint": request.resume_from_checkpoint,
+            "dataset_address": request.dataset_address,
             "training_params": training_params,
             "model_params": model_params,
             "eval_params": eval_params,

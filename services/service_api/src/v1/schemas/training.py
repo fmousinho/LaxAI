@@ -31,6 +31,7 @@ class TrainingParams(BaseModel):
     train_ratio: Optional[float] = Field(None, description="Percentage of dataset samples for training")
     n_datasets_to_use: Optional[int] = Field(None, description="Number of datasets to use for training")
     wandb_project: Optional[str] = Field(None, description="WandB project name")
+    dataset_address: Optional[str] = Field(None, description="Address of the dataset to use")
 
 
 class ModelParams(BaseModel):
@@ -67,6 +68,10 @@ class TrainingRequest(BaseModel):
         default=True,
         description="Whether to resume from checkpoint if available"
     )
+    dataset_address: Optional[str] = Field(
+        default=None,
+        description="Address of the dataset to be used for training"
+    )
     training_params: Optional[TrainingParams] = Field(
         default=None,
         description="Training-specific parameters"
@@ -86,6 +91,7 @@ class TrainingRequest(BaseModel):
                 "custom_name": "my_training_run",
                 "tenant_id": "",
                 "resume_from_checkpoint": True,
+                "dataset_address": "gs://my-bucket/datasets/dataset1",
                 "training_params": {
                     "num_epochs": 100,
                     "batch_size": 128,
