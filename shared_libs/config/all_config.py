@@ -100,9 +100,15 @@ class TrainingConfig:
     prefetch_factor: int = 4  # Increased prefetch for better GPU utilization
     # Number of datasets to use for training (0 = use all)
     n_datasets_to_use: Optional[int] = 0
+    # Full GCS path to a specific dataset (gs://bucket/path or bucket/path)
+    # If provided, this overrides dataset discovery and n_datasets_to_use
+    dataset_address: Optional[str] = None
     # GPU memory management settings
     clear_memory_on_start: bool = True  # Clear GPU memory when training starts
     aggressive_memory_cleanup: bool = True  # Enable aggressive memory cleanup on errors
+    
+    # Auto-resume configuration for long-running Cloud Run jobs
+    execution_timeout_minutes: int = 50  # Trigger auto-resume at this threshold (Cloud Run has 60min limit)
 
 
 @dataclass

@@ -32,12 +32,13 @@ steps:
     args:
       - "push"
       - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-training:latest"
-      - "--service-account=${_SERVICE_ACCOUNT}"
 
 images:
   - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-training:latest"
 
 options:
   logging: CLOUD_LOGGING_ONLY
+
+serviceAccount: "projects/${_GOOGLE_CLOUD_PROJECT}/serviceAccounts/${_SERVICE_ACCOUNT}"
 
 timeout: "3600s"

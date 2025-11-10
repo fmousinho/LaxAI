@@ -10,12 +10,14 @@ import logging
 import signal
 import sys
 import threading
+import time
 from typing import Optional, List
 
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/services/service_training/src')
 from shared_libs.config import logging_config
 from shared_libs.config.logging_config import print_banner
+from shared_libs.config.all_config import training_config
 from services.service_training.src.parameter_registry import parameter_registry
 from workflows.training_workflow import TrainingWorkflow
 
@@ -28,11 +30,21 @@ setup_environment_secrets()
 
 # Global cancellation event for signal handling
 cancellation_event = threading.Event()
+# Global flag to track if cancellation was due to timeout
+timeout_triggered = threading.Event()
 
 
 def signal_handler(signum, frame):
     """Handle shutdown signals by setting cancellation event."""
     print(f"\n⏹️  Received signal {signum}. Requesting training cancellation...")
+    cancellation_event.set()
+
+
+def timeout_handler():
+    """Handle execution timeout by triggering auto-resume sequence."""
+    print(f"\n⏰ Execution timeout reached. Initiating graceful shutdown for auto-resume...")
+    logger.warning("Approaching execution time limit, triggering auto-resume sequence")
+    timeout_triggered.set()
     cancellation_event.set()
 
 
@@ -117,10 +129,24 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--dataset_address",
+        type=str,
+        default=None,
+        help="Full GCS path to a specific dataset (gs://bucket/path or bucket/path). If provided, this overrides dataset discovery and n_datasets_to_use."
+    )
+
+    parser.add_argument(
         "--task_id",
         type=str,
         default=None,
         help="Task ID for tracking this training run (used by proxy service)."
+    )
+    
+    parser.add_argument(
+        "--auto_resume_count",
+        type=int,
+        default=0,
+        help="Number of times this job has been auto-resumed (internal use)."
     )
 
     return parser
@@ -174,7 +200,9 @@ def parse_args_to_workflow_kwargs(args: argparse.Namespace) -> dict:
         'model_kwargs': model_kwargs,
         'eval_kwargs': eval_kwargs,
         'n_datasets_to_use': args.n_datasets_to_use,
-        'task_id': args.task_id
+        'dataset_address': args.dataset_address,
+        'task_id': args.task_id,
+        'auto_resume_count': args.auto_resume_count
     }
 
     return workflow_kwargs
@@ -257,14 +285,32 @@ def main():
         # Setup signal handlers for graceful cancellation
         signal.signal(signal.SIGTERM, signal_handler)
         signal.signal(signal.SIGINT, signal_handler)
+        
+        # Setup execution timeout timer for auto-resume
+        execution_timeout_minutes = training_config.execution_timeout_minutes
+        if execution_timeout_minutes and execution_timeout_minutes > 0:
+            timeout_seconds = execution_timeout_minutes * 60
+            timeout_timer = threading.Timer(timeout_seconds, timeout_handler)
+            timeout_timer.daemon = True
+            timeout_timer.start()
+            logger.info(f"⏰ Execution timeout set to {execution_timeout_minutes} minutes")
+            print(f"⏰ Auto-resume will trigger after {execution_timeout_minutes} minutes")
 
         # Parse arguments and create workflow
         workflow_kwargs = parse_args_to_workflow_kwargs(args)
+        
+        # Pass the timeout flag to workflow
+        workflow_kwargs['timeout_triggered'] = timeout_triggered
 
         print(f"🚀 Starting LaxAI Training Workflow for tenant: {args.tenant_id}")
         print(f"📊 Custom run name: {args.custom_name}")
-        if args.n_datasets_to_use:
+        if args.dataset_address:
+            print(f"📍 Using specific dataset: {args.dataset_address}")
+        elif args.n_datasets_to_use:
             print(f"🎯 Limiting to {args.n_datasets_to_use} datasets")
+        if args.auto_resume_count > 0:
+            print(f"🔄 Auto-resume attempt #{args.auto_resume_count}")
+            logger.info(f"This is auto-resume attempt #{args.auto_resume_count}")
 
         # Execute workflow with cancellation support
         workflow_kwargs['cancellation_event'] = cancellation_event
@@ -297,6 +343,9 @@ def main():
         elif result.get('status') == 'cancelled':
             print("⏹️  Training workflow was cancelled.")
             sys.exit(130)
+        elif result.get('status') == 'auto_suspended':
+            print("⏸️  Training workflow auto-suspended for resume (reached time limit).")
+            sys.exit(0)  # Exit cleanly to allow auto-resume
         else:
             print("⚠️  Training workflow completed with issues.")
             sys.exit(1)

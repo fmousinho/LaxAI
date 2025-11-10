@@ -87,6 +87,16 @@ class TrainingJobProxy:
 
         if payload.get("resume_from_checkpoint", True):
             args.append("--resume_from_checkpoint")
+        
+        # Add dataset_address if specified (takes precedence over n_datasets_to_use)
+        dataset_address = payload.get("dataset_address")
+        if dataset_address:
+            args.append(f"--dataset_address={dataset_address}")
+        else:
+            # Add n_datasets_to_use only if dataset_address is not specified
+            n_datasets_to_use = payload.get("n_datasets_to_use")
+            if n_datasets_to_use is not None:
+                args.append(f"--n_datasets_to_use={n_datasets_to_use}")
 
         # Add dynamic parameters
         for param_group in ["training_params", "model_params", "eval_params"]:
@@ -235,7 +245,7 @@ class TrainingJobProxy:
             if not action:
                 raise ValueError("Action is required in the payload")
 
-            if action not in ["create", "cancel"]:
+            if action not in ["create", "cancel", "auto_resume"]:
                 raise ValueError(f"Invalid action: {action}")
 
             if action == "create":
@@ -245,6 +255,24 @@ class TrainingJobProxy:
                     raise ValueError("Create action requires tenant_id")
                 job_id = self.start_training_job(payload)
                 logger.info(f"Queued training job: {job_id}")
+
+            elif action == "auto_resume":
+                # Validate auto-resume message
+                auto_resume_count = payload.get("auto_resume_count", 0)
+                if auto_resume_count > 100:
+                    logger.error(f"Auto-resume count exceeded maximum (100): {auto_resume_count}")
+                    raise ValueError(f"Maximum auto-resume attempts (100) exceeded: {auto_resume_count}")
+                
+                tenant_id = payload.get("tenant_id")
+                if not tenant_id:
+                    logger.error(f"Missing tenant_id in auto-resume payload. Available keys: {list(payload.keys())}")
+                    raise ValueError("Auto-resume action requires tenant_id")
+                
+                logger.info(f"Processing auto-resume request (attempt #{auto_resume_count}) for task_id: {payload.get('task_id')}")
+                
+                # Start new job with same parameters
+                job_id = self.start_training_job(payload)
+                logger.info(f"Queued auto-resume training job (attempt #{auto_resume_count}): {job_id}")
 
             elif action == "cancel":
                 task_id = payload.get("task_id")

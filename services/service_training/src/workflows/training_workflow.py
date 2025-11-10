@@ -46,10 +46,14 @@ class TrainingWorkflow:
                  model_kwargs: Optional[Dict[str, Any]] = None,
                  pipeline_name: Optional[str] = "default",
                  n_datasets_to_use: Optional[int] = None,
+                 dataset_address: Optional[str] = None,
                  eval_kwargs: Optional[Dict[str, Any]] = None,
                  task_id: Optional[str] = None,
                  cancellation_event: Optional[threading.Event] = None,
-                 execution_timeout: Optional[int] = None):
+                 timeout_triggered: Optional[threading.Event] = None,
+                 execution_timeout: Optional[int] = None,
+                 auto_resume_count: int = 0,
+                 original_message_payload: Optional[Dict[str, Any]] = None):
         """
         Initialize the training workflow.
 
@@ -63,10 +67,15 @@ class TrainingWorkflow:
             model_kwargs: Dictionary of model parameters.
             pipeline_name: Unique name for the pipeline.
             n_datasets_to_use: Limit number of datasets to use.
+            dataset_address: Full GCS path to a specific dataset (gs://bucket/path or bucket/path).
+                           If provided, this overrides dataset discovery and n_datasets_to_use.
             eval_kwargs: Dictionary of evaluation parameters.
             task_id: Task ID for tracking this training run.
             cancellation_event: Event for graceful cancellation handling.
+            timeout_triggered: Event that indicates if cancellation was due to timeout.
             execution_timeout: Maximum execution time in minutes. If set, a message will be sent to pub/sub to suspend and restart the job.
+            auto_resume_count: Number of times this job has been auto-resumed.
+            original_message_payload: Original Pub/Sub message for replay on auto-resume.
         """
         self.tenant_id = tenant_id
         self.verbose = verbose
@@ -77,10 +86,14 @@ class TrainingWorkflow:
         self.model_kwargs = model_kwargs or {}
         self.pipeline_name = pipeline_name
         self.n_datasets_to_use = n_datasets_to_use
+        self.dataset_address = dataset_address
         self.eval_kwargs = eval_kwargs or {}
         self.task_id = task_id
         self.cancellation_event = cancellation_event
+        self.timeout_triggered = timeout_triggered
         self.execution_timeout = execution_timeout
+        self.auto_resume_count = auto_resume_count
+        self.original_message_payload = original_message_payload or {}
 
         # Initialize Firestore client for status updates if task_id is provided
         self.firestore_client = None
@@ -137,6 +150,60 @@ class TrainingWorkflow:
         signal.signal(signal.SIGTERM, signal_handler)
         signal.signal(signal.SIGINT, signal_handler)
         logger.info("Signal handlers registered for graceful cancellation")
+
+    def _extract_dataset_name_from_path(self, gcs_path: str) -> str:
+        """
+        Extract the dataset name from a full GCS path.
+        
+        Handles both formats:
+        - gs://bucket/tenant_id/datasets/dataset_name -> dataset_name
+        - bucket/tenant_id/datasets/dataset_name -> dataset_name
+        
+        Args:
+            gcs_path: Full GCS path to dataset
+            
+        Returns:
+            Dataset name extracted from path
+            
+        Raises:
+            ValueError: If path format is invalid
+        """
+        # Remove gs:// prefix if present
+        path = gcs_path.replace("gs://", "")
+        
+        # Split path into components
+        parts = path.split("/")
+        
+        # Validate path structure - should have at least bucket/tenant/datasets/dataset_name
+        if len(parts) < 4:
+            raise ValueError(
+                f"Invalid dataset path format: {gcs_path}. "
+                f"Expected format: gs://bucket/tenant_id/datasets/dataset_name or bucket/tenant_id/datasets/dataset_name"
+            )
+        
+        # Find 'datasets' in path and take the next component
+        try:
+            datasets_idx = parts.index("datasets")
+            if datasets_idx + 1 >= len(parts):
+                raise ValueError(f"No dataset name found after 'datasets' in path: {gcs_path}")
+            dataset_name = parts[datasets_idx + 1]
+            
+            # Remove trailing slash if present
+            dataset_name = dataset_name.rstrip('/')
+            
+            if not dataset_name:
+                raise ValueError(f"Empty dataset name in path: {gcs_path}")
+                
+            logger.info(f"Extracted dataset name '{dataset_name}' from path: {gcs_path}")
+            return dataset_name
+            
+        except ValueError as e:
+            if "is not in list" in str(e):
+                raise ValueError(
+                    f"Invalid dataset path format: {gcs_path}. "
+                    f"Path must contain 'datasets' directory."
+                )
+            raise
 
     def discover_datasets(self) -> List[str]:
         """
@@ -223,6 +290,47 @@ class TrainingWorkflow:
         except Exception as e:
             logger.error(f"Failed to update Firestore status for task_id {self.task_id}: {e}")
 
+    def _publish_auto_resume_message(self) -> None:
+        """
+        Publish an auto-resume message to Pub/Sub with all job parameters.
+        This allows the proxy to restart the job with the same configuration.
+        """
+        if not self.pubsub_publisher:
+            logger.error("Cannot publish auto-resume message: Pub/Sub publisher not initialized")
+            return
+
+        try:
+            from datetime import datetime, timezone
+            import json
+
+            topic_path = self.pubsub_publisher.topic_path("laxai-466119", "training-jobs")
+
+            # Construct message with all parameters needed to restart the job
+            message_data = {
+                "action": "auto_resume",
+                "tenant_id": self.tenant_id,
+                "custom_name": self.custom_name,
+                "task_id": self.task_id,
+                "resume_from_checkpoint": True,  # Always resume from checkpoint on auto-resume
+                "training_params": self.training_kwargs,
+                "model_params": self.model_kwargs,
+                "eval_params": self.eval_kwargs,
+                "wandb_tags": self.wandb_tags,
+                "n_datasets_to_use": self.n_datasets_to_use or self.original_message_payload.get("n_datasets_to_use"),
+                "dataset_address": self.dataset_address or self.original_message_payload.get("dataset_address"),
+                "auto_resume_count": self.auto_resume_count + 1,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+            message_json = json.dumps(message_data).encode('utf-8')
+            future = self.pubsub_publisher.publish(topic_path, message_json)
+            message_id = future.result()
+            
+            logger.info(f"Published auto-resume message (attempt #{self.auto_resume_count + 1}) for task_id {self.task_id}: {message_id}")
+
+        except Exception as e:
+            logger.error(f"Failed to publish auto-resume message for task_id {self.task_id}: {e}")
+
     def _publish_pubsub_message(self, action: str, task_id: str) -> None:
         """
         Publish a message to the training-jobs Pub/Sub topic.
@@ -261,7 +369,8 @@ class TrainingWorkflow:
         The previous implementation created one pipeline per dataset and aggregated
         their results. The TrainPipeline already supports multi-dataset mode by
         accepting a list of dataset names. We now:
-        - Discover all datasets (optionally truncated by n_datasets_to_use)
+        - If dataset_address is provided: extract dataset name and use it (single dataset mode)
+        - Otherwise: Discover all datasets (optionally truncated by n_datasets_to_use)
         - Instantiate exactly one TrainPipeline whose pipeline_name (and external
           identity) is self.pipeline_name
         - Pass either a single dataset string or list of dataset strings to .run()
@@ -290,14 +399,41 @@ class TrainingWorkflow:
                 "training_results": [],
             }
             self._update_firestore_status("cancelled")
-            # Cancel timeout timer if it exists (cancelled before execution)
-            if timeout_timer:
-                timeout_timer.cancel()
-                logger.info("Cancelled execution timeout timer due to early cancellation")
             return result
 
         try:
-            datasets = self.discover_datasets()
+            # Determine dataset(s) to use
+            if self.dataset_address:
+                # Use provided dataset address
+                logger.info(f"Using provided dataset address: {self.dataset_address}")
+                try:
+                    dataset_name = self._extract_dataset_name_from_path(self.dataset_address)
+                    datasets = [dataset_name]
+                    logger.info(f"Extracted dataset name: {dataset_name}")
+                except ValueError as e:
+                    logger.error(f"Invalid dataset address: {e}")
+                    result = {
+                        "status": "failed",
+                        "datasets_found": 0,
+                        "steps_completed": 0,
+                        "run_id": self.pipeline_name,
+                        "pipeline_name": self.pipeline_name,
+                        "run_guids": [],
+                        "message": f"Invalid dataset address: {e}",
+                        "custom_name": self.custom_name,
+                        "dataset_mode": "none",
+                        "error": str(e),
+                        # Compatibility fields
+                        "total_runs": 0,
+                        "successful_runs": 0,
+                        "training_results": [],
+                    }
+                    self._update_firestore_status("error", str(e))
+                    return result
+            else:
+                # Discover datasets
+                datasets = self.discover_datasets()
+            
             if not datasets:
                 logger.warning("No datasets found for training")
                 result = {
@@ -319,20 +455,6 @@ class TrainingWorkflow:
                 return result
 
             dataset_mode = "multi" if len(datasets) > 1 else "single"
-
-            # Set up execution timeout timer if specified
-            timeout_timer = None
-            if self.execution_timeout is not None and self.execution_timeout > 0:
-                def timeout_handler():
-                    logger.warning(f"Execution timeout reached after {self.execution_timeout} minutes")
-                    # Update Firestore status to suspended
-                    if self.task_id:
-                        self._publish_pubsub_message("suspend-restart", self.task_id)
-
-                # Start timer in a separate thread
-                timeout_timer = threading.Timer(self.execution_timeout * 60, timeout_handler)
-                timeout_timer.start()
-                logger.info(f"Started execution timeout timer for {self.execution_timeout} minutes")
 
             # Merge kwargs for TrainPipeline (avoid duplicate pipeline_name)
             all_kwargs = {**self.training_kwargs, **self.model_kwargs, **self.eval_kwargs}
@@ -366,10 +488,6 @@ class TrainingWorkflow:
                     "dataset_mode": dataset_mode
                 }
                 self._update_firestore_status("cancelled")
-                # Cancel timeout timer if it exists (cancelled before pipeline execution)
-                if timeout_timer:
-                    timeout_timer.cancel()
-                    logger.info("Cancelled execution timeout timer due to cancellation before pipeline execution")
                 return result
 
             # Add task_id to wandb tags if provided
@@ -413,41 +531,57 @@ class TrainingWorkflow:
                 "training_results": [],
             }
             self._update_firestore_status(final_status)
-            # Cancel timeout timer if it exists (successful completion)
-            if timeout_timer:
-                timeout_timer.cancel()
-                logger.info("Cancelled execution timeout timer due to successful completion")
             return result
 
         except InterruptedError:
             logger.info("Training workflow cancelled (single-pipeline mode)")
-            # Cancel timeout timer if it exists
-            if timeout_timer:
-                timeout_timer.cancel()
-                logger.info("Cancelled execution timeout timer due to interruption")
-            result = {
-                "status": "cancelled",
-                "datasets_found": 0,
-                "steps_completed": 0,
-                "run_id": self.pipeline_name,
-                "pipeline_name": self.pipeline_name,
-                "run_guids": [self.pipeline_name],
-                "custom_name": self.custom_name,
-                "dataset_mode": "unknown",
-                "error": "Training workflow cancelled by user request",
-                # Compatibility fields
-                "total_runs": 0,
-                "successful_runs": 0,
-                "training_results": [],
-            }
-            self._update_firestore_status("cancelled", "Training workflow cancelled by user request")
-            return result
+            
+            # Check if cancellation was due to timeout
+            is_timeout = self.timeout_triggered and self.timeout_triggered.is_set()
+            
+            if is_timeout:
+                logger.info("Cancellation was triggered by execution timeout - initiating auto-resume")
+                # Publish auto-resume message to Pub/Sub
+                self._publish_auto_resume_message()
+                # Update Firestore status to auto_suspended
+                self._update_firestore_status("auto_suspended", f"Auto-suspended at attempt #{self.auto_resume_count + 1}")
+                result = {
+                    "status": "auto_suspended",
+                    "datasets_found": 0,
+                    "steps_completed": 0,
+                    "run_id": self.pipeline_name,
+                    "pipeline_name": self.pipeline_name,
+                    "run_guids": [self.pipeline_name],
+                    "custom_name": self.custom_name,
+                    "dataset_mode": "unknown",
+                    "message": f"Training auto-suspended for resume (attempt #{self.auto_resume_count + 1})",
+                    # Compatibility fields
+                    "total_runs": 0,
+                    "successful_runs": 0,
+                    "training_results": [],
+                }
+                return result
+            else:
+                # Normal user cancellation
+                result = {
+                    "status": "cancelled",
+                    "datasets_found": 0,
+                    "steps_completed": 0,
+                    "run_id": self.pipeline_name,
+                    "pipeline_name": self.pipeline_name,
+                    "run_guids": [self.pipeline_name],
+                    "custom_name": self.custom_name,
+                    "dataset_mode": "unknown",
+                    "error": "Training workflow cancelled by user request",
+                    # Compatibility fields
+                    "total_runs": 0,
+                    "successful_runs": 0,
+                    "training_results": [],
+                }
+                self._update_firestore_status("cancelled", "Training workflow cancelled by user request")
+                return result
         except Exception as e:
             logger.error(f"Training workflow failed: {e}")
-            # Cancel timeout timer if it exists
-            if timeout_timer:
-                timeout_timer.cancel()
-                logger.info("Cancelled execution timeout timer due to exception")
             result = {
                 "status": "failed",
                 "datasets_found": 0,
