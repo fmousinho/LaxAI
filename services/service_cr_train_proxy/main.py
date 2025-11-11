@@ -80,23 +80,23 @@ class TrainingJobProxy:
         # Build command arguments
         task_id = payload.get("task_id")
         args = [
-            f"--tenant_id={tenant_id}",
-            f"--custom_name={custom_name}",
-            *( [f"--task_id={task_id}"] if task_id else [] ),
+            f"--tenant-id={tenant_id}",
+            f"--custom-name={custom_name}",
+            *( [f"--task-id={task_id}"] if task_id else [] ),
         ]
 
         if payload.get("resume_from_checkpoint", True):
-            args.append("--resume_from_checkpoint")
+            args.append("--resume-from-checkpoint")
         
         # Add dataset_address if specified (takes precedence over n_datasets_to_use)
         dataset_address = payload.get("dataset_address")
         if dataset_address:
-            args.append(f"--dataset_address={dataset_address}")
+            args.append(f"--dataset-address={dataset_address}")
         else:
             # Add n_datasets_to_use only if dataset_address is not specified
             n_datasets_to_use = payload.get("n_datasets_to_use")
             if n_datasets_to_use is not None:
-                args.append(f"--n_datasets_to_use={n_datasets_to_use}")
+                args.append(f"--n-datasets-to-use={n_datasets_to_use}")
 
         # Add dynamic parameters
         for param_group in ["training_params", "model_params", "eval_params"]:

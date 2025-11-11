@@ -88,10 +88,11 @@ def create_parser() -> argparse.ArgumentParser:
 
     # Add workflow-specific arguments
     parser.add_argument(
-        "--tenant_id",
+        "--tenant-id",
         type=str,
         default="tenant1",
-        help="The tenant ID for GCS operations."
+        help="The tenant ID for GCS operations.",
+        dest="tenant_id"
     )
 
     parser.add_argument(
@@ -101,41 +102,46 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--custom_name",
+        "--custom-name",
         type=str,
         default="cli_training_run",
-        help="Custom name for the training run (used in wandb and logging)."
+        help="Custom name for the training run (used in wandb and logging).",
+        dest="custom_name"
     )
 
     parser.add_argument(
-        "--resume_from_checkpoint",
+        "--resume-from-checkpoint",
         action="store_true",
         default=True,
-        help="Resume training from checkpoint if available."
+        help="Resume training from checkpoint if available.",
+        dest="resume_from_checkpoint"
     )
 
     parser.add_argument(
-        "--wandb_tags",
+        "--wandb-tags",
         nargs="*",
         default=[],
-        help="List of tags for wandb tracking (space-separated)."
+        help="List of tags for wandb tracking (space-separated).",
+        dest="wandb_tags"
     )
 
     # Note: n_datasets_to_use and dataset_address are now defined in parameter_registry
     # and automatically added via generate_cli_parser()
 
     parser.add_argument(
-        "--task_id",
+        "--task-id",
         type=str,
         default=None,
-        help="Task ID for tracking this training run (used by proxy service)."
+        help="Task ID for tracking this training run (used by proxy service).",
+        dest="task_id"
     )
     
     parser.add_argument(
-        "--auto_resume_count",
+        "--auto-resume-count",
         type=int,
         default=0,
-        help="Number of times this job has been auto-resumed (internal use)."
+        help="Number of times this job has been auto-resumed (internal use).",
+        dest="auto_resume_count"
     )
 
     return parser

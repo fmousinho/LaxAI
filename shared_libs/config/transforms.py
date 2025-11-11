@@ -430,19 +430,29 @@ class HSVAdjustmentTransform:
     def _apply_hsv_adjustment(self, image_array, variation):
         # Convert RGB to HSV
         hsv = cv2.cvtColor(image_array, cv2.COLOR_RGB2HSV)
-        hsv_float = hsv.astype(np.float32)
+        
+        # Split channels for safer manipulation
+        h, s, v = cv2.split(hsv)
+        s = s.astype(np.float32)
+        v = v.astype(np.float32)
 
         if variation == "darken":
             # Reduce saturation and brightness (simulating shadow/darkness)
-            hsv_float[:, :, 1] *= 0.7  # Reduce saturation by 30%
-            hsv_float[:, :, 2] *= 0.6  # Reduce brightness by 40%
+            s = s * 0.7  # Reduce saturation by 30%
+            v = v * 0.6  # Reduce brightness by 40%
         elif variation == "oversaturate":
             # Increase saturation (simulating bright sunlight)
-            hsv_float[:, :, 1] *= 1.3  # Increase saturation by 30%
-            hsv_float[:, :, 2] *= 0.9  # Slightly reduce brightness
+            s = s * 1.3  # Increase saturation by 30%
+            v = v * 0.9  # Slightly reduce brightness
 
-        # Clip values and convert back to RGB
-        hsv_adjusted = np.clip(hsv_float, 0, 255).astype(np.uint8)
+        # Clip values to valid range before converting to uint8
+        s = np.clip(s, 0, 255).astype(np.uint8)
+        v = np.clip(v, 0, 255).astype(np.uint8)
+        
+        # Merge channels back
+        hsv_adjusted = cv2.merge([h, s, v])
+        
+        # Convert back to RGB
         rgb_adjusted = cv2.cvtColor(hsv_adjusted, cv2.COLOR_HSV2RGB)
 
         return rgb_adjusted

@@ -4,7 +4,6 @@ import os
 import traceback
 from typing import Any, Callable, Dict, List, Optional
 
-from shared_libs.config.transforms import get_transforms
 from services.service_training.src.dataset import LacrossePlayerDataset
 from services.service_training.src.evaluator import ModelEvaluator
 from services.service_training.src.training_loop import Training
@@ -238,14 +237,6 @@ class TrainPipeline(Pipeline):
             else:
                 return {"status": StepStatus.ERROR.value, "error": f"dataset_name must be str or List[str], got {type(dataset_name)}"}
 
-            if self.is_stop_requested():
-                raise InterruptedError("Cancelled before loading transforms")
-            try:
-                training_transforms = get_transforms('training')
-                validation_transforms = get_transforms('validation')
-            except Exception as e:  # pragma: no cover - defensive
-                return {"status": StepStatus.ERROR.value, "error": f"Failed to load transforms: {e}"}
-
             min_images_per_player = training_config.min_images_per_player
 
             if self.is_stop_requested():
@@ -254,7 +245,6 @@ class TrainPipeline(Pipeline):
             training_dataset = LacrossePlayerDataset(
                 image_dir=train_folders[0] if dataset_mode == "single" else train_folders,
                 storage_client=self.storage_client,
-                transform=training_transforms,
                 min_images_per_player=min_images_per_player
             )
             if self.is_stop_requested():
@@ -263,7 +253,6 @@ class TrainPipeline(Pipeline):
             validation_dataset = LacrossePlayerDataset(
                 image_dir=val_image_dir,
                 storage_client=self.storage_client,
-                transform=validation_transforms,
                 min_images_per_player=min_images_per_player
             )
 

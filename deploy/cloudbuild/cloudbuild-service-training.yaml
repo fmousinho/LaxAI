@@ -12,7 +12,7 @@
 
 substitutions:
   _GOOGLE_CLOUD_PROJECT: "laxai-466119"
-  _SERVICE_ACCOUNT: "service-training@laxai-466119.iam.gserviceaccount.com"
+  #_SERVICE_ACCOUNT: "service-training@laxai-466119.iam.gserviceaccount.com"
 
 steps:
   # Build the service training image
@@ -38,7 +38,5 @@ images:
 
 options:
   logging: CLOUD_LOGGING_ONLY
-
-serviceAccount: "projects/${_GOOGLE_CLOUD_PROJECT}/serviceAccounts/${_SERVICE_ACCOUNT}"
 
 timeout: "3600s"
