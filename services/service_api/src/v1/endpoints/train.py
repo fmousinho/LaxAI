@@ -47,11 +47,15 @@ class PubSubPublisher:
         """Publish a training request to Pub/Sub."""
         # Generate unique task ID
         task_id = str(uuid.uuid4())
+        
+        # Debug log the incoming request
+        logger.info(f"📥 Received training request - tenant_id: {request.tenant_id}, custom_name: {request.custom_name}, dataset_address: {request.dataset_address}")
+        logger.info(f"📥 Full request model: {request.model_dump(by_alias=False)}")
 
         # Convert structured params to dictionaries for Pub/Sub message
-        training_params = request.training_params.model_dump(exclude_unset=True) if request.training_params else {}
-        model_params = request.model_params.model_dump(exclude_unset=True) if request.model_params else {}
-        eval_params = request.eval_params.model_dump(exclude_unset=True) if request.eval_params else {}
+        training_params = request.training_params.model_dump(exclude_unset=True, by_alias=False) if request.training_params else {}
+        model_params = request.model_params.model_dump(exclude_unset=True, by_alias=False) if request.model_params else {}
+        eval_params = request.eval_params.model_dump(exclude_unset=True, by_alias=False) if request.eval_params else {}
 
         # Create message data
         message_data = {

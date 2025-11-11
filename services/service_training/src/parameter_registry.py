@@ -288,7 +288,7 @@ class ParameterRegistry:
             try:
                 # Add argument
                 parser.add_argument(cli_name, **kwargs)
-                logger.info(f"Successfully added CLI argument: {cli_name} (dest: {param.name})")
+                logger.debug(f"Successfully added CLI argument: {cli_name} (dest: {param.name})")
             except argparse.ArgumentError as e:
                 logger.warning(f"Failed to add CLI argument '{cli_name}' for parameter '{param.name}': {e}")
                 continue

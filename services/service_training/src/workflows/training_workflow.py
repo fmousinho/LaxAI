@@ -193,8 +193,7 @@ class TrainingWorkflow:
             
             if not dataset_name:
                 raise ValueError(f"Empty dataset name in path: {gcs_path}")
-                
-            logger.info(f"Extracted dataset name '{dataset_name}' from path: {gcs_path}")
+            
             return dataset_name
             
         except ValueError as e:

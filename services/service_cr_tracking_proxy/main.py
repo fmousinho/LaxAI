@@ -214,7 +214,6 @@ class TrackingJobProxy:
         """Processes a decoded Pub/Sub message."""
         try:
             payload = json.loads(message_data)
-            logger.info(f"Parsed payload: {payload}")
 
             action = payload.get("action")
             if not action:

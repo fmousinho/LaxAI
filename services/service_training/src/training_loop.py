@@ -843,7 +843,7 @@ class Training:
                         memory_after_checkpoint = process.memory_info().rss / 1024 / 1024  # MB
                         checkpoint_memory_delta = memory_after_checkpoint - memory_before_checkpoint
                         if abs(checkpoint_memory_delta) > 50:  # Lowered threshold for better monitoring
-                            logger.info(f"Checkpoint memory usage: {memory_before_checkpoint:.1f}MB → {memory_after_checkpoint:.1f}MB (Δ{checkpoint_memory_delta:+.1f}MB)")
+                            logger.debug(f"Checkpoint memory usage: {memory_before_checkpoint:.1f}MB → {memory_after_checkpoint:.1f}MB (Δ{checkpoint_memory_delta:+.1f}MB)")
                         
                     except Exception as e:
                         if getattr(wandb_config, 'enabled', False):
@@ -1101,7 +1101,7 @@ class Training:
                 memory_after_eval = process.memory_info().rss / 1024 / 1024  # MB
                 eval_memory_delta = memory_after_eval - memory_before_eval
                 if abs(eval_memory_delta) > 50:  # Log significant memory changes
-                    logger.info(f"Evaluation memory usage: {memory_before_eval:.1f}MB → {memory_after_eval:.1f}MB (Δ{eval_memory_delta:+.1f}MB)")
+                    logger.debug(f"Evaluation memory usage: {memory_before_eval:.1f}MB → {memory_after_eval:.1f}MB (Δ{eval_memory_delta:+.1f}MB)")
             except Exception as memory_log_error:
                 logger.debug(f"Memory logging warning: {memory_log_error}")
 

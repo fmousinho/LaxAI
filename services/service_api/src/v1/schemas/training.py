@@ -6,10 +6,24 @@ Complete schemas for API request/response validation with specific parameter fie
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
-class TrainingParams(BaseModel):
+def _to_kebab(s: str) -> str:
+    """Convert snake_case field names to kebab-case for JSON aliases."""
+    return s.replace("_", "-")
+
+
+class KebabModel(BaseModel):
+    """Base model that accepts kebab-case aliases for all snake_case fields."""
+
+    model_config = ConfigDict(
+        populate_by_name=True,  # allow snake_case as well
+        alias_generator=_to_kebab,  # accept kebab-case in JSON
+    )
+
+
+class TrainingParams(KebabModel):
     """Training-specific parameters."""
 
     num_epochs: Optional[int] = Field(None, description="Number of training epochs")
@@ -34,7 +48,7 @@ class TrainingParams(BaseModel):
     dataset_address: Optional[str] = Field(None, description="Address of the dataset to use")
 
 
-class ModelParams(BaseModel):
+class ModelParams(KebabModel):
     """Model architecture parameters."""
 
     embedding_dim: Optional[int] = Field(None, description="Embedding dimension")
@@ -45,7 +59,7 @@ class ModelParams(BaseModel):
     model_class: Optional[str] = Field(None, description="Name of the model class")
 
 
-class EvalParams(BaseModel):
+class EvalParams(KebabModel):
     """Evaluation parameters."""
 
     number_of_workers: Optional[int] = Field(None, description="Number of workers for DataLoader")
@@ -53,7 +67,7 @@ class EvalParams(BaseModel):
     prefetch_factor: Optional[int] = Field(None, description="Number of batches to prefetch")
 
 
-class TrainingRequest(BaseModel):
+class TrainingRequest(KebabModel):
     """Training request model for API services."""
 
     custom_name: str = Field(
@@ -120,7 +134,7 @@ class TrainingRequest(BaseModel):
         }
 
 
-class TrainingResponse(BaseModel):
+class TrainingResponse(KebabModel):
     """Training response model."""
 
     task_id: str = Field(..., description="Unique identifier for the training task")
@@ -129,7 +143,7 @@ class TrainingResponse(BaseModel):
     created_at: str = Field(..., description="Task creation timestamp")
 
 
-class TrainingStatus(BaseModel):
+class TrainingStatus(KebabModel):
     """Training status model."""
 
     task_id: str = Field(..., description="Unique identifier for the training task")
@@ -143,7 +157,7 @@ class TrainingStatus(BaseModel):
     updated_at: str = Field(..., description="Last update timestamp")
 
 
-class ErrorResponse(BaseModel):
+class ErrorResponse(KebabModel):
     """Error response model."""
 
     error: str = Field(..., description="Error message")

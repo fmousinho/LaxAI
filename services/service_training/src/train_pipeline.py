@@ -9,6 +9,7 @@ from services.service_training.src.evaluator import ModelEvaluator
 from services.service_training.src.training_loop import Training
 from services.service_training.src.wandb_logger import wandb_logger
 
+
 from shared_libs.common.google_storage import GCSPaths, get_storage
 from shared_libs.common.pipeline import Pipeline, PipelineStatus
 from shared_libs.common.pipeline_step import StepStatus
@@ -17,6 +18,7 @@ from shared_libs.config.all_config import (
     training_config,
     wandb_config,
 )
+from shared_libs.config.transforms import get_transforms
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +247,7 @@ class TrainPipeline(Pipeline):
             training_dataset = LacrossePlayerDataset(
                 image_dir=train_folders[0] if dataset_mode == "single" else train_folders,
                 storage_client=self.storage_client,
+                transform=get_transforms("training"),
                 min_images_per_player=min_images_per_player
             )
             if self.is_stop_requested():
@@ -253,6 +256,7 @@ class TrainPipeline(Pipeline):
             validation_dataset = LacrossePlayerDataset(
                 image_dir=val_image_dir,
                 storage_client=self.storage_client,
+                transform=get_transforms("validation"),
                 min_images_per_player=min_images_per_player
             )
 
