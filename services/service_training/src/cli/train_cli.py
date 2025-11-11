@@ -15,6 +15,9 @@ from typing import Optional, List
 
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/services/service_training/src')
+from shared_libs.utils.env_secrets import setup_environment_secrets
+setup_environment_secrets()
+
 from shared_libs.config import logging_config
 from shared_libs.config.logging_config import print_banner
 from shared_libs.config.all_config import training_config
@@ -22,11 +25,6 @@ from services.service_training.src.parameter_registry import parameter_registry
 from workflows.training_workflow import TrainingWorkflow
 
 logger = logging.getLogger(__name__)
-# Absolute imports
-from shared_libs.utils.env_secrets import setup_environment_secrets
-
-# Setup environment
-setup_environment_secrets()
 
 # Global cancellation event for signal handling
 cancellation_event = threading.Event()

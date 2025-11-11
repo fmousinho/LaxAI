@@ -141,7 +141,7 @@ class TrainingJobProxy:
 
         return run_request
 
-    def start_training_job(self, payload: Dict[str, Any]) -> Optional[str]:
+    def start_training_job(self, payload: Dict[str, Any]):
         """Creates and executes a training job asynchronously using the existing laxai-service-training job."""
 
         try:
@@ -252,8 +252,8 @@ class TrainingJobProxy:
                 if not tenant_id:
                     logger.error(f"Missing tenant_id in payload. Available keys: {list(payload.keys())}")
                     raise ValueError("Create action requires tenant_id")
-                job_id = self.start_training_job(payload)
-                logger.info(f"Queued training job: {job_id}")
+                self.start_training_job(payload)
+              
 
             elif action == "auto_resume":
                 # Validate auto-resume message
@@ -270,8 +270,8 @@ class TrainingJobProxy:
                 logger.info(f"Processing auto-resume request (attempt #{auto_resume_count}) for task_id: {payload.get('task_id')}")
                 
                 # Start new job with same parameters
-                job_id = self.start_training_job(payload)
-                logger.info(f"Queued auto-resume training job (attempt #{auto_resume_count}): {job_id}")
+                self.start_training_job(payload)
+                logger.info(f"Queued auto-resume training job (attempt #{auto_resume_count})")
 
             elif action == "cancel":
                 task_id = payload.get("task_id")
