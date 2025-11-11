@@ -121,19 +121,8 @@ def create_parser() -> argparse.ArgumentParser:
         help="List of tags for wandb tracking (space-separated)."
     )
 
-    parser.add_argument(
-        "--n_datasets_to_use",
-        type=int,
-        default=None,
-        help="Limit number of discovered datasets to use for training."
-    )
-
-    parser.add_argument(
-        "--dataset_address",
-        type=str,
-        default=None,
-        help="Full GCS path to a specific dataset (gs://bucket/path or bucket/path). If provided, this overrides dataset discovery and n_datasets_to_use."
-    )
+    # Note: n_datasets_to_use and dataset_address are now defined in parameter_registry
+    # and automatically added via generate_cli_parser()
 
     parser.add_argument(
         "--task_id",
@@ -180,8 +169,8 @@ def parse_args_to_workflow_kwargs(args: argparse.Namespace) -> dict:
                 else:
                     eval_kwargs[param_name] = arg_value
             else:  # training parameters
-                # Avoid elevating n_datasets_to_use into training_kwargs
-                if param_name == 'n_datasets_to_use':
+                # Avoid elevating n_datasets_to_use and dataset_address into training_kwargs
+                if param_name in ('n_datasets_to_use', 'dataset_address'):
                     continue
                 # Handle parameter name mapping for training params
                 if param_name == "train_prefetch_factor":
@@ -199,8 +188,8 @@ def parse_args_to_workflow_kwargs(args: argparse.Namespace) -> dict:
         'training_kwargs': training_kwargs,
         'model_kwargs': model_kwargs,
         'eval_kwargs': eval_kwargs,
-        'n_datasets_to_use': args.n_datasets_to_use,
-        'dataset_address': args.dataset_address,
+        'n_datasets_to_use': getattr(args, 'n_datasets_to_use', None),
+        'dataset_address': getattr(args, 'dataset_address', None),
         'task_id': args.task_id,
         'auto_resume_count': args.auto_resume_count
     }

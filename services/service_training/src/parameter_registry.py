@@ -453,6 +453,13 @@ class ParameterRegistry:
                 required=False,
             ),
             ParameterDefinition(
+                name="dataset_address",
+                type=ParameterType.STR,
+                description="Full GCS path to a specific dataset (gs://bucket/path or bucket/path). If provided, this overrides dataset discovery and n_datasets_to_use.",
+                config_path="training_config.dataset_address",
+                required=False,
+            ),
+            ParameterDefinition(
                 name="wandb_project",
                 type=ParameterType.STR,
                 description="WandB project name",

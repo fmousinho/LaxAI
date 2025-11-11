@@ -70,7 +70,7 @@ class TrackerConfig:
 @dataclass
 class TrainingConfig:
     """Configuration for training parameters."""
-    batch_size: int = 256  # Increased from 128 for better triplet mining
+    batch_size: int = 128  # Increased from 128 for better triplet mining
     num_workers: int = 8 if sys.platform != "darwin" else 0  # Number of DataLoader workers
     learning_rate: float = 5e-5  # Reduced from 1e-3 for fine-tuning
     lr_scheduler_patience: int = 5  # Increased patience

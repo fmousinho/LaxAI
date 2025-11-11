@@ -43,9 +43,11 @@ def execute_training_task(task_id: str, training_request: TrainingRequest):
         model_kwargs = training_request.model_params or {}
         eval_kwargs = training_request.eval_params or {}
         
-        # Extract n_datasets_to_use from training_params
+        # Extract n_datasets_to_use and dataset_address from training_params
         n_datasets_to_use = training_kwargs.get('n_datasets_to_use', None)
+        dataset_address = training_kwargs.get('dataset_address', None)
         logger.info(f"🎯 API received n_datasets_to_use: {n_datasets_to_use} (type: {type(n_datasets_to_use)})")
+        logger.info(f"📍 API received dataset_address: {dataset_address}")
 
         # Create and execute training workflow
         workflow = TrainingWorkflow(
@@ -58,7 +60,8 @@ def execute_training_task(task_id: str, training_request: TrainingRequest):
             model_kwargs=model_kwargs,
             eval_kwargs=eval_kwargs,
             pipeline_name=f"api_{task_id}",
-            n_datasets_to_use=n_datasets_to_use
+            n_datasets_to_use=n_datasets_to_use,
+            dataset_address=dataset_address
         )
 
         # Execute the workflow (single pipeline)
