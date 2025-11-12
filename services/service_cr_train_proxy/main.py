@@ -305,15 +305,14 @@ def process_pubsub_message(event, context):
             - resource: Resource information
     """
     try:
-        logger.info(f"Received event: {event}")
-        logger.info(f"Event keys: {list(event.keys()) if isinstance(event, dict) else 'Not a dict'}")
+        logger.info("Train proxy received Pub/Sub message:")
 
         if 'data' not in event:
             logger.error("Missing 'data' in Pub/Sub event")
             return
 
         message_data = base64.b64decode(event['data']).decode('utf-8')
-        logger.info(f"Decoded message data: {message_data}")
+        logger.info(f"{message_data}")
 
         proxy = TrainingJobProxy()
         proxy.process_message(message_data)

@@ -44,7 +44,7 @@ class ModelConfig:
 
     input_height: int = 224  # Increased to match DINOv3 expected input
     input_width: int = 224  # Increased to match DINOv3 expected input
-    embedding_dim: int = 512  # Increased embedding dimension for better representation
+    embedding_dim: int = 512  
     dropout_rate: float = 0.1  # Reduced dropout for fine-tuning
     resnet_conv_kernel_size: int = 3
     resnet_conv_stride: int = 1
@@ -83,14 +83,14 @@ class TrainingConfig:
 
     batch_size: int = 128  # Increased from 128 for better triplet mining
     num_workers: int = 8 if sys.platform != "darwin" else 0  # Number of DataLoader workers
-    learning_rate: float = 5e-5  # Reduced from 1e-3 for fine-tuning
+    learning_rate: float = 1e-3  # Reduced from 1e-3 for fine-tuning
     lr_scheduler_patience: int = 5  # Increased patience
-    lr_scheduler_threshold: float = 1e-5  # More sensitive threshold
-    lr_scheduler_factor: float = 0.3  # More conservative reduction
-    lr_scheduler_min_lr: float = 1e-8  # Lower minimum LR
+    lr_scheduler_threshold: float = 1e-3  # More sensitive threshold
+    lr_scheduler_factor: float = 0.5  # More conservative reduction
+    lr_scheduler_min_lr: float = 1e-6  # Lower minimum LR
     num_epochs: int = 100  # Increased epochs for fine-tuning
-    margin: float = 0.5  # Increased from 0.2 for better separation
-    weight_decay: float = 5e-5  # Reduced L2 regularization
+    margin: float = 0.3  # Increased from 0.2 for better separation
+    weight_decay: float = 1e-5  # Reduced L2 regularization
     train_ratio: float = 0.8
     min_images_per_player: int = 3  # Increased minimum images per player
     force_pretraining: bool = False  # Force using ResNet defaults for pretraining

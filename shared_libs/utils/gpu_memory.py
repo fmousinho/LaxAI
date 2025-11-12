@@ -37,7 +37,7 @@ def clear_gpu_memory(force: bool = False) -> None:
         initial_allocated = torch.cuda.memory_allocated()
         initial_cached = torch.cuda.memory_reserved()
 
-        logger.info(
+        logger.debug(
             f"GPU memory before cleanup - Allocated: {initial_allocated / 1024**3:.2f}GB, Cached: {initial_cached / 1024**3:.2f}GB"
         )
 
@@ -68,10 +68,10 @@ def clear_gpu_memory(force: bool = False) -> None:
         freed_allocated = initial_allocated - final_allocated
         freed_cached = initial_cached - final_cached
 
-        logger.info(
+        logger.debug(
             f"GPU memory after cleanup - Allocated: {final_allocated / 1024**3:.2f}GB, Cached: {final_cached / 1024**3:.2f}GB"
         )
-        logger.info(
+        logger.debug(
             f"Memory freed - Allocated: {freed_allocated / 1024**3:.2f}GB, Cached: {freed_cached / 1024**3:.2f}GB"
         )
 
@@ -121,11 +121,11 @@ def log_gpu_memory_stats(prefix: str = "GPU Memory") -> None:
     """
     stats = get_gpu_memory_stats()
     if stats["device_count"] > 0:
-        logger.info(
+        logger.debug(
             f"{prefix} - Allocated: {stats['allocated_gb']:.2f}GB, Cached: {stats['cached_gb']:.2f}GB, Max: {stats['max_allocated_gb']:.2f}GB"
         )
     else:
-        logger.info(f"{prefix} - CUDA not available")
+        logger.debug(f"{prefix} - CUDA not available")
 
 
 def reset_peak_memory_stats() -> None:
@@ -176,4 +176,4 @@ class GPUMemoryContext:
             final_stats = get_gpu_memory_stats()
             memory_diff = final_stats["allocated_gb"] - self.initial_stats["allocated_gb"]
             if memory_diff > 0.1:  # More than 100MB difference
-                logger.info(f"{self.operation_name} - Memory increase: {memory_diff:.2f}GB")
+                logger.debug(f"{self.operation_name} - Memory increase: {memory_diff:.2f}GB")

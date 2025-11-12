@@ -445,7 +445,7 @@ class Training:
             logger.info(f"Batch size: {self.batch_size}")
             logger.info(f"Number of epochs: {self.num_epochs}")
             logger.info(f"Triplet margin: {self.margin}")
-            logger.info(f"Optimizer: Adam (initial lr={self.learning_rate}, weight_decay={self.weight_decay})")
+            logger.info(f"Optimizer: Adam (initial lr={self.}, weight_decay={self.weight_decay})")
             logger.info(f"LR Scheduler: ReduceLROnPlateau (patience={self.scheduler_patience}, threshold={self.scheduler_threshold})")
         except Exception as e:
             logger.error(f"Model setup failed: {e}")
