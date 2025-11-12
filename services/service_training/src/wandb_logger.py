@@ -1497,7 +1497,6 @@ def _upload_checkpoint_in_subprocess(
         # Upload the artifact
         run.log_artifact(artifact, aliases=["latest"])
         
-        logger.info(f"✅ Successfully uploaded artifact '{checkpoint_name}' via temporary run.")
 
         # Note: The artifact is now available in the project and can be accessed by name
         # from any run in the same project, including the original run_id
@@ -1507,7 +1506,7 @@ def _upload_checkpoint_in_subprocess(
         # Clean up wandb artifact cache after successful upload
         try:
             import subprocess
-            logger.info("Running wandb artifact cache cleanup...")
+            logger.debug("Running wandb artifact cache cleanup...")
             result = subprocess.run(
                 ["wandb", "artifact", "cache", "cleanup", "--remove-temp", "1GB"],
                 capture_output=True,
@@ -1541,7 +1540,6 @@ def _upload_checkpoint_in_subprocess(
         if os.path.exists(checkpoint_path):
             try:
                 os.unlink(checkpoint_path)
-                logger.info(f"Cleaned up temp file: {checkpoint_path}")
             except OSError as e:
                 logger.error(f"Error removing temp file {checkpoint_path}: {e}")
 

@@ -1,151 +1,112 @@
+"""
+Training API request/response schemas for the training service.
+Explicit Pydantic models that use config defaults directly.
+"""
+
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
-from services.service_training.src.parameter_registry import parameter_registry
 from pydantic import BaseModel, ConfigDict, Field
 
-
-def generate_example_from_config() -> Dict[str, Any]:
-    """Generate example values from the training configuration."""
-    
-    # Get example values from the configuration
-    example_data = {
-        "custom_name": "example_training_run",
-        "tenant_id": "",
-        "resume_from_checkpoint": False
-    }
-    
-        # Add training parameters with default values from config only
-    training_params = {}
-    for param_name, param in parameter_registry.get_training_parameters().items():
-        try:
-            # Get the actual default value from config
-            config_value = parameter_registry.get_config_value(param_name)
-            # Include the parameter even if config_value is None (for optional parameters)
-            training_params[param_name] = config_value
-        except Exception as e:
-            if param.required:
-                raise ValueError(f"Failed to retrieve required training parameter '{param_name}' from config: {e}")
-            # For optional parameters, include with None if config retrieval fails
-            training_params[param_name] = None
-    
-    example_data["training_params"] = training_params
-    
-    # Add model parameters with default values from config only
-    model_params = {}
-    for param_name, param in parameter_registry.get_model_parameters().items():
-        try:
-            # Get the actual default value from config
-            config_value = parameter_registry.get_config_value(param_name)
-            # Include the parameter even if config_value is None (for optional parameters)
-            model_params[param_name] = config_value
-        except Exception as e:
-            if param.required:
-                raise ValueError(f"Failed to retrieve required model parameter '{param_name}' from config: {e}")
-            # For optional parameters, include with None if config retrieval fails
-            model_params[param_name] = None
-    example_data["model_params"] = model_params
-    
-    # Add eval parameters with default values from config only
-    eval_params = {}
-    try:
-        for param_name, param in parameter_registry.eval_parameters.items():
-            try:
-                # Get the actual default value from config
-                config_value = parameter_registry.get_config_value(param_name)
-                # Include the parameter even if config_value is None (for optional parameters)
-                eval_params[param_name] = config_value
-            except Exception as e:
-                if param.required:
-                    raise ValueError(f"Failed to retrieve required eval parameter '{param_name}' from config: {e}")
-                # For optional parameters, include with None if config retrieval fails
-                eval_params[param_name] = None
-    except AttributeError:
-        # If eval_parameters not available, use empty dict
-        pass
-    example_data["eval_params"] = eval_params
-    
-    return example_data
+from shared_libs.config.all_config import (
+    training_config,
+    model_config,
+    evaluator_config,
+    wandb_config,
+)
 
 
-# Generate the example for use in model configuration
-EXAMPLE_REQUEST = generate_example_from_config()
+class TrainingParams(BaseModel):
+    """Training hyperparameters - mirrors training_config."""
+
+    num_epochs: int = Field(default=training_config.num_epochs, description="Number of training epochs")
+    batch_size: int = Field(default=training_config.batch_size, description="Batch size for training")
+    num_workers: int = Field(default=training_config.num_workers, description="Number of DataLoader workers")
+    learning_rate: float = Field(default=training_config.learning_rate, description="Learning rate for optimizer")
+    margin: float = Field(default=training_config.margin, description="Margin for triplet loss")
+    weight_decay: float = Field(default=training_config.weight_decay, description="Weight decay for optimizer")
+
+    lr_scheduler_patience: int = Field(default=training_config.lr_scheduler_patience, description="LR scheduler patience")
+    lr_scheduler_threshold: float = Field(default=training_config.lr_scheduler_threshold, description="LR scheduler threshold")
+    lr_scheduler_min_lr: float = Field(default=training_config.lr_scheduler_min_lr, description="LR scheduler minimum LR")
+    lr_scheduler_factor: float = Field(default=training_config.lr_scheduler_factor, description="LR scheduler factor")
+
+    force_pretraining: bool = Field(default=training_config.force_pretraining, description="Force pretrained ResNet defaults")
+    early_stopping_patience: int = Field(default=training_config.early_stopping_patience, description="Early stopping patience")
+    min_images_per_player: int = Field(default=training_config.min_images_per_player, description="Minimum images per player")
+    train_prefetch_factor: int = Field(default=training_config.prefetch_factor, description="Prefetch factor for training data loading")
+
+    margin_decay_rate: float = Field(default=training_config.margin_decay_rate, description="Triplet margin decay rate")
+    margin_change_threshold: float = Field(default=training_config.margin_change_threshold, description="Min change in margin to update")
+    train_ratio: float = Field(default=training_config.train_ratio, description="Train split ratio vs validation")
+    n_datasets_to_use: Optional[int] = Field(default=training_config.n_datasets_to_use, description="Number of datasets to use (optional)")
+    dataset_address: Optional[str] = Field(default=training_config.dataset_address, description="Specific dataset GCS path (optional)")
+
+    wandb_project: str = Field(default=wandb_config.project, description="W&B project name")
+
+    use_classification_head: bool = Field(default=training_config.use_classification_head, description="Whether to use classification head")
+    classification_epochs: int = Field(default=training_config.classification_epochs, description="Number of epochs to use classification loss")
+    classification_weight_start: float = Field(default=training_config.classification_weight_start, description="Initial weight for classification loss")
 
 
-# Generate dynamic Pydantic models from parameter registry
-TrainingParamsModel = None
-ModelParamsModel = None
-EvalParamsModel = None
+class ModelParams(BaseModel):
+    """Model architecture parameters - mirrors model_config."""
 
-try:
-    from pydantic import ConfigDict, create_model
+    embedding_dim: int = Field(default=model_config.embedding_dim, description="Embedding dimension")
+    dropout_rate: float = Field(default=model_config.dropout_rate, description="Dropout rate")
+    input_height: int = Field(default=model_config.input_height, description="Input image height")
+    input_width: int = Field(default=model_config.input_width, description="Input image width")
+    model_class_module: str = Field(default=model_config.model_class_module, description="Module where the model class is defined")
+    model_class: str = Field(default=model_config.model_class_str, description="Model class name")
 
-    # Create the models without trying to add config for now
-    TrainingParamsModel = create_model(
-        "TrainingParams",
-        **parameter_registry.generate_pydantic_fields_for_training()
-    )
-    ModelParamsModel = create_model(
-        "ModelParams", 
-        **parameter_registry.generate_pydantic_fields_for_model()
-    )
-    EvalParamsModel = create_model(
-        "EvalParams",
-        **parameter_registry.generate_pydantic_fields_for_eval()
-    )
-        
-except Exception as e:
-    print(f"Warning: Dynamic model creation failed: {e}")
-    # Fallback if dynamic model creation fails
-    pass
+
+class EvalParams(BaseModel):
+    """Evaluation parameters - mirrors evaluator_config."""
+
+    number_of_workers: int = Field(default=evaluator_config.number_of_workers, description="Eval DataLoader workers")
+    emb_batch_size: int = Field(default=evaluator_config.emb_batch_size, description="Eval embedding batch size")
+    eval_prefetch_factor: int = Field(default=evaluator_config.prefetch_factor, description="Eval DataLoader prefetch factor")
 
 
 class TrainingRequest(BaseModel):
-    """Training request model with dynamic parameter validation."""
-    
+    """Training request model with explicit parameter validation."""
+
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
                 "custom_name": "example_training_run",
                 "tenant_id": "",
                 "resume_from_checkpoint": False,
-                "training_params": EXAMPLE_REQUEST.get("training_params", {}),
-                "model_params": EXAMPLE_REQUEST.get("model_params", {}),
-                "eval_params": EXAMPLE_REQUEST.get("eval_params", {})
+                "training_params": {
+                    "num_epochs": training_config.num_epochs,
+                    "batch_size": training_config.batch_size,
+                    "learning_rate": training_config.learning_rate,
+                },
+                "model_params": {
+                    "embedding_dim": model_config.embedding_dim,
+                    "dropout_rate": model_config.dropout_rate,
+                },
+                "eval_params": {
+                    "number_of_workers": evaluator_config.number_of_workers,
+                    "emb_batch_size": evaluator_config.emb_batch_size,
+                },
             }
         }
     )
-    
-    custom_name: str = Field(
-        default="training_run",
-        description="Custom name for the training run"
-    )
-    tenant_id: str = Field(
-        default="t",
-        description="Tenant identifier for the training job"
-    )
-    resume_from_checkpoint: bool = Field(
-        default=True,
-        description="Whether to resume from checkpoint if available"
-    )
-    
-    # Use the actual dynamic models for proper schema generation
-    training_params: Optional[Any] = Field(
-        default=None,
-        description="Training-specific parameters"
-    )
-    model_params: Optional[Any] = Field(
-        default=None,
-        description="Model architecture parameters"
-    )
-    eval_params: Optional[Any] = Field(
-        default=None,
-        description="Evaluation parameters"
-    )
+
+    custom_name: str = Field(default="training_run", description="Custom name for the training run")
+    tenant_id: str = Field(default="t", description="Tenant identifier for the training job")
+    resume_from_checkpoint: bool = Field(default=True, description="Whether to resume from checkpoint if available")
+
+    training_params: Optional[TrainingParams] = Field(default=None, description="Training-specific parameters")
+    model_params: Optional[ModelParams] = Field(default=None, description="Model architecture parameters")
+    eval_params: Optional[EvalParams] = Field(default=None, description="Evaluation parameters")
+
+
 class TrainingResponse(BaseModel):
     """Training response model."""
-    
+
     task_id: str = Field(..., description="Unique identifier for the training task")
     status: str = Field(..., description="Current status of the training task")
     message: str = Field(..., description="Status message")
@@ -154,9 +115,9 @@ class TrainingResponse(BaseModel):
 
 class TrainingStatus(BaseModel):
     """Training status model."""
-    
+
     task_id: str = Field(..., description="Unique identifier for the training task")
-    status: str = Field(..., description="Current status of the training task") 
+    status: str = Field(..., description="Current status of the training task")
     progress: Optional[float] = Field(None, description="Training progress percentage (0-100)")
     current_epoch: Optional[int] = Field(None, description="Current training epoch")
     total_epochs: Optional[int] = Field(None, description="Total training epochs")

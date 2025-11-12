@@ -98,6 +98,12 @@ class TrainingConfig:
     margin_decay_rate: float = 0.995  # Slower margin decay
     margin_change_threshold: float = 0.005  # More sensitive margin updates
     prefetch_factor: int = 4  # Increased prefetch for better GPU utilization
+    
+    # Classification head parameters for jump-starting embeddings
+    use_classification_head: bool = True  # Whether to use classification head
+    classification_epochs: int = 50  # Number of epochs to use classification loss
+    classification_weight_start: float = 1.0  # Initial weight for classification loss
+    
     # Number of datasets to use for training (0 = use all)
     n_datasets_to_use: Optional[int] = 0
     # Full GCS path to a specific dataset (gs://bucket/path or bucket/path)

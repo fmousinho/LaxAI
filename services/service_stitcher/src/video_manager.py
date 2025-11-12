@@ -754,8 +754,8 @@ class VideoManager:
             if not self.player_manager:
                 raise ValueError("Player manager is not initialized.")
             
-                # Create a serialized backup for rollback (avoids threading.Lock pickle issues)
-                player_manager_backup = self.player_manager.serialize()
+            # Create a serialized backup for rollback (avoids threading.Lock pickle issues)
+            player_manager_backup = self.player_manager.serialize()
             
             player = self.player_manager.get_player_by_id(player_id)
             if not player:
@@ -873,7 +873,7 @@ class VideoManager:
         # Avoid exceptions bubbling up from shutdown paths
         if not getattr(self, "video_id", None):
             return
-        if not getattr(self, "player_manager", None):
+        if not getattr(self, "player_manager", None) or self.player_manager is None:
             return
 
         try:

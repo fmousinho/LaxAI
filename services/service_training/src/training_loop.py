@@ -1,6 +1,7 @@
 import gc
 import logging
 import os
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 from datetime import datetime, timezone
 
@@ -13,7 +14,6 @@ from services.service_training.src.evaluator import (ModelEvaluator,
                                                      calculate_intra_inter_distances,
                                                      calculate_triplet_mining_efficiency)
 from torch.utils.data import DataLoader, Dataset
-from services.service_training.src.parameter_registry import parameter_registry
 from services.service_training.src.wandb_logger import wandb_logger
 
 from shared_libs.config.all_config import (model_config, training_config,
@@ -30,8 +30,262 @@ logger = logging.getLogger(__name__)
 # Constants
 BATCHES_PER_LOG_MSG = 10
 EPOCHS_PER_VAL = 0
-EPOCHS_PER_DATALOADER_RESTART = 10
+EPOCHS_PER_DATALOADER_RESTART = 50
 THRESHOLD_FOR_DATALOADER_RESTART = 90.0  # Memory usage percentage threshold
+
+
+@dataclass
+class TrainingMetrics:
+    """Container for training metrics accumulated during an epoch."""
+    
+    loss: float = 0.0
+    embedding_variance: float = 0.0
+    intra_distance: float = 0.0
+    inter_distance: float = 0.0
+    margin_satisfaction: float = 0.0
+    hard_triplets: float = 0.0
+    easy_triplets: float = 0.0
+    mining_efficiency: float = 0.0
+    grad_norm: float = 0.0
+    
+    def accumulate(self, loss: float, embedding_variance: float, 
+                   distance_metrics: Dict[str, float], mining_metrics: Dict[str, float],
+                   grad_norm: float) -> None:
+        """Accumulate metrics from a single batch."""
+        self.loss += loss
+        self.embedding_variance += embedding_variance
+        self.intra_distance += distance_metrics['intra_class_distance']
+        self.inter_distance += distance_metrics['inter_class_distance']
+        self.margin_satisfaction += distance_metrics['triplet_margin_satisfaction']
+        self.hard_triplets += mining_metrics['hard_triplets_ratio']
+        self.easy_triplets += mining_metrics['easy_triplets_ratio']
+        self.mining_efficiency += mining_metrics['mining_efficiency']
+        self.grad_norm += grad_norm
+    
+    def compute_averages(self, num_batches: int) -> 'TrainingMetrics':
+        """Compute average metrics over all batches."""
+        if num_batches == 0:
+            return TrainingMetrics()
+        
+        return TrainingMetrics(
+            loss=self.loss / num_batches,
+            embedding_variance=self.embedding_variance / num_batches,
+            intra_distance=self.intra_distance / num_batches,
+            inter_distance=self.inter_distance / num_batches,
+            margin_satisfaction=self.margin_satisfaction / num_batches,
+            hard_triplets=self.hard_triplets / num_batches,
+            easy_triplets=self.easy_triplets / num_batches,
+            mining_efficiency=self.mining_efficiency / num_batches,
+            grad_norm=self.grad_norm / num_batches
+        )
+    
+    def to_dict(self) -> Dict[str, float]:
+        """Convert metrics to dictionary for logging."""
+        return {
+            'train_loss': self.loss,
+            'embedding_variance': self.embedding_variance,
+            'intra_class_distance': self.intra_distance,
+            'inter_class_distance': self.inter_distance,
+            'margin_satisfaction': self.margin_satisfaction,
+            'hard_triplets_ratio': self.hard_triplets,
+            'easy_triplets_ratio': self.easy_triplets,
+            'mining_efficiency': self.mining_efficiency,
+            'gradient_norm': self.grad_norm
+        }
+    
+    def log_summary(self, epoch: int, margin: float) -> None:
+        """Log training metrics summary with diagnostic guidance."""
+        logger.info(f"=== Epoch {epoch} Training Summary ===")
+        logger.info(f"Training Loss: {self.loss:.4f}")
+        logger.info(f"Margin used: {margin:.4f}")
+        logger.info(f"Training Progress Metrics:")
+        logger.info(f"  - Embedding Variance: {self.embedding_variance:.4f} (target: >0.1 for diverse features)")
+        logger.info(f"  - Intra-class Distance: {self.intra_distance:.4f} (target: <0.5 for tight clusters)")
+        logger.info(f"  - Inter-class Distance: {self.inter_distance:.4f} (target: >1.0 for separation)")
+        logger.info(f"  - Margin Satisfaction: {self.margin_satisfaction:.4f} (target: >0.8 for effective triplets)")
+        logger.info(f"  - Hard Triplets Ratio: {self.hard_triplets:.4f} (target: 0.3-0.7 for balanced difficulty)")
+        logger.info(f"  - Easy Triplets Ratio: {self.easy_triplets:.4f} (target: <0.3 to avoid trivial learning)")
+        logger.info(f"  - Mining Efficiency: {self.mining_efficiency:.4f} (target: >0.7 for good triplet selection)")
+        logger.info(f"  - Gradient Norm: {self.grad_norm:.4f} (target: 0.01-100, watch for explosion >1000)")
+
+
+class MemoryManager:
+    """Unified memory management for training with smart cleanup strategies."""
+    
+    def __init__(self, device: torch.device, gpu_cache_threshold: float = 0.85, 
+                 conservative_mode: bool = True):
+        """
+        Initialize memory manager.
+        
+        Args:
+            device: The device being used for training
+            gpu_cache_threshold: GPU utilization threshold for cache clearing (default: 85%)
+            conservative_mode: If True, only clear GPU cache when necessary
+        """
+        self.device = device
+        self.gpu_cache_threshold = gpu_cache_threshold
+        self.conservative_mode = conservative_mode
+        self.baseline_memory: Optional[float] = None
+        
+    def establish_baseline(self) -> None:
+        """Establish memory baseline for leak detection."""
+        try:
+            import psutil
+            process = psutil.Process()
+            self.baseline_memory = process.memory_info().rss / 1024 / 1024  # MB
+            logger.info(f"Memory baseline established: {self.baseline_memory:.1f}MB")
+        except Exception as e:
+            logger.debug(f"Could not establish memory baseline: {e}")
+    
+    def smart_gpu_cache_clear(self, force: bool = False, context: str = "") -> None:
+        """
+        Intelligently clear GPU cache only when necessary.
+        
+        Args:
+            force: If True, force cache clear regardless of memory usage
+            context: Context string for logging
+        """
+        if not torch.cuda.is_available():
+            return
+            
+        try:
+            if force:
+                torch.cuda.empty_cache()
+                if context:
+                    logger.debug(f"GPU cache force-cleared ({context})")
+                return
+                
+            # Check if cache clearing is needed based on memory utilization
+            if hasattr(torch.cuda, 'memory_reserved') and torch.cuda.memory_reserved() > 0:
+                memory_allocated = torch.cuda.memory_allocated()
+                memory_reserved = torch.cuda.memory_reserved()
+                gpu_utilization = memory_allocated / memory_reserved
+                
+                if gpu_utilization > self.gpu_cache_threshold:
+                    torch.cuda.empty_cache()
+                    logger.debug(f"GPU cache cleared ({context}) - utilization: {gpu_utilization:.1%} > {self.gpu_cache_threshold:.1%}")
+                else:
+                    logger.debug(f"GPU cache clear skipped ({context}) - utilization: {gpu_utilization:.1%} <= {self.gpu_cache_threshold:.1%}")
+            else:
+                logger.debug(f"GPU cache clear skipped ({context}) - no memory allocated")
+                
+        except Exception as e:
+            if self.conservative_mode:
+                logger.debug(f"GPU cache clear skipped ({context}) - conservative mode, error: {e}")
+            else:
+                torch.cuda.empty_cache()
+                logger.debug(f"GPU cache cleared ({context}) - fallback due to error: {e}")
+    
+    def aggressive_cleanup(self, context: str = "") -> None:
+        """
+        Perform aggressive memory cleanup to prevent accumulation.
+        
+        Args:
+            context: Context string for logging
+        """
+        try:
+            import psutil
+            process = psutil.Process()
+            memory_before = process.memory_info().rss / 1024 / 1024  # MB
+            
+            # Force garbage collection multiple times
+            for _ in range(3):
+                gc.collect()
+            
+            # Force GPU cache clear for aggressive cleanup
+            if torch.cuda.is_available():
+                self.smart_gpu_cache_clear(force=True, context=f"aggressive_{context}")
+                
+            # Clear CPU memory
+            clear_cpu_memory(force=True)
+            
+            # Additional PyTorch internal cleanup
+            if hasattr(torch, '_C') and hasattr(torch._C, '_cuda_clearCaches'):
+                try:
+                    torch._C._cuda_clearCaches()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+            
+            # Log memory change
+            memory_after = process.memory_info().rss / 1024 / 1024  # MB
+            memory_delta = memory_after - memory_before
+            
+            if abs(memory_delta) > 10:
+                logger.info(f"Aggressive cleanup {context}: {memory_before:.1f}MB → {memory_after:.1f}MB (Δ{memory_delta:+.1f}MB)")
+            else:
+                logger.debug(f"Aggressive cleanup {context}: {memory_before:.1f}MB → {memory_after:.1f}MB (Δ{memory_delta:+.1f}MB)")
+                
+        except Exception as e:
+            logger.debug(f"Aggressive cleanup failed {context}: {e}")
+    
+    def periodic_cleanup(self, epoch: int, cleanup_interval: int = 2) -> None:
+        """
+        Perform periodic cleanup to prevent memory accumulation.
+        
+        Args:
+            epoch: Current epoch number (0-indexed)
+            cleanup_interval: How often to run cleanup (every N epochs)
+        """
+        if (epoch + 1) % cleanup_interval == 0:
+            try:
+                self.aggressive_cleanup(f"epoch_{epoch + 1}")
+            except Exception as e:
+                logger.debug(f"Periodic cleanup warning: {e}")
+    
+    def check_for_leaks(self, epoch: int) -> None:
+        """
+        Check for memory leaks by comparing current usage to baseline.
+        
+        Args:
+            epoch: Current epoch number (0-indexed)
+        """
+        if self.baseline_memory is None:
+            return
+            
+        try:
+            import psutil
+            process = psutil.Process()
+            current_memory = process.memory_info().rss / 1024 / 1024  # MB
+            
+            memory_increase = current_memory - self.baseline_memory
+            epochs_since_baseline = max(1, epoch + 1)
+            memory_increase_per_epoch = memory_increase / epochs_since_baseline
+            
+            logger.info(f"Memory trend: Baseline={self.baseline_memory:.1f}MB, "
+                       f"Current={current_memory:.1f}MB, "
+                       f"Increase={memory_increase:.1f}MB ({memory_increase_per_epoch:.1f}MB/epoch)")
+            
+        except Exception as e:
+            logger.debug(f"Memory leak detection warning: {e}")
+    
+    def cleanup_on_error(self, error_type: str = "unknown") -> None:
+        """
+        Clean up memory after an error occurs.
+        
+        Args:
+            error_type: Type of error that occurred
+        """
+        logger.info(f"Cleaning up memory after {error_type} error...")
+        
+        # Force aggressive cleanup
+        clear_gpu_memory(force=True) if torch.cuda.is_available() else None
+        clear_cpu_memory(force=True)
+        
+        if torch.cuda.is_available():
+            log_gpu_memory_stats(f"After {error_type} cleanup")
+    
+    def log_status(self, context: str = "") -> None:
+        """Log current memory status."""
+        if torch.cuda.is_available() and self.device.type == 'cuda':
+            log_gpu_memory_stats(context)
+        
+        try:
+            import psutil
+            process = psutil.Process()
+            current_memory = process.memory_info().rss / 1024 / 1024  # MB
+            logger.debug(f"CPU memory {context}: {current_memory:.1f}MB")
+        except Exception:
+            pass
 
 
 class Training:
@@ -53,7 +307,6 @@ class Training:
     lr_scheduler_min_lr: float
     lr_scheduler_factor: float
     force_pretraining: bool
-    num_workers: int
     prefetch_factor: int
     margin_decay_rate: float
     margin_change_threshold: float
@@ -77,11 +330,10 @@ class Training:
             enable_multithreading: Whether to enable multithreading for data loading
             num_workers: Number of DataLoader workers (auto-detected if None)
             clear_memory_on_start: Whether to clear GPU memory on initialization
-            **kwargs: Training parameters (see parameter_registry for complete list)
+            **kwargs: Training parameters (num_epochs, batch_size, learning_rate, etc.)
         
-        All hyperparameters are defined in config.parameter_registry and will be
-        automatically validated. If any required hyperparameter is missing in both 
-        kwargs and training_config, a ValueError will be raised.
+    All hyperparameters default to values from training_config/wandb_config 
+    but can be overridden via kwargs.
         """
         # Clear GPU memory at start to recover from previous crashes
         if clear_memory_on_start:
@@ -107,26 +359,30 @@ class Training:
         # Store kwargs for later use (e.g., passing eval_kwargs to evaluation)
         self.kwargs = kwargs
 
-        # Initialize all registered parameters using the centralized registry
-        for param_name in parameter_registry.parameters:
-            param_def = parameter_registry.parameters[param_name]
-            if param_def.config_path.startswith("training_config"):
-                # Skip num_workers since it's already handled above
-                if param_name == 'num_workers':
-                    continue
-                try:
-                    value = parameter_registry.get_kwarg_or_config(param_name, kwargs)
-                    setattr(self, param_name, value)
-                except ValueError as e:
-                    if param_def.required:
-                        raise e
-                    # For non-required params, we can skip them
-
-        # Handle specific attribute name mappings for backward compatibility
-        if hasattr(self, 'lr_scheduler_patience'):
-            self.scheduler_patience = self.lr_scheduler_patience
-        if hasattr(self, 'lr_scheduler_threshold'):
-            self.scheduler_threshold = self.lr_scheduler_threshold
+        # Initialize training parameters - direct fallback from kwargs to config
+        self.num_epochs = kwargs.get('num_epochs', training_config.num_epochs)
+        self.batch_size = kwargs.get('batch_size', training_config.batch_size)
+        self.learning_rate = kwargs.get('learning_rate', training_config.learning_rate)
+        self.margin = kwargs.get('margin', training_config.margin)
+        self.weight_decay = kwargs.get('weight_decay', training_config.weight_decay)
+        self.lr_scheduler_patience = kwargs.get('lr_scheduler_patience', training_config.lr_scheduler_patience)
+        self.lr_scheduler_threshold = kwargs.get('lr_scheduler_threshold', training_config.lr_scheduler_threshold)
+        self.lr_scheduler_min_lr = kwargs.get('lr_scheduler_min_lr', training_config.lr_scheduler_min_lr)
+        self.lr_scheduler_factor = kwargs.get('lr_scheduler_factor', training_config.lr_scheduler_factor)
+        self.force_pretraining = kwargs.get('force_pretraining', training_config.force_pretraining)
+        self.early_stopping_patience = kwargs.get('early_stopping_patience', training_config.early_stopping_patience)
+        self.min_images_per_player = kwargs.get('min_images_per_player', training_config.min_images_per_player)
+        self.train_prefetch_factor = kwargs.get('train_prefetch_factor', training_config.prefetch_factor)
+        self.margin_decay_rate = kwargs.get('margin_decay_rate', training_config.margin_decay_rate)
+        self.margin_change_threshold = kwargs.get('margin_change_threshold', training_config.margin_change_threshold)
+        self.train_ratio = kwargs.get('train_ratio', training_config.train_ratio)
+        self.n_datasets_to_use = kwargs.get('n_datasets_to_use', training_config.n_datasets_to_use)
+        self.dataset_address = kwargs.get('dataset_address', training_config.dataset_address)
+        self.wandb_project = kwargs.get('wandb_project', wandb_config.project)
+        
+        # Backward compatibility aliases
+        self.scheduler_patience = self.lr_scheduler_patience
+        self.scheduler_threshold = self.lr_scheduler_threshold
 
         # Device: direct argument, else config, else autodetect
         if device is not None:
@@ -148,14 +404,14 @@ class Training:
         self.val_dataloader = None
         self.cpu_monitor = CPUMemoryMonitor()
         
-        # Memory leak tracking
-        self.epoch_memory_baseline = None
-        self.memory_leak_threshold_mb = 100  # Alert if memory increases by more than 100MB per epoch
-        
-        # GPU cache management strategy
-        # For GPU-enabled Cloud Run, use conservative cache clearing to preserve performance
-        self.gpu_cache_threshold = kwargs.get('gpu_cache_threshold', 0.85)  # Clear cache when >85% GPU memory used
-        self.conservative_gpu_cache = kwargs.get('conservative_gpu_cache', True)  # Default to conservative for Cloud Run GPU
+        # Initialize unified memory manager
+        gpu_cache_threshold = kwargs.get('gpu_cache_threshold', 0.85)
+        conservative_mode = kwargs.get('conservative_gpu_cache', True)
+        self.memory_manager = MemoryManager(
+            device=self.device,
+            gpu_cache_threshold=gpu_cache_threshold,
+            conservative_mode=conservative_mode
+        )
 
 
     def _load_model_from_wandb(self, model_class, model_name: str, alias: Optional[str], **kwargs):
@@ -404,7 +660,7 @@ class Training:
             # Enable backbone fine-tuning for DINOv3 models
             if hasattr(self.model, 'enable_backbone_fine_tuning') and callable(getattr(self.model, 'enable_backbone_fine_tuning', None)):
                 try:
-                    self.model.enable_backbone_fine_tuning(unfreeze_layers=2)  # pyright: ignore[reportCallIssue]
+                    self.model.enable_backbone_fine_tuning(unfreeze_layers=4)  # pyright: ignore[reportCallIssue]
                     logger.info("Enabled backbone fine-tuning for DINOv3 model")
                 except Exception as e:
                     logger.warning(f"Could not enable backbone fine-tuning: {e}")
@@ -414,6 +670,12 @@ class Training:
             # Setup training components with improved loss function
             # Use TripletMarginLoss with distance weighting for better convergence
             self.loss_fn = nn.TripletMarginLoss(margin=self.margin, p=2, reduction='mean')
+            
+            # Setup classification loss if the model has a classification head
+            self.classification_loss_fn = None
+            if hasattr(self.model, 'classification_head') and self.model.classification_head is not None:
+                self.classification_loss_fn = nn.CrossEntropyLoss()
+                logger.info("Classification head detected - will use combined loss for early epochs")
             
             # Use AdamW optimizer which is better for fine-tuning transformers
             self.optimizer = torch.optim.AdamW(
@@ -445,7 +707,7 @@ class Training:
             logger.info(f"Batch size: {self.batch_size}")
             logger.info(f"Number of epochs: {self.num_epochs}")
             logger.info(f"Triplet margin: {self.margin}")
-            logger.info(f"Optimizer: Adam (initial lr={self.}, weight_decay={self.weight_decay})")
+            logger.info(f"Optimizer: AdamW (initial lr={self.learning_rate}, weight_decay={self.weight_decay})")
             logger.info(f"LR Scheduler: ReduceLROnPlateau (patience={self.scheduler_patience}, threshold={self.scheduler_threshold})")
         except Exception as e:
             logger.error(f"Model setup failed: {e}")
@@ -513,14 +775,10 @@ class Training:
                     logger.info(f"Training cancelled by stop_callback at epoch {epoch + 1}")
                     raise InterruptedError("Training cancelled by external request")
 
-                # Periodic aggressive memory cleanup to prevent accumulation
-                if (epoch + 1) % 2 == 0:  # Every 2 epochs
-                    try:
-                        self._aggressive_memory_cleanup(f"End of epoch {epoch + 1}")
-                    except Exception as cleanup_error:
-                        logger.debug(f"Aggressive memory cleanup warning: {cleanup_error}")
+                # Periodic memory cleanup to prevent accumulation
+                self.memory_manager.periodic_cleanup(epoch, cleanup_interval=2)
                 
-                log_gpu_memory_stats(f"Epoch {epoch + 1} start")
+                self.memory_manager.log_status(f"Epoch {epoch + 1} start")
                 self.cpu_monitor.log_memory_stats(f"Epoch {epoch + 1} start")
 
                 # ========================================================================
@@ -533,18 +791,10 @@ class Training:
                 # optimizer state, causing cumulative memory growth. Avoid moving
                 # them here.
                 self.model.train()
-                running_loss = 0.0
                 ttl_batches = len(self.dataloader)
 
-                # Initialize metric accumulators for training progress tracking
-                running_embedding_variance = 0.0
-                running_intra_distance = 0.0
-                running_inter_distance = 0.0
-                running_margin_satisfaction = 0.0
-                running_hard_triplets = 0.0
-                running_easy_triplets = 0.0
-                running_mining_efficiency = 0.0
-                running_grad_norm = 0.0
+                # Initialize metrics tracker for this epoch
+                epoch_metrics = TrainingMetrics()
 
                 # Update margin if decay rate is active (use actual epoch number)
                 new_margin = self.margin * (margin_decay_rate ** epoch)
@@ -562,7 +812,7 @@ class Training:
                         param_group['lr'] = self.learning_rate * warmup_factor
                     logger.debug(f"Warmup LR for epoch {epoch+1}: {self.learning_rate * warmup_factor:.2e}")
                     
-                for i, (anchor, positive, negative, _) in enumerate(self.dataloader):
+                for i, (anchor, positive, negative, labels) in enumerate(self.dataloader):
 
                     # Log progress
                     if (i + 1) % BATCHES_PER_LOG_MSG == 0:
@@ -587,13 +837,45 @@ class Training:
                     anchor = anchor.to(self.device, non_blocking=True)
                     positive = positive.to(self.device, non_blocking=True)
                     negative = negative.to(self.device, non_blocking=True)
+                    labels = labels.to(self.device, non_blocking=True)
 
                     # Clear gradients
                     self.optimizer.zero_grad()
                     
+                    # Determine if we should use classification loss
+                    # Use combined loss for first N epochs to jump-start embeddings
+                    use_classification = (self.classification_loss_fn is not None and 
+                                        epoch < training_config.classification_epochs)
+                    
                     # Forward pass
-                    emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative)  # pyright: ignore[reportCallIssue]
-                    loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
+                    if use_classification:
+                        # Get embeddings and logits for classification
+                        (emb_anchor, logits_a), (emb_positive, logits_p), (emb_negative, logits_n) = \
+                            self.model.forward_triplet(anchor, positive, negative, return_logits=True)  # pyright: ignore[reportCallIssue]
+                        
+                        # Compute triplet loss
+                        triplet_loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
+                        
+                        # Compute classification loss
+                        # Concatenate logits and labels for batch processing
+                        all_logits = torch.cat([logits_a, logits_p, logits_n], dim=0)
+                        all_labels = labels.repeat(3)  # Repeat labels for anchor, positive, negative
+                        classification_loss = self.classification_loss_fn(all_logits, all_labels)
+                        
+                        # Combined loss with decreasing weight for classification
+                        # Start with configured weight, linearly decrease to 0 over N epochs
+                        progress = epoch / training_config.classification_epochs
+                        class_weight = max(0.0, training_config.classification_weight_start * (1.0 - progress))
+                        loss = triplet_loss + (class_weight * classification_loss)
+                        
+                        # Log the component losses periodically
+                        if (i + 1) % BATCHES_PER_LOG_MSG == 0:
+                            logger.debug(f"Epoch {epoch+1} Batch {i+1}: triplet_loss={triplet_loss.item():.4f}, "
+                                       f"class_loss={classification_loss.item():.4f}, class_weight={class_weight:.2f}")
+                    else:
+                        # Standard triplet-only training
+                        emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative)  # pyright: ignore[reportCallIssue]
+                        loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
 
                     # Calculate training progress metrics
                     # These metrics help diagnose why loss might be staying near margin
@@ -605,52 +887,31 @@ class Training:
                     # Backward and optimizer step
                     loss.backward()
                     grad_norm = calculate_gradient_norm(self.model)
+                    # Gradient clipping for stability
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                     self.optimizer.step()
 
-                    # Extract scalar immediately and clear GPU tensors to free memory
+                    # Extract scalar immediately and accumulate metrics
                     loss_value = loss.item()
-                    running_loss += loss_value
-
-                    # Accumulate training progress metrics
-                    # 1. Embedding variance - measures feature diversity (high >0.1 is good)
-                    running_embedding_variance += embedding_variance
-                    # 2. Intra/inter distances - intra should be small (<0.5), inter large (>1.0)
-                    running_intra_distance += distance_metrics['intra_class_distance']
-                    running_inter_distance += distance_metrics['inter_class_distance']
-                    # 3. Margin satisfaction - ratio of triplets satisfying margin constraint (>0.8 is good)
-                    running_margin_satisfaction += distance_metrics['triplet_margin_satisfaction']
-                    # 4. Triplet mining efficiency - higher ratio (>0.7) indicates better triplet selection
-                    running_hard_triplets += mining_metrics['hard_triplets_ratio']
-                    running_easy_triplets += mining_metrics['easy_triplets_ratio']
-                    running_mining_efficiency += mining_metrics['mining_efficiency']
-                    # 5. Gradient norm - monitors for explosion (>1000) or vanishing (<0.01)
-                    running_grad_norm += grad_norm
+                    epoch_metrics.accumulate(
+                        loss=loss_value,
+                        embedding_variance=embedding_variance,
+                        distance_metrics=distance_metrics,
+                        mining_metrics=mining_metrics,
+                        grad_norm=grad_norm
+                    )
                     
                     # Explicitly delete ALL tensors and intermediate results to prevent accumulation
                     del anchor, positive, negative, emb_anchor, emb_positive, emb_negative, loss
                     del concatenated_embeddings  # Clean up the concatenated tensor
                     
                     # Establish memory baseline after first few batches of first epoch
-                    # This accounts for model loading, optimizer state creation, and initial allocations
-                    if epoch == 0 and i == 10 and self.epoch_memory_baseline is None:  # After 5th batch of first epoch
-                        import psutil
-                        process = psutil.Process()
-                        self.epoch_memory_baseline = process.memory_info().rss / 1024 / 1024  # MB
-                        logger.info(f"Memory baseline established after first 5 batches: {self.epoch_memory_baseline:.1f}MB")
+                    if epoch == 0 and i == 10 and self.memory_manager.baseline_memory is None:
+                        self.memory_manager.establish_baseline()
                     
 
-                # Calculate and log training loss
-                epoch_train_loss = running_loss / ttl_batches if ttl_batches > 0 else 0.0
-
-                # Calculate average training progress metrics
-                epoch_embedding_variance = running_embedding_variance / ttl_batches if ttl_batches > 0 else 0.0
-                epoch_intra_distance = running_intra_distance / ttl_batches if ttl_batches > 0 else 0.0
-                epoch_inter_distance = running_inter_distance / ttl_batches if ttl_batches > 0 else 0.0
-                epoch_margin_satisfaction = running_margin_satisfaction / ttl_batches if ttl_batches > 0 else 0.0
-                epoch_hard_triplets = running_hard_triplets / ttl_batches if ttl_batches > 0 else 0.0
-                epoch_easy_triplets = running_easy_triplets / ttl_batches if ttl_batches > 0 else 0.0
-                epoch_mining_efficiency = running_mining_efficiency / ttl_batches if ttl_batches > 0 else 0.0
-                epoch_grad_norm = running_grad_norm / ttl_batches if ttl_batches > 0 else 0.0
+                # Calculate average metrics for the epoch
+                avg_metrics = epoch_metrics.compute_averages(ttl_batches)
                 
 
                 # ========================================================================
@@ -695,35 +956,28 @@ class Training:
                                 
                             # Periodic memory cleanup during validation
                             if (j + 1) % 50 == 0:
-                                if torch.cuda.is_available():
-                                    # Use smart GPU cache clearing with conservative approach
-                                    self._smart_gpu_cache_clear(force=False, context=f"validation_batch_{j+1}")
+                                self.memory_manager.smart_gpu_cache_clear(force=False, context=f"validation_batch_{j+1}")
 
                     epoch_val_loss = running_val_loss / ttl_batches if ttl_batches > 0 else 0.0
 
                     # 2. Calculate Retrieval Metrics with memory monitoring
-                    if torch.cuda.is_available() and self.device.type == 'cuda':
-                        log_gpu_memory_stats("Before evaluation")
+                    self.memory_manager.log_status("Before evaluation")
                     self.cpu_monitor.log_memory_stats("Before evaluation")
                     
                     reid_metrics = self._evaluate_reid_metrics(val_dataloader)
                     
-                    if torch.cuda.is_available() and self.device.type == 'cuda':
-                        log_gpu_memory_stats("After evaluation")
+                    self.memory_manager.log_status("After evaluation")
                     self.cpu_monitor.log_memory_stats("After evaluation")
                     
                     # Aggressive memory cleanup after validation
-                    self._aggressive_memory_cleanup(f"After validation epoch {epoch + 1}")
+                    self.memory_manager.aggressive_cleanup(f"After validation epoch {epoch + 1}")
                     self.cpu_monitor.log_memory_stats(f"Epoch {epoch + 1} validation complete")
 
                 # ========================================================================
                 # Log and check for early stopping
                 # ========================================================================
-                logger.info(f"=== Epoch {epoch+1}/{self.num_epochs} Summary ===")
-                logger.info(f"Training Loss: {epoch_train_loss:.4f}")
-                
                 # Use validation loss for monitoring if available, otherwise fall back to training loss
-                monitoring_loss = epoch_train_loss
+                monitoring_loss = avg_metrics.loss
                 if epoch_val_loss is not None:
                     logger.info(f"Validation Loss: {epoch_val_loss:.4f}")
                     monitoring_loss = epoch_val_loss
@@ -738,44 +992,23 @@ class Training:
                 if 'reid_metrics' in locals():
                     reid_metrics.clear()
 
-                logger.info(f"Margin used: {current_margin:.4f}")
-
-                # Log training progress metrics with diagnostic guidance
-                logger.info(f"Training Progress Metrics:")
-                logger.info(f"  - Embedding Variance: {epoch_embedding_variance:.4f} (target: >0.1 for diverse features)")
-                logger.info(f"  - Intra-class Distance: {epoch_intra_distance:.4f} (target: <0.5 for tight clusters)")
-                logger.info(f"  - Inter-class Distance: {epoch_inter_distance:.4f} (target: >1.0 for separation)")
-                logger.info(f"  - Margin Satisfaction: {epoch_margin_satisfaction:.4f} (target: >0.8 for effective triplets)")
-                logger.info(f"  - Hard Triplets Ratio: {epoch_hard_triplets:.4f} (target: 0.3-0.7 for balanced difficulty)")
-                logger.info(f"  - Easy Triplets Ratio: {epoch_easy_triplets:.4f} (target: <0.3 to avoid trivial learning)")
-                logger.info(f"  - Mining Efficiency: {epoch_mining_efficiency:.4f} (target: >0.7 for good triplet selection)")
-                logger.info(f"  - Gradient Norm: {epoch_grad_norm:.4f} (target: 0.01-100, watch for explosion >1000)")
+                # Log training metrics summary
+                avg_metrics.log_summary(epoch + 1, current_margin)
                 
                 # Log epoch metrics to wandb with memory management
                 if wandb_logger.enabled:
-                    # Create metrics dict with explicit cleanup
-                    metrics = {
-                        "train_loss": float(epoch_train_loss),  # Ensure scalar values
-                        "margin": float(current_margin),
-                        "current_lr": float(self.optimizer.param_groups[0]['lr']),
-                        # Training progress metrics
-                        "embedding_variance": float(epoch_embedding_variance),
-                        "intra_class_distance": float(epoch_intra_distance),
-                        "inter_class_distance": float(epoch_inter_distance),
-                        "margin_satisfaction": float(epoch_margin_satisfaction),
-                        "hard_triplets_ratio": float(epoch_hard_triplets),
-                        "easy_triplets_ratio": float(epoch_easy_triplets),
-                        "mining_efficiency": float(epoch_mining_efficiency),
-                        "gradient_norm": float(epoch_grad_norm)
-                    }
+                    # Create metrics dict from TrainingMetrics
+                    metrics = avg_metrics.to_dict()
+                    metrics["margin"] = float(current_margin)
+                    metrics["current_lr"] = float(self.optimizer.param_groups[0]['lr'])
+                    
                     if epoch_val_loss is not None:
                         metrics["val_loss"] = float(epoch_val_loss)
                         # Add re-id metrics with explicit float conversion to prevent accumulation
                         for k, v in reid_metrics.items():
                             metrics[k] = float(v) if isinstance(v, (int, float)) else v
                     
-                    if wandb_logger.enabled:
-                        wandb_logger.log_metrics(metrics)
+                    wandb_logger.log_metrics(metrics)
                     
                     # Explicitly clear metrics dict to prevent accumulation
                     del metrics
@@ -886,86 +1119,19 @@ class Training:
                         logger.debug(f"DataLoader iterator cleanup warning: {iterator_error}")
 
                 # Memory leak detection and alerting
-                try:
-                    import psutil
-                    process = psutil.Process()
-                    current_memory = process.memory_info().rss / 1024 / 1024  # MB
-                    
-                    if self.epoch_memory_baseline is not None:
-                        memory_increase = current_memory - self.epoch_memory_baseline
-                        # Calculate per-epoch increase more accurately accounting for baseline epoch
-                        epochs_since_baseline = max(1, epoch + 1 - 0)  # epoch is 0-indexed, baseline set after epoch 0 starts
-                        memory_increase_per_epoch = memory_increase / epochs_since_baseline if epochs_since_baseline > 0 else 0
-                        
-                        # Log memory trend every epoch
-                        logger.info(f"Memory trend: Baseline={self.epoch_memory_baseline:.1f}MB, Current={current_memory:.1f}MB, Increase={memory_increase:.1f}MB ({memory_increase_per_epoch:.1f}MB/epoch)")
-                        
-                    else:
-                        # Baseline not yet established
-                        logger.debug(f"Memory monitoring: {current_memory:.1f}MB (baseline not yet established)")
-                        
-                except Exception as memory_check_error:
-                    logger.debug(f"Memory leak detection warning: {memory_check_error}")
+                self.memory_manager.check_for_leaks(epoch)
 
 
         except InterruptedError as e:
             logger.info(f"Training cancelled by external request: {e}")
-            
-            # Clean up both GPU and CPU memory on cancellation
-            logger.info("Cleaning up GPU and CPU memory after training cancellation...")
-            
-            # Clear all variables that might hold GPU tensors
-            if 'anchor' in locals():
-                del anchor
-            if 'positive' in locals():
-                del positive
-            if 'negative' in locals():
-                del negative
-            if 'emb_anchor' in locals():
-                del emb_anchor
-            if 'emb_positive' in locals():
-                del emb_positive
-            if 'emb_negative' in locals():
-                del emb_negative
-            if 'loss' in locals():
-                del loss
-            
-            # Force cleanup
-            clear_gpu_memory()
-            clear_cpu_memory(force=True)
+            self.memory_manager.cleanup_on_error("cancellation")
             self.cpu_monitor.log_memory_stats("After cancellation cleanup")
-            
-            # Re-raise the InterruptedError to propagate cancellation
             raise
             
         except (RuntimeError, torch.cuda.OutOfMemoryError) as e:
             logger.error(f"Training failed with error: {e}")
-            
-            # Clean up both GPU and CPU memory on failure
-            logger.info("Cleaning up GPU and CPU memory after training failure...")
-            
-            # Clear all variables that might hold GPU tensors
-            if 'anchor' in locals():
-                del anchor
-            if 'positive' in locals():
-                del positive
-            if 'negative' in locals():
-                del negative
-            if 'emb_anchor' in locals():
-                del emb_anchor
-            if 'emb_positive' in locals():
-                del emb_positive
-            if 'emb_negative' in locals():
-                del emb_negative
-            if 'loss' in locals():
-                del loss
-            
-            # Force cleanup
-            clear_gpu_memory()
-            clear_cpu_memory(force=True)
+            self.memory_manager.cleanup_on_error("runtime")
             self.cpu_monitor.log_memory_stats("After failure cleanup")
-            
-            # Re-raise the exception
             raise
             
         except Exception as e:
@@ -974,10 +1140,8 @@ class Training:
             # Check if this is a CUDA OOM error and provide specific guidance
             if "out of memory" in str(e).lower() or "cuda out of memory" in str(e).lower():
                 logger.error("CUDA Out of Memory Error detected!")
-                log_gpu_memory_stats("Before OOM cleanup")
-                clear_gpu_memory(force=True)
-                clear_cpu_memory(force=True)
-                log_gpu_memory_stats("After OOM cleanup")
+                self.memory_manager.log_status("Before OOM cleanup")
+                self.memory_manager.cleanup_on_error("OOM")
                 self.cpu_monitor.log_memory_stats("After OOM cleanup")
                 logger.error("Suggestions to resolve OOM:")
                 logger.error("1. Reduce batch_size in your configuration")
@@ -985,8 +1149,7 @@ class Training:
                 logger.error("3. Consider mixed precision training (fp16)")
                 logger.error("4. Use a smaller model architecture")
             else:
-                clear_gpu_memory()
-                clear_cpu_memory()
+                self.memory_manager.cleanup_on_error("unexpected")
             raise
 
         logger.info("Training completed successfully")
@@ -1139,6 +1302,12 @@ class Training:
         # Log memory after data setup, before model setup
         if torch.cuda.is_available() and self.device.type == 'cuda':
             log_gpu_memory_stats("After data setup")
+
+        # Add num_classes to model_kwargs if dataset has player information and classification head is enabled
+        if training_config.use_classification_head and 'num_classes' not in model_kwargs and hasattr(dataset, 'players'):
+            num_classes = len(dataset.players)
+            model_kwargs['num_classes'] = num_classes
+            logger.info(f"Setting num_classes={num_classes} for classification head (enabled for {training_config.classification_epochs} epochs)")
 
         # Setup model
         logger.info("Setting up model...")
@@ -1297,51 +1466,6 @@ class Training:
         except Exception:
             logger.debug("Failed to move some optimizer state tensors to device; they may be created lazily later")
 
-    def _smart_gpu_cache_clear(self, force: bool = False, context: str = ""):
-        """
-        Intelligently clear GPU cache only when necessary.
-        
-        Args:
-            force: If True, force cache clear regardless of memory usage
-            context: Context string for logging (e.g., "epoch_end", "aggressive_cleanup")
-        """
-        if not torch.cuda.is_available():
-            return  # No GPU, no cache to clear
-            
-        try:
-            if force:
-                torch.cuda.empty_cache()
-                if context:
-                    logger.debug(f"GPU cache force-cleared ({context})")
-                return
-                
-            # Check if cache clearing is needed based on memory utilization
-            if hasattr(torch.cuda, 'memory_reserved') and torch.cuda.memory_reserved() > 0:
-                memory_allocated = torch.cuda.memory_allocated()
-                memory_reserved = torch.cuda.memory_reserved()
-                gpu_utilization = memory_allocated / memory_reserved
-                
-                # Use configurable threshold (default 85% for GPU Cloud Run)
-                threshold = getattr(self, 'gpu_cache_threshold', 0.85)
-                
-                if gpu_utilization > threshold:
-                    torch.cuda.empty_cache()
-                    logger.debug(f"GPU cache cleared ({context}) - utilization: {gpu_utilization:.1%} > {threshold:.1%}")
-                else:
-                    logger.debug(f"GPU cache clear skipped ({context}) - utilization: {gpu_utilization:.1%} <= {threshold:.1%}")
-            else:
-                # No memory allocated yet, no need to clear
-                logger.debug(f"GPU cache clear skipped ({context}) - no memory allocated")
-                
-        except Exception as e:
-            # Conservative fallback for Cloud Run GPU: only clear on high memory conditions
-            if getattr(self, 'conservative_gpu_cache', True):
-                logger.debug(f"GPU cache clear skipped ({context}) - conservative mode, error: {e}")
-            else:
-                # Fallback: clear cache if memory queries fail and not in conservative mode
-                torch.cuda.empty_cache()
-                logger.debug(f"GPU cache cleared ({context}) - fallback due to error: {e}")
-
     def cleanup_model(self):
         """
         Clean up the model and associated resources to free memory.
@@ -1352,15 +1476,13 @@ class Training:
         if hasattr(self, 'model') and self.model is not None:
             logger.info("Cleaning up training model and resources")
             
-            # Clear model from GPU memory with smart cache management
+            # Clear model from GPU memory
             if torch.cuda.is_available():
                 self.model = self.model.cpu()
-                # Use smart cache clearing instead of aggressive clearing
-                self._smart_gpu_cache_clear(force=True, context="model_cleanup")
+                self.memory_manager.smart_gpu_cache_clear(force=True, context="model_cleanup")
             
             # Clear optimizer state
             if hasattr(self, 'optimizer') and self.optimizer is not None:
-                # Clear optimizer state dict which can hold significant memory
                 self.optimizer.state.clear()
                 self.optimizer.param_groups.clear()
             
@@ -1395,49 +1517,5 @@ class Training:
             self.model = self.model.to(self.device)
         
         return self.model
-
-    def _aggressive_memory_cleanup(self, context: str = ""):
-        """
-        Perform aggressive memory cleanup to prevent accumulation across epochs.
-        
-        Args:
-            context: Context string for logging
-        """
-        try:
-            import psutil
-
-            # Log memory before cleanup
-            process = psutil.Process()
-            memory_before = process.memory_info().rss / 1024 / 1024  # MB
-            
-            # Force garbage collection multiple times
-            for _ in range(3):
-                gc.collect()
-            
-            # Smart GPU cache clearing - force clear for aggressive cleanup
-            if torch.cuda.is_available():
-                self._smart_gpu_cache_clear(force=True, context=f"aggressive_cleanup_{context}")
-                
-            # Clear CPU memory
-            clear_cpu_memory(force=True)
-            
-            # Additional PyTorch internal cleanup
-            if hasattr(torch, '_C') and hasattr(torch._C, '_cuda_clearCaches'):
-                try:
-                    torch._C._cuda_clearCaches()  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-            
-            # Log memory after cleanup
-            memory_after = process.memory_info().rss / 1024 / 1024  # MB
-            memory_delta = memory_after - memory_before
-            
-            if abs(memory_delta) > 10:  # Log if significant change
-                logger.info(f"Aggressive memory cleanup {context}: {memory_before:.1f}MB → {memory_after:.1f}MB (Δ{memory_delta:+.1f}MB)")
-            else:
-                logger.debug(f"Aggressive memory cleanup {context}: {memory_before:.1f}MB → {memory_after:.1f}MB (Δ{memory_delta:+.1f}MB)")
-                
-        except Exception as e:
-            logger.debug(f"Aggressive memory cleanup failed {context}: {e}")
 
 

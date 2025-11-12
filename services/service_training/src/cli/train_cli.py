@@ -21,7 +21,6 @@ setup_environment_secrets()
 from shared_libs.config import logging_config
 from shared_libs.config.logging_config import print_banner
 from shared_libs.config.all_config import training_config
-from services.service_training.src.parameter_registry import parameter_registry
 from workflows.training_workflow import TrainingWorkflow
 
 logger = logging.getLogger(__name__)
@@ -66,23 +65,51 @@ def create_parser() -> argparse.ArgumentParser:
             """
     )
 
-    # Use parameter registry to add training/model arguments
-    logger.info(f"Parameter registry has {len(parameter_registry.parameters)} total parameters")
-    logger.info(f"Training parameters: {list(parameter_registry.training_parameters.keys())}")
-    logger.info(f"Model parameters: {list(parameter_registry.model_parameters.keys())}")
-    logger.info(f"Eval parameters: {list(parameter_registry.eval_parameters.keys())}")
-    
-    print(f"🔧 About to generate CLI parser...")
-    parser = parameter_registry.generate_cli_parser(parser)
-    print(f"🔧 CLI parser generated with parameter registry arguments")
-    
-    # Debug: Print all arguments that were added to the parser
-    print(f"🔍 Parser now has {len(parser._option_string_actions)} option string actions")
-    for option_string in sorted(parser._option_string_actions.keys()):
-        action = parser._option_string_actions[option_string]
-        print(f"   {option_string} -> {action.dest}")
-    
-    logger.info("CLI parser created with parameter registry arguments")
+    # Training parameters - explicit argparse definitions
+    parser.add_argument('--num-epochs', type=int, default=training_config.num_epochs,
+                       help="Number of training epochs", dest='num_epochs')
+    parser.add_argument('--batch-size', type=int, default=training_config.batch_size,
+                       help="Batch size for training", dest='batch_size')
+    parser.add_argument('--num-workers', type=int, default=training_config.num_workers,
+                       help="Number of DataLoader workers", dest='num_workers')
+    parser.add_argument('--learning-rate', type=float, default=training_config.learning_rate,
+                       help="Learning rate for optimizer", dest='learning_rate')
+    parser.add_argument('--margin', type=float, default=training_config.margin,
+                       help="Margin for triplet loss", dest='margin')
+    parser.add_argument('--weight-decay', type=float, default=training_config.weight_decay,
+                       help="Weight decay for optimizer", dest='weight_decay')
+    parser.add_argument('--lr-scheduler-patience', type=int, default=training_config.lr_scheduler_patience,
+                       help="Patience for learning rate scheduler", dest='lr_scheduler_patience')
+    parser.add_argument('--lr-scheduler-threshold', type=float, default=training_config.lr_scheduler_threshold,
+                       help="Threshold for learning rate scheduler", dest='lr_scheduler_threshold')
+    parser.add_argument('--lr-scheduler-min-lr', type=float, default=training_config.lr_scheduler_min_lr,
+                       help="Minimum learning rate for scheduler", dest='lr_scheduler_min_lr')
+    parser.add_argument('--lr-scheduler-factor', type=float, default=training_config.lr_scheduler_factor,
+                       help="Factor for LR scheduler", dest='lr_scheduler_factor')
+    parser.add_argument('--force-pretraining', action='store_true', default=training_config.force_pretraining,
+                       help="Force pretrained ResNet defaults", dest='force_pretraining')
+    parser.add_argument('--early-stopping-patience', type=int, default=training_config.early_stopping_patience,
+                       help="Early stopping patience", dest='early_stopping_patience')
+    parser.add_argument('--min-images-per-player', type=int, default=training_config.min_images_per_player,
+                       help="Minimum images per player", dest='min_images_per_player')
+    parser.add_argument('--train-prefetch-factor', type=int, default=training_config.prefetch_factor,
+                       help="Prefetch factor for data loading", dest='train_prefetch_factor')
+    parser.add_argument('--margin-decay-rate', type=float, default=training_config.margin_decay_rate,
+                       help="Margin decay rate", dest='margin_decay_rate')
+    parser.add_argument('--margin-change-threshold', type=float, default=training_config.margin_change_threshold,
+                       help="Margin change threshold", dest='margin_change_threshold')
+    parser.add_argument('--train-ratio', type=float, default=training_config.train_ratio,
+                       help="Training ratio", dest='train_ratio')
+    parser.add_argument('--n-datasets-to-use', type=int, default=training_config.n_datasets_to_use,
+                       help="Number of datasets to use", dest='n_datasets_to_use')
+    parser.add_argument('--dataset-address', type=str, default=training_config.dataset_address,
+                       help="GCS path to specific dataset", dest='dataset_address')
+    parser.add_argument('--use-classification-head', action='store_true', default=training_config.use_classification_head,
+                       help="Whether to use classification head", dest='use_classification_head')
+    parser.add_argument('--classification-epochs', type=int, default=training_config.classification_epochs,
+                       help="Number of epochs to use classification loss", dest='classification_epochs')
+    parser.add_argument('--classification-weight-start', type=float, default=training_config.classification_weight_start,
+                       help="Initial weight for classification loss", dest='classification_weight_start')
 
     # Add workflow-specific arguments
     parser.add_argument(
@@ -123,8 +150,7 @@ def create_parser() -> argparse.ArgumentParser:
         dest="wandb_tags"
     )
 
-    # Note: n_datasets_to_use and dataset_address are now defined in parameter_registry
-    # and automatically added via generate_cli_parser()
+    # Note: dataset selection options are provided explicitly above.
 
     parser.add_argument(
         "--task-id",
@@ -155,32 +181,26 @@ def parse_args_to_workflow_kwargs(args: argparse.Namespace) -> dict:
     Returns:
         Dictionary of keyword arguments for TrainingWorkflow.
     """
-    # Extract training, model, and eval kwargs using parameter registry
+    # Extract training, model, and eval kwargs directly from args
     training_kwargs = {}
     model_kwargs = {}
     eval_kwargs = {}
 
-    for param_name, param_def in parameter_registry.parameters.items():
+    # Training parameters
+    training_param_names = [
+        'num_epochs', 'batch_size', 'num_workers', 'learning_rate', 'margin',
+        'weight_decay', 'lr_scheduler_patience', 'lr_scheduler_threshold',
+        'lr_scheduler_min_lr', 'lr_scheduler_factor', 'force_pretraining',
+        'early_stopping_patience', 'min_images_per_player', 'margin_decay_rate',
+        'margin_change_threshold', 'train_ratio'
+    ]
+    for param_name in training_param_names:
         arg_value = getattr(args, param_name, None)
         if arg_value is not None:
-            # Determine parameter category by checking config_path
-            if param_def.config_path.startswith('model_config'):
-                model_kwargs[param_name] = arg_value
-            elif param_def.config_path.startswith('evaluator_config'):
-                # Handle parameter name mapping for eval params
-                if param_name == "eval_prefetch_factor":
-                    eval_kwargs["prefetch_factor"] = arg_value
-                else:
-                    eval_kwargs[param_name] = arg_value
-            else:  # training parameters
-                # Avoid elevating n_datasets_to_use and dataset_address into training_kwargs
-                if param_name in ('n_datasets_to_use', 'dataset_address'):
-                    continue
-                # Handle parameter name mapping for training params
-                if param_name == "train_prefetch_factor":
-                    training_kwargs["prefetch_factor"] = arg_value
-                else:
-                    training_kwargs[param_name] = arg_value
+            if param_name == "train_prefetch_factor":
+                training_kwargs["prefetch_factor"] = arg_value
+            else:
+                training_kwargs[param_name] = arg_value
 
     # Build workflow kwargs
     workflow_kwargs = {
@@ -211,11 +231,20 @@ def validate_and_suggest_args(unknown_args: List[str]) -> None:
     if not unknown_args:
         return
         
-    # Get all known parameter names for suggestions
-    known_params = set()
-    for param_name in parameter_registry.parameters.keys():
-        known_params.add(f"--{param_name}")
-        known_params.add(f"--{param_name.replace('_', '-')}")
+    # Known parameter names
+    known_params = {
+        '--num-epochs', '--batch-size', '--num-workers', '--learning-rate',
+        '--margin', '--weight-decay', '--lr-scheduler-patience',
+        '--lr-scheduler-threshold', '--lr-scheduler-min-lr',
+        '--lr-scheduler-factor', '--force-pretraining',
+        '--early-stopping-patience', '--min-images-per-player',
+        '--train-prefetch-factor', '--margin-decay-rate',
+        '--margin-change-threshold', '--train-ratio',
+        '--n-datasets-to-use', '--dataset-address',
+        '--tenant-id', '--verbose', '--custom-name',
+        '--resume-from-checkpoint', '--wandb-tags', '--task-id',
+        '--auto-resume-count'
+    }
     
     for unknown_arg in unknown_args:
         if unknown_arg.startswith('--'):

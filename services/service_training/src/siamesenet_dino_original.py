@@ -72,15 +72,6 @@ class DINOv3Backbone(nn.Module):
             nn.Linear(feat_dim, self.embedding_dim)
         )
         return head
-    
-    def _get_device(self, input_tensor: torch.Tensor) -> torch.device:
-        """Get the appropriate device for the model."""
-        try:
-            # Try to get device from backbone parameters
-            return next(self.backbone.parameters()).device
-        except (StopIteration, AttributeError):
-            # Fallback to input tensor device
-            return input_tensor.device
 
     def ensure_head_initialized(self, device: str = "cpu", input_shape=(1, 3, 224, 224)) -> None:
         """
@@ -143,11 +134,7 @@ class DINOv3Backbone(nn.Module):
                     out = out.mean(1)
                 return out
         else:
-            # Fallback for any other case - this should rarely happen
-            logger.warning(
-                "Backbone does not have expected feature extraction methods. "
-                "Falling back to random features. This may indicate a configuration issue."
-            )
+            # Fallback for any other case
             batch_size = x.shape[0]
             feature_dim = 384
             return torch.randn(batch_size, feature_dim, device=x.device, dtype=x.dtype)
@@ -159,8 +146,15 @@ class DINOv3Backbone(nn.Module):
         if self._head is None:
             feat_dim = int(feats.shape[-1])
             self._head = self._build_head(feat_dim)
-            # move head to same device as features
-            device = self._get_device(x)
+            # move head to same device as input (or cpu if backbone is None)
+            if hasattr(self.backbone, 'parameters') and self.backbone is not self.backbone:
+                # For HF models, get device from backbone parameters
+                try:
+                    device = next(self.backbone.parameters()).device
+                except (StopIteration, AttributeError):
+                    device = x.device
+            else:
+                device = x.device
             self._head = self._head.to(device)
 
         emb = self._head(feats)
@@ -188,19 +182,9 @@ class SiameseNet(nn.Module):
         # preserve same kwargs as before
         self.embedding_dim = kwargs.get('embedding_dim', model_config.embedding_dim)
         self.dropout_rate = kwargs.get('dropout_rate', model_config.dropout_rate)
-        self.num_classes = kwargs.get('num_classes', None)
 
         # instantiate DINOv3 backbone (uses class PRETRAINED_MODEL_NAME)
         self.backbone = DINOv3Backbone(self.embedding_dim, dropout=self.dropout_rate)
-        
-        # Optional classification head for jump-starting embeddings
-        self.classification_head = None
-        if self.num_classes is not None and self.num_classes > 0:
-            self.classification_head = nn.Sequential(
-                nn.Dropout(self.dropout_rate),
-                nn.Linear(self.embedding_dim, self.num_classes)
-            )
-            logger.info(f"Classification head initialized with {self.num_classes} classes")
 
         logger.info(f"SiameseNet initialized with DINOv3 backbone variant={self.backbone.PRETRAINED_MODEL_NAME}")
         logger.info(f"Embedding dim={self.embedding_dim}, dropout={self.dropout_rate}")
@@ -225,18 +209,25 @@ class SiameseNet(nn.Module):
             # For ConvNeXt models, unfreeze the last few stages
             if hasattr(self.backbone.backbone, 'stages'):
                 stages = self.backbone.backbone.stages
-                # Check if stages is a sequence using try-except pattern
-                try:
-                    num_stages = len(stages)
-                    # Unfreeze the last N stages
-                    for i in range(max(0, num_stages - unfreeze_layers), num_stages):
-                        stage = stages[i]
-                        if isinstance(stage, nn.Module):
-                            for param in stage.parameters():
-                                param.requires_grad = True
-                    logger.info(f"Unfroze last {min(unfreeze_layers, num_stages)} stages of DINOv3 backbone")
-                except (TypeError, AttributeError) as e:
-                    logger.warning(f"Backbone stages attribute found but does not support sequence interface: {e}")
+                if hasattr(stages, '__len__') and hasattr(stages, '__getitem__'):
+                    # Type guard: ensure stages is a sequence-like object
+                    len_callable = callable(getattr(stages, '__len__', None))
+                    getitem_callable = callable(getattr(stages, '__getitem__', None))
+                    if not len_callable or not getitem_callable:
+                        logger.warning("Backbone stages attribute found but does not support expected interface")
+                    else:
+                        # Type cast to help Pylance understand this is a sized object
+                        stages = cast(list, stages)  # type: ignore
+                        num_stages = len(stages)
+                        for i in range(max(0, num_stages - unfreeze_layers), num_stages):
+                            if i < num_stages:
+                                stage = stages[i]
+                                if hasattr(stage, 'parameters') and callable(getattr(stage, 'parameters', None)):
+                                    for param in stage.parameters():
+                                        param.requires_grad = True
+                        logger.info(f"Unfroze last {min(unfreeze_layers, num_stages)} stages of DINOv3 backbone")
+                else:
+                    logger.warning("Backbone stages attribute found but does not support expected interface")
 
             # Alternative: unfreeze by layer name patterns
             elif hasattr(self.backbone.backbone, 'named_parameters'):
@@ -259,52 +250,22 @@ class SiameseNet(nn.Module):
     def device(self) -> torch.device:
         return next(self.parameters()).device
 
-    def forward(self, x: torch.Tensor, return_logits: bool = False) -> torch.Tensor:
-        """Return L2-normalized embeddings for input tensor x.
-        
-        Args:
-            x: Input tensor
-            return_logits: If True and classification head exists, return (embeddings, logits)
-        
-        Returns:
-            Normalized embeddings, or tuple of (embeddings, logits) if return_logits=True
-        """
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Return L2-normalized embeddings for input tensor x."""
         emb = self.backbone(x)
-        emb_normalized = F.normalize(emb, p=2, dim=1)
-        
-        if return_logits and self.classification_head is not None:
-            logits = self.classification_head(emb)
-            return emb_normalized, logits
-        
-        return emb_normalized
+        emb = F.normalize(emb, p=2, dim=1)
+        return emb
 
     def forward_triplet(
         self,
         anchor: torch.Tensor,
         positive: torch.Tensor,
-        negative: torch.Tensor,
-        return_logits: bool = False
+        negative: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Forward pass for triplet of inputs.
-        
-        Args:
-            anchor, positive, negative: Input tensors
-            return_logits: If True, return embeddings and logits for classification loss
-        
-        Returns:
-            If return_logits=False: (emb_a, emb_p, emb_n)
-            If return_logits=True: ((emb_a, logits_a), (emb_p, logits_p), (emb_n, logits_n))
-        """
-        if return_logits and self.classification_head is not None:
-            emb_a, logits_a = self.forward(anchor, return_logits=True)
-            emb_p, logits_p = self.forward(positive, return_logits=True)
-            emb_n, logits_n = self.forward(negative, return_logits=True)
-            return (emb_a, logits_a), (emb_p, logits_p), (emb_n, logits_n)
-        else:
-            emb_a = self.forward(anchor)
-            emb_p = self.forward(positive)
-            emb_n = self.forward(negative)
-            return emb_a, emb_p, emb_n
+        emb_a = self.forward(anchor)
+        emb_p = self.forward(positive)
+        emb_n = self.forward(negative)
+        return emb_a, emb_p, emb_n
 
     def get_attention_maps(self, x: Optional[torch.Tensor] = None) -> dict:
         """Return attention maps from the backbone if available.
@@ -317,6 +278,24 @@ class SiameseNet(nn.Module):
     def ensure_head_initialized(self, device: str = "cpu", input_shape=(1, 3, 224, 224)) -> None:
         """
         Public convenience wrapper that ensures the backbone's lazy head is initialized.
-        Delegates to the backbone's implementation to avoid code duplication.
         """
-        self.backbone.ensure_head_initialized(device=device, input_shape=input_shape)
+        if hasattr(self.backbone, "ensure_head_initialized"):
+            return self.backbone.ensure_head_initialized(device=device, input_shape=input_shape)
+        # Fallback: run a dummy forward
+        try:
+            dev = torch.device(device)
+        except Exception:
+            dev = torch.device("cpu")
+
+        prev_mode = self.training
+        try:
+            self.to(dev)
+            self.eval()
+            with torch.no_grad():
+                dummy = torch.zeros(input_shape, device=dev)
+                _ = self(dummy)
+        except Exception as e:
+            logger.warning(f"SiameseNet.ensure_head_initialized fallback failed: {e}")
+        finally:
+            if prev_mode:
+                self.train()
