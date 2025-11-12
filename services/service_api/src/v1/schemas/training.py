@@ -47,6 +47,17 @@ class TrainingParams(KebabModel):
     wandb_project: Optional[str] = Field(None, description="WandB project name")
     dataset_address: Optional[str] = Field(None, description="Address of the dataset to use")
 
+    # Classification-head controls
+    use_classification_head: Optional[bool] = Field(
+        None, description="Enable auxiliary classification head for early epochs"
+    )
+    classification_epochs: Optional[int] = Field(
+        None, description="Number of epochs to blend in classification loss"
+    )
+    classification_weight_start: Optional[float] = Field(
+        None, description="Initial weight for classification loss (decays to 0)"
+    )
+
 
 class ModelParams(KebabModel):
     """Model architecture parameters."""
@@ -116,6 +127,9 @@ class TrainingRequest(KebabModel):
                     "train_ratio": 0.8,
                     "prefetch_factor": 2,
                     "n_datasets_to_use": 10,
+                    "use_classification_head": true,
+                    "classification_epochs": 20,
+                    "classification_weight_start": 1.0,
                 },
                 "model_params": {
                     "embedding_dim": 512,

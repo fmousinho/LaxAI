@@ -94,6 +94,27 @@ class TrainPipeline(Pipeline):
             verbose=verbose
         )
 
+    # Override GCS run-folder and checkpoint persistence to avoid writing
+    # status/metadata files to GCS for the training service. We rely on
+    # Weights & Biases (checkpoints/artifacts) and Firestore (status) instead.
+    #
+    # Note: We're intentionally not deleting the base implementation; these
+    # overrides act as "commented out" behavior for training only.
+
+    def _create_run_folder(self) -> None:  # type: ignore[override]
+        # Disabled for training: skip creating .pipeline_info.json in GCS
+        logger.info(f"[TrainPipeline] Skipping GCS run folder creation for {self.run_folder}")
+        return None
+
+    def _save_checkpoint(self, context: dict, completed_steps: list[str]) -> bool:  # type: ignore[override]
+        # Disabled for training: skip writing .checkpoint.json to GCS
+        # (W&B artifacts handle checkpointing)
+        return True
+
+    def _cleanup_checkpoint(self) -> bool:  # type: ignore[override]
+        # Disabled for training: nothing to clean up in GCS
+        return True
+
     def run(self, dataset_name: str | List[str], resume_from_checkpoint: bool = True, wandb_run_tags: Optional[List[str]] = None, custom_name: str = "run") -> Dict[str, Any]:
         """
         Execute the complete training pipeline for a given dataset.

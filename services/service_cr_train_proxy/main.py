@@ -102,6 +102,22 @@ class TrainingJobProxy:
         for param_group in ["training_params", "model_params", "eval_params"]:
             for key, value in payload.get(param_group, {}).items():
                 if value is not None:
+                    # Best-effort type coercion for string inputs coming from JSON
+                    # Accept "True"/"False" (case-insensitive) and numeric strings
+                    if isinstance(value, str):
+                        low = value.strip().lower()
+                        if low in {"true", "false"}:
+                            value = (low == "true")
+                        else:
+                            # Try int/float coercion without raising
+                            try:
+                                if any(ch in low for ch in [".", "e"]):
+                                    value = float(value)
+                                else:
+                                    value = int(value)
+                            except ValueError:
+                                pass
+
                     # Handle parameter name mapping for different param groups
                     if param_group == "eval_params" and key == "prefetch_factor":
                         arg_name = "eval_prefetch_factor"

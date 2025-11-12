@@ -111,6 +111,12 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument('--classification-weight-start', type=float, default=training_config.classification_weight_start,
                        help="Initial weight for classification loss", dest='classification_weight_start')
 
+    # Model selection overrides
+    parser.add_argument('--model-class-module', type=str, default=None,
+                       help="Override the model class module (e.g., siamesenet_resnet50_wCBAM)", dest='model_class_module')
+    parser.add_argument('--model-class', type=str, default=None,
+                       help="Override the model class name (default: SiameseNet)", dest='model_class')
+
     # Add workflow-specific arguments
     parser.add_argument(
         "--tenant-id",
@@ -192,7 +198,8 @@ def parse_args_to_workflow_kwargs(args: argparse.Namespace) -> dict:
         'weight_decay', 'lr_scheduler_patience', 'lr_scheduler_threshold',
         'lr_scheduler_min_lr', 'lr_scheduler_factor', 'force_pretraining',
         'early_stopping_patience', 'min_images_per_player', 'margin_decay_rate',
-        'margin_change_threshold', 'train_ratio'
+        'margin_change_threshold', 'train_ratio', 'train_prefetch_factor',
+        'use_classification_head', 'classification_epochs', 'classification_weight_start'
     ]
     for param_name in training_param_names:
         arg_value = getattr(args, param_name, None)
@@ -201,6 +208,13 @@ def parse_args_to_workflow_kwargs(args: argparse.Namespace) -> dict:
                 training_kwargs["prefetch_factor"] = arg_value
             else:
                 training_kwargs[param_name] = arg_value
+
+    # Model parameters (passed through; TrainPipeline will consume overrides)
+    if getattr(args, 'model_class_module', None):
+        model_kwargs['model_class_module'] = args.model_class_module
+    if getattr(args, 'model_class', None):
+        # TrainPipeline expects 'model_class_str'
+        model_kwargs['model_class_str'] = args.model_class
 
     # Build workflow kwargs
     workflow_kwargs = {
@@ -243,7 +257,7 @@ def validate_and_suggest_args(unknown_args: List[str]) -> None:
         '--n-datasets-to-use', '--dataset-address',
         '--tenant-id', '--verbose', '--custom-name',
         '--resume-from-checkpoint', '--wandb-tags', '--task-id',
-        '--auto-resume-count'
+        '--auto-resume-count', '--model-class-module', '--model-class'
     }
     
     for unknown_arg in unknown_args:
