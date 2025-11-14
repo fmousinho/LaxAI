@@ -13,7 +13,7 @@ import sys
 import warnings
 
 import torch
-from torch.jit import TracerWarning
+from torch.jit._trace import TracerWarning
 
 # Ensure shared_libs can be imported
 sys.path.insert(0, '/app')
