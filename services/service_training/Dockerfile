@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for service_training
 # Stage 1: Base image with Python and system dependencies
-FROM pytorch/pytorch:2.3.1-cuda12.1-cudnn8-runtime AS base
+FROM pytorch/pytorch:2.9.1-cuda12.6-cudnn9-runtime AS base
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \

@@ -8,6 +8,12 @@ from datetime import datetime, timezone
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.optim.lr_scheduler import (
+    SequentialLR,
+    LinearLR,
+    CosineAnnealingLR,
+    ReduceLROnPlateau,
+)
 from services.service_training.src.evaluator import (ModelEvaluator,
                                                      calculate_embedding_variance,
                                                      calculate_gradient_norm,
@@ -494,7 +500,7 @@ class Training:
                 "scheduler_threshold": self.scheduler_threshold,
                 "lr_scheduler_min_lr": self.lr_scheduler_min_lr,
                 "lr_scheduler_factor": self.lr_scheduler_factor,
-                "optimizer_type": "Adam",
+                "optimizer_type": "AdamW",
                 "model_architecture": type(self.model).__name__ if self.model is not None else None,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "notes": getattr(self, 'notes', None),
@@ -660,8 +666,8 @@ class Training:
             # Enable backbone fine-tuning for DINOv3 models
             if hasattr(self.model, 'enable_backbone_fine_tuning') and callable(getattr(self.model, 'enable_backbone_fine_tuning', None)):
                 try:
-                    self.model.enable_backbone_fine_tuning(unfreeze_layers=4)  # pyright: ignore[reportCallIssue]
-                    logger.info("Enabled backbone fine-tuning for DINOv3 model")
+                    self.model.enable_backbone_fine_tuning(unfreeze_layers=2)  # pyright: ignore[reportCallIssue]
+                    logger.info("Enabled backbone fine-tuning ")
                 except Exception as e:
                     logger.warning(f"Could not enable backbone fine-tuning: {e}")
             else:
@@ -677,24 +683,95 @@ class Training:
                 self.classification_loss_fn = nn.CrossEntropyLoss()
                 logger.info("Classification head detected - will use combined loss for early epochs")
             
+            def _collect_params(module):
+                params: List[torch.nn.Parameter] = []
+                if module is None:
+                    return params
+                for param in module.parameters():
+                    if id(param) not in included_param_ids:
+                        included_param_ids.add(id(param))
+                        params.append(param)
+                return params
+
+            def _resolve_component(*attr_paths):
+                if self.model is None:
+                    return None
+                for path in attr_paths:
+                    module = self.model
+                    for attr in path:
+                        module = getattr(module, attr, None)
+                        if module is None:
+                            break
+                    else:
+                        return module
+                return None
+
+            included_param_ids: set[int] = set()
+            param_groups: List[Dict[str, Any]] = []
+            component_specs = [
+                ("layer3", 2e-5, (("layer3",), ("backbone", "layer3"))),
+                ("layer4", 5e-5, (("layer4",), ("backbone", "layer4"))),
+                ("cbam", 1e-4, (("cbam",), ("backbone", "cbam"))),
+                ("head", 2e-4, (("head",), ("backbone", "head"), ("backbone", "_head"))),
+            ]
+
+            added_components: List[str] = []
+            for name, lr, paths in component_specs:
+                module = _resolve_component(*paths)
+                params = _collect_params(module)
+                if params:
+                    param_groups.append({"params": params, "lr": lr})
+                    added_components.append(name)
+
+            if getattr(self.model, "classification_head", None) is not None:
+                params = _collect_params(self.model.classification_head)
+                if params:
+                    param_groups.append({"params": params, "lr": max(self.learning_rate, 1e-3)})
+                    added_components.append("classification_head")
+
+            remaining_params = [
+                param
+                for param in self.model.parameters()
+                if id(param) not in included_param_ids
+            ]
+            if remaining_params:
+                param_groups.append({"params": remaining_params, "lr": self.learning_rate})
+                added_components.append("remaining_params")
+
+            if not param_groups:
+                raise RuntimeError("Failed to collect any parameter groups for optimizer setup")
+
             # Use AdamW optimizer which is better for fine-tuning transformers
             self.optimizer = torch.optim.AdamW(
-                self.model.parameters(), 
-                lr=self.learning_rate, 
+                param_groups,
                 weight_decay=self.weight_decay,
                 betas=(0.9, 0.999),  # Default AdamW betas
                 eps=1e-8  # Slightly higher epsilon for stability
             )
+            logger.info(f"Optimizer parameter groups: {', '.join(added_components)}")
             log_gpu_memory_stats("After creating optimizer")
             # Scheduler uses its own patience/threshold for LR adjustment only
         
-            self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            # self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            #     self.optimizer,
+            #     mode='min',
+            #     factor=self.lr_scheduler_factor,
+            #     patience=self.scheduler_patience,
+            #     threshold=self.scheduler_threshold,
+            #     min_lr=self.lr_scheduler_min_lr
+            # )
+
+
+            warmup_epochs = 5
+            total_epochs = self.num_epochs
+
+            self.lr_scheduler = SequentialLR(
                 self.optimizer,
-                mode='min',
-                factor=self.lr_scheduler_factor,
-                patience=self.scheduler_patience,
-                threshold=self.scheduler_threshold,
-                min_lr=self.lr_scheduler_min_lr
+                schedulers=[
+                    LinearLR(self.optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs),
+                    CosineAnnealingLR(self.optimizer, T_max=total_epochs - warmup_epochs, eta_min=1e-7)
+                ],
+                milestones=[warmup_epochs]
             )
 
             # Ensure optimizer state tensors are on the same device as model
@@ -1033,7 +1110,10 @@ class Training:
 
                 # Step the learning rate scheduler (now using the monitoring_loss)
                 if hasattr(self, 'lr_scheduler') and self.lr_scheduler is not None:
-                    self.lr_scheduler.step(monitoring_loss)
+                    if isinstance(self.lr_scheduler, ReduceLROnPlateau):
+                        self.lr_scheduler.step(monitoring_loss)
+                    else:
+                        self.lr_scheduler.step()
                     current_lr = self.optimizer.param_groups[0]['lr']
                     logger.info(f"Learning rate after scheduler step: {current_lr:.6f}")
 

@@ -502,19 +502,26 @@ def create_training_transforms():
     transforms_list.extend(
         [
             transforms.Resize((model_config.input_height, model_config.input_width)),
+            transforms.RandomResizedCrop(
+                size=(model_config.input_height, model_config.input_width),
+                scale=(0.0, .2),
+            ),
             # transforms.RandomHorizontalFlip(p=transform_config.hflip_prob),
-            # transforms.ColorJitter(
-            #     brightness=transform_config.colorjitter_brightness,
-            #     contrast=transform_config.colorjitter_contrast,
-            #     saturation=transform_config.colorjitter_saturation,
-            #     hue=transform_config.colorjitter_hue,
-            # ),
+            transforms.ColorJitter(
+                brightness=transform_config.colorjitter_brightness,
+                contrast=transform_config.colorjitter_contrast,
+                saturation=transform_config.colorjitter_saturation,
+                hue=transform_config.colorjitter_hue,
+            ),
             # transforms.RandomRotation(transform_config.random_rotation_degrees),
             # transforms.RandomAffine(
             #     degrees=transform_config.random_affine_degrees,
             #     translate=transform_config.random_affine_translate,
             # ),
             transforms.ToTensor(),
+            transforms.RandomErasing(
+                p=.5, scale=(0.02, 0.1), ratio=(0.3, 3.3), value='random'
+            ),
             transforms.Normalize(mean=model_config.imagenet_mean, std=model_config.imagenet_std),
         ]
     )

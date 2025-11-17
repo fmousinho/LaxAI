@@ -45,7 +45,7 @@ class ModelConfig:
     input_height: int = 224  # Increased to match DINOv3 expected input
     input_width: int = 224  # Increased to match DINOv3 expected input
     embedding_dim: int = 512  
-    dropout_rate: float = 0.1  # Reduced dropout for fine-tuning
+    dropout_rate: float = 0.05  # Reduced dropout for fine-tuning
     resnet_conv_kernel_size: int = 3
     resnet_conv_stride: int = 1
     resnet_conv_padding: int = 1

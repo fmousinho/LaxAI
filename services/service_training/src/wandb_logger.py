@@ -1484,7 +1484,7 @@ def _upload_checkpoint_in_subprocess(
         if run is None:
             raise ConnectionError(f"Failed to create temporary wandb run for checkpoint upload.")
 
-        logger.info(f"Successfully created temporary run {run.name} (ID: {run.id}) for artifact upload.")
+        logger.debug(f"Successfully created temporary run {run.name} (ID: {run.id}) for artifact upload.")
 
         # Create and log the artifact to the temporary run
         artifact = wandb.Artifact(
