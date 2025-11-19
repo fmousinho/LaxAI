@@ -1470,7 +1470,7 @@ def _upload_checkpoint_in_subprocess(
         # Create a temporary run for artifact upload to avoid conflicts
         # We can't resume the main run from subprocess as it's already active
         temp_run_name = f"temp_checkpoint_upload_{uuid.uuid4().hex[:8]}"
-        logger.info(f"Creating temporary wandb run for artifact upload: {temp_run_name}")
+        logger.debug(f"Creating temporary wandb run for artifact upload: {temp_run_name}")
         
         run = wandb.init(
             project=project,

@@ -77,7 +77,7 @@ class CPUMemoryMonitor:
                 f" | Increase: +{stats['increase_mb']:.1f}MB ({stats['increase_percent']:.1f}%)"
             )
 
-        logger.info(log_msg)
+        logger.debug(log_msg)
 
 
 def clear_cpu_memory(force: bool = False):
@@ -206,4 +206,4 @@ def log_comprehensive_memory_stats(context: str = ""):
         f"  GC: {stats['gc']['gc_objects']} objects, {stats['gc']['gc_garbage_count']} garbage"
     )
 
-    logger.info(log_msg)
+    logger.debug(log_msg)

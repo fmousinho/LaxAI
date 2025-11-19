@@ -207,7 +207,7 @@ def is_running_in_colab():
         if get_ipython is None:
             return False
         in_colab = "google.colab" in str(get_ipython())
-        logger.info(f"Running in Google Colab: {in_colab}")
+        logger.debug(f"Running in Google Colab: {in_colab}")
         return in_colab
     except Exception:
         return False
@@ -229,7 +229,7 @@ def is_running_in_gcp():
 
         # Check if the response is successful
         if response.status_code == 200:
-            logger.info("Metadata server check passed: Running in GCP.")
+            logger.debug("Metadata server check passed: Running in GCP.")
             return True
         else:
             logger.info(f"Metadata server returned status code: {response.status_code}")
@@ -260,7 +260,7 @@ def verify_gcp_credentials():
             )
         logger.info(f"Using explicit service account file: {credentials_path}")
     else:
-        logger.info("No GOOGLE_APPLICATION_CREDENTIALS set; relying on default authentication.")
+        logger.debug("No GOOGLE_APPLICATION_CREDENTIALS set; relying on default authentication.")
 
     # Check for GOOGLE_CLOUD_PROJECT, which is a required configuration for most apps.
     project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -268,7 +268,7 @@ def verify_gcp_credentials():
         # Fallback check for GCLOUD_PROJECT, a common older variable name
         project_id = os.environ.get("GCLOUD_PROJECT")
         if project_id:
-            logger.info("Using GCLOUD_PROJECT as fallback for project ID.")
+            logger.debug("Using GCLOUD_PROJECT as fallback for project ID.")
             os.environ["GOOGLE_CLOUD_PROJECT"] = project_id  # set for consistency
         else:
             # Don't raise during import/runtime init. Failures to use GCP APIs will

@@ -100,7 +100,7 @@ class CBAM(nn.Module):
 
 
 class ResNet50BackboneCBAM(nn.Module):
-    """ResNet50 backbone with a CBAM block after layer4."""
+    """ResNet50 backbone with a CBAM block after layer2."""
 
     def __init__(self, embedding_dim: int, dropout: float, pretrained: bool = False):
         super().__init__()
@@ -120,7 +120,14 @@ class ResNet50BackboneCBAM(nn.Module):
         self.avgpool = model.avgpool
 
         feat_dim = model.fc.in_features  # 2048 for resnet50
-        self.cbam = CBAM(channels=feat_dim)
+        cbam_channels = getattr(self.layer2[-1], "conv3", None)
+        if cbam_channels is not None:
+            cbam_channels = cbam_channels.out_channels
+        else:
+            # Fallback to known ResNet50 channel width after layer2
+            cbam_channels = 512
+
+        self.cbam = CBAM(channels=cbam_channels)
 
         head = []
         if dropout and dropout > 0.0:
@@ -132,6 +139,7 @@ class ResNet50BackboneCBAM(nn.Module):
         x = self.stem(x)
         x = self.layer1(x)
         x = self.layer2(x)
+        x = self.cbam(x)
         x = self.layer3(x)
         x = self.layer4(x)
         # Global pool input has feat_dim channels
@@ -144,10 +152,10 @@ class ResNet50BackboneCBAM(nn.Module):
         x = self.stem(x)
         x = self.layer1(x)
         x = self.layer2(x)
+        # Apply CBAM after layer2 to modulate mid-level features
+        x = self.cbam(x)
         x = self.layer3(x)
         x = self.layer4(x)
-        # Apply CBAM at the last conv stage
-        x = self.cbam(x)
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
         emb = self.head(x)

@@ -1,6 +1,5 @@
+import gc
 import logging
-logger = logging.getLogger(__name__)
-
 import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
@@ -32,11 +31,7 @@ from shared_libs.utils.dataloader_memory import worker_init_fn
 from shared_libs.utils.gpu_memory import (GPUMemoryContext, clear_gpu_memory,
                                           log_gpu_memory_stats)
 
-from schemas.training import TrainingParams
-from resnet50_custom import ReIdModel
-from loss_fn import loss_fn
-from metrics import Metrics
-
+logger = logging.getLogger(__name__)
 
 # Constants
 BATCHES_PER_LOG_MSG = 10
@@ -46,49 +41,382 @@ EPOCHS_PER_CHECKPOINT = 10
 THRESHOLD_FOR_DATALOADER_RESTART = 90.0  # Memory usage percentage threshold
 
 
+@dataclass
+class TrainingMetrics:
+    """Aggregates per-batch diagnostics for a single training epoch."""
+    
+    loss: float = 0.0
+    embedding_variance: float = 0.0
+    intra_distance: float = 0.0
+    inter_distance: float = 0.0
+    margin_satisfaction: float = 0.0
+    hard_triplets: float = 0.0
+    easy_triplets: float = 0.0
+    mining_efficiency: float = 0.0
+    grad_norm: float = 0.0
+    
+    def accumulate(self, loss: float, embedding_variance: float, 
+                   distance_metrics: Dict[str, float], mining_metrics: Dict[str, float],
+                   grad_norm: float) -> None:
+        """Accumulate metrics from a single batch."""
+        self.loss += loss
+        self.embedding_variance += embedding_variance
+        self.intra_distance += distance_metrics['intra_class_distance']
+        self.inter_distance += distance_metrics['inter_class_distance']
+        self.margin_satisfaction += distance_metrics['triplet_margin_satisfaction']
+        self.hard_triplets += mining_metrics['hard_triplets_ratio']
+        self.easy_triplets += mining_metrics['easy_triplets_ratio']
+        self.mining_efficiency += mining_metrics['mining_efficiency']
+        self.grad_norm += grad_norm
+    
+    def compute_averages(self, num_batches: int) -> 'TrainingMetrics':
+        """Compute average metrics over all batches."""
+        if num_batches == 0:
+            return TrainingMetrics()
+        
+        return TrainingMetrics(
+            loss=self.loss / num_batches,
+            embedding_variance=self.embedding_variance / num_batches,
+            intra_distance=self.intra_distance / num_batches,
+            inter_distance=self.inter_distance / num_batches,
+            margin_satisfaction=self.margin_satisfaction / num_batches,
+            hard_triplets=self.hard_triplets / num_batches,
+            easy_triplets=self.easy_triplets / num_batches,
+            mining_efficiency=self.mining_efficiency / num_batches,
+            grad_norm=self.grad_norm / num_batches
+        )
+    
+    def to_dict(self) -> Dict[str, float]:
+        """Convert metrics to dictionary for logging."""
+        return {
+            'train_loss': self.loss,
+            'embedding_variance': self.embedding_variance,
+            'intra_class_distance': self.intra_distance,
+            'inter_class_distance': self.inter_distance,
+            'margin_satisfaction': self.margin_satisfaction,
+            'hard_triplets_ratio': self.hard_triplets,
+            'easy_triplets_ratio': self.easy_triplets,
+            'mining_efficiency': self.mining_efficiency,
+            'gradient_norm': self.grad_norm
+        }
+    
+    def log_summary(self, epoch: int, margin: float) -> None:
+        """Log a concise snapshot of key metrics for the epoch."""
+        logger.info(f"Epoch {epoch}: loss={self.loss:.4f} | margin={margin:.4f}")
+        metric_map = {
+            "emb_var": self.embedding_variance,
+            "intra": self.intra_distance,
+            "inter": self.inter_distance,
+            "margin_hit": self.margin_satisfaction,
+            "hard_triplets": self.hard_triplets,
+            "easy_triplets": self.easy_triplets,
+            "mining_eff": self.mining_efficiency,
+            "grad_norm": self.grad_norm,
+        }
+        metrics_str = " | ".join(f"{k}={v:.4f}" for k, v in metric_map.items())
+        logger.info(f"Epoch {epoch} metrics: {metrics_str}")
+
+
+class MemoryManager:
+    """Coordinates GPU/CPU memory hygiene while the trainer runs."""
+    
+    def __init__(self, device: torch.device, gpu_cache_threshold: float = 0.85, 
+                 conservative_mode: bool = True):
+        """
+        Initialize memory manager.
+        
+        Args:
+            device: The device being used for training
+            gpu_cache_threshold: GPU utilization threshold for cache clearing (default: 85%)
+            conservative_mode: If True, only clear GPU cache when necessary
+        """
+        self.device = device
+        self.gpu_cache_threshold = gpu_cache_threshold
+        self.conservative_mode = conservative_mode
+        self.baseline_memory: Optional[float] = None
+        
+    def establish_baseline(self) -> None:
+        """Establish memory baseline for leak detection."""
+        try:
+            import psutil
+            process = psutil.Process()
+            self.baseline_memory = process.memory_info().rss / 1024 / 1024  # MB
+            logger.debug(f"Memory baseline established: {self.baseline_memory:.1f}MB")
+        except Exception as e:
+            logger.debug(f"Could not establish memory baseline: {e}")
+    
+    def smart_gpu_cache_clear(self, force: bool = False, context: str = "") -> None:
+        """
+        Intelligently clear GPU cache only when necessary.
+        
+        Args:
+            force: If True, force cache clear regardless of memory usage
+            context: Context string for logging
+        """
+        if not torch.cuda.is_available():
+            return
+            
+        try:
+            if force:
+                torch.cuda.empty_cache()
+                if context:
+                    logger.debug(f"GPU cache force-cleared ({context})")
+                return
+                
+            # Check if cache clearing is needed based on memory utilization
+            if hasattr(torch.cuda, 'memory_reserved') and torch.cuda.memory_reserved() > 0:
+                memory_allocated = torch.cuda.memory_allocated()
+                memory_reserved = torch.cuda.memory_reserved()
+                gpu_utilization = memory_allocated / memory_reserved
+                
+                if gpu_utilization > self.gpu_cache_threshold:
+                    torch.cuda.empty_cache()
+                    logger.debug(f"GPU cache cleared ({context}) - utilization: {gpu_utilization:.1%} > {self.gpu_cache_threshold:.1%}")
+                else:
+                    logger.debug(f"GPU cache clear skipped ({context}) - utilization: {gpu_utilization:.1%} <= {self.gpu_cache_threshold:.1%}")
+            else:
+                logger.debug(f"GPU cache clear skipped ({context}) - no memory allocated")
+                
+        except Exception as e:
+            if self.conservative_mode:
+                logger.debug(f"GPU cache clear skipped ({context}) - conservative mode, error: {e}")
+            else:
+                torch.cuda.empty_cache()
+                logger.debug(f"GPU cache cleared ({context}) - fallback due to error: {e}")
+    
+    def aggressive_cleanup(self, context: str = "") -> None:
+        """
+        Perform aggressive memory cleanup to prevent accumulation.
+        
+        Args:
+            context: Context string for logging
+        """
+        try:
+            import psutil
+            process = psutil.Process()
+            memory_before = process.memory_info().rss / 1024 / 1024  # MB
+            
+            # Force garbage collection multiple times
+            for _ in range(3):
+                gc.collect()
+            
+            # Force GPU cache clear for aggressive cleanup
+            if torch.cuda.is_available():
+                self.smart_gpu_cache_clear(force=True, context=f"aggressive_{context}")
+                
+            # Clear CPU memory
+            clear_cpu_memory(force=True)
+            
+            # Additional PyTorch internal cleanup
+            if hasattr(torch, '_C') and hasattr(torch._C, '_cuda_clearCaches'):
+                try:
+                    torch._C._cuda_clearCaches()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+            
+            # Log memory change
+            memory_after = process.memory_info().rss / 1024 / 1024  # MB
+            memory_delta = memory_after - memory_before
+            
+            if abs(memory_delta) > 10:
+                logger.info(f"Aggressive cleanup {context}: {memory_before:.1f}MB → {memory_after:.1f}MB (Δ{memory_delta:+.1f}MB)")
+            else:
+                logger.debug(f"Aggressive cleanup {context}: {memory_before:.1f}MB → {memory_after:.1f}MB (Δ{memory_delta:+.1f}MB)")
+                
+        except Exception as e:
+            logger.debug(f"Aggressive cleanup failed {context}: {e}")
+    
+    def periodic_cleanup(self, epoch: int, cleanup_interval: int = 2) -> None:
+        """
+        Perform periodic cleanup to prevent memory accumulation.
+        
+        Args:
+            epoch: Current epoch number (0-indexed)
+            cleanup_interval: How often to run cleanup (every N epochs)
+        """
+        if (epoch + 1) % cleanup_interval == 0:
+            try:
+                self.aggressive_cleanup(f"epoch_{epoch + 1}")
+            except Exception as e:
+                logger.debug(f"Periodic cleanup warning: {e}")
+    
+    def check_for_leaks(self, epoch: int) -> None:
+        """
+        Check for memory leaks by comparing current usage to baseline.
+        
+        Args:
+            epoch: Current epoch number (0-indexed)
+        """
+        if self.baseline_memory is None:
+            return
+            
+        try:
+            import psutil
+            process = psutil.Process()
+            current_memory = process.memory_info().rss / 1024 / 1024  # MB
+            
+            memory_increase = current_memory - self.baseline_memory
+            epochs_since_baseline = max(1, epoch + 1)
+            memory_increase_per_epoch = memory_increase / epochs_since_baseline
+            
+            logger.debug(f"Memory trend: Baseline={self.baseline_memory:.1f}MB, "
+                       f"Current={current_memory:.1f}MB, "
+                       f"Increase={memory_increase:.1f}MB ({memory_increase_per_epoch:.1f}MB/epoch)")
+            
+        except Exception as e:
+            logger.debug(f"Memory leak detection warning: {e}")
+    
+    def cleanup_on_error(self, error_type: str = "unknown") -> None:
+        """
+        Clean up memory after an error occurs.
+        
+        Args:
+            error_type: Type of error that occurred
+        """
+        logger.debug(f"Cleaning up memory after {error_type} error...")
+        
+        # Force aggressive cleanup
+        clear_gpu_memory(force=True) if torch.cuda.is_available() else None
+        clear_cpu_memory(force=True)
+        
+        if torch.cuda.is_available():
+            log_gpu_memory_stats(f"After {error_type} cleanup")
+    
+    def log_status(self, context: str = "") -> None:
+        """Log current memory status."""
+        if torch.cuda.is_available() and self.device.type == 'cuda':
+            log_gpu_memory_stats(context)
+        
+        try:
+            import psutil
+            process = psutil.Process()
+            current_memory = process.memory_info().rss / 1024 / 1024  # MB
+            logger.debug(f"CPU memory {context}: {current_memory:.1f}MB")
+        except Exception:
+            pass
+
 
 class Training:
     """Triplet-loss trainer with staged LR scheduling and aggressive memory hygiene."""
     
+    # Type annotations for dynamically assigned attributes
+    num_epochs: int
+    batch_size: int
+    num_workers: int
+    learning_rate: float
+    margin: float
+    weight_decay: float
+    lr_scheduler_patience: int
+    lr_scheduler_threshold: float
+    lr_scheduler_min_lr: float
+    lr_scheduler_factor: float
+    force_pretraining: bool
+    prefetch_factor: int
+    margin_decay_rate: float
+    margin_change_threshold: float
+    early_stopping_patience: Optional[int]
+    
+    # Legacy attribute names for backward compatibility
+    scheduler_patience: int
+    scheduler_threshold: float
+    
     def __init__(self, 
-                device: Optional[torch.device] = None,
-                params: TrainingParams = TrainingParams()
-                ):
+                device: Any = None,
+                enable_multithreading: bool = True,
+                num_workers: Optional[int] = None,
+                clear_memory_on_start: bool = True,
+                **kwargs):
         """
         Initialize the training class with hyperparameters and runtime knobs.
         
         Args:
-            device: Torch device to run the model on (CPU, GPU, or MPS)
-            training_parameters: TrainingParams object containing all training hyperparameters
+            device: Device to run the model on (CPU, GPU, or MPS)
+            enable_multithreading: Whether to enable multithreading for data loading
+            num_workers: Number of DataLoader workers (auto-detected if None)
+            clear_memory_on_start: Whether to clear GPU memory on initialization
+            **kwargs: Training parameters (num_epochs, batch_size, learning_rate, etc.)
         
         All hyperparameters default to values from training_config/wandb_config 
         but can be overridden via kwargs.
         """
-
         # Clear GPU memory at start to recover from previous crashes
-        clear_gpu_memory()
-        logger.info("Cleared GPU memory on Training initialization")
+        if clear_memory_on_start:
+            clear_gpu_memory()
 
-        self.params = params
+        # Configure threading settings
+        self.enable_multithreading = enable_multithreading
+        
+        # Allow API override of num_workers via kwargs
+        api_num_workers = kwargs.get('num_workers')
+        if api_num_workers is not None:
+            self.num_workers = api_num_workers
+            logger.info(f"Using num_workers from API: {self.num_workers}")
+        elif enable_multithreading:
+            # Use default PyTorch multiprocessing with safe number of workers
+            import multiprocessing as mp
+            self.num_workers = num_workers if num_workers is not None else min(mp.cpu_count(), 8)
+        else:
+            self.num_workers = 0
+        
+        logger.info(f"Training configured with multithreading={'enabled' if enable_multithreading else 'disabled'}, workers={self.num_workers}")
 
+        # Store kwargs for later use (e.g., passing eval_kwargs to evaluation)
+        self.kwargs = kwargs
+
+        # Initialize training parameters - direct fallback from kwargs to config
+        self.num_epochs = kwargs.get('num_epochs', training_config.num_epochs)
+        self.batch_size = kwargs.get('batch_size', training_config.batch_size)
+        self.learning_rate = kwargs.get('learning_rate', training_config.learning_rate)
+        self.margin = kwargs.get('margin', training_config.margin)
+        self.weight_decay = kwargs.get('weight_decay', training_config.weight_decay)
+        self.lr_scheduler_patience = kwargs.get('lr_scheduler_patience', training_config.lr_scheduler_patience)
+        self.lr_scheduler_threshold = kwargs.get('lr_scheduler_threshold', training_config.lr_scheduler_threshold)
+        self.lr_scheduler_min_lr = kwargs.get('lr_scheduler_min_lr', training_config.lr_scheduler_min_lr)
+        self.lr_scheduler_factor = kwargs.get('lr_scheduler_factor', training_config.lr_scheduler_factor)
+        self.force_pretraining = kwargs.get('force_pretraining', training_config.force_pretraining)
+        self.early_stopping_patience = kwargs.get('early_stopping_patience', training_config.early_stopping_patience)
+        self.min_images_per_player = kwargs.get('min_images_per_player', training_config.min_images_per_player)
+        self.train_prefetch_factor = kwargs.get('train_prefetch_factor', training_config.prefetch_factor)
+        self.margin_decay_rate = kwargs.get('margin_decay_rate', training_config.margin_decay_rate)
+        self.margin_change_threshold = kwargs.get('margin_change_threshold', training_config.margin_change_threshold)
+        self.train_ratio = kwargs.get('train_ratio', training_config.train_ratio)
+        self.n_datasets_to_use = kwargs.get('n_datasets_to_use', training_config.n_datasets_to_use)
+        self.dataset_address = kwargs.get('dataset_address', training_config.dataset_address)
+        self.wandb_project = kwargs.get('wandb_project', wandb_config.project)
+        
+        # Backward compatibility aliases
+        self.scheduler_patience = self.lr_scheduler_patience
+        self.scheduler_threshold = self.lr_scheduler_threshold
+
+        # Device: direct argument, else config, else autodetect
         if device is not None:
             self.device = device
+        elif getattr(training_config, 'device', None) is not None:
+            self.device = getattr(training_config, 'device')
         else:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
+
+        # Log initial device and memory state
         logger.info(f"Training device: {self.device}")
         if torch.cuda.is_available() and self.device.type == 'cuda':
             log_gpu_memory_stats("Device initialization")
 
-        self.model = ReIdModel(embedding_dim=model_config.embedding_dim)
-        self.model.to(self.device)
+        self.model: nn.Module
+        self.optimizer: Optional[torch.optim.Optimizer] = None
+        self.loss_fn: Optional[nn.Module] = None
+        self.dataloader = None
+        self.val_dataloader = None
+        self.cpu_monitor = CPUMemoryMonitor()
+        
+        # Initialize unified memory manager
+        gpu_cache_threshold = kwargs.get('gpu_cache_threshold', 0.85)
+        conservative_mode = kwargs.get('conservative_gpu_cache', True)
+        self.memory_manager = MemoryManager(
+            device=self.device,
+            gpu_cache_threshold=gpu_cache_threshold,
+            conservative_mode=conservative_mode
+        )
 
-        self.loss_fn = loss_fn
-        self.train_dataloader = DataLoader
-        self.metrics = Metrics()
-
-        self.current_epoch = 1
-    
-   
 
     def _load_model_from_wandb(self, model_class, model_name: str, alias: Optional[str], **kwargs):
         """
@@ -218,7 +546,7 @@ class Training:
         """
         # Configure DataLoader settings for optimal speed
 
-        prefetch_factor = self.params.
+        prefetch_factor = self.kwargs.get('prefetch_factor', training_config.prefetch_factor) if self.num_workers > 0 else None
 
         dataloader_kwargs = {
             'num_workers': self.num_workers,
@@ -455,24 +783,31 @@ class Training:
             raise RuntimeError(f"Failed to setup model: {e}")
 
 
-    def train(self):
+    def train(self, 
+          margin_decay_rate: float = training_config.margin_decay_rate, 
+          margin_change_threshold: float = training_config.margin_change_threshold,
+          start_epoch: int = 1,
+          stop_callback: Optional[Callable[[], bool]] = None):
         """
-        Main training loop for triplet-loss model.
+        Run the staged warmup→cosine training loop with optional validation + early stop.
         
         Args:
-            None
+            margin_decay_rate: Rate at which to decay the triplet loss margin.
+            margin_change_threshold: Minimum change in margin to trigger an update.
+            start_epoch: Epoch number to start training from (for checkpoint resumption).
+            stop_callback: Optional callback function that returns True if training should stop.
             
         Returns:
             The trained model
             
         Raises:
             RuntimeError: If required components are not setup
-          
+            InterruptedError: If training is cancelled via stop_callback
         """
         # ========================================================================
         # Sanity checks
         # ========================================================================
-        if self.model is None or self.train_dataloader is None:
+        if self.model is None or self.dataloader is None:
             raise RuntimeError("Model and dataloader must be setup before training")
         
         if self.optimizer is None or self.loss_fn is None:
@@ -481,99 +816,193 @@ class Training:
         # ========================================================================
         # Training setup and logging
         # ========================================================================
- 
-        ttl_batches = len(self.train_dataloader)
-
-        starting_epoch = self.current_epoch
+        effective_epochs = self.num_epochs - (start_epoch - 1)
+        logger.info(f"Starting training for {effective_epochs} epochs (from epoch {start_epoch} to {self.num_epochs})")
         
-        try: 
-            for epoch in range(starting_epoch, self.num_epochs + 1):
-                logger.info(f"=== Epoch {epoch}/{self.num_epochs} ===")
+        # Log memory state at training start
+        if torch.cuda.is_available() and self.device.type == 'cuda':
+            log_gpu_memory_stats("Training start")
+        
+        # Early stopping configuration
+        early_stopping_patience = getattr(training_config, 'early_stopping_patience', None)
+        best_monitoring_loss = float('inf')
+        patience_counter = 0
+
+        # Margin decay setup
+        current_margin = self.margin
+        self.loss_fn = nn.TripletMarginLoss(margin=current_margin, p=2)
+        val_dataloader = self.val_dataloader
+        
+        try:
+            log_gpu_memory_stats("Training start")
+            self.cpu_monitor.log_memory_stats("Training start")
+            
+            for epoch in range(start_epoch - 1, self.num_epochs):
+                # Check for cancellation before starting epoch
+                if stop_callback and stop_callback():
+                    logger.info(f"Training cancelled by stop_callback at epoch {epoch + 1}")
+                    raise InterruptedError("Training cancelled by external request")
+
+                # Periodic memory cleanup to prevent accumulation
+                self.memory_manager.periodic_cleanup(epoch, cleanup_interval=2)
                 
-                if not self.model.training:
-                    self.model.train() 
+                self.memory_manager.log_status(f"Epoch {epoch + 1} start")
+                self.cpu_monitor.log_memory_stats(f"Epoch {epoch + 1} start")
 
-                self.margin = self.update_margin (epoch, self.margin)
+                # ========================================================================
+                # Training Phase
+                # ========================================================================
+                # Model and optimizer should already be placed on the correct device
+                # during setup_model (or after checkpoint resumption). Repeatedly
+                # calling .to(device) each epoch can unintentionally create new
+                # parameter tensors and leave old tensors referenced by the
+                # optimizer state, causing cumulative memory growth. Avoid moving
+                # them here.
+                self.model.train()
+                ttl_batches = len(self.dataloader)
 
-                for i, (anchor, positive, negative, labels) in enumerate(self.train_dataloader):
+                # Initialize metrics tracker for this epoch
+                epoch_metrics = TrainingMetrics()
 
+                # Update margin if decay rate is active (use actual epoch number)
+                new_margin = self.margin * (margin_decay_rate ** epoch)
+                if abs(new_margin - current_margin) > margin_change_threshold:
+                    current_margin = new_margin
+                    self.loss_fn = nn.TripletMarginLoss(margin=current_margin, p=2)
+                    logger.info(f"Margin updated for epoch {epoch+1}: {current_margin:.4f}")
+                else:
+                    logger.debug(f"Margin unchanged for epoch {epoch+1}: {current_margin:.4f}")
+                    
+                # Add warmup phase for first few epochs
+                if epoch < 5:  # Warmup for first 5 epochs
+                    warmup_factor = min(1.0, (epoch + 1) / 5.0)
+                    for param_group in self.optimizer.param_groups:
+                        param_group['lr'] = self.learning_rate * warmup_factor
+                    logger.debug(f"Warmup LR for epoch {epoch+1}: {self.learning_rate * warmup_factor:.2e}")
+                    
+                for i, (anchor, positive, negative, labels) in enumerate(self.dataloader):
+
+                    # Log progress
                     if (i + 1) % BATCHES_PER_LOG_MSG == 0:
                         logger.info(f"Training Batch {i+1}/{ttl_batches}")
 
-                    self.optimizer.zero_grad()
+                    # ------------------------------------------------------------------
+                    # Mid-epoch cancellation check
+                    # The web/API cancellation sets a stop flag on the Pipeline which
+                    # propagates here via stop_callback. Previously we only checked at
+                    # epoch boundaries, causing long waits for large epochs. We now
+                    # check every batch (fast) but still keep operations lightweight.
+                    # ------------------------------------------------------------------
+                    if stop_callback and stop_callback():
+                        logger.info(
+                            f"Training cancelled by stop_callback mid-epoch at epoch {epoch + 1}, batch {i + 1}"
+                        )
+                        # Raise InterruptedError to trigger upstream cleanup logic
+                        raise InterruptedError("Training cancelled by external request (mid-epoch)")
+                    
 
+                    # Move tensors to device with non_blocking for async transfer
                     anchor = anchor.to(self.device, non_blocking=True)
                     positive = positive.to(self.device, non_blocking=True)
                     negative = negative.to(self.device, non_blocking=True)
+                    labels = labels.to(self.device, non_blocking=True)
 
-                    anchor_embs = self.model.forward(anchor) 
-                    positive_embs = self.model.forward(positive)  
-                    negative_embs = self.model.forward(negative) 
+                    # Device safety check on first batch of first epoch
+                    if epoch == start_epoch - 1 and i == 0:
+                        cpu_params = [name for name, p in self.model.named_parameters() if p.device.type == 'cpu']
+                        if cpu_params:
+                            error_msg = f"Model has {len(cpu_params)} parameters still on CPU before forward pass: {cpu_params[:5]}"
+                            logger.error(error_msg)
+                            raise RuntimeError(error_msg)
 
-                    batch_loss = self.loss_fn(anchor_embs, positive_embs, negative_embs, self.margin)
-                    batch_loss.backward()
-
-                    self.metrics.update_with_batch_data(epoch, anchor_embs, positive_embs, negative_embs, batch_loss, self.margin)
+                    # Clear gradients
+                    self.optimizer.zero_grad()
                     
+                    # Determine if we should use classification loss
+                    # Use combined loss for first N epochs to jump-start embeddings
+                    use_classification = (self.classification_loss_fn is not None and 
+                                        epoch < training_config.classification_epochs)
+                    
+                    # Forward pass
+                    if use_classification:
+                        # Get embeddings and logits for classification
+                        (emb_anchor, logits_a), (emb_positive, logits_p), (emb_negative, logits_n) = \
+                            self.model.forward_triplet(anchor, positive, negative, return_logits=True)  # pyright: ignore[reportCallIssue]
+                        
+                        # Compute triplet loss
+                        triplet_loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
+                        
+                        # Compute classification loss
+                        # Concatenate logits and labels for batch processing
+                        all_logits = torch.cat([logits_a, logits_p, logits_n], dim=0)
+                        all_labels = labels.repeat(3)  # Repeat labels for anchor, positive, negative
+                        classification_loss = self.classification_loss_fn(all_logits, all_labels)
+                        
+                        # Combined loss with decreasing weight for classification
+                        # Start with configured weight, linearly decrease to 0 over N epochs
+                        progress = epoch / training_config.classification_epochs
+                        class_weight = max(0.0, training_config.classification_weight_start * (1.0 - progress))
+                        loss = triplet_loss + (class_weight * classification_loss)
+                        
+                        # Log the component losses periodically
+                        if (i + 1) % BATCHES_PER_LOG_MSG == 0:
+                            logger.debug(f"Epoch {epoch+1} Batch {i+1}: triplet_loss={triplet_loss.item():.4f}, "
+                                       f"class_loss={classification_loss.item():.4f}, class_weight={class_weight:.2f}")
+                    else:
+                        # Standard triplet-only training
+                        emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative)  # pyright: ignore[reportCallIssue]
+                        loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
+
+                    # Calculate training progress metrics
+                    # These metrics help diagnose why loss might be staying near margin
+                    concatenated_embeddings = torch.cat([emb_anchor, emb_positive, emb_negative], dim=0)
+                    embedding_variance = calculate_embedding_variance(concatenated_embeddings)
+                    distance_metrics = calculate_intra_inter_distances(emb_anchor, emb_positive, emb_negative)
+                    mining_metrics = calculate_triplet_mining_efficiency(emb_anchor, emb_positive, emb_negative, current_margin)
+
+                    # Backward and optimizer step
+                    loss.backward()
+                    grad_norm = calculate_gradient_norm(self.model)
+                    # Gradient clipping for stability
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                     self.optimizer.step()
 
-                self.metrics.finalize_epoch_metrics(epoch)
+                    # Extract scalar immediately and accumulate metrics
+                    loss_value = loss.item()
+                    epoch_metrics.accumulate(
+                        loss=loss_value,
+                        embedding_variance=embedding_variance,
+                        distance_metrics=distance_metrics,
+                        mining_metrics=mining_metrics,
+                        grad_norm=grad_norm
+                    )
+                    
+                    # Explicitly delete ALL tensors and intermediate results to prevent accumulation
+                    del anchor, positive, negative, emb_anchor, emb_positive, emb_negative, loss
+                    del concatenated_embeddings  # Clean up the concatenated tensor
+                    
 
-                self.maybe_save_checkpoint(epoch, self.model, self.optimizer, self.lr_scheduler)
-
-                self.check_for_cancellation_request()
-
-                self.maybe_run_mid_train_evaluation(epoch, self.val_dataloader)
-
-                self.current_epoch += 1
-
-            logger.info("🎉 Training Complete!!!")
-            return self.model
-
-        except Exception as e:
-            error_msg = f"Training loop failed at epoch {epoch}: {e}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
-        
+                # Calculate average metrics for the epoch
+                avg_metrics = epoch_metrics.compute_averages(ttl_batches)
                 
-    def maybe_run_mid_train_evaluation(self):
-        if self.current_epoch % EPOCHS_PER_VAL == 0:
-            logger.info(f"--- Running Validation after Epoch {self.current_epoch} ---")
-            self.mid_train_evaluation()
+
+                # ========================================================================
+                # Validation Phase (if dataloader is provided)
+                # ========================================================================
+               
+
+                # Check for cancellation before validation
+                if stop_callback and stop_callback():
+                    logger.info(f"Training cancelled by stop_callback before validation at epoch {epoch + 1}")
+                    raise InterruptedError("Training cancelled by external request")
+
+                epoch_val_loss = None
+                reid_metrics = {} 
 
 
-    def mid_train_evaluation(self):
-        """Run evaluation at mid-training. """
-                
-        if self.model.training:
-            self.model.eval()  # Set model to evaluation mode
-        
-        with torch.no_grad():
-           
-           for i, (anchor, positive, negative, _) in enumerate(self.val_dataloader):
-                
-                anchor = anchor.to(self.device, non_blocking=True)
-                positive = positive.to(self.device, non_blocking=True)
-                negative = negative.to(self.device, non_blocking=True)
+                if EPOCHS_PER_VAL > 0 and val_dataloader and (epoch + 1) % EPOCHS_PER_VAL == 0:
 
-                emb_anchor = self.model.forward(anchor)
-                emb_positive = self.model.forward(positive)
-                emb_negative = self.model.forward(negative)
-
-                batch_loss = self.loss_fn(emb_anchor, emb_positive, emb_negative, 0)
-
-                self.metrics.update_with_mid_epoch_eval_data(self.current_epoch, emb_anchor, emb_positive, emb_negative, batch_loss.item())
-
-                self.check_for_cancellation_request()
-
-            self.metrics.mid_epoch_eval_end(self.current_epoch)
-           
-
-    def update_margin(self, epoch: int, current_margin: float) -> float:
-        """Update the triplet loss margin based on epoch schedule."""
-
-        return current_margin
-
+                    self.model.eval()  # Set model to evaluation mode
                     
                     # 1. Calculate Validation Loss with aggressive memory management
                     running_val_loss = 0.0

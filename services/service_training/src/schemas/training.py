@@ -45,10 +45,6 @@ class TrainingParams(BaseModel):
 
     wandb_project: str = Field(default=wandb_config.project, description="W&B project name")
 
-    use_classification_head: bool = Field(default=training_config.use_classification_head, description="Whether to use classification head")
-    classification_epochs: int = Field(default=training_config.classification_epochs, description="Number of epochs to use classification loss")
-    classification_weight_start: float = Field(default=training_config.classification_weight_start, description="Initial weight for classification loss")
-
 
 class ModelParams(BaseModel):
     """Model architecture parameters - mirrors model_config."""
