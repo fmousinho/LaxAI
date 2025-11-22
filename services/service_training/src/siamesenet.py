@@ -8,7 +8,7 @@ import torch.nn as nn
 
 from shared_libs.config.all_config import model_config, training_config
 
-from .resnet50_custom import LacrosseReIDResNet
+from .model import LacrosseReIDResNet
 
 
 class SiameseNet(nn.Module):

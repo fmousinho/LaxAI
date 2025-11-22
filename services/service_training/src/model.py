@@ -108,6 +108,8 @@ class BottleneckCBAM(nn.Module):
 # 3. The Main Network Class
 # ==========================================
 class LacrosseReIDResNet(nn.Module):
+    model_name = "LacrosseReIDNet - ResNet50 with CBAM and BNNeck v1.0"
+
     def __init__(self, embedding_dim=512):
         super().__init__()
         

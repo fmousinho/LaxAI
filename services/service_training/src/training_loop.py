@@ -2,57 +2,38 @@ import logging
 logger = logging.getLogger(__name__)
 
 import os
-from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 from datetime import datetime, timezone
 
 import numpy as np
 import torch
-import torch.nn as nn
-from torch.optim.lr_scheduler import (
-    SequentialLR,
-    LinearLR,
-    CosineAnnealingLR,
-    ReduceLROnPlateau,
-)
-from services.service_training.src.evaluator import (ModelEvaluator,
-                                                     calculate_embedding_variance,
-                                                     calculate_gradient_norm,
-                                                     calculate_intra_inter_distances,
-                                                     calculate_triplet_mining_efficiency)
+
+
 from torch.utils.data import DataLoader, Dataset
-from services.service_training.src.wandb_logger import wandb_logger
 
-from shared_libs.config.all_config import (model_config, training_config,
-                                           wandb_config)
-from shared_libs.utils.cpu_memory import (CPUMemoryMonitor, clear_cpu_memory,
-                                          cpu_memory_context,
-                                          log_comprehensive_memory_stats)
-from shared_libs.utils.dataloader_memory import worker_init_fn
-from shared_libs.utils.gpu_memory import (GPUMemoryContext, clear_gpu_memory,
-                                          log_gpu_memory_stats)
-
-from schemas.training import TrainingParams
-from resnet50_custom import ReIdModel
-from loss_fn import loss_fn
 from metrics import Metrics
 
 
 # Constants
 BATCHES_PER_LOG_MSG = 10
 EPOCHS_PER_VAL = 50
-EPOCHS_PER_DATALOADER_RESTART = 200
 EPOCHS_PER_CHECKPOINT = 10
-THRESHOLD_FOR_DATALOADER_RESTART = 90.0  # Memory usage percentage threshold
 
 
-
-class Training:
+class TrainingLoop:
     """Triplet-loss trainer with staged LR scheduling and aggressive memory hygiene."""
     
     def __init__(self, 
+                model: nn.Module,
+                train_dataloader: DataLoader,
+                eval_dataloader: Optional[DataLoader],
+                loss_fn: Callable,
+                optimizer: torch.optim.Optimizer,
+                lr_scheduler: Any,
+                starting_epoch: int = 1,
+                num_epochs: int = 10,
+                wandb_logger: Optional = None,
                 device: Optional[torch.device] = None,
-                params: TrainingParams = TrainingParams()
                 ):
         """
         Initialize the training class with hyperparameters and runtime knobs.
@@ -69,398 +50,36 @@ class Training:
         clear_gpu_memory()
         logger.info("Cleared GPU memory on Training initialization")
 
-        self.params = params
-
         if device is not None:
             self.device = device
         else:
-            self.device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         logger.info(f"Training device: {self.device}")
         if torch.cuda.is_available() and self.device.type == 'cuda':
             log_gpu_memory_stats("Device initialization")
 
-        self.model = ReIdModel(embedding_dim=model_config.embedding_dim)
+        self.model = model
         self.model.to(self.device)
 
+        self.train_dataloader = train_dataloader
+        self.eval_dataloader = eval_dataloader
         self.loss_fn = loss_fn
-        self.train_dataloader = DataLoader
-        self.metrics = Metrics()
-
-        self.current_epoch = 1
-    
-   
-
-    def _load_model_from_wandb(self, model_class, model_name: str, alias: Optional[str], **kwargs):
-        """
-        Load model from wandb model registry, and puts in self.model.
-
-        Args:
-            model_class: The model class to instantiate
-            model_name: Name of the model in wandb registry
-            alias: Model version alias (e.g., "latest", "best", "v1")
-            
-        Returns:
-            bool: True if model loaded successfully, False otherwise
-        """
-        try:
-            # Use the centralized wandb model loading
-        
-            registry_kwargs = {
-                'model_class': lambda **kwargs: model_class(**kwargs),
-                'collection_name': model_name,
-                'device': str(self.device)
-            }
-            if alias is not None:
-                registry_kwargs['alias'] = alias
-            registry_kwargs.update(kwargs)  # Merge/override with any extra kwargs
-            loaded_model = wandb_logger.load_model_from_registry(**registry_kwargs)
-            
-            if loaded_model is not None:
-                self.model = loaded_model
-                logger.info(f"✓ Successfully loaded model from wandb registry: {model_name}:{alias}")
-                
-                # Log memory after model loading from WandB
-                if torch.cuda.is_available() and self.device.type == 'cuda':
-                    log_gpu_memory_stats("After WandB model load")
-                
-                return True
-            else:
-                logger.warning(f"Could not load model from wandb registry")
-                return False
-                
-        except Exception as e:
-            # If wandb is expected to be enabled, surface the error so the
-            # pipeline fails loudly instead of silently falling back.
-            if getattr(wandb_config, 'enabled', False):
-                logger.error(f"Failed to load model from wandb registry while wandb is enabled: {e}")
-                raise
-            logger.info(f"Could not load model from wandb registry: {e}")
-            return False
-
-    def save_model(self, model_name: str):
-        """
-        Save the trained model weights to wandb registry.
-        
-        Args:
-            model_name: Name of the model to save in wandb registry
-            
-        Raises:
-            RuntimeError: If no model to save
-        """
-        if self.model is None:
-            raise RuntimeError("No model to save. Train the model first.")
-        
-        # Skip saving if WandB is not enabled
-        if not wandb_logger.enabled:
-            logger.info("WandB not enabled, skipping model save to registry")
-            return
-        
-        try:
-            # Collect additional metadata for reproducibility and traceability
-            import subprocess
-            metadata = {
-                "device": str(self.device),
-                "num_epochs": self.num_epochs,
-                "margin": self.margin,
-                "learning_rate": self.learning_rate,
-                "batch_size": self.batch_size,
-                "weight_decay": self.weight_decay,
-                "scheduler_type": "SequentialLR (LinearLR warmup → CosineAnnealingLR)",
-                "warmup_epochs": 5,
-                "cosine_eta_min": 1e-7,
-                "optimizer_type": "AdamW",
-                "model_architecture": type(self.model).__name__ if self.model is not None else None,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "notes": getattr(self, 'notes', None),
-            }
-
-            # Optionally add dataset info if available
-            if hasattr(self, 'dataloader') and self.dataloader is not None:
-                try:
-                    if hasattr(self.dataloader.dataset, "__len__") and callable(getattr(self.dataloader.dataset, "__len__", None)):
-                        metadata["train_dataset_size"] = len(self.dataloader.dataset) # pyright: ignore[reportArgumentType]
-                    else:
-                        metadata["train_dataset_size"] = None
-                except Exception:
-                    metadata["train_dataset_size"] = None
-            if hasattr(self, 'dataloader') and self.dataloader is not None:
-                try:
-                    metadata["train_num_batches"] = len(self.dataloader)
-                except Exception:
-                    metadata["train_num_batches"] = None
-
-            if wandb_logger.enabled:
-                wandb_logger.save_model_to_registry(
-                    model=self.model,
-                    collection_name=model_name,
-                    metadata=metadata
-                )
-                logger.info(f"✓ Model saved to wandb registry: {model_name}:latest")
-            else:
-                logger.info(f"WandB not enabled, skipping model save to registry")
-        except Exception as e:
-            # If wandb is expected to be enabled, fail the pipeline
-            if getattr(wandb_config, 'enabled', False):
-                logger.error(f"Failed to save model to wandb registry while wandb is enabled: {e}")
-                raise
-            logger.error(f"Failed to save model to wandb registry: {e}")
+        self.optimizer = optimizer.to
+        self.lr_scheduler = lr_scheduler
+        self.current_epoch = starting_epoch
+        self.num_epochs = num_epochs
+        self.wandb_logger = wandb_logger
+        self.metrics = Metrics(wandb_logger=wandb_logger)
+        self.task_id = task_id
 
 
-    def setup_dataloader(self, dataset, type: str = 'train'):
-        """
-        Setup the dataloader for the given dataset.
-
-        Args:
-            dataset: The dataset object to load
-            type: Type of dataloader to create ('train' or 'val'). If 'train', uses shuffle=True.
-                  If 'val', uses shuffle=False.
-            
-        """
-        # Configure DataLoader settings for optimal speed
-
-        prefetch_factor = self.params.
-
-        dataloader_kwargs = {
-            'num_workers': self.num_workers,
-            'pin_memory': torch.cuda.is_available() and self.num_workers > 0,  # Only pin memory with workers
-            'persistent_workers': self.num_workers > 0,
-            'prefetch_factor': prefetch_factor,  # Increased prefetch for speed
-            'drop_last': True if type == 'train' else False  # Drop incomplete batches for consistent timing
-        }
-        
-        # Add worker initialization function to suppress logs and show custom messages
-        if self.num_workers > 0:
-            dataloader_kwargs['worker_init_fn'] = worker_init_fn
-        
-        # Add batch size and dataset-specific options
-        base_config = {
-            'batch_size': self.batch_size,
-            **dataloader_kwargs
-        }
-        
-        if type == 'train':
-            self.dataloader = DataLoader(
-                dataset,
-                shuffle=True,
-                **base_config
-            )
-
-        elif type == 'val':
-            self.val_dataloader = DataLoader(
-                dataset,
-                shuffle=False,
-                **base_config
-            )
-        else:
-            raise ValueError(f"Invalid dataloader type: {type}. Use 'train' or 'val'.")
-
-        # Validate that we have at least 1 batch
-        active_dataloader = self.dataloader if type == 'train' else self.val_dataloader
-        if active_dataloader is not None and len(active_dataloader) == 0:
-            # Safely get dataset size with proper type checking
-            dataset_size = 'unknown'
-            if hasattr(active_dataloader.dataset, '__len__'):
-                try:
-                    dataset_size = len(active_dataloader.dataset)  # type: ignore[arg-type]
-                except (TypeError, AttributeError):
-                    dataset_size = 'unknown'
-            raise ValueError(
-                f"Insufficient data for training! "
-                f"Dataset has {dataset_size} samples, but batch size is {self.batch_size}. "
-                f"This results in 0 batches for {type} (drop_last={'True' if type == 'train' else 'False'}). "
-                f"Please either: "
-                f"1) Reduce batch_size to be smaller than dataset size, or "
-                f"2) Add more data to the dataset, or "
-                f"3) For training, consider using a smaller batch_size"
-            )
-
-        # Log configuration
-        active_dataloader = self.dataloader if type == 'train' else self.val_dataloader
-        if active_dataloader is not None:
-            workers_str = f"{active_dataloader.num_workers} workers" if active_dataloader.num_workers > 0 else "no workers"
-            pin_str = ", pinned" if active_dataloader.pin_memory else ""
-            n_batches = len(self.dataloader) if self.dataloader is not None else len(self.val_dataloader) if self.val_dataloader is not None else 'N/A'
-            logger.info(f"DataLoader ({type}): {self.batch_size} batch_size, {n_batches} batches, {workers_str}{pin_str}")
-
-
-
-    def setup_model(self, model_class, model_name: str, **kwargs):
-
-        """
-        Setup the model, loss function, and optimizer for training.
-        First attempts to load from wandb registry, then falls back to local weights.
-        
-        Args:
-            model_class: The model class to use (e.g., SiameseNet)
-            model_name: The name of the model (used for logging and saving)
-            force_pretrained: If True, ignore saved weights and start with pre-trained backbone
-            
-        Raises:
-            RuntimeError: If model setup fails
-        """
-        try:
-            model_loaded = False
-            # Prepare kwargs for model initialization
-
-            # Log memory before model operations
-            if torch.cuda.is_available() and self.device.type == 'cuda':
-                log_gpu_memory_stats("Before model setup")
-
-            # Try to load from wandb registry first (unless forcing pretrained)
-            if self.force_pretraining:
-                logger.info("Forcing fresh start with pre-trained weights")
-                self.model = model_class(**kwargs)
-            else:
-                model_loaded = self._load_model_from_wandb(model_class, model_name=model_name, alias="latest", **kwargs)
-            if not model_loaded:
-                logger.info("No wandb model found, will use local weights or pre-trained backbone")
-                self.model = model_class(**kwargs)
-
-            # Ensure ALL model components are on target device
-            # Force move to device and verify no stragglers remain
-            self.model = self.model.to(self.device)
-            
-            # Explicitly move all named submodules to catch any lazy/dynamic modules
-            for name, module in self.model.named_modules():
-                if module is not self.model:  # Don't redundantly move root
-                    module.to(self.device)
-            
-            # Verify all parameters and buffers are on correct device
-            cpu_params = [name for name, p in self.model.named_parameters() if p.device.type == 'cpu']
-            cpu_buffers = [name for name, b in self.model.named_buffers() if b.device.type == 'cpu']
-            if cpu_params or cpu_buffers:
-                logger.warning(f"Found {len(cpu_params)} CPU parameters and {len(cpu_buffers)} CPU buffers after device move")
-                if cpu_params:
-                    logger.warning(f"CPU parameters: {cpu_params[:5]}")
-                if cpu_buffers:
-                    logger.warning(f"CPU buffers: {cpu_buffers[:5]}")
-            else:
-                logger.debug(f"All model parameters and buffers on device: {self.device}")
-            
-            log_gpu_memory_stats("After moving model to device")
-            
-            # Enable backbone fine-tuning for DINOv3 models
-            if hasattr(self.model, 'enable_backbone_fine_tuning') and callable(getattr(self.model, 'enable_backbone_fine_tuning', None)):
-                try:
-                    self.model.enable_backbone_fine_tuning(unfreeze_layers=2)  # pyright: ignore[reportCallIssue]
-                    logger.info("Enabled backbone fine-tuning ")
-                except Exception as e:
-                    logger.warning(f"Could not enable backbone fine-tuning: {e}")
-            else:
-                logger.debug("enable_backbone_fine_tuning is not callable or not present on model")
-            
-            # Setup training components with improved loss function
-            # Use TripletMarginLoss with distance weighting for better convergence
-            self.loss_fn = nn.TripletMarginLoss(margin=self.margin, p=2, reduction='mean')
-            
-            # Setup classification loss if the model has a classification head
-            self.classification_loss_fn = None
-            if hasattr(self.model, 'classification_head') and self.model.classification_head is not None:
-                self.classification_loss_fn = nn.CrossEntropyLoss()
-                logger.info("Classification head detected - will use combined loss for early epochs")
-            
-            def _collect_params(module):
-                params: List[torch.nn.Parameter] = []
-                if module is None:
-                    return params
-                for param in module.parameters():
-                    if id(param) not in included_param_ids:
-                        included_param_ids.add(id(param))
-                        params.append(param)
-                return params
-
-            def _resolve_component(*attr_paths):
-                if self.model is None:
-                    return None
-                for path in attr_paths:
-                    module = self.model
-                    for attr in path:
-                        module = getattr(module, attr, None)
-                        if module is None:
-                            break
-                    else:
-                        return module
-                return None
-
-            included_param_ids: set[int] = set()
-            param_groups: List[Dict[str, Any]] = []
-            component_specs = [
-                ("layer3", 1e-4, (("layer3",), ("backbone", "layer3"))),
-                ("layer4", 5e-4, (("layer4",), ("backbone", "layer4"))),
-                ("cbam", 1e-4, (("cbam",), ("backbone", "cbam"))),
-                ("head", 1e-3, (("head",), ("backbone", "head"), ("backbone", "_head"))),
-            ]
-
-            added_components: List[str] = []
-            for name, lr, paths in component_specs:
-                module = _resolve_component(*paths)
-                params = _collect_params(module)
-                if params:
-                    param_groups.append({"params": params, "lr": lr})
-                    added_components.append(name)
-
-            if getattr(self.model, "classification_head", None) is not None:
-                params = _collect_params(self.model.classification_head)
-                if params:
-                    param_groups.append({"params": params, "lr": max(self.learning_rate, 1e-3)})
-                    added_components.append("classification_head")
-
-            remaining_params = [
-                param
-                for param in self.model.parameters()
-                if id(param) not in included_param_ids
-            ]
-            if remaining_params:
-                param_groups.append({"params": remaining_params, "lr": self.learning_rate})
-                added_components.append("remaining_params")
-
-            if not param_groups:
-                raise RuntimeError("Failed to collect any parameter groups for optimizer setup")
-
-            # Use AdamW optimizer which is better for fine-tuning transformers
-            self.optimizer = torch.optim.AdamW(
-                param_groups,
-                weight_decay=self.weight_decay,
-                betas=(0.9, 0.999),  # Default AdamW betas
-                eps=1e-8  # Slightly higher epsilon for stability
-            )
-            logger.info(f"Optimizer parameter groups: {', '.join(added_components)}")
-            log_gpu_memory_stats("After creating optimizer")
-            
-            # Setup staged LR scheduler: linear warmup → cosine annealing
-            warmup_epochs = 10
-            total_epochs = self.num_epochs
-
-            self.lr_scheduler = SequentialLR(
-                self.optimizer,
-                schedulers=[
-                    LinearLR(self.optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs),
-                    CosineAnnealingLR(self.optimizer, T_max=total_epochs - warmup_epochs, eta_min=1e-7)
-                ],
-                milestones=[warmup_epochs]
-            )
-
-            # Ensure optimizer state tensors are on the same device as model
-            try:
-                self._move_optimizer_state_to_device(self.device)
-            except Exception:
-                logger.debug("Could not move optimizer state to device during setup; will attempt later if needed")
-
-            logger.info(f"Training model initialized with device: {self.device}")
-            logger.info(f"Batch size: {self.batch_size} | Epochs: {self.num_epochs} | Margin: {self.margin:.4f}")
-            logger.info(f"Optimizer: AdamW (lr={self.learning_rate:.2e}, wd={self.weight_decay:.2e})")
-            logger.info(f"LR Scheduler: warmup(5)→cosine(eta_min=1e-7)")
-        except Exception as e:
-            logger.error(f"Model setup failed: {e}")
-            raise RuntimeError(f"Failed to setup model: {e}")
-
-
-    def train(self):
+    def train(self, task_id: str, cancellation_requested_fn: Callable[[], bool]):
         """
         Main training loop for triplet-loss model.
         
         Args:
-            None
+            task_id: Unique identifier for the training task
+            cancellation_requested_fn: A callable that returns True if training should be cancelled
             
         Returns:
             The trained model
@@ -478,6 +97,8 @@ class Training:
         if self.optimizer is None or self.loss_fn is None:
             raise RuntimeError("Optimizer and loss function must be setup before training")
         
+        self.cancellation_requested = cancellation_requested_fn
+        
         # ========================================================================
         # Training setup and logging
         # ========================================================================
@@ -485,7 +106,7 @@ class Training:
         ttl_batches = len(self.train_dataloader)
 
         starting_epoch = self.current_epoch
-        
+
         try: 
             for epoch in range(starting_epoch, self.num_epochs + 1):
                 logger.info(f"=== Epoch {epoch}/{self.num_epochs} ===")
@@ -514,16 +135,24 @@ class Training:
                     batch_loss.backward()
 
                     self.metrics.update_with_batch_data(epoch, anchor_embs, positive_embs, negative_embs, batch_loss, self.margin)
-                    
                     self.optimizer.step()
-
-                self.metrics.finalize_epoch_metrics(epoch)
+                    self.lr_scheduler.step()
 
                 self.maybe_save_checkpoint(epoch, self.model, self.optimizer, self.lr_scheduler)
 
-                self.check_for_cancellation_request()
+                if self.cancellation_requested():
+                    logger.info(f"--- Cancellation requested at Epoch {epoch}. Stopping training. ---")
+                    self.save_checkpoint()
+                    return
 
                 self.maybe_run_mid_train_evaluation(epoch, self.val_dataloader)
+                
+                if self.cancellation_requested():
+                    logger.info(f"--- Cancellation requested at Epoch {epoch}. Stopping training. ---")
+                    self.save_checkpoint()
+                    return
+
+                self.metrics.finalize_epoch_metrics(epoch)
 
                 self.current_epoch += 1
 
@@ -534,638 +163,45 @@ class Training:
             error_msg = f"Training loop failed at epoch {epoch}: {e}"
             logger.error(error_msg)
             raise RuntimeError(error_msg)
-        
                 
     def maybe_run_mid_train_evaluation(self):
         if self.current_epoch % EPOCHS_PER_VAL == 0:
             logger.info(f"--- Running Validation after Epoch {self.current_epoch} ---")
             self.mid_train_evaluation()
 
-
     def mid_train_evaluation(self):
         """Run evaluation at mid-training. """
-                
         if self.model.training:
-            self.model.eval()  # Set model to evaluation mode
-        
+            self.model.eval()  
         with torch.no_grad():
-           
-           for i, (anchor, positive, negative, _) in enumerate(self.val_dataloader):
-                
-                anchor = anchor.to(self.device, non_blocking=True)
-                positive = positive.to(self.device, non_blocking=True)
-                negative = negative.to(self.device, non_blocking=True)
-
-                emb_anchor = self.model.forward(anchor)
-                emb_positive = self.model.forward(positive)
-                emb_negative = self.model.forward(negative)
-
-                batch_loss = self.loss_fn(emb_anchor, emb_positive, emb_negative, 0)
-
-                self.metrics.update_with_mid_epoch_eval_data(self.current_epoch, emb_anchor, emb_positive, emb_negative, batch_loss.item())
-
-                self.check_for_cancellation_request()
-
-            self.metrics.mid_epoch_eval_end(self.current_epoch)
-           
+           for i, (player, crop) in enumerate(self.val_dataloader):
+                crop = crop.to(self.device, non_blocking=True)
+                emb = self.model.forward(crop)
+                self.metrics.update_eval_batch_data(
+                    self.current_epoch, player, emb)
+                if self.cancellation_requested():
+                    return
+            self.metrics.finalize_eval_epoch_metrics(self.current_epoch)
 
     def update_margin(self, epoch: int, current_margin: float) -> float:
         """Update the triplet loss margin based on epoch schedule."""
-
         return current_margin
 
-                    
-                    # 1. Calculate Validation Loss with aggressive memory management
-                    running_val_loss = 0.0
-                    ttl_batches = len(val_dataloader)
-                    with torch.no_grad(): # No need to compute gradients
-                        for j, (anchor, positive, negative, _) in enumerate(val_dataloader):
-                            anchor = anchor.to(self.device, non_blocking=True)
-                            positive = positive.to(self.device, non_blocking=True)
-                            negative = negative.to(self.device, non_blocking=True)
-                            
-                            emb_anchor, emb_positive, emb_negative = self.model.forward_triplet(anchor, positive, negative) # pyright: ignore[reportCallIssue]
-                            loss = self.loss_fn(emb_anchor, emb_positive, emb_negative)
-                            
-                            # Extract scalar value immediately
-                            loss_value = loss.item()
-                            running_val_loss += loss_value
+    def maybe_save_checkpoint(self, epoch: int, model: nn.Module, optimizer: torch.optim.Optimizer, lr_scheduler: Any):
+        """Save model checkpoint at regular intervals."""
+        if epoch % EPOCHS_PER_CHECKPOINT == 0:
+            self.save_checkpoint()
 
-                            # Explicit cleanup of validation tensors
-                            del anchor, positive, negative, emb_anchor, emb_positive, emb_negative, loss
-
-                            if (j + 1) % BATCHES_PER_LOG_MSG == 0:
-                                logger.info(f"Validation Batch {j+1}/{ttl_batches}")
-                                
-                            # Periodic memory cleanup during validation
-                            if (j + 1) % 50 == 0:
-                                self.memory_manager.smart_gpu_cache_clear(force=False, context=f"validation_batch_{j+1}")
-
-                    epoch_val_loss = running_val_loss / ttl_batches if ttl_batches > 0 else 0.0
-
-                    # 2. Calculate Retrieval Metrics with memory monitoring
-                    self.memory_manager.log_status("Before evaluation")
-                    self.cpu_monitor.log_memory_stats("Before evaluation")
-                    
-                    reid_metrics = self._evaluate_reid_metrics(val_dataloader)
-                    
-                    self.memory_manager.log_status("After evaluation")
-                    self.cpu_monitor.log_memory_stats("After evaluation")
-                    
-                    # Aggressive memory cleanup after validation
-                    self.memory_manager.aggressive_cleanup(f"After validation epoch {epoch + 1}")
-                    self.cpu_monitor.log_memory_stats(f"Epoch {epoch + 1} validation complete")
-
-                # ========================================================================
-                # Log and check for early stopping
-                # ========================================================================
-                # Use validation loss for monitoring if available, otherwise fall back to training loss
-                monitoring_loss = avg_metrics.loss
-                if epoch_val_loss is not None:
-                    logger.info(f"Validation Loss: {epoch_val_loss:.4f}")
-                    monitoring_loss = epoch_val_loss
-                    if reid_metrics:
-                        flat_metrics = []
-                        for key, val in reid_metrics.items():
-                            if isinstance(val, dict):
-                                continue
-                            flat_metrics.append(f"{key}={val:.4f}")
-                        if flat_metrics:
-                            logger.info("Validation metrics: " + " | ".join(flat_metrics))
-
-                # Clear evaluation metrics to prevent memory accumulation
-                # Don't delete reid_metrics here as it's still needed for WandB logging
-                if 'reid_metrics' in locals():
-                    reid_metrics.clear()
-
-                # Log training metrics summary
-                avg_metrics.log_summary(epoch + 1, current_margin)
-                
-                # Log epoch metrics to wandb with memory management
-                if wandb_logger.enabled:
-                    # Create metrics dict from TrainingMetrics
-                    metrics = avg_metrics.to_dict()
-                    metrics["margin"] = float(current_margin)
-                    metrics["current_lr"] = float(self.optimizer.param_groups[0]['lr'])
-                    
-                    if epoch_val_loss is not None:
-                        metrics["val_loss"] = float(epoch_val_loss)
-                        # Add re-id metrics with explicit float conversion to prevent accumulation
-                        for k, v in reid_metrics.items():
-                            metrics[k] = float(v) if isinstance(v, (int, float)) else v
-                    
-                    wandb_logger.log_metrics(metrics)
-                    
-                    # Explicitly clear metrics dict to prevent accumulation
-                    del metrics
-
-                    # Now it's safe to delete reid_metrics after WandB logging is complete
-                    if 'reid_metrics' in locals():
-                        del reid_metrics
-
-                # Early stopping based on patience (now using the monitoring_loss)
-                if early_stopping_patience is not None:
-                    if monitoring_loss < best_monitoring_loss:
-                        best_monitoring_loss = monitoring_loss
-                        patience_counter = 0
-                        logger.debug(f"New best loss: {best_monitoring_loss:.4f}")
-                    else:
-                        patience_counter += 1
-                        logger.debug(f"Patience counter: {patience_counter}/{early_stopping_patience}")
-
-                    if patience_counter >= early_stopping_patience:
-                        logger.info(f"Early stopping triggered due to patience ({patience_counter} epochs without improvement)")
-                        break
-
-                # Step the learning rate scheduler (now using the monitoring_loss)
-                if hasattr(self, 'lr_scheduler') and self.lr_scheduler is not None:
-                    if isinstance(self.lr_scheduler, ReduceLROnPlateau):
-                        self.lr_scheduler.step(monitoring_loss)
-                    else:
-                        self.lr_scheduler.step()
-                    current_lr = self.optimizer.param_groups[0]['lr']
-                    logger.info(f"Learning rate after scheduler step: {current_lr:.6f}")
-
-                # Save checkpoint at the end of each epoch with aggressive memory management
-                if wandb_logger.enabled and self.optimizer is not None and (epoch + 1) % EPOCHS_PER_CHECKPOINT == 0:
-                    try:
-                        # Monitor memory before checkpoint save
-                        import psutil
-                        process = psutil.Process()
-                        memory_before_checkpoint = process.memory_info().rss / 1024 / 1024  # MB
-                        logger.debug(f"Memory before checkpoint save: {memory_before_checkpoint:.1f}MB")
-                        
-                        # Force garbage collection before checkpoint to clear accumulated state
-                        gc.collect()
-                        
-                        model_config_dict = {
-                            "margin": float(self.margin),
-                            "learning_rate": float(self.learning_rate),
-                            "batch_size": int(self.batch_size),
-                            "weight_decay": float(self.weight_decay)
-                        }
-                        
-                        # Memory-efficient checkpoint save: pass model/optimizer objects directly
-                        # instead of pre-computed state_dicts to avoid memory leaks
-                        wandb_logger.save_checkpoint(
-                            epoch=epoch + 1,  # Save 1-indexed epoch number
-                            model=self.model,
-                            optimizer=self.optimizer,
-                            loss=float(monitoring_loss),  # Ensure scalar value
-                            model_name=type(self.model).__name__,
-                            model_config=model_config_dict
-                        )
-                        logger.debug(f"Checkpoint saved for epoch {epoch + 1}")
-                        
-                        # Explicit cleanup after checkpoint save
-                        del model_config_dict
-                        gc.collect()
-                        
-                        # Monitor memory after checkpoint save
-                        memory_after_checkpoint = process.memory_info().rss / 1024 / 1024  # MB
-                        checkpoint_memory_delta = memory_after_checkpoint - memory_before_checkpoint
-                        if abs(checkpoint_memory_delta) > 50:  # Lowered threshold for better monitoring
-                            logger.debug(f"Checkpoint memory usage: {memory_before_checkpoint:.1f}MB → {memory_after_checkpoint:.1f}MB (Δ{checkpoint_memory_delta:+.1f}MB)")
-                        
-                    except Exception as e:
-                        if getattr(wandb_config, 'enabled', False):
-                            logger.error(f"Failed to save checkpoint for epoch {epoch + 1} while wandb is enabled: {e}")
-                            raise
-                        logger.warning(f"Failed to save checkpoint for epoch {epoch + 1}: {e}")
-
-                # Aggressive end-of-epoch memory cleanup
-                try:
-                    # Clear reid_metrics dict explicitly
-                    if 'reid_metrics' in locals():
-                        reid_metrics.clear()
-                        del reid_metrics
-                    
-                    # Force garbage collection at end of each epoch
-                    gc.collect()
-                    
-                    # Log memory after cleanup
-                    if epoch % 5 == 0:  # Log every 5 epochs to monitor trend
-                        import psutil
-                        process = psutil.Process()
-                        current_memory = process.memory_info().rss / 1024 / 1024  # MB
-                        logger.info(f"End of epoch {epoch + 1} memory usage: {current_memory:.1f}MB")
-                        
-                except Exception as cleanup_error:
-                    logger.debug(f"End-of-epoch cleanup warning: {cleanup_error}")
-
-                # Additional DataLoader iterator cleanup every few epochs to prevent accumulation
-                if (epoch + 1) % EPOCHS_PER_DATALOADER_RESTART == 0 and self.num_workers > 0:
-                    try:
-                        # Reset DataLoader iterators to prevent state accumulation
-                        if hasattr(self.dataloader, '_iterator') and self.dataloader._iterator:
-                            del self.dataloader._iterator
-                            self.dataloader._iterator = None
-                        if self.val_dataloader and hasattr(self.val_dataloader, '_iterator') and self.val_dataloader._iterator:
-                            del self.val_dataloader._iterator  
-                            self.val_dataloader._iterator = None
-                        logger.debug(f"DataLoader iterators reset at epoch {epoch + 1}")
-                    except Exception as iterator_error:
-                        logger.debug(f"DataLoader iterator cleanup warning: {iterator_error}")
-
-                # Memory leak detection and alerting
-                self.memory_manager.check_for_leaks(epoch)
-
-
-        except InterruptedError as e:
-            logger.info(f"Training cancelled by external request: {e}")
-            self.memory_manager.cleanup_on_error("cancellation")
-            self.cpu_monitor.log_memory_stats("After cancellation cleanup")
-            raise
-            
-        except (RuntimeError, torch.cuda.OutOfMemoryError) as e:
-            logger.error(f"Training failed with error: {e}")
-            self.memory_manager.cleanup_on_error("runtime")
-            self.cpu_monitor.log_memory_stats("After failure cleanup")
-            raise
-            
-        except Exception as e:
-            logger.error(f"Training failed with unexpected error: {e}")
-            
-            # Check if this is a CUDA OOM error and provide specific guidance
-            if "out of memory" in str(e).lower() or "cuda out of memory" in str(e).lower():
-                logger.error("CUDA Out of Memory Error detected!")
-                self.memory_manager.log_status("Before OOM cleanup")
-                self.memory_manager.cleanup_on_error("OOM")
-                self.cpu_monitor.log_memory_stats("After OOM cleanup")
-                logger.error("Suggestions to resolve OOM:")
-                logger.error("1. Reduce batch_size in your configuration")
-                logger.error("2. Use gradient accumulation to simulate larger batches")
-                logger.error("3. Consider mixed precision training (fp16)")
-                logger.error("4. Use a smaller model architecture")
-            else:
-                self.memory_manager.cleanup_on_error("unexpected")
-            raise
-
-        logger.info("Training completed successfully")
-        log_comprehensive_memory_stats("Training completion")
-        
-        # Optional: Move model to CPU to save GPU memory if evaluation will be on CPU
-        # Uncomment the following lines if you want to conserve GPU memory:
-        # if self.device.type == 'cuda' and torch.cuda.is_available():
-        #     logger.info("Moving trained model to CPU to conserve GPU memory")
-        #     self.model = self.model.cpu()
-        #     torch.cuda.empty_cache()
-        
-        return self.model
-
-
-
-    def _evaluate_reid_metrics(self, dataloader: DataLoader) -> Dict[str, float]:
-        """
-        Computes re-identification metrics (Recall@k and mAP) on the provided dataloader.
-        
-        This function uses the current model to generate embeddings for all images
-        in the dataloader. For triplet datasets, uses only the anchor images for evaluation.
-        
-        Args:
-            dataloader: The dataloader for the validation or test set (can be triplet format).
-            
-        Returns:
-            A dictionary containing the calculated metrics.
-        """
-        # Use the centralized comprehensive evaluator to compute and persist
-        # full evaluation, then return the retrieval metrics used by training.
-        from services.service_training.src.evaluator import ModelEvaluator
-
-        # dataloader may be a DataLoader; evaluator expects a Dataset instance
-        dataset = getattr(dataloader, 'dataset', dataloader)
-
-        # Create evaluator with memory management
-        evaluator = None
-        results = {}
-        flat_metrics = {}
-        
-        try:
-            evaluator = ModelEvaluator(self.model, device=self.device)
-
-            # Log memory before evaluation
-            import psutil
-            process = psutil.Process()
-            memory_before_eval = process.memory_info().rss / 1024 / 1024  # MB
-            logger.debug(f"Memory before evaluation: {memory_before_eval:.1f}MB")
-
-            try:
-                # Run the comprehensive evaluation (this also saves results to disk)
-                results = evaluator.evaluate_comprehensive(dataset, **self.kwargs)
-                
-                # Log evaluation results to WandB if enabled and results available
-                if results and hasattr(evaluator, '_log_to_wandb'):
-                    try:
-                        evaluator._log_to_wandb(results)
-                        logger.debug("Evaluation results logged to WandB")
-                    except Exception as e:
-                        logger.debug(f"Failed to log evaluation results to WandB: {e}")
-                        
-            except Exception as e:
-                logger.warning(f"Comprehensive evaluation failed, falling back to local computation: {e}")
-                results = {}
-
-            # If evaluation succeeded, flatten all nested metrics into a single-level dict;
-            # otherwise fall back to a local computation that produces the same metric groups.
-            def _flatten(prefix: str, obj: Any):
-                """Recursively flatten dict-like metric objects into flat_metrics using
-                joined keys. Does not rely on specific section name patterns.
-                """
-                if isinstance(obj, dict):
-                    for k, v in obj.items():
-                        new_prefix = f"{prefix}_{k}" if prefix else k
-                        _flatten(new_prefix, v)
-                else:
-                    # Try to coerce numeric-like values to float for consistency
-                    try:
-                        flat_metrics[prefix] = float(obj)
-                    except Exception:
-                        flat_metrics[prefix] = obj
-
-            if isinstance(results, dict) and results:
-                # Iterate over whatever sections the evaluator returned; future-proof.
-                for section, metrics in results.items():
-                    _flatten(section, metrics)
-
-        finally:
-            # Always cleanup evaluator to prevent memory leaks
-            if evaluator is not None:
-                try:
-                    evaluator.cleanup()
-                except Exception as cleanup_error:
-                    logger.debug(f"Evaluator cleanup warning: {cleanup_error}")
-                finally:
-                    del evaluator
-            
-            # Explicit cleanup of evaluation variables
-            if 'results' in locals():
-                if hasattr(results, 'clear') and callable(results.clear):
-                    results.clear()
-                del results
-                
-            # Force garbage collection after evaluation
-            gc.collect()
-            
-            # Monitor memory after evaluation
-            try:
-                import psutil
-                process = psutil.Process()
-                memory_after_eval = process.memory_info().rss / 1024 / 1024  # MB
-                eval_memory_delta = memory_after_eval - memory_before_eval
-                if abs(eval_memory_delta) > 50:  # Log significant memory changes
-                    logger.debug(f"Evaluation memory usage: {memory_before_eval:.1f}MB → {memory_after_eval:.1f}MB (Δ{eval_memory_delta:+.1f}MB)")
-            except Exception as memory_log_error:
-                logger.debug(f"Memory logging warning: {memory_log_error}")
-
-        # Additional cleanup of local variables
-        try:
-            del dataset, evaluator
-            gc.collect()
-        except NameError:
-            pass
-
-        return flat_metrics
-
-
-    def setup_training_pipeline(self, model_class, dataset: Dataset, model_name: str, val_dataset: Optional[Dataset] = None, model_kwargs: Dict[str, Any] = {}):
-        """
-        Setup the complete training pipeline components.
-        
-        Args:
-            model_class: The model class to use (e.g., SiameseNet)
-            dataset: The dataset instance to use (e.g., LacrossePlayerDataset)
-            model_name: Name of the model to save in wandb registry
-            val_dataset: Optional validation dataset for early stopping and metrics
-            model_kwargs: Additional arguments for model instantiation
-        """
-        logger.info("Setting up training pipeline components...")
-        
-        # Setup data
-        logger.info("Setting up training data...")
-        self.setup_dataloader(dataset)
-
-        if val_dataset is not None:
-            logger.info("Setting up validation data...")
-            self.setup_dataloader(val_dataset, type='val')
-
-        # Log memory after data setup, before model setup
-        if torch.cuda.is_available() and self.device.type == 'cuda':
-            log_gpu_memory_stats("After data setup")
-
-        # Add num_classes to model_kwargs if dataset has player information and classification head is enabled
-        if training_config.use_classification_head and 'num_classes' not in model_kwargs and hasattr(dataset, 'players'):
-            num_classes = len(dataset.players)
-            model_kwargs['num_classes'] = num_classes
-            logger.info(f"Setting num_classes={num_classes} for classification head (enabled for {training_config.classification_epochs} epochs)")
-
-        # Setup model
-        logger.info("Setting up model...")
-        self.setup_model(model_class, model_name=model_name, **model_kwargs)
-
-    def check_for_checkpoint_resumption(self) -> int:
-        """
-        Check for existing checkpoint and determine starting epoch.
-        
-        Returns:
-            Starting epoch number (1 if no checkpoint, >1 if resuming)
-        """
-        start_epoch = 1
-        
-        if not wandb_logger.enabled:
-            logger.info("WandB not enabled, starting fresh training")
-            return start_epoch
-            
-        logger.info("Checking for existing checkpoint")
-        try:
-            # Ensure optimizer exists before attempting to resume
-            if self.optimizer is None:
-                logger.warning("Optimizer not initialized, cannot resume from checkpoint")
-                return start_epoch
-                
-            start_epoch = wandb_logger.resume_training_from_checkpoint(
-                model=self.model,
-                optimizer=self.optimizer,
-                artifact_name=wandb_logger.get_checkpoint_name(),
-                version="latest"
+    def save_checkpoint(self):      
+            logger.info(f"--- Saving Checkpoint at Epoch {epoch} ---")
+            self.wandb_logger.save_checkpoint(
+                run_name=self.wandb_run_name,
+                model=model,
+                optimizer=optimizer,
+                lr_scheduler=lr_scheduler,
+                epoch=epoch
             )
-            
-            if start_epoch > 1:
-                logger.info(f"✅ Resumed training from checkpoint at epoch {start_epoch}")
-                # Force all model components to target device after checkpoint load
-                self.model = self.model.to(self.device)
-                for name, module in self.model.named_modules():
-                    if module is not self.model:
-                        module.to(self.device)
-                
-                # Verify no CPU stragglers
-                cpu_params = [name for name, p in self.model.named_parameters() if p.device.type == 'cpu']
-                if cpu_params:
-                    logger.warning(f"After checkpoint resume: {len(cpu_params)} params still on CPU: {cpu_params[:3]}")
-                
-                # Move optimizer state tensors to device
-                try:
-                    self._move_optimizer_state_to_device(self.device)
-                except Exception as opt_err:
-                    logger.debug(f"Could not move optimizer state to device after resuming checkpoint: {opt_err}")
-                
-                # Check if training is already completed
-                remaining_epochs = max(0, self.num_epochs - (start_epoch - 1))
-                if remaining_epochs == 0:
-                    logger.info("Training already completed according to checkpoint!")
-                    return self.num_epochs + 1
-                logger.info(f"Training will continue for {remaining_epochs} more epochs")
-            else:
-                logger.info("No valid checkpoint found, starting fresh training")
-                
-        except Exception as e:
-            logger.warning(f"Failed to resume from checkpoint: {e}")
-            logger.info("Starting fresh training")
-            start_epoch = 1
-            
-        return start_epoch
 
-    def train_and_save(self, model_class, dataset: Dataset, model_name: str, val_dataset: Optional[Dataset] = None, model_kwargs: Dict[str, Any] = {}, resume_from_checkpoint: bool = True, stop_callback: Optional[Callable[[], bool]] = None) -> Any:
-        """
-        Complete training pipeline: setup, train, and save.
-        This is a convenience method with minimal logic.
+
         
-        Args:
-            model_class: The model class to use (e.g., SiameseNet)
-            dataset: The dataset instance to use (e.g., LacrossePlayerDataset)
-            model_name: Name of the model to save in wandb registry
-            val_dataset: Optional validation dataset for early stopping and metrics
-            model_kwargs: Additional arguments for model instantiation
-            resume_from_checkpoint: Whether to resume from existing wandb checkpoint
-            stop_callback: Optional callback function that returns True if training should stop
-            
-        Returns:
-            The trained model
-            
-        Raises:
-            Exception: If any step in the training pipeline fails
-            InterruptedError: If training is cancelled via stop_callback
-        """
-        try:
-            logger.info("Starting complete training pipeline")
-            
-            # Setup pipeline components
-            self.setup_training_pipeline(model_class, dataset, model_name, val_dataset, model_kwargs)
-            
-            # Check for checkpoint resumption
-            start_epoch = 1
-            if resume_from_checkpoint:
-                start_epoch = self.check_for_checkpoint_resumption()
-                if start_epoch > self.num_epochs:
-                    logger.info("Training already completed!")
-                    return self.model
-
-            # Train with checkpoint support
-            logger.info("Starting training...")
-            trained_model = self.train(start_epoch=start_epoch, stop_callback=stop_callback)
-            
-            # Save final model
-            logger.info("Saving model...")
-            self.save_model(model_name=model_name)
-              
-            logger.info("Training pipeline completed successfully")
-            return trained_model
-            
-        except Exception as e:
-            logger.error(f"Training pipeline failed: {str(e)}")
-            raise
-
-    def get_training_info(self):
-        """
-        Get information about the current training setup.
-        
-        Returns:
-            Dictionary with training configuration details
-        """
-        return {
-            'learning_rate': self.learning_rate,
-            'batch_size': self.batch_size,
-            'num_epochs': self.num_epochs,
-            'margin': self.margin,
-            'weight_decay': self.weight_decay,
-            'scheduler_patience': self.scheduler_patience,
-            'scheduler_threshold': self.scheduler_threshold,
-            'lr_scheduler_min_lr': self.lr_scheduler_min_lr,
-            'lr_scheduler_factor': self.lr_scheduler_factor,
-            'device': str(self.device),
-        }
-
-    def _move_optimizer_state_to_device(self, device: torch.device):
-        """Move all optimizer state tensors to the target device.
-
-        Some optimizers allocate state tensors (exp_avg, exp_avg_sq) on creation.
-        If the model was created on CPU and later moved to GPU, these state
-        tensors remain on CPU and will cause runtime errors during optimizer.step.
-        This helper moves them to the desired device.
-        """
-        if self.optimizer is None:
-            return
-        try:
-            for param_group in self.optimizer.param_groups:
-                for p in param_group.get('params', []):
-                    if p in self.optimizer.state:
-                        state = self.optimizer.state[p]
-                        for k, v in list(state.items()):
-                            if isinstance(v, torch.Tensor):
-                                state[k] = v.to(device)
-        except Exception:
-            logger.debug("Failed to move some optimizer state tensors to device; they may be created lazily later")
-
-    def cleanup_model(self):
-        """
-        Clean up the model and associated resources to free memory.
-        
-        This method should be called after evaluation is complete to prevent
-        memory leaks from accumulated model references.
-        """
-        if hasattr(self, 'model') and self.model is not None:
-            logger.info("Cleaning up training model and resources")
-            
-            # Clear model from GPU memory
-            if torch.cuda.is_available():
-                self.model = self.model.cpu()
-                self.memory_manager.smart_gpu_cache_clear(force=True, context="model_cleanup")
-            
-            # Clear optimizer state
-            if hasattr(self, 'optimizer') and self.optimizer is not None:
-                self.optimizer.state.clear()
-                self.optimizer.param_groups.clear()
-            
-            # Clear loss function
-            if hasattr(self, 'loss_fn'):
-                self.loss_fn = None
-            
-            # Clear dataloaders
-            if hasattr(self, 'dataloader'):
-                self.dataloader = None
-            if hasattr(self, 'val_dataloader'):
-                self.val_dataloader = None
-            
-            # Force garbage collection
-            clear_cpu_memory()
-            
-            logger.info("Model cleanup completed")
-        
-    def get_model_for_evaluation(self):
-        """
-        Get the trained model for evaluation with memory management.
-        
-        Returns:
-            The trained model, moved to appropriate device for evaluation
-        """
-        if not hasattr(self, 'model') or self.model is None:
-            raise RuntimeError("No trained model available. Call train() first.")
-        
-        # Ensure model is on the correct device for evaluation
-        self.model = self.model.to(self.device)
-        for name, module in self.model.named_modules():
-            if module is not self.model:
-                module.to(self.device)
-        
-        return self.model
-
-
+    

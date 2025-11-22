@@ -21,29 +21,24 @@ class TrainingParams(BaseModel):
     """Training hyperparameters - mirrors training_config."""
 
     num_epochs: int = Field(default=training_config.num_epochs, description="Number of training epochs")
-    batch_size: int = Field(default=training_config.batch_size, description="Batch size for training")
-    num_workers: int = Field(default=training_config.num_workers, description="Number of DataLoader workers")
-    learning_rate: float = Field(default=training_config.learning_rate, description="Learning rate for optimizer")
-    margin: float = Field(default=training_config.margin, description="Margin for triplet loss")
-    weight_decay: float = Field(default=training_config.weight_decay, description="Weight decay for optimizer")
 
+    num_workers: int = Field(default=training_config.num_workers, description="Number of DataLoader workers")
+    batch_size: int = Field(default=training_config.batch_size, description="Batch size for training")
+    prefetch_factor: int = Field(default=training_config.prefetch_factor, description="Prefetch factor for training data loading")
+    
+    lr_initial: float = Field(default=training_config.learning_rate, description="Learning rate for optimizer")
     lr_scheduler_patience: int = Field(default=training_config.lr_scheduler_patience, description="LR scheduler patience")
-    lr_scheduler_threshold: float = Field(default=training_config.lr_scheduler_threshold, description="LR scheduler threshold")
-    lr_scheduler_min_lr: float = Field(default=training_config.lr_scheduler_min_lr, description="LR scheduler minimum LR")
     lr_scheduler_factor: float = Field(default=training_config.lr_scheduler_factor, description="LR scheduler factor")
 
-    force_pretraining: bool = Field(default=training_config.force_pretraining, description="Force pretrained ResNet defaults")
     early_stopping_patience: int = Field(default=training_config.early_stopping_patience, description="Early stopping patience")
-    min_images_per_player: int = Field(default=training_config.min_images_per_player, description="Minimum images per player")
-    train_prefetch_factor: int = Field(default=training_config.prefetch_factor, description="Prefetch factor for training data loading")
 
-    margin_decay_rate: float = Field(default=training_config.margin_decay_rate, description="Triplet margin decay rate")
-    margin_change_threshold: float = Field(default=training_config.margin_change_threshold, description="Min change in margin to update")
-    train_ratio: float = Field(default=training_config.train_ratio, description="Train split ratio vs validation")
-    n_datasets_to_use: Optional[int] = Field(default=training_config.n_datasets_to_use, description="Number of datasets to use (optional)")
-    dataset_address: Optional[str] = Field(default=training_config.dataset_address, description="Specific dataset GCS path (optional)")
+    dataset_address: Union[str, List[str]] = Field(default=training_config.dataset_address, description="Specific dataset GCS path (string or list of str)")
 
-    wandb_project: str = Field(default=wandb_config.project, description="W&B project name")
+    margin: float = Field(default=training_config.margin, description="Margin for triplet loss")
+    weights: Literal["checkpoint", "latest", "reset"] = Field(
+        default="checkpoint", 
+        description="Use "checktpoint" to resume from wandb, "latest" for previous saved model, "reset" to use ResNet defaults"
+        )
 
 
 class ModelParams(BaseModel):
@@ -61,39 +56,15 @@ class EvalParams(BaseModel):
     """Evaluation parameters - mirrors evaluator_config."""
 
     number_of_workers: int = Field(default=evaluator_config.number_of_workers, description="Eval DataLoader workers")
-    emb_batch_size: int = Field(default=evaluator_config.emb_batch_size, description="Eval embedding batch size")
-    eval_prefetch_factor: int = Field(default=evaluator_config.prefetch_factor, description="Eval DataLoader prefetch factor")
+    batch_size: int = Field(default=evaluator_config.eval_batch_size, description="Eval embedding batch size")
+    prefetch_factor: int = Field(default=evaluator_config.prefetch_factor, description="Eval DataLoader prefetch factor")
 
 
 class TrainingRequest(BaseModel):
     """Training request model with explicit parameter validation."""
 
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "custom_name": "example_training_run",
-                "tenant_id": "",
-                "resume_from_checkpoint": False,
-                "training_params": {
-                    "num_epochs": training_config.num_epochs,
-                    "batch_size": training_config.batch_size,
-                    "learning_rate": training_config.learning_rate,
-                },
-                "model_params": {
-                    "embedding_dim": model_config.embedding_dim,
-                    "dropout_rate": model_config.dropout_rate,
-                },
-                "eval_params": {
-                    "number_of_workers": evaluator_config.number_of_workers,
-                    "emb_batch_size": evaluator_config.emb_batch_size,
-                },
-            }
-        }
-    )
-
-    custom_name: str = Field(default="training_run", description="Custom name for the training run")
+    wandb_run_name: str = Field(default="training_run", description="Name used for WandB reporting")
     tenant_id: str = Field(default="t", description="Tenant identifier for the training job")
-    resume_from_checkpoint: bool = Field(default=True, description="Whether to resume from checkpoint if available")
 
     training_params: Optional[TrainingParams] = Field(default=None, description="Training-specific parameters")
     model_params: Optional[ModelParams] = Field(default=None, description="Model architecture parameters")

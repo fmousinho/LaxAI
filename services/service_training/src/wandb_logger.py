@@ -836,50 +836,7 @@ class WandbLogger:
             # Don't re-raise to avoid breaking training
             return
 
-    @monitor_memory
-    def _upload_checkpoint_and_cleanup(self, checkpoint_path: str, checkpoint_name: str, epoch: int, loss: Optional[float]) -> None:
-        """
-        [DEPRECATED] This method is kept for reference but is replaced by the subprocess mechanism.
-        Upload checkpoint and clean up old versions.
-        """
-        try:
- 
-            self.run.log_artifact(
-                artifact_or_path = checkpoint_path,
-                name = checkpoint_name,
-                type="model_checkpoint",
-                aliases = ['latest']
-            )  # Register artifact with the run
-            
-            logger.info(f"✅ Uploaded checkpoint for epoch {epoch}")
-            
-            # Clean up old checkpoints (keep only latest)
-            self._cleanup_artifacts_by_type(checkpoint_name, "model_checkpoint", keep_latest=self.checkpoint_retention_count)
-            
-            # Periodic aggressive cleanup for long training runs
-            self._checkpoint_count += 1
-            if self._checkpoint_count % self._memory_cleanup_interval == 0:
-                logger.info(f"🧹 Periodic memory cleanup after {self._checkpoint_count} checkpoints")
-                self._force_memory_cleanup()
-            
-        except (NameError, AttributeError, TypeError) as e:
-            # Critical errors that indicate bugs in the code - these should not be silently caught
-            logger.error(f"Critical error in checkpoint upload (likely bug): {e}")
-            raise  # Re-raise critical errors to fail fast and expose bugs
-            
-        except Exception as e:
-            # Handle expected wandb/network related errors
-            logger.error(f"Failed to upload checkpoint: {e}")
-            # For expected errors, we don't re-raise to avoid breaking training
-            # But we should still track these for monitoring
-        finally:
-            # Clean up temp file
-            try:
-                if os.path.exists(checkpoint_path):
-                    os.unlink(checkpoint_path)
-            except Exception:
-                pass
-            
+   
          
 
     @monitor_memory
@@ -1029,7 +986,7 @@ class WandbLogger:
                 model_config_meta = model_artifact.metadata.get('model_config', {})
                 if 'embedding_dim' in model_config_meta:
                     saved_config['embedding_dim'] = model_config_meta['embedding_dim']
-                    logger.info(f"Using saved embedding_dim: {saved_config['embedding_dim']}")
+                    logger.debug(f"Using saved embedding_dim: {saved_config['embedding_dim']}")
         except Exception as e:
             logger.debug(f"Could not read artifact metadata: {e}")
 

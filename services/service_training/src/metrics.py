@@ -10,15 +10,14 @@ methods in MetricsData accordingly, and add logging in _log_to_logger and _log_t
 """
 
 
-
-
 import logging
 logger = logging.getLogger(__name__)
 
-from typing import Dict
-from schemas.metrics import MetricsData
-
+from typing import Dict, Optional
 import torch
+
+from schemas.metrics import MetricsData, EvalData
+
 
 class Metrics:
 
@@ -28,6 +27,12 @@ class Metrics:
         self.epoch_metrics = MetricsData()
         self.epoch_accumulations = MetricsData()
         self.running_num_batches_in_epoch = 0
+
+        self.eval_batch_metrics = EvalData()
+        self.eval_epic_metrics = EvalData()
+        self.eval_epoch_accumulations = EvalData()
+        self.running_num_eval_batches_in_epoch = 0
+       
         self.wandb_logger = wandb_logger
 
     def update_with_batch_data (
@@ -39,7 +44,7 @@ class Metrics:
             batch_loss: float, 
             margin: float
          ):
-        """Update metrics with batch data."""
+        """Accumulate batch metrics into epoch metrics."""
 
         with torch.no_grad():
             self.batch_metrics.loss = batch_loss.item()
@@ -59,7 +64,10 @@ class Metrics:
             self._accumulate_epoch_metrics(epoch, self.batch_metrics)
 
     def finalize_epoch_metrics(self, epoch: int):
-        """Finalize and log epoch metrics."""
+        """
+        Calculates epoch metrics based on acculated averages.
+        Logs metrics to standard logger and Weights & Biases if provided.
+        """
         if self.running_num_batches_in_epoch == 0:
             logger.warning(f"No batches processed in epoch {epoch}. Cannot finalize metrics.")
             return
@@ -74,6 +82,59 @@ class Metrics:
         self.epoch_accumulations = MetricsData()
         self.running_num_batches_in_epoch = 0
 
+    def update_eval_batch_data(
+            self, 
+            epoch: int, 
+            labels: torch.Tensor,
+            embeddings: torch.Tensor
+        ):
+        """Accumulate evaluation batch metrics into epoch metrics."""
+        with torch.no_grad():
+            
+            centroids = _compute_centroids(labels, embeddings)
+            confusion = _compute_confusion_matrix(labels, embeddings, centroids)
+
+            tp = torch.diagonal(confusion).sum().item()
+            fp = confusion.sum().item() - tp
+            fn = fp  # In balanced triplet batches, FP = FN
+            tn = 0  # Not computed in triplet batches
+            
+            # Compute distances once for all metrics
+            pos_dist = torch.norm(anchor_embs - positive_embs, p=2, dim=1)
+            neg_dist = torch.norm(anchor_embs - negative_embs, p=2, dim=1)
+            
+            
+            self.eval_batch_metrics.precision = self._compute_precision(tp, fp)
+            self.eval_batch_metrics.recall = self._compute_recall(tp, fn)
+            self.eval_batch_metrics.f1_score = self._compute_f1_score(
+                self.eval_batch_metrics.precision, self.eval_batch_metrics.recall
+            )
+            
+            self.eval_batch_metrics.k1 = self._compute_k1(labels, embeddings, centroids)
+            self.eval_batch_metrics.k5 = self._compute_k5(labels, embeddings, centroids)
+            self.eval_batch_metrics.map = self._compute_map(labels, embeddings, centroids)
+
+            self._accumulate_eval_epoch_metrics(epoch, self.eval_batch_metrics)
+
+
+    def finalize_eval_epoch_metrics(self, epoch: int):
+        """Calculates evaluation epoch metrics based on accumulated averages.
+        Logs metrics to standard logger. WandB logging triggered in finalize_epoch_metrics.
+        """
+        if self.running_num_eval_batches_in_epoch == 0:
+            logger.warning(f"No evaluation batches processed in epoch {epoch}. Cannot finalize eval metrics.")
+            return
+
+        # Use operator overloading for cleaner averagingse
+        self.eval_epoch_metrics = self.eval_epoch_accumulations / self.running_num_eval_batches_in_epoch
+
+        self._log_eval_to_logger(epoch, self.eval_epoch_metrics)
+   
+        self.eval_epoch_accumulations = EvalData()
+        self.running_num_eval_batches_in_epoch = 0
+
+
+    # ===== Computation Helpers =====
 
     def _compute_gradient_norm(self, model: torch.nn.Module) -> float:
         """Compute the gradient norm of the model."""
@@ -121,19 +182,174 @@ class Metrics:
         self.epoch_accumulations += batch_metrics
         self.running_num_batches_in_epoch += 1
 
+    def _accumulate_eval_epoch_metrics(self, epoch: int, eval_batch_metrics: EvalData):
+        """Accumulate evaluation batch metrics into evaluation epoch metrics."""
+        self.eval_epoch_accumulations += eval_batch_metrics
+        self.running_num_eval_batches_in_epoch += 1
 
-    def _log_to_logger(self, epoch: int, epoch_metrics: MetricsData):
+    def _compute_centroids(labels: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
+        """Compute centroids: average embeddings for each unique label."""
+        unique_labels = torch.unique(labels)
+        centroids = []
+        
+        for label in unique_labels:
+            mask = labels == label
+            label_embeddings = embeddings[mask]
+            centroid = label_embeddings.mean(dim=0)
+            centroids.append(centroid)
+        
+        return torch.stack(centroids)  # Shape: [num_classes, embedding_dim]
+
+    def _compute_confusion_matrix(
+            labels: torch.Tensor, 
+            embeddings: torch.Tensor, 
+            centroids: torch.Tensor
+        ) -> torch.Tensor:
+        """Compute confusion matrix based on nearest centroid classification."""
+        num_classes = centroids.size(0)
+        confusion_matrix = torch.zeros((num_classes, num_classes), dtype=torch.int32).to(embeddings.device)
+        for i in range(embeddings.size(0)):
+            embedding = embeddings[i]
+            label = labels[i]
+            # Compute distances to centroids
+            dists = torch.norm(centroids - embedding.unsqueeze(0), p=2, dim=1)
+            predicted_label = torch.argmin(dists).item()
+            confusion_matrix[label.item(), predicted_label] += 1
+        return confusion_matrix
+
+    def _compute_precision(self, tp: int, fp: int) -> float:
+        """Compute precision from confusion matrix values."""
+        if tp + fp == 0:
+            return 0.0
+        return tp / (tp + fp)
+    
+    def _compute_recall(self, tp: int, fn: int) -> float:
+        """Compute recall from confusion matrix values."""
+        if tp + fn == 0:
+            return 0.0
+        return tp / (tp + fn)
+    
+    def _compute_f1_score(self, precision: float, recall: float) -> float:
+        """Compute F1 score from precision and recall."""
+        if precision + recall == 0:
+            return 0.0
+        return 2 * (precision * recall) / (precision + recall)
+    
+    def _compute_k1(
+            self, 
+            labels: torch.Tensor, 
+            embeddings: torch.Tensor, 
+            centroids: torch.Tensor
+        ) -> float:
+        """Compute K@1 (top-1 accuracy) retrieval metric using centroids.
+        
+        For each embedding, check if the nearest centroid matches its true label.
+        """
+        # Compute distance matrix: [num_samples, num_centroids]
+        # Using cdist is more efficient than nested loops
+        distances = torch.cdist(embeddings, centroids, p=2)
+        
+        # Get predicted labels (nearest centroid)
+        predicted = torch.argmin(distances, dim=1)
+        
+        # Get unique label mapping for indexing
+        unique_labels = torch.unique(labels)
+        label_to_idx = {label.item(): idx for idx, label in enumerate(unique_labels)}
+        true_indices = torch.tensor([label_to_idx[l.item()] for l in labels], device=labels.device)
+        
+        # Compute accuracy
+        correct = (predicted == true_indices).float()
+        return correct.mean().item()
+    
+    def _compute_k5(
+            self, 
+            labels: torch.Tensor, 
+            embeddings: torch.Tensor, 
+            centroids: torch.Tensor
+        ) -> float:
+        """Compute K@5 retrieval metric using centroids.
+        
+        For each embedding, check if true label's centroid is in top-5 closest.
+        """
+        # Compute distance matrix: [num_samples, num_centroids]
+        distances = torch.cdist(embeddings, centroids, p=2)
+        
+        # Get top-5 nearest centroids for each embedding
+        _, top5_indices = torch.topk(distances, k=min(5, centroids.size(0)), dim=1, largest=False)
+        
+        # Get unique label mapping
+        unique_labels = torch.unique(labels)
+        label_to_idx = {label.item(): idx for idx, label in enumerate(unique_labels)}
+        true_indices = torch.tensor([label_to_idx[l.item()] for l in labels], device=labels.device)
+        
+        # Check if true label is in top-5
+        true_in_top5 = (top5_indices == true_indices.unsqueeze(1)).any(dim=1).float()
+        return true_in_top5.mean().item()
+    
+    def _compute_map(
+            self, 
+            labels: torch.Tensor, 
+            embeddings: torch.Tensor, 
+            centroids: torch.Tensor
+        ) -> float:
+        """Compute Mean Average Precision (mAP) using centroids.
+        
+        For each embedding, compute AP based on ranking of all centroids.
+        """
+        # Compute distance matrix and sort: [num_samples, num_centroids]
+        distances = torch.cdist(embeddings, centroids, p=2)
+        sorted_indices = torch.argsort(distances, dim=1)
+        
+        # Get unique label mapping
+        unique_labels = torch.unique(labels)
+        label_to_idx = {label.item(): idx for idx, label in enumerate(unique_labels)}
+        true_indices = torch.tensor([label_to_idx[l.item()] for l in labels], device=labels.device)
+        
+        # Compute AP for each sample
+        aps = []
+        for i in range(embeddings.size(0)):
+            sorted_preds = sorted_indices[i]
+            true_idx = true_indices[i]
+            
+            # Find position of correct label (1-indexed for AP calculation)
+            position = (sorted_preds == true_idx).nonzero(as_tuple=True)[0].item() + 1
+            
+            # AP = 1 / position (simplified for single relevant item)
+            ap = 1.0 / position
+            aps.append(ap)
+        
+        return sum(aps) / len(aps)
+
+
+
+
+    # ===== Logging Helpers =====
+
+    def _log_to_logger(self, epoch: int):
         """Log epoch metrics to standard logger."""
         logger.info(f"🧮 Epoch {epoch} Metrics - ")
-        for field_name, value in epoch_metrics.model_dump().items():
+        for field_name, value in self.epoch_accumulations.model_dump().items():
             logger.info(f". - {field_name}: {value}")
+
+    def _log_eval_to_logger(self, epoch: int):
+        """Log evaluation epoch metrics to standard logger."""
+        logger.info(f"🧮 Eval Epoch {epoch} Metrics - ")
+        for field_name, value in self.eval_epoch_accumulations.model_dump().items():
+            logger.info(f". - {field_name}: {value / self.running_num_eval_batches_in_epoch}")
             
 
-    def _maybe_log_to_wandb(self, epoch: int, epoch_metrics: MetricsData, phase: str = "train"):
+    def _maybe_log_to_wandb(self, epoch: int):
         """Log epoch metrics to Weights & Biases if logger is provided."""
         if self.wandb_logger is not None:
+            
             metrics_dict = {}
-            for field_name, value in epoch_metrics.model_dump().items():
-                metrics_dict[f"{phase}/{field_name}"] = value
+            for field_name, value in self.epoch_accumulations.model_dump().items():
+                metrics_dict[f"train/{field_name}"] = value
+
+            # Eval metrics are not updated in every epoch, so log values are repeated
+            eval_dict = {}
+            for field_name, value in self.eval_epoch_accumulations.model_dump().items():
+                eval_dict[f"eval/{field_name}"] = value / self.running_num_eval_batches_in_epoch    
+            
             self.wandb_logger.log_metrics(metrics_dict, step=epoch)
 

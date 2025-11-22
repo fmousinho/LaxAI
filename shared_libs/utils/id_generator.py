@@ -104,3 +104,13 @@ def create_full_guid() -> str:
 def create_short_guid() -> str:
     """Generate a shortened UUID (8 characters)."""
     return uuid.uuid4().hex[:8]
+
+def create_simple_uuid() -> str:
+    """Generate a simple UUID based on current date.
+
+    Format: 'DD-M' where DD is day of month and M is month number.
+    Example: For November 20th, returns '20-11'.
+    """
+    from datetime import datetime
+    now = datetime.now()
+    return f"{now.day}-{now.month}"

@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import psutil
 import pytest
 import torch
-from services.service_training.src.train_pipeline import TrainPipeline
+from training_controller import TrainPipeline
 
 from shared_libs.common.google_storage import GCSPaths, get_storage
 from shared_libs.config.all_config import training_config, wandb_config

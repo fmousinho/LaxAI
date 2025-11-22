@@ -127,7 +127,7 @@ class EvaluatorConfig:
     number_of_workers: int = (
         0 if sys.platform != "darwin" else 0
     )  # Number of workers for DataLoader
-    emb_batch_size: int = 32  # Batch size for embedding generation
+    eval_batch_size: int = 32  # Batch size for embedding generation
     prefetch_factor: int = 2  # Number of batches to prefetch for DataLoader
 
 
