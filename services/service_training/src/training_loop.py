@@ -7,11 +7,12 @@ from datetime import datetime, timezone
 
 import numpy as np
 import torch
-
-
+from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
+from shared_libs.utils.gpu_memory import clear_gpu_memory
 from metrics import Metrics
+
 
 
 # Constants
@@ -32,8 +33,9 @@ class TrainingLoop:
                 lr_scheduler: Any,
                 starting_epoch: int = 1,
                 num_epochs: int = 10,
-                wandb_logger: Optional = None,
+                wandb_logger = None,
                 device: Optional[torch.device] = None,
+                task_id: Optional[str] = None
                 ):
         """
         Initialize the training class with hyperparameters and runtime knobs.
@@ -55,8 +57,6 @@ class TrainingLoop:
         else:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         logger.info(f"Training device: {self.device}")
-        if torch.cuda.is_available() and self.device.type == 'cuda':
-            log_gpu_memory_stats("Device initialization")
 
         self.model = model
         self.model.to(self.device)
@@ -174,7 +174,7 @@ class TrainingLoop:
         if self.model.training:
             self.model.eval()  
         with torch.no_grad():
-           for i, (player, crop) in enumerate(self.val_dataloader):
+           for i, (player, crop) in enumerate(self.eval_dataloader):
                 crop = crop.to(self.device, non_blocking=True)
                 emb = self.model.forward(crop)
                 self.metrics.update_eval_batch_data(
@@ -193,13 +193,19 @@ class TrainingLoop:
             self.save_checkpoint()
 
     def save_checkpoint(self):      
-            logger.info(f"--- Saving Checkpoint at Epoch {epoch} ---")
+            logger.info(f"--- Saving Checkpoint at Epoch {self.current_epoch} ---")
+            if not self.wandb_logger:
+                logger.warning("WandB logger not initialized, skipping checkpoint save.")
+                return
+            state_dicts = {
+                'model_state_dict': self.model.state_dict(),           
+                'optimizer_state_dict': self.optimizer.state_dict(),   
+                'lr_scheduler_state_dict': self.lr_scheduler.state_dict(),    
+            }
             self.wandb_logger.save_checkpoint(
-                run_name=self.wandb_run_name,
-                model=model,
-                optimizer=optimizer,
-                lr_scheduler=lr_scheduler,
-                epoch=epoch
+                state_dicts=state_dicts,
+                epoch=self.current_epoch,
+                task_id=self.task_id
             )
 
 
