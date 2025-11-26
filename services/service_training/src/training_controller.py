@@ -272,71 +272,71 @@ class TrainingController():
             traceback.print_exc()
             raise RuntimeError(msg) from e
     
-        def prepare_train_dataloader(self) -> DataLoader:
-            """Create DataLoader for training dataset."""
-            batch_size = self.training_params.batch_size
-            num_workers = self.training_params.num_workers
-            shuffle = True
-            train_dataset = self.prepare_train_dataset()
+    def prepare_train_dataloader(self) -> DataLoader:
+        """Create DataLoader for training dataset."""
+        batch_size = self.training_params.batch_size
+        num_workers = self.training_params.num_workers
+        shuffle = True
+        train_dataset = self.prepare_train_dataset()
 
-            train_dataloader = DataLoader(
-                train_dataset,
-                batch_size=batch_size,
-                shuffle=shuffle,
-                num_workers=num_workers,
-                pin_memory=True
-            )
-            return train_dataloader
-        
-        def prepare_eval_dataloader(self) -> DataLoader:
-            """Create DataLoader for evaluation dataset."""
-            batch_size = self.eval_params.batch_size
-            num_workers = self.eval_params.num_workers
-            shuffle = True
-            eval_dataset = self.prepare_eval_dataset()
+        train_dataloader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            num_workers=num_workers,
+            pin_memory=True
+        )
+        return train_dataloader
+    
+    def prepare_eval_dataloader(self) -> DataLoader:
+        """Create DataLoader for evaluation dataset."""
+        batch_size = self.eval_params.batch_size
+        num_workers = self.eval_params.num_workers
+        shuffle = True
+        eval_dataset = self.prepare_eval_dataset()
 
-            eval_dataloader = DataLoader(
-                eval_dataset,
-                batch_size=batch_size,
-                shuffle=shuffle,
-                num_workers=num_workers,
-                pin_memory=True
-            )
-            return eval_dataloader
+        eval_dataloader = DataLoader(
+            eval_dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            num_workers=num_workers,
+            pin_memory=True
+        )
+        return eval_dataloader
 
-        def load_model_and_datasets(self) -> None:
-            """Load model and datasets in parallel to optimize startup time."""
-            logger.info("Initializing model and dataloaders in parallel...")
-            with ThreadPoolExecutor(max_workers=3) as executor:
-                # Submit all three tasks
-                model_future = executor.submit(self.prepare_model)
-                train_dl_future = executor.submit(self.prepare_train_dataloader)
-                eval_dl_future = executor.submit(self.prepare_eval_dataloader)
-                
-                # Wait for all to complete and retrieve results
-                try:
-                    self.model = model_future.result()
-                    self.train_dataloader = train_dl_future.result()
-                    self.eval_dataloader = eval_dl_future.result()
-                    logger.info("✅ Model and dataloaders initialized successfully")
-                except Exception as e:
-                    logger.error(f"Failed during parallel initialization: {e}")
-                    raise
+    def load_model_and_datasets(self) -> None:
+        """Load model and datasets in parallel to optimize startup time."""
+        logger.info("Initializing model and dataloaders in parallel...")
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            # Submit all three tasks
+            model_future = executor.submit(self.prepare_model)
+            train_dl_future = executor.submit(self.prepare_train_dataloader)
+            eval_dl_future = executor.submit(self.prepare_eval_dataloader)
+            
+            # Wait for all to complete and retrieve results
+            try:
+                self.model = model_future.result()
+                self.train_dataloader = train_dl_future.result()
+                self.eval_dataloader = eval_dl_future.result()
+                logger.info("✅ Model and dataloaders initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed during parallel initialization: {e}")
+                raise
 
-        def log_initialization_parameters(self) -> None:
-            """Log all initialization parameters for debugging."""
-            logger.info(f"Initializing Training pipeline with parameters:")
-            logger.info(f" - Tenant ID: {self.tenant_id}")
-            logger.info(f" - WandB Run Name: {self.wandb_run_name}")
-            logger.info(f" - Device: {self.device}")
-            logger.info(f" - Model Class: {self.model_class.__name__}")
-            logger.info(f" - Optimizer: {self.optimizer.__class__.__name__}")
-            logger.info(f" - LR Scheduler: {self.lr_scheduler.__class__.__name__}")
-            logger.info(f" - Training Params:")
-            for key, value in self.training_params.dict().items():
-                logger.info(f"    - {key}: {value}")
-            logger.info(f" - Evaluation Params:")
-            for key, value in self.eval_params.dict().items():
-                logger.info(f"    - {key}: {value}")
+    def log_initialization_parameters(self) -> None:
+        """Log all initialization parameters for debugging."""
+        logger.info(f"Initializing Training pipeline with parameters:")
+        logger.info(f" - Tenant ID: {self.tenant_id}")
+        logger.info(f" - WandB Run Name: {self.wandb_run_name}")
+        logger.info(f" - Device: {self.device}")
+        logger.info(f" - Model Class: {self.model_class.__name__}")
+        logger.info(f" - Optimizer: {self.optimizer.__class__.__name__}")
+        logger.info(f" - LR Scheduler: {self.lr_scheduler.__class__.__name__}")
+        logger.info(f" - Training Params:")
+        for key, value in self.training_params.dict().items():
+            logger.info(f"    - {key}: {value}")
+        logger.info(f" - Evaluation Params:")
+        for key, value in self.eval_params.dict().items():
+            logger.info(f"    - {key}: {value}")
             
 
