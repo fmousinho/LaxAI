@@ -12,6 +12,8 @@ import signal
 import threading
 from typing import Any, Dict, List, Optional
 
+from schemas.training import TrainingParams, ModelParams, EvalParams
+
 # Enable MPS fallback for unsupported operations, as recommended by PyTorch.
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 
@@ -38,62 +40,41 @@ class TrainingWorkflow:
 
     def __init__(self,
                  tenant_id: str,
-                 verbose: bool = True,
-                 custom_name: str = "training_workflow_run",
-                 resume_from_checkpoint: bool = True,
-                 wandb_tags: Optional[List[str]] = None,
-                 training_kwargs: Optional[Dict[str, Any]] = None,
-                 model_kwargs: Optional[Dict[str, Any]] = None,
-                 pipeline_name: Optional[str] = "default",
-                 n_datasets_to_use: Optional[int] = None,
+                 wandb_run_name: str = "training_workflow_run",
+                 training_params: Optional[TrainingParams] = None,
                  dataset_address: Optional[str] = None,
-                 eval_kwargs: Optional[Dict[str, Any]] = None,
+                 eval_params: Optional[EvalParams] = None,
                  task_id: Optional[str] = None,
                  cancellation_event: Optional[threading.Event] = None,
                  timeout_triggered: Optional[threading.Event] = None,
                  execution_timeout: Optional[int] = None,
-                 auto_resume_count: int = 0,
-                 original_message_payload: Optional[Dict[str, Any]] = None):
+                 auto_resume_count: int = 0):
         """
         Initialize the training workflow.
 
         Args:
             tenant_id: The tenant ID for GCS operations.
-            verbose: Enable verbose logging for pipelines.
-            custom_name: Custom name for the training run.
-            resume_from_checkpoint: Resume training from checkpoint if available.
-            wandb_tags: List of tags for wandb tracking.
-            training_kwargs: Dictionary of training parameters.
-            model_kwargs: Dictionary of model parameters.
-            pipeline_name: Unique name for the pipeline.
-            n_datasets_to_use: Limit number of datasets to use.
+            wandb_run_name: Name of the run in Weights & Biases.
+            training_params: TrainingParams object with training hyperparameters.
             dataset_address: Full GCS path to a specific dataset (gs://bucket/path or bucket/path).
                            If provided, this overrides dataset discovery and n_datasets_to_use.
-            eval_kwargs: Dictionary of evaluation parameters.
+            eval_params: EvalParams object with evaluation parameters.
             task_id: Task ID for tracking this training run.
             cancellation_event: Event for graceful cancellation handling.
             timeout_triggered: Event that indicates if cancellation was due to timeout.
             execution_timeout: Maximum execution time in minutes. If set, a message will be sent to pub/sub to suspend and restart the job.
             auto_resume_count: Number of times this job has been auto-resumed.
-            original_message_payload: Original Pub/Sub message for replay on auto-resume.
         """
         self.tenant_id = tenant_id
-        self.verbose = verbose
-        self.custom_name = custom_name
-        self.resume_from_checkpoint = resume_from_checkpoint
-        self.wandb_tags = wandb_tags or []
-        self.training_kwargs = training_kwargs or {}
-        self.model_kwargs = model_kwargs or {}
-        self.pipeline_name = pipeline_name
-        self.n_datasets_to_use = n_datasets_to_use
+        self.wandb_run_name = wandb_run_name
+        self.training_params = training_params or TrainingParams()
         self.dataset_address = dataset_address
-        self.eval_kwargs = eval_kwargs or {}
+        self.eval_params = eval_params or EvalParams()
         self.task_id = task_id
         self.cancellation_event = cancellation_event
         self.timeout_triggered = timeout_triggered
         self.execution_timeout = execution_timeout
         self.auto_resume_count = auto_resume_count
-        self.original_message_payload = original_message_payload or {}
 
         # Initialize Firestore client for status updates if task_id is provided
         self.firestore_client = None
@@ -151,113 +132,6 @@ class TrainingWorkflow:
         signal.signal(signal.SIGINT, signal_handler)
         logger.info("Signal handlers registered for graceful cancellation")
 
-    def _extract_dataset_name_from_path(self, gcs_path: str) -> str:
-        """
-        Extract the dataset name from a full GCS path.
-        
-        Handles both formats:
-        - gs://bucket/tenant_id/datasets/dataset_name -> dataset_name
-        - bucket/tenant_id/datasets/dataset_name -> dataset_name
-        
-        Args:
-            gcs_path: Full GCS path to dataset
-            
-        Returns:
-            Dataset name extracted from path
-            
-        Raises:
-            ValueError: If path format is invalid
-        """
-        # Remove gs:// prefix if present
-        path = gcs_path.replace("gs://", "")
-        
-        # Split path into components
-        parts = path.split("/")
-        
-        # Validate path structure - should have at least bucket/tenant/datasets/dataset_name
-        if len(parts) < 4:
-            raise ValueError(
-                f"Invalid dataset path format: {gcs_path}. "
-                f"Expected format: gs://bucket/tenant_id/datasets/dataset_name or bucket/tenant_id/datasets/dataset_name"
-            )
-        
-        # Find 'datasets' in path and take the next component
-        try:
-            datasets_idx = parts.index("datasets")
-            if datasets_idx + 1 >= len(parts):
-                raise ValueError(f"No dataset name found after 'datasets' in path: {gcs_path}")
-            dataset_name = parts[datasets_idx + 1]
-            
-            # Remove trailing slash if present
-            dataset_name = dataset_name.rstrip('/')
-            
-            if not dataset_name:
-                raise ValueError(f"Empty dataset name in path: {gcs_path}")
-            
-            return dataset_name
-            
-        except ValueError as e:
-            if "is not in list" in str(e):
-                raise ValueError(
-                    f"Invalid dataset path format: {gcs_path}. "
-                    f"Path must contain 'datasets' directory."
-                )
-            raise
-
-    def discover_datasets(self) -> List[str]:
-        """
-        Find all available training datasets for the tenant.
-
-        Returns:
-            List of dataset paths available for training.
-        """
-        try:
-            storage = get_storage(self.tenant_id)
-            path_manager = GCSPaths()
-            dataset_path = path_manager.get_path("datasets_root")
-
-            available_datasets = []
-
-            try:
-                available_datasets = storage.list_blobs(
-                    prefix=dataset_path,
-                    delimiter='/',
-                    exclude_prefix_in_return=True
-                    )
-                available_datasets = [d.rstrip('/') for d in available_datasets]
-
-                logger.info(f"Found {len(available_datasets)} datasets: {available_datasets}")
-
-            except Exception as e:
-                logger.warning(f"Could not list datasets from {dataset_path}: {e}")
-                available_datasets = []
-
-            # Limit datasets if specified (0 means use all datasets)
-            logger.info(f"n_datasets_to_use parameter: {self.n_datasets_to_use}")
-            if (self.n_datasets_to_use and self.n_datasets_to_use > 0 and
-                    self.n_datasets_to_use < len(available_datasets)):
-                original_count = len(available_datasets)
-                available_datasets = available_datasets[:self.n_datasets_to_use]
-                logger.info(
-                    f"🎯 LIMITED: Reduced from {original_count} to "
-                    f"{self.n_datasets_to_use} datasets: {available_datasets}"
-                )
-            elif self.n_datasets_to_use and self.n_datasets_to_use > 0:
-                logger.info(
-                    f"⚠️  Requested {self.n_datasets_to_use} datasets, but only "
-                    f"{len(available_datasets)} available"
-                )
-            else:
-                logger.info(
-                    f"📋 Using all {len(available_datasets)} datasets "
-                    f"(n_datasets_to_use={self.n_datasets_to_use})"
-                )
-
-            return available_datasets
-
-        except Exception as e:
-            logger.error(f"Error discovering datasets: {e}")
-            raise
 
     def _update_firestore_status(self, status: str, error: Optional[str] = None) -> None:
         """
@@ -304,19 +178,18 @@ class TrainingWorkflow:
 
             topic_path = self.pubsub_publisher.topic_path("laxai-466119", "training-jobs")
 
+            # Ensure training_params has weights set to 'checkpoint' for auto-resume
+            training_params_dict = self.training_params.dict() if self.training_params else {}
+            training_params_dict['weights'] = 'checkpoint'  # Always resume from checkpoint on auto-resume
+            
             # Construct message with all parameters needed to restart the job
             message_data = {
                 "action": "auto_resume",
                 "tenant_id": self.tenant_id,
-                "custom_name": self.custom_name,
                 "task_id": self.task_id,
-                "resume_from_checkpoint": True,  # Always resume from checkpoint on auto-resume
-                "training_params": self.training_kwargs,
-                "model_params": self.model_kwargs,
-                "eval_params": self.eval_kwargs,
-                "wandb_tags": self.wandb_tags,
-                "n_datasets_to_use": self.n_datasets_to_use or self.original_message_payload.get("n_datasets_to_use"),
-                "dataset_address": self.dataset_address or self.original_message_payload.get("dataset_address"),
+                "training_params": training_params_dict,
+                "eval_params": self.eval_params.dict() if self.eval_params else {},
+                "dataset_address": self.dataset_address,
                 "auto_resume_count": self.auto_resume_count + 1,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
@@ -376,8 +249,8 @@ class TrainingWorkflow:
         - Return a flattened summary without per-dataset training_results
         """
         logger.info(f"--- Starting Training Workflow (single-pipeline) Tenant: {self.tenant_id} ---")
-        logger.info(f"Training configuration: {self.training_kwargs}")
-        logger.info(f"Model configuration: {self.model_kwargs}")
+        logger.info(f"Training configuration: {self.training_params.dict() if self.training_params else {}}")
+        logger.info(f"Model configuration: {self.model_params.dict() if self.model_params else {}}")
 
         # Check for cancellation before starting
         if self.cancellation_event and self.cancellation_event.is_set():
@@ -390,7 +263,6 @@ class TrainingWorkflow:
                 "pipeline_name": self.pipeline_name,
                 "run_guids": [],
                 "message": "Training cancelled before execution",
-                "custom_name": self.custom_name,
                 "dataset_mode": "none",
                 # Compatibility fields
                 "total_runs": 0,
@@ -419,7 +291,6 @@ class TrainingWorkflow:
                         "pipeline_name": self.pipeline_name,
                         "run_guids": [],
                         "message": f"Invalid dataset address: {e}",
-                        "custom_name": self.custom_name,
                         "dataset_mode": "none",
                         "error": str(e),
                         # Compatibility fields
@@ -443,7 +314,6 @@ class TrainingWorkflow:
                     "pipeline_name": self.pipeline_name,
                     "run_guids": [],
                     "message": "No datasets available for training",
-                    "custom_name": self.custom_name,
                     "dataset_mode": "none",
                     # Compatibility fields
                     "total_runs": 0,
@@ -455,8 +325,13 @@ class TrainingWorkflow:
 
             dataset_mode = "multi" if len(datasets) > 1 else "single"
 
-            # Merge kwargs for TrainPipeline (avoid duplicate pipeline_name)
-            all_kwargs = {**self.training_kwargs, **self.model_kwargs, **self.eval_kwargs}
+            # Merge params for TrainPipeline (avoid duplicate pipeline_name)
+            # Convert Pydantic models to dicts for TrainPipeline
+            all_kwargs = {
+                **(self.training_params.dict() if self.training_params else {}),
+                **(self.model_params.dict() if self.model_params else {}),
+                **(self.eval_params.dict() if self.eval_params else {})
+            }
             all_kwargs.pop("pipeline_name", None)
 
             # Create single pipeline; override run_guid with external identity (task_id/pipeline_name)
@@ -483,7 +358,6 @@ class TrainingWorkflow:
                     "pipeline_name": pipeline_identity,
                     "run_guids": [],
                     "message": "Training cancelled before pipeline execution",
-                    "custom_name": self.custom_name,
                     "dataset_mode": dataset_mode
                 }
                 self._update_firestore_status("cancelled")
@@ -500,7 +374,6 @@ class TrainingWorkflow:
 
             pipeline_result = train_pipeline.run(
                 dataset_name=dataset_arg,
-                resume_from_checkpoint=self.resume_from_checkpoint,
                 wandb_run_tags=wandb_tags,
                 custom_name=self.custom_name,
             )
@@ -521,7 +394,6 @@ class TrainingWorkflow:
                 "run_id": pipeline_identity,
                 "pipeline_name": pipeline_identity,
                 "run_guids": [train_pipeline.run_guid],  # type: ignore[attr-defined]
-                "custom_name": self.custom_name,
                 "dataset_mode": dataset_mode,
                 "pipeline_result": pipeline_result,
                 # Compatibility fields expected by CLI
@@ -551,7 +423,6 @@ class TrainingWorkflow:
                     "run_id": self.pipeline_name,
                     "pipeline_name": self.pipeline_name,
                     "run_guids": [self.pipeline_name],
-                    "custom_name": self.custom_name,
                     "dataset_mode": "unknown",
                     "message": f"Training auto-suspended for resume (attempt #{self.auto_resume_count + 1})",
                     # Compatibility fields

@@ -4,6 +4,9 @@ Command Line Interface for LaxAI Training.
 
 This module provides the CLI interface for running training workflows.
 """
+from shared_libs.config import logging_config
+logger = logging_config.get_logger(__name__)
+
 import argparse
 import difflib
 import json
@@ -19,13 +22,10 @@ sys.path.insert(0, '/app/services/service_training/src')
 from shared_libs.utils.env_secrets import setup_environment_secrets
 setup_environment_secrets()
 
-from shared_libs.config import logging_config
-from shared_libs.config.logging_config import print_banner
+
 from shared_libs.config.all_config import training_config
 from workflows.training_workflow import TrainingWorkflow
 from schemas.training import TrainingParams, EvalParams, ModelParams
-
-logger = logging.getLogger(__name__)
 
 # Global cancellation event for signal handling
 cancellation_event = threading.Event()
@@ -35,16 +35,25 @@ timeout_triggered = threading.Event()
 
 def signal_handler(signum, frame):
     """Handle shutdown signals by setting cancellation event."""
-    print(f"\n⏹️  Received signal {signum}. Requesting training cancellation...")
+    logger.info(f"Received signal {signum}. Requesting training cancellation...")
     cancellation_event.set()
 
 
 def timeout_handler():
     """Handle execution timeout by triggering auto-resume sequence."""
-    print(f"\n⏰ Execution timeout reached. Initiating graceful shutdown for auto-resume...")
-    logger.warning("Approaching execution time limit, triggering auto-resume sequence")
+    logger.warning("Execution timeout reached. Initiating graceful shutdown for auto-resume...")
     timeout_triggered.set()
     cancellation_event.set()
+
+
+def print_banner():
+    """Print the LaxAI training banner."""
+    banner = """
+    ╔═══════════════════════════════════════╗
+    ║      LaxAI Training Workflow CLI      ║
+    ╚═══════════════════════════════════════╝
+    """
+    print(banner)
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -72,7 +81,6 @@ def create_parser() -> argparse.ArgumentParser:
             # With all parameter types
             python -m cli.train_cli --tenant-id tenant1 \\
                 --training-params '{"num_epochs": 50}' \\
-                --model-params '{"embedding_dim": 512}' \\
                 --eval-params '{"batch_size": 64}'
             """
     )
@@ -84,14 +92,6 @@ def create_parser() -> argparse.ArgumentParser:
         default=None,
         help='Training parameters as JSON string (e.g., \'{"num_epochs": 100, "batch_size": 32}\')',
         dest='training_params_json'
-    )
-    
-    parser.add_argument(
-        '--model-params',
-        type=str,
-        default=None,
-        help='Model parameters as JSON string (e.g., \'{"embedding_dim": 512}\')',
-        dest='model_params_json'
     )
     
     parser.add_argument(
@@ -112,34 +112,13 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Enable verbose pipeline logging."
-    )
-
-    parser.add_argument(
-        "--custom-name",
+        "--wandb-run-name",
         type=str,
         default="cli_training_run",
         help="Custom name for the training run (used in wandb and logging).",
-        dest="custom_name"
+        dest="wandb_run_name"
     )
 
-    parser.add_argument(
-        "--resume-from-checkpoint",
-        action="store_true",
-        default=True,
-        help="Resume training from checkpoint if available.",
-        dest="resume_from_checkpoint"
-    )
-
-    parser.add_argument(
-        "--wandb-tags",
-        nargs="*",
-        default=[],
-        help="List of tags for wandb tracking (space-separated).",
-        dest="wandb_tags"
-    )
 
     # Note: dataset selection options are provided explicitly above.
 
@@ -183,15 +162,13 @@ def parse_json_params(json_str: Optional[str], schema_class, param_name: str):
     try:
         json_dict = json.loads(json_str)
     except json.JSONDecodeError as e:
-        print(f"❌ Error parsing {param_name}: Invalid JSON")
-        print(f"   {e}")
+        logger.error(f"Error parsing {param_name}: Invalid JSON - {e}")
         sys.exit(1)
     
     try:
         return schema_class(**json_dict)
     except Exception as e:
-        print(f"❌ Error validating {param_name} against schema")
-        print(f"   {e}")
+        logger.error(f"Error validating {param_name} against schema: {e}")
         sys.exit(1)
 
 
@@ -212,34 +189,18 @@ def parse_args_to_workflow_kwargs(args: argparse.Namespace) -> dict:
         "--training-params"
     )
     
-    model_params = parse_json_params(
-        args.model_params_json,
-        ModelParams,
-        "--model-params"
-    )
-    
     eval_params = parse_json_params(
         args.eval_params_json,
         EvalParams,
         "--eval-params"
     )
     
-    # Convert to dicts (if not None, use .model_dump(), otherwise use defaults)
-    training_kwargs = training_params.model_dump() if training_params else {}
-    model_kwargs = model_params.model_dump() if model_params else {}
-    eval_kwargs = eval_params.model_dump() if eval_params else {}
-
-
-    # Build workflow kwargs
+    # Build workflow kwargs - pass Pydantic objects directly
     workflow_kwargs = {
         'tenant_id': args.tenant_id,
-        'verbose': args.verbose,
-        'custom_name': args.custom_name,
-        'resume_from_checkpoint': args.resume_from_checkpoint,
-        'wandb_tags': args.wandb_tags,
-        'training_kwargs': training_kwargs,
-        'model_kwargs': model_kwargs,
-        'eval_kwargs': eval_kwargs,
+        'wandb_run_name': args.wandb_run_name,
+        'training_params': training_params,  # Pass Pydantic object or None
+        'eval_params': eval_params,          # Pass Pydantic object or None
         'task_id': args.task_id,
         'auto_resume_count': args.auto_resume_count
     }
@@ -248,36 +209,7 @@ def parse_args_to_workflow_kwargs(args: argparse.Namespace) -> dict:
 
 
 
-def validate_and_suggest_args(unknown_args: List[str]) -> None:
-    """
-    Validate unknown arguments and provide helpful suggestions.
-    
-    Args:
-        unknown_args: List of unrecognized command line arguments
-    """
-    if not unknown_args:
-        return
-        
-    # Known parameter names
-    known_params = {
-        '--training-params', '--model-params', '--eval-params',
-        '--tenant-id', '--verbose', '--custom-name',
-        '--resume-from-checkpoint', '--wandb-tags', '--task-id',
-        '--auto-resume-count'
-    }
-    
-    for unknown_arg in unknown_args:
-        if unknown_arg.startswith('--'):
-            arg_name = unknown_arg.split('=')[0]  # Handle --arg=value format
-            
-            # Look for close matches
-            from difflib import get_close_matches
-            suggestions = get_close_matches(arg_name, known_params, n=3, cutoff=0.6)
-            
-            if suggestions:
-                logger.warning(f"Unknown argument '{arg_name}'. Did you mean: {', '.join(suggestions)}?")
-            else:
-                logger.warning(f"Unknown argument '{arg_name}'. Use --training-params, --model-params, or --eval-params for configuration.")
+
 
 
 def main():
@@ -285,40 +217,14 @@ def main():
     Main CLI entry point.
     """
     try:
-        # Print all received arguments for debugging
-        print(f"🔍 Received CLI arguments: {sys.argv[1:]}")
-        
-        # Setup logging first
+        # Setup logging
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
         
         parser = create_parser()
-        
-        # Use parse_known_args to handle unrecognized arguments gracefully
-        args, unknown_args = parser.parse_known_args()
-        
-        # Debug: Print what was parsed
-        print(f"✅ Parsed known args: {len(vars(args))} arguments")
-        print(f"⚠️  Unknown args: {unknown_args}")
-        
-        # Debug: Show a few of the parsed arguments
-        parsed_args = vars(args)
-        print(f"🔍 Sample parsed args: {list(parsed_args.keys())[:10]}...")
-        
-        # Warn about unrecognized arguments
-        if unknown_args:
-            logger.warning(f"Unrecognized arguments detected: {' '.join(unknown_args)}")
-            logger.warning("These arguments will be ignored. Please check for typos or missing parameter definitions.")
-            logger.info("Continuing with execution using recognized arguments only...")
-
-        # Setup basic logging if not configured globally
-        if not logging.getLogger().hasHandlers():
-            logging.basicConfig(
-                level=logging.INFO,
-                format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            )
+        args = parser.parse_args()  # Will error with helpful message on unknown args
 
         # Setup signal handlers for graceful cancellation
         signal.signal(signal.SIGTERM, signal_handler)
@@ -331,8 +237,7 @@ def main():
             timeout_timer = threading.Timer(timeout_seconds, timeout_handler)
             timeout_timer.daemon = True
             timeout_timer.start()
-            logger.info(f"⏰ Execution timeout set to {execution_timeout_minutes} minutes")
-            print(f"⏰ Auto-resume will trigger after {execution_timeout_minutes} minutes")
+            logger.info(f"Execution timeout set to {execution_timeout_minutes} minutes")
 
         # Parse arguments and create workflow
         workflow_kwargs = parse_args_to_workflow_kwargs(args)
@@ -340,11 +245,10 @@ def main():
         # Pass the timeout flag to workflow
         workflow_kwargs['timeout_triggered'] = timeout_triggered
 
-        print(f"🚀 Starting LaxAI Training Workflow for tenant: {args.tenant_id}")
-        print(f"📊 Custom run name: {args.custom_name}")
+        logger.info(f"Starting LaxAI Training Workflow for tenant: {args.tenant_id}")
+        logger.info(f"WandB run name: {args.wandb_run_name}")
         if args.auto_resume_count > 0:
-            print(f"🔄 Auto-resume attempt #{args.auto_resume_count}")
-            logger.info(f"This is auto-resume attempt #{args.auto_resume_count}")
+            logger.info(f"Auto-resume attempt #{args.auto_resume_count}")
 
         # Execute workflow with cancellation support
         workflow_kwargs['cancellation_event'] = cancellation_event
@@ -385,10 +289,10 @@ def main():
             sys.exit(1)
 
     except KeyboardInterrupt:
-        print("\n⏹️  Training interrupted by user.")
+        logger.info("Training interrupted by user")
         sys.exit(130)
     except Exception as e:
-        print(f"\n💥 Training workflow failed: {e}")
+        logger.error(f"Training workflow failed: {e}")
         logging.exception("Training workflow error")
         sys.exit(1)
 

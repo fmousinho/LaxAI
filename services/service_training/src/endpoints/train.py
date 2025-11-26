@@ -38,14 +38,14 @@ def execute_training_task(task_id: str, training_request: TrainingRequest):
             "updated_at": datetime.now(timezone.utc).isoformat()
         })
 
-        # Extract parameters from request
-        training_kwargs = training_request.training_params or {}
-        model_kwargs = training_request.model_params or {}
-        eval_kwargs = training_request.eval_params or {}
+        # Extract parameters from request (already Pydantic objects or None)
+        training_params = training_request.training_params
+        model_params = training_request.model_params
+        eval_params = training_request.eval_params
         
-        # Extract n_datasets_to_use and dataset_address from training_params
-        n_datasets_to_use = training_kwargs.get('n_datasets_to_use', None)
-        dataset_address = training_kwargs.get('dataset_address', None)
+        # Extract n_datasets_to_use and dataset_address from training_params if available
+        n_datasets_to_use = training_params.n_datasets_to_use if training_params else None
+        dataset_address = training_params.dataset_address if training_params else None
         logger.info(f"🎯 API received n_datasets_to_use: {n_datasets_to_use} (type: {type(n_datasets_to_use)})")
         logger.info(f"📍 API received dataset_address: {dataset_address}")
 
@@ -53,15 +53,15 @@ def execute_training_task(task_id: str, training_request: TrainingRequest):
         workflow = TrainingWorkflow(
             tenant_id=training_request.tenant_id,
             verbose=getattr(training_request, 'verbose', True),
-            custom_name=training_request.custom_name,
-            resume_from_checkpoint=training_request.resume_from_checkpoint,
+            custom_name=training_request.wandb_run_name,
             wandb_tags=getattr(training_request, 'wandb_tags', []),
-            training_kwargs=training_kwargs,
-            model_kwargs=model_kwargs,
-            eval_kwargs=eval_kwargs,
+            training_params=training_params,
+            model_params=model_params,
+            eval_params=eval_params,
             pipeline_name=f"api_{task_id}",
             n_datasets_to_use=n_datasets_to_use,
-            dataset_address=dataset_address
+            dataset_address=dataset_address,
+            task_id=task_id
         )
 
         # Execute the workflow (single pipeline)
@@ -116,12 +116,11 @@ async def start_training(
     training_tasks[task_id] = {
         "task_id": task_id,
         "status": "queued",
-        "custom_name": request.custom_name,
+        "wandb_run_name": request.wandb_run_name,
         "tenant_id": request.tenant_id,
-        "resume_from_checkpoint": request.resume_from_checkpoint,
-        "training_params": request.training_params,
-        "model_params": request.model_params,
-        "eval_params": request.eval_params,
+        "training_params": request.training_params.dict() if request.training_params else {},
+        "model_params": request.model_params.dict() if request.model_params else {},
+        "eval_params": request.eval_params.dict() if request.eval_params else {},
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "progress": None,
@@ -221,7 +220,7 @@ async def list_training_jobs() -> Dict[str, Any]:
         "training_jobs": [
             {
                 "task_id": task_id,
-                "custom_name": task["custom_name"],
+                "wandb_run_name": task.get("wandb_run_name", ""),
                 "tenant_id": task["tenant_id"],
                 "status": task["status"],
                 "created_at": task["created_at"],
