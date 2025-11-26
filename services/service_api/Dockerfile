@@ -50,12 +50,15 @@ COPY shared_libs/ /app/shared_libs/
 # Copy service API source code
 COPY services/service_api/src/ /app/services/service_api/src/
 
+# Copy service_training source code (needed for schema imports)
+COPY services/service_training/src/ /app/services/service_training/src/
+
 # Copy necessary root configuration files
 COPY config.toml /app/config.toml
 
 # Set PYTHONPATH globally for all users and entrypoints
 # Suppress gRPC ALTS warnings in Cloud Run
-ENV PYTHONPATH=/app/shared_libs:/app/services/service_api/src \
+ENV PYTHONPATH=/app/shared_libs:/app/services/service_api/src:/app/services/service_training/src \
     CONFIG_TOML_PATH=/app/config.toml \
     GRPC_VERBOSITY=ERROR \
     GRPC_TRACE="" \
