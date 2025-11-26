@@ -145,7 +145,7 @@ class TrainingLoop:
                     self.save_checkpoint()
                     return
 
-                self.maybe_run_mid_train_evaluation(epoch, self.val_dataloader)
+                self.maybe_run_mid_train_evaluation()
                 
                 if self.cancellation_requested():
                     logger.info(f"--- Cancellation requested at Epoch {epoch}. Stopping training. ---")
@@ -174,7 +174,7 @@ class TrainingLoop:
         if self.model.training:
             self.model.eval()  
         with torch.no_grad():
-           for i, (player, crop) in enumerate(self.eval_dataloader):
+            for i, (player, crop) in enumerate(self.eval_dataloader):
                 crop = crop.to(self.device, non_blocking=True)
                 emb = self.model.forward(crop)
                 self.metrics.update_eval_batch_data(

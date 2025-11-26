@@ -6,12 +6,13 @@ This module provides the CLI interface for running training workflows.
 """
 import argparse
 import difflib
+import json
 import logging
 import signal
 import sys
 import threading
 import time
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 sys.path.insert(0, '/app')
 sys.path.insert(0, '/app/services/service_training/src')
@@ -22,6 +23,7 @@ from shared_libs.config import logging_config
 from shared_libs.config.logging_config import print_banner
 from shared_libs.config.all_config import training_config
 from workflows.training_workflow import TrainingWorkflow
+from schemas.training import TrainingParams, EvalParams, ModelParams
 
 logger = logging.getLogger(__name__)
 
@@ -60,62 +62,45 @@ def create_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
             Examples:
-            python -m cli.train_cli --tenant_id tenant1 --verbose
-            python -m cli.train_cli --tenant_id tenant1 --n_datasets_to_use 2 --custom_name my_training_run
+            # Basic run with default parameters
+            python -m cli.train_cli --tenant-id tenant1 --custom-name my_run
+            
+            # With custom training parameters
+            python -m cli.train_cli --tenant-id tenant1 \\
+                --training-params '{"num_epochs": 100, "batch_size": 32, "learning_rate": 0.001}'
+            
+            # With all parameter types
+            python -m cli.train_cli --tenant-id tenant1 \\
+                --training-params '{"num_epochs": 50}' \\
+                --model-params '{"embedding_dim": 512}' \\
+                --eval-params '{"batch_size": 64}'
             """
     )
 
-    # Training parameters - explicit argparse definitions
-    parser.add_argument('--num-epochs', type=int, default=training_config.num_epochs,
-                       help="Number of training epochs", dest='num_epochs')
-    parser.add_argument('--batch-size', type=int, default=training_config.batch_size,
-                       help="Batch size for training", dest='batch_size')
-    parser.add_argument('--num-workers', type=int, default=training_config.num_workers,
-                       help="Number of DataLoader workers", dest='num_workers')
-    parser.add_argument('--learning-rate', type=float, default=training_config.learning_rate,
-                       help="Learning rate for optimizer", dest='learning_rate')
-    parser.add_argument('--margin', type=float, default=training_config.margin,
-                       help="Margin for triplet loss", dest='margin')
-    parser.add_argument('--weight-decay', type=float, default=training_config.weight_decay,
-                       help="Weight decay for optimizer", dest='weight_decay')
-    parser.add_argument('--lr-scheduler-patience', type=int, default=training_config.lr_scheduler_patience,
-                       help="Patience for learning rate scheduler", dest='lr_scheduler_patience')
-    parser.add_argument('--lr-scheduler-threshold', type=float, default=training_config.lr_scheduler_threshold,
-                       help="Threshold for learning rate scheduler", dest='lr_scheduler_threshold')
-    parser.add_argument('--lr-scheduler-min-lr', type=float, default=training_config.lr_scheduler_min_lr,
-                       help="Minimum learning rate for scheduler", dest='lr_scheduler_min_lr')
-    parser.add_argument('--lr-scheduler-factor', type=float, default=training_config.lr_scheduler_factor,
-                       help="Factor for LR scheduler", dest='lr_scheduler_factor')
-    parser.add_argument('--force-pretraining', action='store_true', default=training_config.force_pretraining,
-                       help="Force pretrained ResNet defaults", dest='force_pretraining')
-    parser.add_argument('--early-stopping-patience', type=int, default=training_config.early_stopping_patience,
-                       help="Early stopping patience", dest='early_stopping_patience')
-    parser.add_argument('--min-images-per-player', type=int, default=training_config.min_images_per_player,
-                       help="Minimum images per player", dest='min_images_per_player')
-    parser.add_argument('--train-prefetch-factor', type=int, default=training_config.prefetch_factor,
-                       help="Prefetch factor for data loading", dest='train_prefetch_factor')
-    parser.add_argument('--margin-decay-rate', type=float, default=training_config.margin_decay_rate,
-                       help="Margin decay rate", dest='margin_decay_rate')
-    parser.add_argument('--margin-change-threshold', type=float, default=training_config.margin_change_threshold,
-                       help="Margin change threshold", dest='margin_change_threshold')
-    parser.add_argument('--train-ratio', type=float, default=training_config.train_ratio,
-                       help="Training ratio", dest='train_ratio')
-    parser.add_argument('--n-datasets-to-use', type=int, default=training_config.n_datasets_to_use,
-                       help="Number of datasets to use", dest='n_datasets_to_use')
-    parser.add_argument('--dataset-address', type=str, default=training_config.dataset_address,
-                       help="GCS path to specific dataset", dest='dataset_address')
-    parser.add_argument('--use-classification-head', action='store_true', default=training_config.use_classification_head,
-                       help="Whether to use classification head", dest='use_classification_head')
-    parser.add_argument('--classification-epochs', type=int, default=training_config.classification_epochs,
-                       help="Number of epochs to use classification loss", dest='classification_epochs')
-    parser.add_argument('--classification-weight-start', type=float, default=training_config.classification_weight_start,
-                       help="Initial weight for classification loss", dest='classification_weight_start')
-
-    # Model selection overrides
-    parser.add_argument('--model-class-module', type=str, default=None,
-                       help="Override the model class module (e.g., siamesenet_resnet50_wCBAM)", dest='model_class_module')
-    parser.add_argument('--model-class', type=str, default=None,
-                       help="Override the model class name (default: SiameseNet)", dest='model_class')
+    # Schema-based parameters (JSON strings)
+    parser.add_argument(
+        '--training-params',
+        type=str,
+        default=None,
+        help='Training parameters as JSON string (e.g., \'{"num_epochs": 100, "batch_size": 32}\')',
+        dest='training_params_json'
+    )
+    
+    parser.add_argument(
+        '--model-params',
+        type=str,
+        default=None,
+        help='Model parameters as JSON string (e.g., \'{"embedding_dim": 512}\')',
+        dest='model_params_json'
+    )
+    
+    parser.add_argument(
+        '--eval-params',
+        type=str,
+        default=None,
+        help='Evaluation parameters as JSON string (e.g., \'{"batch_size": 64}\')',
+        dest='eval_params_json'
+    )
 
     # Add workflow-specific arguments
     parser.add_argument(
@@ -177,9 +162,42 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def parse_json_params(json_str: Optional[str], schema_class, param_name: str):
+    """
+    Parse and validate JSON string against a Pydantic schema.
+    
+    Args:
+        json_str: JSON string to parse (can be None)
+        schema_class: Pydantic model class for validation
+        param_name: Name of parameter for error messages
+        
+    Returns:
+        Validated schema instance or None if json_str is None
+        
+    Raises:
+        SystemExit: If JSON is invalid or fails validation
+    """
+    if json_str is None:
+        return None
+        
+    try:
+        json_dict = json.loads(json_str)
+    except json.JSONDecodeError as e:
+        print(f"❌ Error parsing {param_name}: Invalid JSON")
+        print(f"   {e}")
+        sys.exit(1)
+    
+    try:
+        return schema_class(**json_dict)
+    except Exception as e:
+        print(f"❌ Error validating {param_name} against schema")
+        print(f"   {e}")
+        sys.exit(1)
+
+
 def parse_args_to_workflow_kwargs(args: argparse.Namespace) -> dict:
     """
-    Parse CLI arguments into workflow keyword arguments.
+    Parse CLI arguments into workflow keyword arguments using schema validation.
 
     Args:
         args: Parsed command line arguments.
@@ -187,34 +205,30 @@ def parse_args_to_workflow_kwargs(args: argparse.Namespace) -> dict:
     Returns:
         Dictionary of keyword arguments for TrainingWorkflow.
     """
-    # Extract training, model, and eval kwargs directly from args
-    training_kwargs = {}
-    model_kwargs = {}
-    eval_kwargs = {}
+    # Parse and validate JSON parameters
+    training_params = parse_json_params(
+        args.training_params_json, 
+        TrainingParams, 
+        "--training-params"
+    )
+    
+    model_params = parse_json_params(
+        args.model_params_json,
+        ModelParams,
+        "--model-params"
+    )
+    
+    eval_params = parse_json_params(
+        args.eval_params_json,
+        EvalParams,
+        "--eval-params"
+    )
+    
+    # Convert to dicts (if not None, use .model_dump(), otherwise use defaults)
+    training_kwargs = training_params.model_dump() if training_params else {}
+    model_kwargs = model_params.model_dump() if model_params else {}
+    eval_kwargs = eval_params.model_dump() if eval_params else {}
 
-    # Training parameters
-    training_param_names = [
-        'num_epochs', 'batch_size', 'num_workers', 'learning_rate', 'margin',
-        'weight_decay', 'lr_scheduler_patience', 'lr_scheduler_threshold',
-        'lr_scheduler_min_lr', 'lr_scheduler_factor', 'force_pretraining',
-        'early_stopping_patience', 'min_images_per_player', 'margin_decay_rate',
-        'margin_change_threshold', 'train_ratio', 'train_prefetch_factor',
-        'use_classification_head', 'classification_epochs', 'classification_weight_start'
-    ]
-    for param_name in training_param_names:
-        arg_value = getattr(args, param_name, None)
-        if arg_value is not None:
-            if param_name == "train_prefetch_factor":
-                training_kwargs["prefetch_factor"] = arg_value
-            else:
-                training_kwargs[param_name] = arg_value
-
-    # Model parameters (passed through; TrainPipeline will consume overrides)
-    if getattr(args, 'model_class_module', None):
-        model_kwargs['model_class_module'] = args.model_class_module
-    if getattr(args, 'model_class', None):
-        # TrainPipeline expects 'model_class_str'
-        model_kwargs['model_class_str'] = args.model_class
 
     # Build workflow kwargs
     workflow_kwargs = {
@@ -226,13 +240,12 @@ def parse_args_to_workflow_kwargs(args: argparse.Namespace) -> dict:
         'training_kwargs': training_kwargs,
         'model_kwargs': model_kwargs,
         'eval_kwargs': eval_kwargs,
-        'n_datasets_to_use': getattr(args, 'n_datasets_to_use', None),
-        'dataset_address': getattr(args, 'dataset_address', None),
         'task_id': args.task_id,
         'auto_resume_count': args.auto_resume_count
     }
 
     return workflow_kwargs
+
 
 
 def validate_and_suggest_args(unknown_args: List[str]) -> None:
@@ -247,17 +260,10 @@ def validate_and_suggest_args(unknown_args: List[str]) -> None:
         
     # Known parameter names
     known_params = {
-        '--num-epochs', '--batch-size', '--num-workers', '--learning-rate',
-        '--margin', '--weight-decay', '--lr-scheduler-patience',
-        '--lr-scheduler-threshold', '--lr-scheduler-min-lr',
-        '--lr-scheduler-factor', '--force-pretraining',
-        '--early-stopping-patience', '--min-images-per-player',
-        '--train-prefetch-factor', '--margin-decay-rate',
-        '--margin-change-threshold', '--train-ratio',
-        '--n-datasets-to-use', '--dataset-address',
+        '--training-params', '--model-params', '--eval-params',
         '--tenant-id', '--verbose', '--custom-name',
         '--resume-from-checkpoint', '--wandb-tags', '--task-id',
-        '--auto-resume-count', '--model-class-module', '--model-class'
+        '--auto-resume-count'
     }
     
     for unknown_arg in unknown_args:
@@ -271,11 +277,7 @@ def validate_and_suggest_args(unknown_args: List[str]) -> None:
             if suggestions:
                 logger.warning(f"Unknown argument '{arg_name}'. Did you mean: {', '.join(suggestions)}?")
             else:
-                # Check for common mistakes
-                if 'prefetch' in arg_name.lower():
-                    logger.warning(f"Unknown argument '{arg_name}'. Note: use --train-prefetch-factor for training or --eval-prefetch-factor for evaluation.")
-                else:
-                    logger.warning(f"Unknown argument '{arg_name}'. Check the parameter registry for available options.")
+                logger.warning(f"Unknown argument '{arg_name}'. Use --training-params, --model-params, or --eval-params for configuration.")
 
 
 def main():
@@ -340,10 +342,6 @@ def main():
 
         print(f"🚀 Starting LaxAI Training Workflow for tenant: {args.tenant_id}")
         print(f"📊 Custom run name: {args.custom_name}")
-        if args.dataset_address:
-            print(f"📍 Using specific dataset: {args.dataset_address}")
-        elif args.n_datasets_to_use:
-            print(f"🎯 Limiting to {args.n_datasets_to_use} datasets")
         if args.auto_resume_count > 0:
             print(f"🔄 Auto-resume attempt #{args.auto_resume_count}")
             logger.info(f"This is auto-resume attempt #{args.auto_resume_count}")

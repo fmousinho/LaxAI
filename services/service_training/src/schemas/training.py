@@ -5,7 +5,7 @@ Explicit Pydantic models that use config defaults directly.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -37,7 +37,7 @@ class TrainingParams(BaseModel):
     margin: float = Field(default=training_config.margin, description="Margin for triplet loss")
     weights: Literal["checkpoint", "latest", "reset"] = Field(
         default="checkpoint", 
-        description="Use "checktpoint" to resume from wandb, "latest" for previous saved model, "reset" to use ResNet defaults"
+        description="Use 'checkpoint' to resume from wandb, 'latest' for previous saved model, 'reset' to use ResNet defaults"
         )
 
 

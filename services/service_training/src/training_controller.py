@@ -18,7 +18,7 @@ import torchvision.transforms as transforms
 
 from shared_libs.common.google_storage import GCSPaths, get_storage
 from shared_libs.config.transforms import get_transforms
-from shared_libs.utils.id_generator import generate_simple_uuid
+from shared_libs.utils.id_generator import create_simple_uuid
 
 
 from schemas.training import TrainingParams, EvalParams
@@ -85,57 +85,43 @@ class TrainingController():
             wandb_logger=self.wandb_logger
         )
 
-        self.training_threads: Dict[str, threading.Thread] = {}
+        self._is_running = False
         self.cancellation_requested_flag = False
 
     def train(self) -> str:
-        """Start the training process in a background thread.
+        """Run the training process synchronously.
 
         Returns:
             task_id: Simple UUID identifying this training run.
         """
-        task_id = generate_simple_uuid()
-        logger.info(f"Starting training task {task_id} (threaded) with WandB run '{self.wandb_run_name}'")
+        task_id = create_simple_uuid()
+        logger.info(f"Starting training task {task_id} (blocking) with WandB run '{self.wandb_run_name}'")
 
         def _cancellation_requested() -> bool:
             return self.cancellation_requested_flag
 
-        def _run_training():
-            try:
-                self.training_loop.train(task_id, cancellation_requested_fn=_cancellation_requested)
-                self.wandb_logger.finish()
-            except Exception as e:
-                logger.error(f"Training task {task_id} failed: {e}")
-                traceback.print_exc()
-
-        # Spawn daemon thread so it won't block process shutdown
-        self.training_threads[task_id] = threading.Thread(target=_run_training, name=f"train-{task_id}", daemon=True)
-        self.training_threads[task_id].start()
+        self._is_running = True
+        try:
+            self.training_loop.train(task_id, cancellation_requested_fn=_cancellation_requested)
+            self.wandb_logger.finish()
+        except Exception as e:
+            logger.error(f"Training task {task_id} failed: {e}")
+            traceback.print_exc()
+            raise
+        finally:
+            self._is_running = False
+        
         return task_id
 
     def graceful_cancellation_request(self, task_id: str, timout: int = 600) -> bool:
-        """Waits for graceful cancellation until timeout is reached."""
+        """Requests graceful cancellation."""
         logger.info(f"Graceful cancellation requested for training task {task_id}")
         self.cancellation_requested_flag = True
-
-        def _cancellation_poller():
-            check_interval = 5  # seconds
-            wait_time = 0
-            while self.training_thread[task_id].is_alive():
-                if wait_time >= timout:
-                    logger.error(f"CANCELLATION TIMOUT REACHED and {task_id} is still alive. Consider killing the process externally.")
-                time.sleep(check_interval)
-                wait_time += check_interval
-
-        threading.Thread(target=_cancellation_poller, name=f"cancel-poller-{task_id}", daemon=True).start()
         return True
 
     def train_is_running(self, task_id: str) -> bool:
         """Check if the training task is still running."""
-        thread = self.training_threads.get(task_id)
-        if thread:
-            return thread.is_alive()
-        return False
+        return self._is_running
 
 
     def setup_wandb_logger(self, run_name):
@@ -236,6 +222,11 @@ class TrainingController():
                 transform=train_transform,
             )
             return train_dataset
+        except Exception as e:
+            msg = f"Error preparing training dataset: {e}"
+            logger.error(msg)
+            traceback.print_exc()
+            raise RuntimeError(msg) from e
 
     def prepare_eval_dataset(self) -> Dataset:
         """
