@@ -154,29 +154,57 @@ class TrainingController():
             config=config
             )
     
-    def prepare_model(self) -> nn.Module:
+    def prepare_model(self) -> torch.nn.Module:
         """Setup the model class and training/evaluation parameters."""
         weights_source = self.training_params.weights
+        model = None
 
         try: 
             model_name = ReIdModel.model_name
             
             if weights_source == "checkpoint":
                 logger.info("Attempting to load model weights from checkpoint")
-                model, last_epoch = self.wandb_logger.load_from_checkpoint(self.wandb_run_name)
-                if not self.model:
-                    logger.warning(f"No checkpoint found in run {self.wandb_run_name}")
+                # load_checkpoint returns Optional[StateDicts]
+                # We pass None to let it auto-detect the checkpoint name based on the current run
+                checkpoint_data = self.wandb_logger.load_checkpoint()
+                
+                if checkpoint_data:
+                    model = ReIdModel(pretrained=False)
+                    # Load model state
+                    model.load_state_dict(checkpoint_data['model_state_dict'])
+                    
+                    # Load optimizer and scheduler states
+                    if 'optimizer_state_dict' in checkpoint_data:
+                        self.optimizer.load_state_dict(checkpoint_data['optimizer_state_dict'])
+                    else:
+                        logger.warning("No optimizer state found in checkpoint") 
+                    if 'lr_scheduler_state_dict' in checkpoint_data:
+                        self.lr_scheduler.load_state_dict(checkpoint_data['lr_scheduler_state_dict'])
+                    else:
+                        logger.warning("No lr scheduler state found in checkpoint")
+                        
+                    # Set starting epoch
+                    self.starting_epoch = checkpoint_data.get('epoch', 0) + 1
+                    logger.info(f"Resuming training from epoch {self.starting_epoch}")
+                else:
+                    logger.warning(f"No checkpoint found for run {self.wandb_run_name}, falling back to 'latest'")
                     weights_source = "latest"
-                self.starting_epoch = last_epoch + 1
             
             if weights_source == "latest":
                 logger.info("Attempting to load weights from latest saved model")
-                model = self.wandb_logger().load_model(model_name=model_name, alias="latest")
-                if not self.model:
-                    logger.warning("No latest saved model found")
+                model = self.wandb_logger.load_model_from_registry(
+                    model_class=ReIdModel,
+                    collection_name=model_name,
+                    alias="latest",
+                    device=str(self.device),
+                    pretrained=False
+                )
+                
+                if not model:
+                    logger.warning("No latest saved model found, falling back to 'reset'")
                     weights_source = "reset"
             
-            if weights_source == "reset":
+            if weights_source == "reset" or model is None:
                 logger.warning("⚠️  Resetting model weights to ResNet defaults as per training parameters")
                 model = ReIdModel()
 

@@ -110,12 +110,16 @@ class BottleneckCBAM(nn.Module):
 class LacrosseReIDResNet(nn.Module):
     model_name = "LacrosseReIDNet - ResNet50 with CBAM and BNNeck v1.0"
 
-    def __init__(self, embedding_dim=512):
+    def __init__(self, embedding_dim=512, pretrained=True):
         super().__init__()
         
         # 1. Load Standard Pretrained Weights
-        print("Loading ResNet50 ImageNet weights...")
-        self.base_model = resnet50(weights=ResNet50_Weights.DEFAULT)
+        if pretrained:
+            print("Loading ResNet50 ImageNet weights...")
+            self.base_model = resnet50(weights=ResNet50_Weights.DEFAULT)
+        else:
+            print("Skipping ResNet50 ImageNet weights (pretrained=False)...")
+            self.base_model = resnet50(weights=None)
         
         # 2. Apply the Stride Trick (Layer 4 stride = 1)
         # This increases feature map size from 8x4 to 16x8 (for 256x128 input)
