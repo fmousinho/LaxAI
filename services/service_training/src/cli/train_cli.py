@@ -4,13 +4,13 @@ Command Line Interface for LaxAI Training.
 
 This module provides the CLI interface for running training workflows.
 """
+import logging
 from shared_libs.config import logging_config
-logger = logging_config.get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 import argparse
 import difflib
 import json
-import logging
 import signal
 import sys
 import threading
