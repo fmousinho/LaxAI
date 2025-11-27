@@ -520,7 +520,7 @@ def create_training_transforms():
             # ),
             transforms.ToTensor(),
             transforms.RandomErasing(
-                p=.5, scale=(0.02, 0.1), ratio=(0.3, 3.3), value='random'
+                p=.5, scale=(0.02, 0.1), ratio=(0.3, 3.3)
             ),
             transforms.Normalize(mean=model_config.imagenet_mean, std=model_config.imagenet_std),
         ]

@@ -23,10 +23,12 @@ models/
 artifacts/
 wandb/
 evaluation_results/
+backup_removed_files/
 
 # Notebooks and large assets
 notebooks/
 *.ipynb
+**/.ipynb_checkpoints
 
 # Build and dist outputs
 build/
@@ -106,6 +108,11 @@ src/utils/wandb
 models/
 evaluation_results/
 .file_cache/
+artifacts/**
+data/**
+models/**
+wandb/**
+evaluation_results/**
 
 # Explicitly ignore build artifacts that may live under src (sometimes created
 # by local builds) so they are not sent in the docker build context.
@@ -119,6 +126,22 @@ temp/
 *.tmp
 *.log
 logs/
+
+# Large binaries and media
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.onnx
+*.npz
+*.npy
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.mp4
+*.mov
+*.avi
 
 # Secrets / keys
 *.pem

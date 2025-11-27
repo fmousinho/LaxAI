@@ -26,7 +26,7 @@ from wandb_logger import wandb_logger
 from training_loop import TrainingLoop
 from loss_fn import loss_fn
 from model import ReIdModel
-from eval_dataset.py import load_eval_dataset
+from eval_dataset import load_eval_dataset
 from dataset import LacrossePlayerDataset
 
 
@@ -37,7 +37,7 @@ class TrainingController():
             self, 
             tenant_id: str, 
             wandb_run_name: str,
-            training_params: TrainingParams = TrainingParams(),
+            training_params: TrainingParams,
             eval_params: EvalParams = EvalParams()
         ):
         """
@@ -45,6 +45,8 @@ class TrainingController():
         """
 
         self.log_initialization_parameters()
+        self.tenant_id = tenant_id
+        self.wandb_run_name = wandb_run_name
 
         self.storage_client = get_storage(tenant_id)
         self.path_manager = GCSPaths()
@@ -53,24 +55,26 @@ class TrainingController():
         self.training_params = training_params
         self.eval_params = eval_params
 
-        self.wandb_run_name = wandb_run_name
         self.wandb_logger = wandb_logger
-        self.setup_wandb_logger()
+        # Initialize WandB with required run name
+        self.setup_wandb_logger(run_name=self.wandb_run_name)
 
         self.starting_epoch = 1
         self.loss_fn = loss_fn
-        self.optimizer = torch.optim.AdamW (lr=self.training_params.lr_initial)
+
+        self.model: torch.nn.Module
+        self.train_dataloader: DataLoader
+        self.eval_dataloader: DataLoader
+        self.load_model_and_datasets()
+
+        # Optimizer and scheduler depend on model parameters
+        self.optimizer = AdamW(self.model.parameters(), lr=self.training_params.lr_initial)
         self.lr_scheduler = ReduceLROnPlateau(
             optimizer=self.optimizer,
             mode='min',
             factor=self.training_params.lr_scheduler_factor,
             patience=self.training_params.lr_scheduler_patience,
         )
-
-        self.model: torch.nn.Module
-        self.train_dataloader: DataLoader
-        self.eval_dataloader: DataLoader    
-        self.load_model_and_datasets()
 
         self.training_loop = TrainingLoop(
             model=self.model,
@@ -81,7 +85,7 @@ class TrainingController():
             lr_scheduler=self.lr_scheduler,
             device=self.device,
             starting_epoch=self.starting_epoch,
-            training_params=self.training_params,
+            # training_params is not a parameter of TrainingLoop
             wandb_logger=self.wandb_logger
         )
 
@@ -124,7 +128,7 @@ class TrainingController():
         return self._is_running
 
 
-    def setup_wandb_logger(self, run_name):
+    def setup_wandb_logger(self, run_name: str):
         """Setup WandB logger for the training pipeline."""
         config = {
             "tenant_id": self.tenant_id,
@@ -135,10 +139,7 @@ class TrainingController():
             "training_params": {**self.training_params.dict()},
             "eval_params": {**self.eval_params.dict()}
         }
-        self.wandb_logger.init_run(
-            name=self.wandb_run_name,
-            config=config
-            )
+        self.wandb_logger.init_run(config=config, run_name=run_name)
     
     def prepare_model(self) -> torch.nn.Module:
         """Setup the model class and training/evaluation parameters."""
@@ -207,18 +208,18 @@ class TrainingController():
     def prepare_train_dataset(self) -> Dataset:
         """Prepare training dataset with triple (anchor, positive, negative) sampling."""
         try:
-            train_transform, _ = get_transforms('training')
+            train_transform = get_transforms('training')
             dataset_addresses = self.training_params.dataset_address
             if type(dataset_addresses) is str:
                 dataset_addresses = [dataset_addresses]
             logger.info("Training dataset built with the following addresses:")
-            for i in range(len(dataset_addresses)):
-                dataset_addresses[i] = dataset_addresses[i].rstrip("/") + "/train/"
-                logger.info(f" - {dataset_addresses[i]}")
+            adjusted_addresses = [addr.rstrip("/") + "/train/" for addr in dataset_addresses]
+            for addr in adjusted_addresses:
+                logger.info(f" - {addr}")
 
             train_dataset = LacrossePlayerDataset(
                 storage_client=self.storage_client,
-                image_dir=dataset_addresses,
+                image_dir=adjusted_addresses,
                 transform=train_transform,
             )
             return train_dataset
@@ -236,7 +237,7 @@ class TrainingController():
         expected to be unique in the eval dataset).
         """
         try:
-            _, eval_transform = get_transforms('evaluation')
+            eval_transform = get_transforms('evaluation')
             dataset_addresses = self.training_params.dataset_address
             if type(dataset_addresses) is str:
                 dataset_addresses = [dataset_addresses]
@@ -250,10 +251,11 @@ class TrainingController():
                 if size > largest_size:
                     largest_size = size
                     largest_dataset_path = dataset_address
+                    largest_dataset_images_paths = image_set
             logger.info(f"Evaluation dataset built from {largest_dataset_path} with {largest_size} images")
             eval_dataset = load_eval_dataset(
                 storage_client=self.storage_client,
-                image_paths=largest_dataset_path,
+                image_paths=largest_dataset_images_paths,
                 transform=eval_transform
             )
             return eval_dataset
@@ -282,7 +284,8 @@ class TrainingController():
     def prepare_eval_dataloader(self) -> DataLoader:
         """Create DataLoader for evaluation dataset."""
         batch_size = self.eval_params.batch_size
-        num_workers = self.eval_params.num_workers
+        # Use training num_workers for eval if not provided in EvalParams
+        num_workers = getattr(self.eval_params, 'num_workers', self.training_params.num_workers)
         shuffle = True
         eval_dataset = self.prepare_eval_dataset()
 
@@ -320,7 +323,7 @@ class TrainingController():
         logger.info(f" - Tenant ID: {self.tenant_id}")
         logger.info(f" - WandB Run Name: {self.wandb_run_name}")
         logger.info(f" - Device: {self.device}")
-        logger.info(f" - Model Class: {self.model_class.__name__}")
+        logger.info(f" - Model Class: {self.model.__class__.__name__}")
         logger.info(f" - Optimizer: {self.optimizer.__class__.__name__}")
         logger.info(f" - LR Scheduler: {self.lr_scheduler.__class__.__name__}")
         logger.info(f" - Training Params:")

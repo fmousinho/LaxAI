@@ -13,7 +13,7 @@ methods in MetricsData accordingly, and add logging in _log_to_logger and _log_t
 import logging
 logger = logging.getLogger(__name__)
 
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 import torch
 
 from schemas.metrics import MetricsData, EvalData
@@ -21,7 +21,7 @@ from schemas.metrics import MetricsData, EvalData
 
 class Metrics:
 
-    def __init__(self, wandb_logger: Optional = None):
+    def __init__(self, wandb_logger = None):
     
         self.batch_metrics = MetricsData()
         self.epoch_metrics = MetricsData()
@@ -29,7 +29,7 @@ class Metrics:
         self.running_num_batches_in_epoch = 0
 
         self.eval_batch_metrics = EvalData()
-        self.eval_epic_metrics = EvalData()
+        self.eval_epoch_metrics = EvalData()
         self.eval_epoch_accumulations = EvalData()
         self.running_num_eval_batches_in_epoch = 0
        
@@ -47,7 +47,7 @@ class Metrics:
         """Accumulate batch metrics into epoch metrics."""
 
         with torch.no_grad():
-            self.batch_metrics.loss = batch_loss.item()
+            self.batch_metrics.loss = batch_loss
             self.batch_metrics.gradient_norm = self._compute_gradient_norm(model)
 
             positive_distance = torch.norm(anchor_embs - positive_embs, p=2, dim=1)
@@ -56,7 +56,7 @@ class Metrics:
             self.batch_metrics.positive_distance = positive_distance.mean().item()
             self.batch_metrics.negative_distance = negative_distance.mean().item()
             (self.batch_metrics.mining_hard, 
-                self.batch_metrics.mining_semihard, 
+                self.batch_metrics.mining_semi_hard, 
                 self.batch_metrics.mining_easy) = self._compute_mining_efficiency(
                     positive_distance, negative_distance, margin
                 )
@@ -75,8 +75,8 @@ class Metrics:
         # Use operator overloading for cleaner averaging
         self.epoch_metrics = self.epoch_accumulations / self.running_num_batches_in_epoch
 
-        self._maybe_log_to_wandb(epoch, self.epoch_metrics)
-        self._log_to_logger(epoch, self.epoch_metrics)
+        self._maybe_log_to_wandb(epoch)
+        self._log_to_logger(epoch)
 
         # Reset accumulations for next epoch
         self.epoch_accumulations = MetricsData()
@@ -91,21 +91,16 @@ class Metrics:
         """Accumulate evaluation batch metrics into epoch metrics."""
         with torch.no_grad():
             
-            centroids = _compute_centroids(labels, embeddings)
-            confusion = _compute_confusion_matrix(labels, embeddings, centroids)
+            centroids = self._compute_centroids(labels, embeddings)
+            confusion = self._compute_confusion_matrix(labels, embeddings, centroids)
 
-            tp = torch.diagonal(confusion).sum().item()
-            fp = confusion.sum().item() - tp
-            fn = fp  # In balanced triplet batches, FP = FN
+            tp_val = int(torch.diagonal(confusion).sum().item())
+            fp_val = int(confusion.sum().item() - tp_val)
+            fn_val = fp_val  # In balanced triplet batches, FP = FN
             tn = 0  # Not computed in triplet batches
             
-            # Compute distances once for all metrics
-            pos_dist = torch.norm(anchor_embs - positive_embs, p=2, dim=1)
-            neg_dist = torch.norm(anchor_embs - negative_embs, p=2, dim=1)
-            
-            
-            self.eval_batch_metrics.precision = self._compute_precision(tp, fp)
-            self.eval_batch_metrics.recall = self._compute_recall(tp, fn)
+            self.eval_batch_metrics.precision = self._compute_precision(tp_val, fp_val)
+            self.eval_batch_metrics.recall = self._compute_recall(tp_val, fn_val)
             self.eval_batch_metrics.f1_score = self._compute_f1_score(
                 self.eval_batch_metrics.precision, self.eval_batch_metrics.recall
             )
@@ -128,7 +123,7 @@ class Metrics:
         # Use operator overloading for cleaner averagingse
         self.eval_epoch_metrics = self.eval_epoch_accumulations / self.running_num_eval_batches_in_epoch
 
-        self._log_eval_to_logger(epoch, self.eval_epoch_metrics)
+        self._log_eval_to_logger(epoch)
    
         self.eval_epoch_accumulations = EvalData()
         self.running_num_eval_batches_in_epoch = 0
@@ -151,7 +146,7 @@ class Metrics:
             pos_dist: torch.Tensor, 
             neg_dist: torch.Tensor, 
             margin: float
-        ) -> Dict[str, float]:
+        ) -> Tuple[float, float, float]:
         """Compute mining efficiency for triplet loss.
         
         Since pos_dist and neg_dist are already averaged scalars,
@@ -187,7 +182,7 @@ class Metrics:
         self.eval_epoch_accumulations += eval_batch_metrics
         self.running_num_eval_batches_in_epoch += 1
 
-    def _compute_centroids(labels: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
+    def _compute_centroids(self, labels: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
         """Compute centroids: average embeddings for each unique label."""
         unique_labels = torch.unique(labels)
         centroids = []
@@ -201,6 +196,7 @@ class Metrics:
         return torch.stack(centroids)  # Shape: [num_classes, embedding_dim]
 
     def _compute_confusion_matrix(
+            self,
             labels: torch.Tensor, 
             embeddings: torch.Tensor, 
             centroids: torch.Tensor
@@ -213,8 +209,8 @@ class Metrics:
             label = labels[i]
             # Compute distances to centroids
             dists = torch.norm(centroids - embedding.unsqueeze(0), p=2, dim=1)
-            predicted_label = torch.argmin(dists).item()
-            confusion_matrix[label.item(), predicted_label] += 1
+            predicted_label = int(torch.argmin(dists).item())
+            confusion_matrix[int(label.item()), predicted_label] += 1
         return confusion_matrix
 
     def _compute_precision(self, tp: int, fp: int) -> float:

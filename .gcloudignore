@@ -27,6 +27,8 @@ artifacts/**
 data/**
 models/**
 backup_removed_files/**
+evaluation_results/**
+wandb/**
 
 
 # Large model files
@@ -34,6 +36,16 @@ backup_removed_files/**
 *.pt
 *.ckpt
 *.h5
+*.onnx
+*.npz
+*.npy
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.mp4
+*.mov
+*.avi
 
 # Experiment outputs / logs
 wandb/**

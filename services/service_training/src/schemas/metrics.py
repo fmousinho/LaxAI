@@ -35,33 +35,34 @@ class MetricsData(BaseModel):
     
 
 
-    class EvalData(BaseModel):
-        """Evaluation metrics data model."""
+class EvalData(BaseModel):
+    """Evaluation metrics data model."""
+    
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    precision: Optional[float] = Field(default=0.0, description="Precision")
+    recall: Optional[float] = Field(default=0.0, description="Recall")
+    f1_score: Optional[float] = Field(default=0.0, description="F1 score")
+    k1: Optional[float] = Field(default=0.0, description="Top-1 accuracy")
+    k5: Optional[float] = Field(default=0.0, description="Top-5 accuracy")
+    map: Optional[float] = Field(default=0.0, description="Mean Average Precision")
+
+    def __add__(self, other: 'EvalData') -> 'EvalData':
+        """Add two EvalData instances for accumulation."""
+        kwargs = {}
+        for field in self.__fields__:
+            kwargs[field] = self.__getattribute__(field) + other.__getattribute__(field)
+        return EvalData(**kwargs)
         
-        model_config = ConfigDict(arbitrary_types_allowed=True)
 
-        precision: Optional[float] = Field(default=0.0, description="Precision")
-        recall: Optional[float] = Field(default=0.0, description="Recall")
-        k1: Optional[float] = Field(default=0.0, description="Top-1 accuracy")
-        k5: Optional[float] = Field(default=0.0, description="Top-5 accuracy")
-        map: Optional[float] = Field(default=0.0, description="Mean Average Precision")
-
-        def __add__(self, other: 'EvalData') -> 'EvalData':
-            """Add two EvalData instances for accumulation."""
-            kwargs = {}
-            for field in self.__fields__:
-                kwargs[field] = self.__getattribute__(field) + other.__getattribute__(field)
-            return EvalData(**kwargs)
-            
-
-        def __truediv__(self, scalar: float) -> 'EvalData':
-            """Divide all evaluation metrics by a scalar for averaging."""
-            if scalar == 0:
-                raise ValueError("Cannot divide evaluation metrics by zero")
-            kwargs = {}
-            for field in self.__fields__:
-                kwargs[field] = (self.__getattribute__(field)) / scalar
-            return EvalData(**kwargs)
+    def __truediv__(self, scalar: float) -> 'EvalData':
+        """Divide all evaluation metrics by a scalar for averaging."""
+        if scalar == 0:
+            raise ValueError("Cannot divide evaluation metrics by zero")
+        kwargs = {}
+        for field in self.__fields__:
+            kwargs[field] = (self.__getattribute__(field)) / scalar
+        return EvalData(**kwargs)
 
    
    

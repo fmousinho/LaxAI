@@ -30,9 +30,9 @@ class TrainingParams(BaseModel):
     lr_scheduler_patience: int = Field(default=training_config.lr_scheduler_patience, description="LR scheduler patience")
     lr_scheduler_factor: float = Field(default=training_config.lr_scheduler_factor, description="LR scheduler factor")
 
-    early_stopping_patience: int = Field(default=training_config.early_stopping_patience, description="Early stopping patience")
+    early_stopping_patience: int = Field(default=training_config.early_stopping_patience or 10, description="Early stopping patience")
 
-    dataset_address: Union[str, List[str]] = Field(default=training_config.dataset_address, description="Specific dataset GCS path (string or list of str)")
+    dataset_address: Union[str, List[str]] = Field(..., description="Specific dataset GCS path (string or list of str)")
 
     margin: float = Field(default=training_config.margin, description="Margin for triplet loss")
     weights: Literal["checkpoint", "latest", "reset"] = Field(

@@ -64,7 +64,7 @@ class TrainingLoop:
         self.train_dataloader = train_dataloader
         self.eval_dataloader = eval_dataloader
         self.loss_fn = loss_fn
-        self.optimizer = optimizer.to
+        self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
         self.current_epoch = starting_epoch
         self.num_epochs = num_epochs
@@ -134,7 +134,7 @@ class TrainingLoop:
                     batch_loss = self.loss_fn(anchor_embs, positive_embs, negative_embs, self.margin)
                     batch_loss.backward()
 
-                    self.metrics.update_with_batch_data(epoch, anchor_embs, positive_embs, negative_embs, batch_loss, self.margin)
+                    self.metrics.update_with_batch_data(self.model, epoch, anchor_embs, positive_embs, negative_embs, batch_loss, self.margin)
                     self.optimizer.step()
                     self.lr_scheduler.step()
 
@@ -173,6 +173,8 @@ class TrainingLoop:
         """Run evaluation at mid-training. """
         if self.model.training:
             self.model.eval()  
+        if self.eval_dataloader is None:
+            return
         with torch.no_grad():
             for i, (player, crop) in enumerate(self.eval_dataloader):
                 crop = crop.to(self.device, non_blocking=True)

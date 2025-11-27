@@ -1,13 +1,16 @@
 import os
+import io
+from typing import Optional, Iterable
+
 import torch
-from pytorch.utils.data import TensorDataset
-import Image
+from torch.utils.data import TensorDataset
+import torchvision.transforms as transforms
+from PIL import Image
 
 
 def load_eval_dataset(
-    self, 
     storage_client,
-    image_paths: set, 
+    image_paths: Iterable[str], 
     transform: Optional[transforms.Compose] = None
 ) -> TensorDataset:
     """Load evaluation dataset from image paths and create TensorDataset.
