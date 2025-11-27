@@ -81,7 +81,12 @@ async def start_training(request: TrainingRequest) -> TrainingResponse:
             # It contains the task_id which is enough for the worker to fetch details from Firestore
             message = AutoResumeMessage(
                 task_id=task_id,
-                attempt=1
+                tenant_id=request.tenant_id,
+                wandb_run_name=request.wandb_run_name,
+                training_params=request.training_params.dict() if request.training_params else {},
+                eval_params=request.eval_params.dict() if request.eval_params else {},
+                dataset_address=request.training_params.dataset_address if request.training_params else None,
+                auto_resume_count=0
             )
             
             # Publish message

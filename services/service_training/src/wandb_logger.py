@@ -1,5 +1,6 @@
 import gc
 import logging
+logger = logging.getLogger(__name__)
 import os
 import re
 import subprocess
@@ -17,7 +18,7 @@ import torch
 
 from shared_libs.config.all_config import wandb_config
 
-logger = logging.getLogger(__name__)
+
 
 # Try to import wandb, handle gracefully if not available:
 import wandb

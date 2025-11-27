@@ -59,7 +59,7 @@ COPY services/service_training/src/ /app/services/service_training/src/
 COPY config.toml /app/config.toml
 
 # Set PYTHONPATH globally for all users and entrypoints
-ENV PYTHONPATH=/app/shared_libs:/app/services/service_training/src
+ENV PYTHONPATH=/app:/app/services/service_training/src
 
 # Create non-root user for security
 RUN groupadd -r appuser && useradd -r -g appuser appuser
