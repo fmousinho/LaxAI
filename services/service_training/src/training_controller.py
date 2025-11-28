@@ -38,7 +38,8 @@ class TrainingController():
             tenant_id: str, 
             wandb_run_name: str,
             training_params: TrainingParams,
-            eval_params: EvalParams = EvalParams()
+            eval_params: EvalParams = EvalParams(),
+            task_id: Optional[str] = None
         ):
         """
         Sets up all components required for training.
@@ -47,6 +48,7 @@ class TrainingController():
         self.log_initialization_parameters()
         self.tenant_id = tenant_id
         self.wandb_run_name = wandb_run_name
+        self.task_id = task_id
 
         self.storage_client = get_storage(tenant_id)
         self.path_manager = GCSPaths()
@@ -98,7 +100,7 @@ class TrainingController():
         Returns:
             task_id: Simple UUID identifying this training run.
         """
-        task_id = create_simple_uuid()
+        task_id = self.task_id or create_simple_uuid()
         logger.info(f"Starting training task {task_id} (blocking) with WandB run '{self.wandb_run_name}'")
 
         def _cancellation_requested() -> bool:

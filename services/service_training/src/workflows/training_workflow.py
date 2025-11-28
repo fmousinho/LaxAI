@@ -27,8 +27,8 @@ try:
 except ImportError:
     PUBSUB_AVAILABLE = False
     logger.warning("google-cloud-pubsub not available, Pub/Sub publishing disabled")
-from services.service_training.src.train_pipeline import TrainPipeline  # noqa: E402
 
+from training_controller import TrainingController
 
 class TrainingWorkflow:
     """
@@ -121,7 +121,7 @@ class TrainingWorkflow:
             # Stop any active pipelines
             try:
                 from shared_libs.common.pipeline import stop_pipeline
-                if self.pipeline_name:
+                if hasattr(self, 'pipeline_name') and self.pipeline_name: # Check if pipeline_name exists
                     stop_pipeline(self.pipeline_name)
                     logger.info(f"Requested pipeline stop for: {self.pipeline_name}")
             except Exception as e:
@@ -236,176 +236,130 @@ class TrainingWorkflow:
             logger.error(f"Failed to publish Pub/Sub message for task_id {task_id}: {e}")
 
     def execute(self) -> Dict[str, Any]:
-        """Execute training using a SINGLE TrainPipeline over all datasets.
-
-        The previous implementation created one pipeline per dataset and aggregated
-        their results. The TrainPipeline already supports multi-dataset mode by
-        accepting a list of dataset names. We now:
-        - If dataset_address is provided: extract dataset name and use it (single dataset mode)
-        - Otherwise: Discover all datasets (optionally truncated by n_datasets_to_use)
-        - Instantiate exactly one TrainPipeline whose pipeline_name (and external
-          identity) is self.pipeline_name
-        - Pass either a single dataset string or list of dataset strings to .run()
-        - Return a flattened summary without per-dataset training_results
-        """
-        logger.info(f"--- Starting Training Workflow (single-pipeline) Tenant: {self.tenant_id} ---")
+        """Execute training using TrainingController."""
+        logger.info(f"--- Starting Training Workflow Tenant: {self.tenant_id} ---")
         logger.info(f"Training configuration: {self.training_params.dict() if self.training_params else {}}")
-        logger.info(f"Model configuration: {self.model_params.dict() if self.model_params else {}}")
-
+        logger.info(f"Evaluation configuration: {self.eval_params.dict() if self.eval_params else {}}")
+        
         # Check for cancellation before starting
         if self.cancellation_event and self.cancellation_event.is_set():
             logger.info("Training cancelled before execution")
             result = {
                 "status": "cancelled",
-                "datasets_found": 0,
-                "steps_completed": 0,
-                "run_id": self.pipeline_name,
-                "pipeline_name": self.pipeline_name,
-                "run_guids": [],
                 "message": "Training cancelled before execution",
-                "dataset_mode": "none",
-                # Compatibility fields
-                "total_runs": 0,
-                "successful_runs": 0,
-                "training_results": [],
             }
             self._update_firestore_status("cancelled")
             return result
 
         try:
             # Determine dataset(s) to use
+            datasets = []
             if self.dataset_address:
                 # Use provided dataset address
                 logger.info(f"Using provided dataset address: {self.dataset_address}")
-                try:
-                    dataset_name = self._extract_dataset_name_from_path(self.dataset_address)
-                    datasets = [dataset_name]
-                    logger.info(f"Extracted dataset name: {dataset_name}")
-                except ValueError as e:
-                    logger.error(f"Invalid dataset address: {e}")
-                    result = {
-                        "status": "failed",
-                        "datasets_found": 0,
-                        "steps_completed": 0,
-                        "run_id": self.pipeline_name,
-                        "pipeline_name": self.pipeline_name,
-                        "run_guids": [],
-                        "message": f"Invalid dataset address: {e}",
-                        "dataset_mode": "none",
-                        "error": str(e),
-                        # Compatibility fields
-                        "total_runs": 0,
-                        "successful_runs": 0,
-                        "training_results": [],
-                    }
-                    self._update_firestore_status("error", str(e))
-                    return result
+                if isinstance(self.dataset_address, str):
+                    datasets = [self.dataset_address]
+                else:
+                    datasets = self.dataset_address
             else:
                 # Discover datasets
-                datasets = self.discover_datasets()
+                if hasattr(self, 'discover_datasets'):
+                    datasets = self.discover_datasets()
+                else:
+                    logger.warning("discover_datasets method not found on TrainingWorkflow instance. No datasets will be used unless dataset_address is provided.")
             
             if not datasets:
                 logger.warning("No datasets found for training")
                 result = {
                     "status": "completed",
-                    "datasets_found": 0,
-                    "steps_completed": 0,
-                    "run_id": self.pipeline_name,
-                    "pipeline_name": self.pipeline_name,
-                    "run_guids": [],
                     "message": "No datasets available for training",
-                    "dataset_mode": "none",
-                    # Compatibility fields
-                    "total_runs": 0,
-                    "successful_runs": 0,
-                    "training_results": [],
                 }
                 self._update_firestore_status("completed")
                 return result
 
-            dataset_mode = "multi" if len(datasets) > 1 else "single"
+            # Update training_params with discovered datasets
+            if self.training_params:
+                # Assuming TrainingParams has a dataset_address field that can take a list of strings
+                self.training_params.dataset_address = datasets
 
-            # Merge params for TrainPipeline (avoid duplicate pipeline_name)
-            # Convert Pydantic models to dicts for TrainPipeline
-            all_kwargs = {
-                **(self.training_params.dict() if self.training_params else {}),
-                **(self.model_params.dict() if self.model_params else {}),
-                **(self.eval_params.dict() if self.eval_params else {})
-            }
-            all_kwargs.pop("pipeline_name", None)
-
-            # Create single pipeline; override run_guid with external identity (task_id/pipeline_name)
-            pipeline_identity = self.task_id or self.pipeline_name or "training_run"
-            train_pipeline = TrainPipeline(
+            # Initialize TrainingController
+            controller = TrainingController(
                 tenant_id=self.tenant_id,
-                verbose=self.verbose,
-                pipeline_name=pipeline_identity,  # Also used as identity
-                run_guid=pipeline_identity,
-                **all_kwargs
+                wandb_run_name=self.wandb_run_name,
+                training_params=self.training_params,
+                eval_params=self.eval_params,
+                task_id=self.task_id, # Pass task_id to controller for internal logging/tracking
             )
 
-            # Execute once over all datasets (list or single item)
-            dataset_arg = datasets if dataset_mode == "multi" else datasets[0]
-
-            # Check for cancellation before pipeline execution
+            # Check for cancellation before training
             if self.cancellation_event and self.cancellation_event.is_set():
-                logger.info("Training cancelled before pipeline execution")
-                result = {
-                    "status": "cancelled",
-                    "datasets_found": len(datasets),
-                    "steps_completed": 0,
-                    "run_id": pipeline_identity,
-                    "pipeline_name": pipeline_identity,
-                    "run_guids": [],
-                    "message": "Training cancelled before pipeline execution",
-                    "dataset_mode": dataset_mode
-                }
+                logger.info("Training cancelled before controller execution")
                 self._update_firestore_status("cancelled")
-                return result
+                return {"status": "cancelled", "message": "Training cancelled before controller execution"}
 
-            # Add task_id to wandb tags if provided
-            wandb_tags = self.wandb_tags.copy()
-            if self.task_id:
-                wandb_tags.append(f"task_id:{self.task_id}")
+            # We can start a thread to monitor cancellation_event and update controller
+            def monitor_cancellation():
+                if self.cancellation_event:
+                    self.cancellation_event.wait()
+                    if self.cancellation_event.is_set():
+                        logger.info("Cancellation event detected, requesting graceful cancellation from TrainingController.")
+                        controller.graceful_cancellation_request(self.task_id or "unknown")
+            
+            monitor_thread = threading.Thread(target=monitor_cancellation, daemon=True)
+            monitor_thread.start()
 
             # Update status to running before starting training
             if self.task_id:
                 self._update_firestore_status("running")
 
-            pipeline_result = train_pipeline.run(
-                dataset_name=dataset_arg,
-                wandb_run_tags=wandb_tags,
-                custom_name=self.custom_name,
-            )
+            task_id = controller.train()
 
-            status = pipeline_result.get("status", "unknown")
-            steps_completed = int(pipeline_result.get("steps_completed", 0))
-            steps_failed = int(pipeline_result.get("steps_failed", 0))
+            # Check if training was cancelled (graceful shutdown)
+            if self.cancellation_event and self.cancellation_event.is_set():
+                logger.info("Training finished due to cancellation event")
+                
+                # Check if cancellation was due to timeout
+                is_timeout = self.timeout_triggered and self.timeout_triggered.is_set()
+                
+                if is_timeout:
+                    logger.info("Cancellation was triggered by execution timeout - initiating auto-resume")
+                    # Publish auto-resume message to Pub/Sub
+                    self._publish_auto_resume_message()
+                    # Update Firestore status to auto_suspended
+                    self._update_firestore_status("auto_suspended", f"Auto-suspended at attempt #{self.auto_resume_count + 1}")
+                    result = {
+                        "status": "auto_suspended",
+                        "task_id": task_id,
+                        "run_id": self.wandb_run_name,
+                        "pipeline_name": self.wandb_run_name,
+                        "message": f"Training auto-suspended for resume (attempt #{self.auto_resume_count + 1})",
+                    }
+                    return result
+                else:
+                    # Normal user cancellation
+                    logger.info("Cancellation was triggered by user request")
+                    self._update_firestore_status("cancelled", "Training workflow cancelled by user request")
+                    result = {
+                        "status": "cancelled",
+                        "task_id": task_id,
+                        "run_id": self.wandb_run_name,
+                        "pipeline_name": self.wandb_run_name,
+                        "message": "Training workflow cancelled by user request",
+                    }
+                    return result
 
-            # Back-compat summary across (now single) run
-            total_runs = 1
-            successful_runs = 1 if (status.lower() == "completed" and steps_failed == 0) else 0
-
-            final_status = "completed" if status == "completed" else status
             result = {
-                "status": final_status,
-                "datasets_found": len(datasets),
-                "steps_completed": steps_completed,
-                "run_id": pipeline_identity,
-                "pipeline_name": pipeline_identity,
-                "run_guids": [train_pipeline.run_guid],  # type: ignore[attr-defined]
-                "dataset_mode": dataset_mode,
-                "pipeline_result": pipeline_result,
-                # Compatibility fields expected by CLI
-                "total_runs": total_runs,
-                "successful_runs": successful_runs,
-                "training_results": [],
+                "status": "completed",
+                "task_id": task_id,
+                "run_id": self.wandb_run_name, 
+                "pipeline_name": self.wandb_run_name, 
+                "message": f"Training completed successfully for task_id: {task_id}"
             }
-            self._update_firestore_status(final_status)
+            self._update_firestore_status("completed")
             return result
 
         except InterruptedError:
-            logger.info("Training workflow cancelled (single-pipeline mode)")
+            logger.info("Training workflow cancelled")
             
             # Check if cancellation was due to timeout
             is_timeout = self.timeout_triggered and self.timeout_triggered.is_set()

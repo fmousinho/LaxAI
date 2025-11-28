@@ -75,73 +75,40 @@ class TrainingJobProxy:
         tenant_id = payload.get("tenant_id")
         if not tenant_id:
             raise ValueError("tenant_id is required in the payload")
-        custom_name = payload.get("custom_name") or payload.get("wandb_run_name") or "training-run"
+        
+        # Determine run name (prefer custom_name, fallback to wandb_run_name)
+        run_name = payload.get("custom_name") or payload.get("wandb_run_name") or "training-run"
 
         # Build command arguments
-        task_id = payload.get("task_id")
         args = [
             f"--tenant-id={tenant_id}",
-            f"--custom-name={custom_name}",
-            *( [f"--task-id={task_id}"] if task_id else [] ),
+            f"--wandb-run-name={run_name}",
         ]
 
-        if payload.get("resume_from_checkpoint", True):
-            args.append("--resume-from-checkpoint")
-        
-        # Add dataset_address if specified (takes precedence over n_datasets_to_use)
-        dataset_address = payload.get("dataset_address")
-        if dataset_address:
-            args.append(f"--dataset-address={dataset_address}")
-        else:
-            # Add n_datasets_to_use only if dataset_address is not specified
-            n_datasets_to_use = payload.get("n_datasets_to_use")
-            if n_datasets_to_use is not None:
-                args.append(f"--n-datasets-to-use={n_datasets_to_use}")
+        task_id = payload.get("task_id")
+        if task_id:
+            args.append(f"--task-id={task_id}")
+            
+        auto_resume_count = payload.get("auto_resume_count")
+        if auto_resume_count is not None:
+            args.append(f"--auto-resume-count={auto_resume_count}")
 
-        # Add dynamic parameters
-        for param_group in ["training_params", "model_params", "eval_params"]:
-            for key, value in payload.get(param_group, {}).items():
-                if value is not None:
-                    # Best-effort type coercion for string inputs coming from JSON
-                    # Accept "True"/"False" (case-insensitive) and numeric strings
-                    if isinstance(value, str):
-                        low = value.strip().lower()
-                        if low in {"true", "false"}:
-                            value = (low == "true")
-                        else:
-                            # Try int/float coercion without raising
-                            try:
-                                if any(ch in low for ch in [".", "e"]):
-                                    value = float(value)
-                                else:
-                                    value = int(value)
-                            except ValueError:
-                                pass
+        # Handle training_params
+        training_params = payload.get("training_params", {})
+        # Ensure dataset_address is in training_params if provided at top level
+        # (This handles cases where it might be passed separately, though usually it's in training_params)
+        if "dataset_address" in payload and "dataset_address" not in training_params:
+             training_params["dataset_address"] = payload["dataset_address"]
+             
+        if training_params:
+            args.append(f"--training-params={json.dumps(training_params)}")
 
-                    # Handle parameter name mapping for different param groups
-                    if param_group == "eval_params" and key == "prefetch_factor":
-                        arg_name = "eval_prefetch_factor"
-                    elif param_group == "training_params" and key == "prefetch_factor":
-                        arg_name = "train_prefetch_factor"
-                    else:
-                        arg_name = key
-                    
-                    # Convert underscores to dashes for CLI argument format
-                    cli_arg_name = arg_name.replace('_', '-')
-                    
-                    # Handle boolean parameters as flags, not key=value pairs
-                    if isinstance(value, bool):
-                        if value:
-                            # For True boolean values, add the flag without value
-                            args.append(f"--{cli_arg_name}")
-                            logger.info(f"Added boolean flag: --{cli_arg_name} (from {param_group}.{key})")
-                        # For False boolean values, don't add the flag at all
-                        else:
-                            logger.info(f"Skipped boolean flag: --{cli_arg_name} (False value from {param_group}.{key})")
-                    else:
-                        # For non-boolean parameters, use key=value format
-                        args.append(f"--{cli_arg_name}={value}")
-                        logger.info(f"Added argument: --{cli_arg_name}={value} (from {param_group}.{key})")
+        # Handle eval_params
+        eval_params = payload.get("eval_params", {})
+        if eval_params:
+            args.append(f"--eval-params={json.dumps(eval_params)}")
+
+        logger.info(f"Constructed CLI arguments: {args}")
 
         # Use the existing job with args override
         job_name = f"{self.parent}/jobs/{_JOB_NAME}"

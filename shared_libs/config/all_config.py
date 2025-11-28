@@ -89,7 +89,7 @@ class TrainingConfig:
     lr_scheduler_factor: float = 0.5  # More conservative reduction
     lr_scheduler_min_lr: float = 1e-6  # Lower minimum LR
     num_epochs: int = 100  # Increased epochs for fine-tuning
-    margin: float = 0.3  # Increased from 0.2 for better separation
+    margin: float = 1.0  # Increased from 0.2 for better separation
     weight_decay: float = 1e-5  # Reduced L2 regularization
     train_ratio: float = 0.8
     min_images_per_player: int = 3  # Increased minimum images per player
