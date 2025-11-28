@@ -564,7 +564,7 @@ def test_train_all_resnet_with_checkpoint_verification():
     setup_environment_secrets()
 
     from services.service_training.src.workflows.training_workflow import \
-        train_workflow as train  # type: ignore
+        TrainingWorkflow as train  # type: ignore
 
     run_name = f"e2e_resnet_checkpoint_test_{uuid.uuid4().hex[:8]}"
 
@@ -598,7 +598,7 @@ def test_train_all_resnet_with_checkpoint_verification():
 def test_train_signature_has_n_datasets_to_use():
     """Test that the train function signature includes n_datasets_to_use parameter."""
     from services.service_training.src.workflows.training_workflow import \
-        train_workflow as train  # type: ignore
+        TrainingWorkflow as train  # type: ignore
     sig = inspect.signature(train)
     
     # Check if **kwargs is present, allowing n_datasets_to_use to be passed dynamically
@@ -656,7 +656,7 @@ def test_checkpoint_resume():
     setup_environment_secrets()
 
     from services.service_training.src.workflows.training_workflow import \
-        train_workflow as train  # type: ignore
+        TrainingWorkflow as train  # type: ignore
 
     try:
         result = train(

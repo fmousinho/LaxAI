@@ -118,14 +118,6 @@ class TrainingWorkflow:
                 self.cancellation_event.set()
                 logger.info("Set cancellation event")
             
-            # Stop any active pipelines
-            try:
-                from shared_libs.common.pipeline import stop_pipeline
-                if hasattr(self, 'pipeline_name') and self.pipeline_name: # Check if pipeline_name exists
-                    stop_pipeline(self.pipeline_name)
-                    logger.info(f"Requested pipeline stop for: {self.pipeline_name}")
-            except Exception as e:
-                logger.error(f"Failed to stop pipeline: {e}")
 
         # Register signal handlers
         signal.signal(signal.SIGTERM, signal_handler)
@@ -254,13 +246,19 @@ class TrainingWorkflow:
         try:
             # Determine dataset(s) to use
             datasets = []
-            if self.dataset_address:
+            
+            # Check if dataset_address is provided directly OR in training_params
+            provided_address = self.dataset_address
+            if not provided_address and self.training_params and self.training_params.dataset_address:
+                provided_address = self.training_params.dataset_address
+
+            if provided_address:
                 # Use provided dataset address
-                logger.info(f"Using provided dataset address: {self.dataset_address}")
-                if isinstance(self.dataset_address, str):
-                    datasets = [self.dataset_address]
+                logger.info(f"Using provided dataset address: {provided_address}")
+                if isinstance(provided_address, str):
+                    datasets = [provided_address]
                 else:
-                    datasets = self.dataset_address
+                    datasets = provided_address
             else:
                 # Discover datasets
                 if hasattr(self, 'discover_datasets'):
@@ -331,7 +329,6 @@ class TrainingWorkflow:
                         "status": "auto_suspended",
                         "task_id": task_id,
                         "run_id": self.wandb_run_name,
-                        "pipeline_name": self.wandb_run_name,
                         "message": f"Training auto-suspended for resume (attempt #{self.auto_resume_count + 1})",
                     }
                     return result
@@ -343,7 +340,6 @@ class TrainingWorkflow:
                         "status": "cancelled",
                         "task_id": task_id,
                         "run_id": self.wandb_run_name,
-                        "pipeline_name": self.wandb_run_name,
                         "message": "Training workflow cancelled by user request",
                     }
                     return result
@@ -352,7 +348,6 @@ class TrainingWorkflow:
                 "status": "completed",
                 "task_id": task_id,
                 "run_id": self.wandb_run_name, 
-                "pipeline_name": self.wandb_run_name, 
                 "message": f"Training completed successfully for task_id: {task_id}"
             }
             self._update_firestore_status("completed")
@@ -372,35 +367,14 @@ class TrainingWorkflow:
                 self._update_firestore_status("auto_suspended", f"Auto-suspended at attempt #{self.auto_resume_count + 1}")
                 result = {
                     "status": "auto_suspended",
-                    "datasets_found": 0,
-                    "steps_completed": 0,
-                    "run_id": self.pipeline_name,
-                    "pipeline_name": self.pipeline_name,
-                    "run_guids": [self.pipeline_name],
-                    "dataset_mode": "unknown",
                     "message": f"Training auto-suspended for resume (attempt #{self.auto_resume_count + 1})",
-                    # Compatibility fields
-                    "total_runs": 0,
-                    "successful_runs": 0,
-                    "training_results": [],
                 }
                 return result
             else:
                 # Normal user cancellation
                 result = {
                     "status": "cancelled",
-                    "datasets_found": 0,
-                    "steps_completed": 0,
-                    "run_id": self.pipeline_name,
-                    "pipeline_name": self.pipeline_name,
-                    "run_guids": [self.pipeline_name],
-                    "custom_name": self.custom_name,
-                    "dataset_mode": "unknown",
                     "error": "Training workflow cancelled by user request",
-                    # Compatibility fields
-                    "total_runs": 0,
-                    "successful_runs": 0,
-                    "training_results": [],
                 }
                 self._update_firestore_status("cancelled", "Training workflow cancelled by user request")
                 return result
@@ -408,38 +382,10 @@ class TrainingWorkflow:
             logger.error(f"Training workflow failed: {e}")
             result = {
                 "status": "failed",
-                "datasets_found": 0,
-                "steps_completed": 0,
-                "run_id": self.pipeline_name,
-                "pipeline_name": self.pipeline_name,
-                "run_guids": [self.pipeline_name],
-                "custom_name": self.custom_name,
-                "dataset_mode": "unknown",
                 "error": str(e),
-                # Compatibility fields
-                "total_runs": 0,
-                "successful_runs": 0,
-                "training_results": [],
             }
             self._update_firestore_status("error", str(e))
             return result
 
-    # Removed _run_training_for_dataset: single pipeline now handles all datasets.
 
 
-def train_workflow(tenant_id: str, **kwargs):
-    """
-    Convenience function for running training workflow.
-
-    This function provides a simple interface for running the training workflow
-    with keyword arguments, similar to the original train_all.train() function.
-
-    Args:
-        tenant_id: The tenant ID for GCS operations.
-        **kwargs: Additional keyword arguments for TrainingWorkflow.
-
-    Returns:
-        Dictionary containing training results.
-    """
-    workflow = TrainingWorkflow(tenant_id=tenant_id, **kwargs)
-    return workflow.execute()
