@@ -86,7 +86,7 @@ class TrainingWorkflow:
             except ImportError:
                 logger.warning("google-cloud-firestore not available, status updates disabled")
             except Exception as e:
-                logger.error(f"Failed to initialize Firestore client: {e}")
+                logger.exception(f"Failed to initialize Firestore client: {e}")
 
         # Initialize Pub/Sub publisher client for message publishing
         self.pubsub_publisher = None
@@ -95,7 +95,7 @@ class TrainingWorkflow:
                 self.pubsub_publisher = pubsub_v1.PublisherClient()
                 logger.info("Initialized Pub/Sub publisher client")
             except Exception as e:
-                logger.error(f"Failed to initialize Pub/Sub publisher client: {e}")
+                logger.exception(f"Failed to initialize Pub/Sub publisher client: {e}")
                 self.pubsub_publisher = None
 
         # Set up signal handlers for external cancellation (e.g., Cloud Run job cancellation)
@@ -111,7 +111,7 @@ class TrainingWorkflow:
                     self._update_firestore_status("cancelled", f"Cancelled by signal {signum}")
                     logger.info(f"Updated Firestore status to cancelled for task_id: {self.task_id}")
                 except Exception as e:
-                    logger.error(f"Failed to update Firestore status on signal: {e}")
+                    logger.exception(f"Failed to update Firestore status on signal: {e}")
             
             # Set the cancellation event if it exists
             if self.cancellation_event:
@@ -153,7 +153,7 @@ class TrainingWorkflow:
             logger.info(f"Updated Firestore status for task_id {self.task_id} to: {status}")
 
         except Exception as e:
-            logger.error(f"Failed to update Firestore status for task_id {self.task_id}: {e}")
+            logger.exception(f"Failed to update Firestore status for task_id {self.task_id}: {e}")
 
     def _publish_auto_resume_message(self) -> None:
         """
@@ -193,7 +193,7 @@ class TrainingWorkflow:
             logger.info(f"Published auto-resume message (attempt #{self.auto_resume_count + 1}) for task_id {self.task_id}: {message_id}")
 
         except Exception as e:
-            logger.error(f"Failed to publish auto-resume message for task_id {self.task_id}: {e}")
+            logger.exception(f"Failed to publish auto-resume message for task_id {self.task_id}: {e}")
 
     def _publish_pubsub_message(self, action: str, task_id: str) -> None:
         """
@@ -225,7 +225,7 @@ class TrainingWorkflow:
             logger.info(f"Published Pub/Sub message for task_id {task_id} with action '{action}': {message_id}")
 
         except Exception as e:
-            logger.error(f"Failed to publish Pub/Sub message for task_id {task_id}: {e}")
+            logger.exception(f"Failed to publish Pub/Sub message for task_id {task_id}: {e}")
 
     def execute(self) -> Dict[str, Any]:
         """Execute training using TrainingController."""
@@ -379,6 +379,7 @@ class TrainingWorkflow:
                 self._update_firestore_status("cancelled", "Training workflow cancelled by user request")
                 return result
         except Exception as e:
+            # Exception already logged with traceback at origin (TrainingController)
             logger.error(f"Training workflow failed: {e}")
             result = {
                 "status": "failed",

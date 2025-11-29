@@ -161,7 +161,7 @@ class TrainingLoop:
 
         except Exception as e:
             error_msg = f"Training loop failed at epoch {epoch}: {e}"
-            logger.error(error_msg)
+            logger.exception(error_msg)
             raise RuntimeError(error_msg)
                 
     def maybe_run_mid_train_evaluation(self):

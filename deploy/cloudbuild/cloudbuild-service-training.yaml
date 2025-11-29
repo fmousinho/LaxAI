@@ -20,6 +20,8 @@ steps:
     name: "gcr.io/cloud-builders/docker"
     args:
       - "build"
+      - "--build-arg"
+      - "GIT_COMMIT_SHA=${SHORT_SHA}"
       - "-f"
       - "services/service_training/Dockerfile"
       - "-t"
@@ -32,6 +34,18 @@ steps:
     args:
       - "push"
       - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-training:latest"
+
+  # Update the Cloud Run Job to use the latest image
+  - id: "update-cloud-run-job"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: "gcloud"
+    args:
+      - "run"
+      - "jobs"
+      - "update"
+      - "laxai-service-training"
+      - "--region=us-central1"
+      - "--image=us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-training:latest"
 
 images:
   - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-training:latest"

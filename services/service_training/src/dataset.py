@@ -168,7 +168,7 @@ class LacrossePlayerDataset(Dataset):
                 
             return img
         except Exception as e:
-            logger.error(f"Error loading image {blob_path}: {e}")
+            logger.exception(f"Error loading image {blob_path}: {e}")
             # Return a dummy image in case of error
             return Image.new('RGB', (224, 224), color='black')
 
@@ -208,7 +208,7 @@ class LacrossePlayerDataset(Dataset):
                 positive_img = self.transform(positive_img)
                 negative_img = self.transform(negative_img)
             except Exception as e:
-                logger.error(f"Error applying transforms: {e}")
+                logger.exception(f"Error applying transforms: {e}")
                 anchor_img = transforms.ToTensor()(anchor_img)
                 positive_img = transforms.ToTensor()(positive_img)
                 negative_img = transforms.ToTensor()(negative_img)

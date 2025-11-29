@@ -10,6 +10,10 @@ ENV PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive \
     TZ=UTC
 
+# Add Git Commit SHA for versioning
+ARG GIT_COMMIT_SHA=unknown
+ENV GIT_COMMIT_SHA=${GIT_COMMIT_SHA}
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \

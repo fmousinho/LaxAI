@@ -35,7 +35,7 @@ class TrainingJobStateManager:
         try:
             self.client = firestore_client or firestore.Client()
         except Exception as e:
-            logger.error(f"Failed to initialize Firestore client: {e}")
+            logger.exception(f"Failed to initialize Firestore client: {e}")
             self.client = None
     
     def create_job(self, job: TrainingJobDocument) -> bool:
@@ -57,7 +57,7 @@ class TrainingJobStateManager:
             logger.info(f"Created training job {job.task_id} with status {job.status}")
             return True
         except Exception as e:
-            logger.error(f"Failed to create job {job.task_id}: {e}")
+            logger.exception(f"Failed to create job {job.task_id}: {e}")
             return False
     
     def get_job(self, task_id: str) -> Optional[TrainingJobDocument]:
@@ -79,7 +79,7 @@ class TrainingJobStateManager:
                 return TrainingJobDocument.from_firestore(doc.to_dict())
             return None
         except Exception as e:
-            logger.error(f"Failed to get job {task_id}: {e}")
+            logger.exception(f"Failed to get job {task_id}: {e}")
             return None
     
     def update_status(
@@ -140,7 +140,7 @@ class TrainingJobStateManager:
             logger.info(f"Updated {task_id}: {job.status.value} → {new_status.value}")
             return True
         except Exception as e:
-            logger.error(f"Failed to update status for {task_id}: {e}")
+            logger.exception(f"Failed to update status for {task_id}: {e}")
             return False
     
     def update_progress(self, task_id: str, **kwargs) -> bool:
@@ -166,5 +166,5 @@ class TrainingJobStateManager:
             doc_ref.update(update_data)
             return True
         except Exception as e:
-            logger.error(f"Failed to update progress for {task_id}: {e}")
+            logger.exception(f"Failed to update progress for {task_id}: {e}")
             return False

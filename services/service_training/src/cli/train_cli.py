@@ -246,6 +246,11 @@ def main():
         workflow_kwargs['timeout_triggered'] = timeout_triggered
 
         logger.info(f"Starting LaxAI Training Workflow for tenant: {args.tenant_id}")
+        
+        # Log version information
+        git_sha = os.environ.get('GIT_COMMIT_SHA', 'unknown')
+        logger.info(f"🚀 Code Version (Git SHA): {git_sha}")
+        
         logger.info(f"WandB run name: {args.wandb_run_name}")
         if args.auto_resume_count > 0:
             logger.info(f"Auto-resume attempt #{args.auto_resume_count}")
@@ -292,8 +297,8 @@ def main():
         logger.info("Training interrupted by user")
         sys.exit(130)
     except Exception as e:
-        logger.error(f"Training workflow failed: {e}")
-        logging.exception("Training workflow error")
+        # Unexpected error in CLI
+        logger.exception(f"Training workflow failed with unexpected error: {e}")
         sys.exit(1)
 
 
