@@ -57,6 +57,7 @@ class TrainingController():
         self.eval_params = eval_params
 
         self.wandb_logger = wandb_logger
+        self.loss_fn = loss_fn
         
         # Initialize to None before loading
         self.model = None
@@ -68,7 +69,6 @@ class TrainingController():
         self.setup_wandb_logger(run_name=self.wandb_run_name)
 
         self.starting_epoch = 1
-        self.loss_fn = loss_fn
         
         self.load_model_and_datasets()
 

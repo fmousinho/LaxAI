@@ -379,8 +379,10 @@ class TrainingWorkflow:
                 self._update_firestore_status("cancelled", "Training workflow cancelled by user request")
                 return result
         except Exception as e:
-            # Exception already logged with traceback at origin (TrainingController)
-            logger.error(f"Training workflow failed: {e}")
+            # Log exception with traceback to capture unexpected errors (like AttributeError)
+            # For handled errors (RuntimeError from controller), this might duplicate traceback,
+            # but it's safer to ensure we don't miss critical debug info.
+            logger.exception(f"Training workflow failed: {e}")
             result = {
                 "status": "failed",
                 "error": str(e),
