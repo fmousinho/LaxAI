@@ -45,7 +45,6 @@ class TrainingController():
         Sets up all components required for training.
         """
 
-        self.log_initialization_parameters()
         self.tenant_id = tenant_id
         self.wandb_run_name = wandb_run_name
         self.task_id = task_id
@@ -78,6 +77,20 @@ class TrainingController():
             patience=self.training_params.lr_scheduler_patience,
         )
 
+        # Load optimizer and scheduler states if available from checkpoint
+        if self.checkpoint_data:
+            if 'optimizer_state_dict' in self.checkpoint_data:
+                self.optimizer.load_state_dict(self.checkpoint_data['optimizer_state_dict'])
+                logger.info("Restored optimizer state from checkpoint")
+            else:
+                logger.warning("No optimizer state found in checkpoint")
+                
+            if 'lr_scheduler_state_dict' in self.checkpoint_data:
+                self.lr_scheduler.load_state_dict(self.checkpoint_data['lr_scheduler_state_dict'])
+                logger.info("Restored LR scheduler state from checkpoint")
+            else:
+                logger.warning("No LR scheduler state found in checkpoint")
+
         self.training_loop = TrainingLoop(
             model=self.model,
             train_dataloader=self.train_dataloader,
@@ -93,6 +106,8 @@ class TrainingController():
 
         self._is_running = False
         self.cancellation_requested_flag = False
+
+        self.log_initialization_parameters()
 
     def train(self) -> str:
         """Run the training process synchronously.
@@ -143,10 +158,11 @@ class TrainingController():
         }
         self.wandb_logger.init_run(config=config, run_name=run_name)
     
-    def prepare_model(self) -> torch.nn.Module:
+    def prepare_model(self) -> Tuple[torch.nn.Module, Optional[Dict[str, Any]]]:
         """Setup the model class and training/evaluation parameters."""
         weights_source = self.training_params.weights
         model = None
+        checkpoint_data = None
 
         try: 
             model_name = ReIdModel.model_name
@@ -162,16 +178,6 @@ class TrainingController():
                     # Load model state
                     model.load_state_dict(checkpoint_data['model_state_dict'])
                     
-                    # Load optimizer and scheduler states
-                    if 'optimizer_state_dict' in checkpoint_data:
-                        self.optimizer.load_state_dict(checkpoint_data['optimizer_state_dict'])
-                    else:
-                        logger.warning("No optimizer state found in checkpoint") 
-                    if 'lr_scheduler_state_dict' in checkpoint_data:
-                        self.lr_scheduler.load_state_dict(checkpoint_data['lr_scheduler_state_dict'])
-                    else:
-                        logger.warning("No lr scheduler state found in checkpoint")
-                        
                     # Set starting epoch
                     self.starting_epoch = checkpoint_data.get('epoch', 0) + 1
                     logger.info(f"Resuming training from epoch {self.starting_epoch}")
@@ -198,7 +204,7 @@ class TrainingController():
                 model = ReIdModel()
 
             model.to(self.device)
-            return model
+            return model, checkpoint_data
 
         except Exception as e:
             msg = f"Error setting up model with weights source '{weights_source}': {e}"
@@ -311,7 +317,7 @@ class TrainingController():
             
             # Wait for all to complete and retrieve results
             try:
-                self.model = model_future.result()
+                self.model, self.checkpoint_data = model_future.result()
                 self.train_dataloader = train_dl_future.result()
                 self.eval_dataloader = eval_dl_future.result()
                 logger.info("✅ Model and dataloaders initialized successfully")
@@ -321,7 +327,7 @@ class TrainingController():
 
     def log_initialization_parameters(self) -> None:
         """Log all initialization parameters for debugging."""
-        logger.info(f"Initializing Training pipeline with parameters:")
+        logger.info(f"Initializing Training controller with parameters:")
         logger.info(f" - Tenant ID: {self.tenant_id}")
         logger.info(f" - WandB Run Name: {self.wandb_run_name}")
         logger.info(f" - Device: {self.device}")
