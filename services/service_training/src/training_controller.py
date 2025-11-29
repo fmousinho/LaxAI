@@ -57,17 +57,18 @@ class TrainingController():
         self.eval_params = eval_params
 
         self.wandb_logger = wandb_logger
-        # Initialize WandB with required run name
-        self.setup_wandb_logger(run_name=self.wandb_run_name)
-
-        self.starting_epoch = 1
-        self.loss_fn = loss_fn
-
-        # Initialize to None before loading (will be set by load_model_and_datasets)
+        
+        # Initialize to None before loading
         self.model = None
         self.train_dataloader = None
         self.eval_dataloader = None
         self.checkpoint_data = None
+        
+        # Initialize WandB with required run name (partial config first)
+        self.setup_wandb_logger(run_name=self.wandb_run_name)
+
+        self.starting_epoch = 1
+        self.loss_fn = loss_fn
         
         self.load_model_and_datasets()
 
@@ -110,6 +111,7 @@ class TrainingController():
         self._is_running = False
         self.cancellation_requested_flag = False
 
+        self.update_wandb_config()
         self.log_initialization_parameters()
 
     def train(self) -> str:
@@ -151,14 +153,35 @@ class TrainingController():
         """Setup WandB logger for the training pipeline."""
         config = {
             "tenant_id": self.tenant_id,
-            "model_class": self.model.__class__.__name__,
-            "loss_function": self.loss_fn.__class__.__name__,
-            "optimizer": self.optimizer.__class__.__name__,
-            "lr_scheduler": self.lr_scheduler.__class__.__name__,
             "training_params": {**self.training_params.dict()},
             "eval_params": {**self.eval_params.dict()}
         }
+        
+        # Add components if they are already initialized
+        if self.model:
+            config["model_class"] = self.model.__class__.__name__
+        if self.loss_fn:
+            config["loss_function"] = self.loss_fn.__class__.__name__
+        if hasattr(self, 'optimizer') and self.optimizer:
+            config["optimizer"] = self.optimizer.__class__.__name__
+        if hasattr(self, 'lr_scheduler') and self.lr_scheduler:
+            config["lr_scheduler"] = self.lr_scheduler.__class__.__name__
+            
         self.wandb_logger.init_run(config=config, run_name=run_name)
+
+    def update_wandb_config(self):
+        """Update WandB config with model details after initialization."""
+        # We access the underlying wandb run object if available
+        if hasattr(self.wandb_logger, 'run') and self.wandb_logger.run:
+            config_update = {}
+            if self.model:
+                config_update["model_class"] = self.model.__class__.__name__
+            if hasattr(self, 'optimizer') and self.optimizer:
+                config_update["optimizer"] = self.optimizer.__class__.__name__
+            if hasattr(self, 'lr_scheduler') and self.lr_scheduler:
+                config_update["lr_scheduler"] = self.lr_scheduler.__class__.__name__
+            
+            self.wandb_logger.run.config.update(config_update, allow_val_change=True)
     
     def prepare_model(self) -> Tuple[torch.nn.Module, Optional[Dict[str, Any]]]:
         """Setup the model class and training/evaluation parameters."""
