@@ -8,6 +8,7 @@ import logging
 from shared_libs.config import logging_config
 logger = logging.getLogger(__name__)
 
+import os
 import argparse
 import difflib
 import json

@@ -69,9 +69,7 @@ class TrainingController():
         self.eval_dataloader = None
         self.checkpoint_data = None
         
-        print("DEBUG: About to call load_model_and_datasets")
         self.load_model_and_datasets()
-        print(f"DEBUG: After load_model_and_datasets - model={self.model is not None}")
 
         # Optimizer and scheduler depend on model parameters
         self.optimizer = AdamW(self.model.parameters(), lr=self.training_params.lr_initial)
@@ -208,7 +206,6 @@ class TrainingController():
                 model = ReIdModel()
 
             model.to(self.device)
-            print(f"DEBUG: prepare_model returning model={model}, checkpoint={checkpoint_data}")
             return model, checkpoint_data
 
         except Exception as e:
@@ -277,7 +274,6 @@ class TrainingController():
     
     def prepare_train_dataloader(self) -> DataLoader:
         """Create DataLoader for training dataset."""
-        print("DEBUG: Entering prepare_train_dataloader")
         batch_size = self.training_params.batch_size
         num_workers = self.training_params.num_workers
         shuffle = True
@@ -294,7 +290,6 @@ class TrainingController():
     
     def prepare_eval_dataloader(self) -> DataLoader:
         """Create DataLoader for evaluation dataset."""
-        print("DEBUG: Entering prepare_eval_dataloader")
         batch_size = self.eval_params.batch_size
         # Use training num_workers for eval if not provided in EvalParams
         num_workers = getattr(self.eval_params, 'num_workers', self.training_params.num_workers)
@@ -321,24 +316,17 @@ class TrainingController():
             
             # Wait for all to complete and retrieve results
             try:
-                print("DEBUG: Waiting for results (timeout=300s)")
                 # Add timeout to detect hangs
                 self.model, self.checkpoint_data = model_future.result(timeout=300)
-                print(f"DEBUG: Model loaded: {self.model is not None}")
-                
                 self.train_dataloader = train_dl_future.result(timeout=300)
-                print("DEBUG: Train DL loaded")
-                
                 self.eval_dataloader = eval_dl_future.result(timeout=300)
-                print("DEBUG: Eval DL loaded")
                 
                 logger.info("✅ Model and dataloaders initialized successfully")
             except TimeoutError:
-                print("DEBUG: Timeout during parallel initialization!")
-                logger.error("Timeout during parallel initialization")
+                logger.exception("Timeout during parallel initialization")
                 raise
             except Exception as e:
-                print(f"DEBUG: Exception in load_model_and_datasets: {e}")
+                # Worker threads already log exceptions with traceback, so we just log error here
                 logger.error(f"Failed during parallel initialization: {e}")
                 raise
 
