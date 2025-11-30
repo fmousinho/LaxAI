@@ -66,7 +66,7 @@ class TrainingController():
         self.checkpoint_data = None
         
         self.margin = self.training_params.margin
-        self.starting_epoch = 1
+        self.starting_epoch = 0
         
         self.load_model_and_datasets()
 

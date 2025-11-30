@@ -325,7 +325,7 @@ class Metrics:
         """Log epoch metrics to standard logger."""
         logger.info(f"🧮 Epoch {epoch} Metrics - ")
         for field_name, value in self.epoch_accumulations.model_dump().items():
-            logger.info(f". - {field_name}: {value}")
+            logger.info(f". - {field_name}: {value:.6f}")
 
     def _log_eval_to_logger(self, epoch: int):
         """Log evaluation epoch metrics to standard logger."""

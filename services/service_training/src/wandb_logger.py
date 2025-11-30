@@ -655,7 +655,7 @@ class WandbLogger:
                 scheduler_epoch = scheduler_state['last_epoch']
                 # Note: scheduler epoch is often 0-indexed or 1-indexed depending on implementation
                 # We just check if they are different and log it
-                if scheduler_epoch != epoch:
+                if scheduler_epoch!= epoch:
                     logger.error(f"Epoch mismatch: Argument epoch={epoch}, Scheduler epoch={scheduler_epoch}")
 
         # Get appropriate checkpoint name
