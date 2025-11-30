@@ -249,6 +249,14 @@ class TrainingController():
         """
         original_address = address
         
+        # Strategy 0: Robust extraction from "datasets/" onward
+        # This handles cases where bucket name or tenant prefix might vary or have typos
+        if '/datasets/' in address:
+            datasets_index = address.index('/datasets/')
+            address = address[datasets_index + 1:]  # +1 to skip the leading "/"
+            logger.info(f"Normalized by extracting '/datasets/': {original_address} -> {address}")
+            return address
+        
         # Get bucket name from storage client
         bucket_name = self.storage_client.bucket_name
         
