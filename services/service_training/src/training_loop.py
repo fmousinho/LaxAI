@@ -138,7 +138,6 @@ class TrainingLoop:
 
                     self.metrics.update_with_batch_data(self.model, epoch, anchor_embs, positive_embs, negative_embs, batch_loss, self.margin)
                     self.optimizer.step()
-                    self.lr_scheduler.step()
 
                 self.maybe_save_checkpoint(epoch, self.model, self.optimizer, self.lr_scheduler)
 
@@ -155,6 +154,11 @@ class TrainingLoop:
                     return
 
                 self.metrics.finalize_epoch_metrics(epoch)
+                
+                # Step the learning rate scheduler with the epoch loss
+                # ReduceLROnPlateau requires a metric to decide whether to reduce LR
+                if self.metrics.epoch_metrics and self.metrics.epoch_metrics.loss is not None:
+                    self.lr_scheduler.step(self.metrics.epoch_metrics.loss)
 
                 self.current_epoch += 1
 
