@@ -6,6 +6,9 @@ import torch
 from torch.utils.data import TensorDataset
 import torchvision.transforms as transforms
 from PIL import Image
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def load_eval_dataset(
@@ -37,6 +40,10 @@ def load_eval_dataset(
         
         # Load and transform image
         img_bytes = storage_client.download_blob_to_bytes(blob_path)
+        if img_bytes is None:
+            logger.warning(f"Warning: Failed to download image {blob_path}, skipping.")
+            continue
+            
         img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
         
         if transform:

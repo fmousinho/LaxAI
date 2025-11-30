@@ -505,9 +505,35 @@ class GoogleStorageClient:
         except NotFound:
             logger.info(f"Blob {source_blob_name} not found (404)")
             return False
+
         except Exception as e:
             logger.error(f"Failed to download blob: {e}")
             return False
+
+    @ensure_ready
+    @normalize_user_path
+    @build_full_path("source_blob_name")
+    def download_blob_to_bytes(self, source_blob_name: str) -> Optional[bytes]:
+        """
+        Download a blob from the bucket as raw bytes.
+
+        Args:
+            source_blob_name: Name of the blob in the bucket
+
+        Returns:
+            bytes: Content of the blob as bytes, or None if failed
+        """
+        try:
+            blob = self._bucket.blob(source_blob_name)  # type: ignore
+            content = blob.download_as_bytes()
+            logger.debug(f"Blob {source_blob_name} downloaded as bytes")
+            return content
+        except NotFound:
+            logger.info(f"Blob {source_blob_name} not found (404)")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to download blob as bytes: {e}")
+            return None
 
     @ensure_ready
     @normalize_user_path
