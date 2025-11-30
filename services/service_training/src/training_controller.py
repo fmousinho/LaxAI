@@ -65,9 +65,7 @@ class TrainingController():
         self.eval_dataloader = None
         self.checkpoint_data = None
         
-        # Initialize WandB with required run name (partial config first)
-        self.setup_wandb_logger(run_name=self.wandb_run_name)
-
+        self.margin = self.training_params.margin
         self.starting_epoch = 1
         
         self.load_model_and_datasets()
@@ -95,10 +93,13 @@ class TrainingController():
             else:
                 logger.warning("No LR scheduler state found in checkpoint")
 
+        self.setup_wandb_logger(run_name=self.wandb_run_name)
+        
         self.training_loop = TrainingLoop(
             model=self.model,
             train_dataloader=self.train_dataloader,
             eval_dataloader=self.eval_dataloader,
+            margin=self.margin,
             loss_fn=self.loss_fn,
             optimizer = self.optimizer,
             lr_scheduler=self.lr_scheduler,
@@ -111,7 +112,6 @@ class TrainingController():
         self._is_running = False
         self.cancellation_requested_flag = False
 
-        self.update_wandb_config()
         self.log_initialization_parameters()
 
     def train(self) -> str:
@@ -166,6 +166,8 @@ class TrainingController():
             config["optimizer"] = self.optimizer.__class__.__name__
         if hasattr(self, 'lr_scheduler') and self.lr_scheduler:
             config["lr_scheduler"] = self.lr_scheduler.__class__.__name__
+        if hasattr(self, 'margin') and self.margin:
+            config["margin"] = self.margin
             
         self.wandb_logger.init_run(config=config, run_name=run_name)
 
@@ -180,6 +182,8 @@ class TrainingController():
                 config_update["optimizer"] = self.optimizer.__class__.__name__
             if hasattr(self, 'lr_scheduler') and self.lr_scheduler:
                 config_update["lr_scheduler"] = self.lr_scheduler.__class__.__name__
+            if hasattr(self, 'margin') and self.margin:
+                config_update["margin"] = self.margin
             
             self.wandb_logger.run.config.update(config_update, allow_val_change=True)
     
@@ -422,6 +426,7 @@ class TrainingController():
         logger.info(f" - Model Class: {self.model.__class__.__name__}")
         logger.info(f" - Optimizer: {self.optimizer.__class__.__name__}")
         logger.info(f" - LR Scheduler: {self.lr_scheduler.__class__.__name__}")
+        logger.info(f" - Margin: {self.margin}")
         logger.info(f" - Training Params:")
         for key, value in self.training_params.dict().items():
             logger.info(f"    - {key}: {value}")

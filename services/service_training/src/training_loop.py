@@ -31,6 +31,7 @@ class TrainingLoop:
                 loss_fn: Callable,
                 optimizer: torch.optim.Optimizer,
                 lr_scheduler: Any,
+                margin: float,
                 starting_epoch: int = 1,
                 num_epochs: int = 10,
                 wandb_logger = None,
@@ -66,6 +67,7 @@ class TrainingLoop:
         self.loss_fn = loss_fn
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
+        self.margin = margin
         self.current_epoch = starting_epoch
         self.num_epochs = num_epochs
         self.wandb_logger = wandb_logger
