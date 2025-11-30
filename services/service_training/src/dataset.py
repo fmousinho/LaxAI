@@ -84,17 +84,37 @@ class LacrossePlayerDataset(Dataset):
         self.dataset_to_players = {}
 
         # Process each dataset
+        logger.info("="*60)
+        logger.info("🔍 DISCOVERING PLAYERS IN DATASETS")
+        logger.info("="*60)
         for dataset_dir in self.dataset_list:
+            logger.info(f"Querying dataset: {dataset_dir}")
+            logger.info(f"  Using delimiter='/' to find player directories")
             potential_players = storage_client.list_blobs(prefix=dataset_dir, delimiter='/')
+            logger.info(f"  Found {len(potential_players)} potential player directories")
+            
+            if len(potential_players) == 0:
+                logger.warning(f"  ⚠️  No player directories found at {dataset_dir}")
+            else:
+                logger.debug(f"  First few players: {list(potential_players)[:3]}")
+            
             self.dataset_to_players[dataset_dir] = []
-            for potential_player in potential_players:
+            for i, potential_player in enumerate(potential_players, 1):
                 player_images = storage_client.list_blobs(prefix=potential_player)
+                logger.debug(f"  Player {i}/{len(potential_players)}: {potential_player} has {len(player_images)} images")
                 if len(player_images) > self.min_images_per_player:
                     self.players.append(potential_player)
                     self.player_to_images[potential_player] = player_images
                     self.dataset_to_players[dataset_dir].append(potential_player)
+                    logger.debug(f"    ✓ Added (has {len(player_images)} images > {self.min_images_per_player} required)")
+                else:
+                    logger.debug(f"    ✗ Skipped (only {len(player_images)} images, need {self.min_images_per_player}+)")
 
+        logger.info("="*60)
+        logger.info(f"🎯 RESULT: {len(self.players)} valid players found across {len(self.dataset_list)} dataset(s)")
+        logger.info("="*60)
         if len(self.players) < 2:
+            logger.error(f"❌ INSUFFICIENT PLAYERS: Need at least 2, found {len(self.players)}")
             raise ValueError(f"Need at least 2 players with {self.min_images_per_player}+ images each. Found {len(self.players)} valid players.")
 
         # Create list of all valid images

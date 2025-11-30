@@ -235,7 +235,45 @@ class TrainingController():
             msg = f"Error setting up model with weights source '{weights_source}': {e}"
             logger.exception(msg)
             raise RuntimeError(msg) from e
-            
+    
+    def _normalize_dataset_address(self, address: str) -> str:
+        """Strip bucket name and tenant prefix from dataset address.
+        
+        GoogleStorageClient automatically adds tenant prefix, so we need
+        to provide paths relative to the tenant root.
+        
+        Examples:
+            laxai_dev/tenant1/datasets/foo -> datasets/foo
+            tenant1/datasets/foo -> datasets/foo
+            datasets/foo -> datasets/foo (already correct)
+        """
+        original_address = address
+        
+        # Get bucket name from storage client
+        bucket_name = self.storage_client.bucket_name
+        
+        # Strategy 1: Try to strip "bucket_name/tenant_id/" prefix
+        if bucket_name and self.tenant_id:
+            combined_prefix = f"{bucket_name}/{self.tenant_id}/"
+            if address.startswith(combined_prefix):
+                address = address[len(combined_prefix):]
+                logger.info(f"Stripped combined prefix '{combined_prefix}': {original_address} -> {address}")
+                return address
+        
+        # Strategy 2: Try to strip just bucket name
+        if bucket_name and address.startswith(f"{bucket_name}/"):
+            address = address[len(bucket_name) + 1:]
+            logger.info(f"Stripped bucket prefix '{bucket_name}/': {original_address} -> {address}")
+        
+        # Strategy 3: Try to strip just tenant prefix
+        if address.startswith(f"{self.tenant_id}/"):
+            address = address[len(self.tenant_id) + 1:]
+            logger.info(f"Stripped tenant prefix '{self.tenant_id}/': {original_address} -> {address}")
+        
+        if address == original_address:
+            logger.info(f"Dataset address unchanged (already normalized): {address}")
+        
+        return address
 
     def prepare_train_dataset(self) -> Dataset:
         """Prepare training dataset with triple (anchor, positive, negative) sampling."""
@@ -244,8 +282,18 @@ class TrainingController():
             dataset_addresses = self.training_params.dataset_address
             if type(dataset_addresses) is str:
                 dataset_addresses = [dataset_addresses]
-            logger.info("Training dataset built with the following addresses:")
-            adjusted_addresses = [addr.rstrip("/") + "/train/" for addr in dataset_addresses]
+            
+            # Normalize addresses to strip bucket/tenant prefixes
+            normalized_addresses = [self._normalize_dataset_address(addr) for addr in dataset_addresses]
+            
+            logger.info(" ")
+            logger.info("="*60)
+            logger.info("📦 TRAINING DATASET CONFIGURATION")
+            logger.info("="*60)
+            logger.info(f"Original addresses: {dataset_addresses}")
+            logger.info(f"Normalized addresses: {normalized_addresses}")
+            adjusted_addresses = [addr.rstrip("/") + "/train/" for addr in normalized_addresses]
+            logger.info("Final paths to query for players:")
             for addr in adjusted_addresses:
                 logger.info(f" - {addr}")
 
@@ -268,14 +316,18 @@ class TrainingController():
         expected to be unique in the eval dataset).
         """
         try:
-            eval_transform = get_transforms('evaluation')
+            eval_transform = get_transforms('validation')
             dataset_addresses = self.training_params.dataset_address
             if type(dataset_addresses) is str:
                 dataset_addresses = [dataset_addresses]
+            
+            # Normalize addresses to strip bucket/tenant prefixes
+            normalized_addresses = [self._normalize_dataset_address(addr) for addr in dataset_addresses]
+            
             largest_dataset_path: str = ""
             largest_size: int = 0
             largest_dataset_images_paths = set()
-            for dataset_address in dataset_addresses:
+            for dataset_address in normalized_addresses:
                 dataset_address = dataset_address.rstrip("/") + "/val/"
                 image_set = self.storage_client.list_blobs(dataset_address)
                 size = len(image_set)

@@ -33,6 +33,9 @@ def _is_gcp_environment() -> bool:
     )
 
 
+# Get log level from environment, default to INFO
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -55,7 +58,7 @@ LOGGING = {
             "formatter": "json",
         }
     },
-    "loggers": {"": {"handlers": ["stdout"], "level": "INFO"}},
+    "loggers": {"": {"handlers": ["stdout"], "level": LOG_LEVEL}},
 }
 
 # Detect environment and set appropriate formatter
@@ -83,7 +86,9 @@ if is_cloud_env:
     try:
         from google.cloud import logging as cloud_logging  # type: ignore
         client = cloud_logging.Client()
-        client.setup_logging(log_level=logging.INFO)
+        # Map string level to logging constant
+        log_level_const = getattr(logging, LOG_LEVEL, logging.INFO)
+        client.setup_logging(log_level=log_level_const)
     except Exception:
         # If Cloud Logging client isn't available or fails, silently fall back to stdout
         # We still configure stdout below.
@@ -103,7 +108,7 @@ for name in framework_loggers:
     # Don't forcibly clear handlers here; let dictConfig manage root handlers
     # and avoid stripping handlers that frameworks may rely on.
     if is_cloud_env:
-        lg.setLevel(logging.INFO)
+        lg.setLevel(LOG_LEVEL)
 
 
 def print_banner() -> None:

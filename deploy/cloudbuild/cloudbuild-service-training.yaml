@@ -46,6 +46,7 @@ steps:
       - "laxai-service-training"
       - "--region=us-central1"
       - "--image=us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-training:latest"
+      - "--set-env-vars=LOG_LEVEL=DEBUG,GOOGLE_CLOUD_PROJECT=${_GOOGLE_CLOUD_PROJECT}"
 
 images:
   - "us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-service-training:latest"

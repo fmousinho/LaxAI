@@ -1,0 +1,19 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build',
+      '-t', 'us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-base-gpu:latest',
+      '-f', 'deploy/base-gpu-image/Dockerfile',
+      '.'
+    ]
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-base-gpu:latest']
+
+substitutions:
+  _GOOGLE_CLOUD_PROJECT: "laxai-466119"
+
+images:
+  - 'us-central1-docker.pkg.dev/${_GOOGLE_CLOUD_PROJECT}/laxai-repo/laxai-base-gpu:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
