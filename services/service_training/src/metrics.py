@@ -30,7 +30,7 @@ class Metrics:
 
         self.eval_batch_metrics = EvalData()
         self.eval_epoch_metrics = EvalData()
-        self.eval_epoch_accumulations = EvalData()
+        self.eval_epoch_accumulations: Optional[EvalData] = None
         self.running_num_eval_batches_in_epoch = 0
        
         self.wandb_logger = wandb_logger
@@ -344,8 +344,8 @@ class Metrics:
 
             # Eval metrics are not updated in every epoch, so log values are repeated
             eval_dict = {}
-            for field_name, value in self.eval_epoch_accumulations.model_dump().items():
-                eval_dict[f"eval/{field_name}"] = value / self.running_num_eval_batches_in_epoch    
+            if self.eval_epoch_accumulations is not None:
+                for field_name, value in self.eval_epoch_accumulations.model_dump().items():
+                    eval_dict[f"eval/{field_name}"] = value / self.running_num_eval_batches_in_epoch    
             
             self.wandb_logger.log_metrics(metrics_dict, step=epoch)
-
