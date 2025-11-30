@@ -176,10 +176,8 @@ class LacrosseReIDResNet(nn.Module):
         
         embedding = self.classifier(feat)
         
-        if not self.training:
-            return F.normalize(embedding, p=2, dim=1)
-        
-        return embedding
+        # Always normalize embeddings for Triplet Loss
+        return F.normalize(embedding, p=2, dim=1)
 
     def _weights_init_kaiming(self, m):
         classname = m.__class__.__name__
