@@ -1438,7 +1438,7 @@ if __name__ == "__main__":
 
     if args.upload_checkpoint:
         if not all([args.run_id, args.checkpoint_path, args.checkpoint_name, args.project, args.entity]):
-            print("Error: --run-id, --checkpoint-path, --checkpoint-name, --project, and --entity are required for --upload-checkpoint.", file=sys.stderr)
+            logger.error("Error: --run-id, --checkpoint-path, --checkpoint-name, --project, and --entity are required for --upload-checkpoint.", file=sys.stderr)
             sys.exit(1)
         
         try:

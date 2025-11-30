@@ -115,10 +115,10 @@ class LacrosseReIDResNet(nn.Module):
         
         # 1. Load Standard Pretrained Weights
         if pretrained:
-            print("Loading ResNet50 ImageNet weights...")
+            logger.info("Loading ResNet50 ImageNet weights...")
             self.base_model = resnet50(weights=ResNet50_Weights.DEFAULT)
         else:
-            print("Skipping ResNet50 ImageNet weights (pretrained=False)...")
+            logger.info("Skipping ResNet50 ImageNet weights (pretrained=False)...")
             self.base_model = resnet50(weights=None)
         
         # 2. Apply the Stride Trick (Layer 4 stride = 1)

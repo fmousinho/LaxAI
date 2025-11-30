@@ -182,7 +182,7 @@ class TrainingLoop:
         if self.eval_dataloader is None:
             return
         with torch.no_grad():
-            for i, (player, crop) in enumerate(self.eval_dataloader):
+            for i, (crop, player) in enumerate(self.eval_dataloader):
                 crop = crop.to(self.device, non_blocking=True)
                 emb = self.model.forward(crop)
                 self.metrics.update_eval_batch_data(
