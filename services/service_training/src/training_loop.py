@@ -110,8 +110,8 @@ class TrainingLoop:
         starting_epoch = self.current_epoch
 
         try: 
-            for epoch in range(starting_epoch, self.num_epochs + 1):
-                logger.info(f"=== Epoch {epoch}/{self.num_epochs} ===")
+            for epoch in range(starting_epoch, self.num_epochs):
+                logger.info(f"=== Epoch {epoch}/{self.num_epochs-1} ===")
                 
                 if not self.model.training:
                     self.model.train() 

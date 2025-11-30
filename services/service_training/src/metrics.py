@@ -204,13 +204,20 @@ class Metrics:
         """Compute confusion matrix based on nearest centroid classification."""
         num_classes = centroids.size(0)
         confusion_matrix = torch.zeros((num_classes, num_classes), dtype=torch.int32).to(embeddings.device)
+        
+        # Map unique labels to 0..N-1 indices
+        unique_labels = torch.unique(labels)
+        label_to_idx = {label.item(): idx for idx, label in enumerate(unique_labels)}
+        
         for i in range(embeddings.size(0)):
             embedding = embeddings[i]
             label = labels[i]
             # Compute distances to centroids
             dists = torch.norm(centroids - embedding.unsqueeze(0), p=2, dim=1)
-            predicted_label = int(torch.argmin(dists).item())
-            confusion_matrix[int(label.item()), predicted_label] += 1
+            predicted_label_idx = int(torch.argmin(dists).item())
+            
+            true_label_idx = label_to_idx[label.item()]
+            confusion_matrix[true_label_idx, predicted_label_idx] += 1
         return confusion_matrix
 
     def _compute_precision(self, tp: int, fp: int) -> float:
