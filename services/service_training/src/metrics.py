@@ -179,6 +179,8 @@ class Metrics:
 
     def _accumulate_eval_epoch_metrics(self, epoch: int, eval_batch_metrics: EvalData):
         """Accumulate evaluation batch metrics into evaluation epoch metrics."""
+        if self.eval_epoch_accumulations is None:
+            self.eval_epoch_accumulations = EvalData()
         self.eval_epoch_accumulations += eval_batch_metrics
         self.running_num_eval_batches_in_epoch += 1
 
