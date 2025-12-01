@@ -214,7 +214,7 @@ class TrainingController():
                     # Set starting epoch
                     # Try explicit 'epoch' key first (new format), then scheduler 'last_epoch' (fallback), then 0
                     saved_epoch = checkpoint_data.get('epoch')
-                    if saved_epoch is None:
+                    if saved_epoch is not None:
                         self.starting_epoch = saved_epoch + 1
                    
                     logger.info(f"✅ Resuming training from epoch {self.starting_epoch}")
