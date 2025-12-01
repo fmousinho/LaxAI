@@ -962,8 +962,8 @@ class WandbLogger:
             if hasattr(model_artifact, 'metadata') and model_artifact.metadata:
                 model_config_meta = model_artifact.metadata.get('model_config', {})
                 if 'embedding_dim' in model_config_meta:
-                    saved_config['embedding_dim'] = model_config_meta['embedding_dim']
-                    logger.debug(f"Using saved embedding_dim: {saved_config['embedding_dim']}")
+                    # Ensure embedding_dim is an integer
+                    saved_config['embedding_dim'] = int(model_config_meta['embedding_dim'])
         except Exception as e:
             logger.debug(f"Could not read artifact metadata: {e}")
 
@@ -971,6 +971,8 @@ class WandbLogger:
         merged_kwargs = dict(kwargs)
         merged_kwargs.update(saved_config)
         
+        logger.info(f"DEBUG: Initializing model class {model_class.__name__} with kwargs: {merged_kwargs}")
+
         # Initialize model
         model = model_class(**merged_kwargs)
 
