@@ -2,8 +2,51 @@ import logging.config
 import sys
 import warnings
 import os
+import json
 
 LOGGING_LINE_SIZE = 110
+
+
+class GCPJSONFormatter(logging.Formatter):
+    """
+    JSON formatter for Google Cloud Logging with structured fields.
+    
+    Outputs logs as JSON with 'severity' field (GCP standard) and makes
+    all fields searchable in Cloud Logging console.
+    """
+    
+    # Standard logging record attributes to exclude from extra fields
+    RESERVED_ATTRS = {
+        'name', 'msg', 'args', 'created', 'filename', 'funcName', 
+        'levelname', 'levelno', 'lineno', 'module', 'msecs', 
+        'message', 'pathname', 'process', 'processName', 'relativeCreated',
+        'thread', 'threadName', 'exc_info', 'exc_text', 'stack_info',
+        'taskName', 'asctime'
+    }
+    
+    def format(self, record):
+        """Format log record as JSON for GCP."""
+        log_obj = {
+            "severity": record.levelname,  # GCP uses "severity" for log level
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        
+        # Add exception info if present
+        if record.exc_info:
+            log_obj["exception"] = self.formatException(record.exc_info)
+        
+        # Add custom fields from extra={} parameter
+        for key, value in record.__dict__.items():
+            if key not in self.RESERVED_ATTRS:
+                # Ensure value is JSON serializable
+                try:
+                    json.dumps(value)
+                    log_obj[key] = value
+                except (TypeError, ValueError):
+                    log_obj[key] = str(value)
+        
+        return json.dumps(log_obj)
 
 
 def _is_notebook() -> bool:
@@ -43,8 +86,8 @@ LOGGING = {
         "json": {
             "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
         },
-        "json_no_timestamp": {
-            "format": "%(levelname)s %(name)s %(message)s",
+        "gcp_json": {
+            "()": GCPJSONFormatter,  # Use custom formatter class
         },
         "pipe": {
             "format": "| %(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -65,7 +108,7 @@ LOGGING = {
 if sys.stdout.isatty() or _is_notebook():
     LOGGING["handlers"]["stdout"]["formatter"] = "pipe"
 elif _is_gcp_environment():
-    LOGGING["handlers"]["stdout"]["formatter"] = "json_no_timestamp"
+    LOGGING["handlers"]["stdout"]["formatter"] = "gcp_json"  # Use structured JSON for GCP
 else:
     LOGGING["handlers"]["stdout"]["formatter"] = "json"
 
