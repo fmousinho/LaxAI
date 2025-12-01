@@ -1,7 +1,6 @@
 import gc
 import logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.WARNING)
 import os
 import re
 import subprocess
