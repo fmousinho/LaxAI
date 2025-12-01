@@ -105,6 +105,7 @@ class TrainingController():
             lr_scheduler=self.lr_scheduler,
             device=self.device,
             starting_epoch=self.starting_epoch,
+            num_epochs=self.training_params.num_epochs,
             # training_params is not a parameter of TrainingLoop
             wandb_logger=self.wandb_logger
         )
