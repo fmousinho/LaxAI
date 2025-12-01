@@ -201,8 +201,8 @@ class TrainingController():
                 logger.info("Attempting to load model weights from checkpoint")
                 logger.info(f"Current WandB run name: {self.wandb_run_name}")
                 # load_checkpoint returns Optional[StateDicts]
-                # We pass None to let it auto-detect the checkpoint name based on the current run
-                checkpoint_data = self.wandb_logger.load_checkpoint()
+                # Pass run_name explicitly since WandB run isn't initialized yet
+                checkpoint_data = self.wandb_logger.load_checkpoint(run_name=self.wandb_run_name)
                 
                 if checkpoint_data:
                     logger.info(f"✅ Checkpoint loaded successfully")

@@ -817,19 +817,25 @@ class WandbLogger:
     @monitor_memory
     @requires_wandb_enabled
     @safe_wandb_operation()
-    def load_checkpoint(self, artifact_name: Optional[str] = None, version: str = "latest") -> Optional[StateDicts]:
+    def load_checkpoint(self, artifact_name: Optional[str] = None, version: str = "latest", run_name: Optional[str] = None) -> Optional[StateDicts]:
         """
         Load model checkpoint from wandb.
         
         Args:
             artifact_name: Name of the checkpoint artifact (auto-detected if None)
             version: Version of the artifact to load (default: "latest")
+            run_name: Run name to use for checkpoint name generation (uses self.run.name if None)
             
         Returns:
             Checkpoint data dictionary or None if failed
         """
         if artifact_name is None:
-            artifact_name = self._get_checkpoint_name()
+            # Use provided run_name or fall back to self.run.name
+            if run_name:
+                safe_run_name = self._sanitize_artifact_name(run_name)
+                artifact_name = f"checkpoint-{safe_run_name}"
+            else:
+                artifact_name = self._get_checkpoint_name()
             logger.info(f"Auto-detected checkpoint name: {artifact_name}")
             
         artifact_path = self._construct_artifact_path(artifact_name, version)
@@ -845,11 +851,23 @@ class WandbLogger:
         except Exception as e:
             logger.warning(f"❌ Checkpoint {artifact_path} not found: {e}")
             
-            # Fallback: try with original run name (no sanitization) if we have a run
-            if self.run and hasattr(self.run, 'name') and self.run.name:
-                original_name = f"checkpoint-{self.run.name}"
+            # Fallback: try with original run name (no sanitization) if we have a run_name
+            if run_name:
+                original_name = f"checkpoint-{run_name}"
                 fallback_path = self._construct_artifact_path(original_name, version)
                 logger.info(f"Trying fallback with original run name: {fallback_path}")
+                try:
+                    artifact = self.wandb_api.artifact(fallback_path, type="model_checkpoint")
+                    artifact_dir = artifact.download()
+                    logger.info(f"✅ Successfully downloaded artifact using fallback to: {artifact_dir}")
+                except Exception as e2:
+                    logger.warning(f"❌ Fallback also failed: {e2}")
+                    return None
+            elif self.run and hasattr(self.run, 'name') and self.run.name:
+                # Fallback using self.run.name if available
+                original_name = f"checkpoint-{self.run.name}"
+                fallback_path = self._construct_artifact_path(original_name, version)
+                logger.info(f"Trying fallback with self.run.name: {fallback_path}")
                 try:
                     artifact = self.wandb_api.artifact(fallback_path, type="model_checkpoint")
                     artifact_dir = artifact.download()
