@@ -105,16 +105,37 @@ class Metrics:
             centroids = self._compute_centroids(labels, embeddings)
             confusion = self._compute_confusion_matrix(labels, embeddings, centroids)
 
-            tp_val = int(torch.diagonal(confusion).sum().item())
-            fp_val = int(confusion.sum().item() - tp_val)
-            fn_val = fp_val  # In balanced triplet batches, FP = FN
-            tn = 0  # Not computed in triplet batches
+            # Calculate Macro-Averaged Metrics (Per-Class)
+            tp = torch.diagonal(confusion).float()
+            col_sums = confusion.sum(dim=0).float()
+            row_sums = confusion.sum(dim=1).float()
             
-            self.eval_batch_metrics.precision = self._compute_precision(tp_val, fp_val)
-            self.eval_batch_metrics.recall = self._compute_recall(tp_val, fn_val)
-            self.eval_batch_metrics.f1_score = self._compute_f1_score(
-                self.eval_batch_metrics.precision, self.eval_batch_metrics.recall
-            )
+            fp = col_sums - tp
+            fn = row_sums - tp
+            
+            # Precision per class: TP / (TP + FP)
+            # Avoid division by zero
+            precision_per_class = torch.zeros_like(tp)
+            denom_p = tp + fp
+            mask_p = denom_p > 0
+            precision_per_class[mask_p] = tp[mask_p] / denom_p[mask_p]
+            
+            # Recall per class: TP / (TP + FN)
+            recall_per_class = torch.zeros_like(tp)
+            denom_r = tp + fn
+            mask_r = denom_r > 0
+            recall_per_class[mask_r] = tp[mask_r] / denom_r[mask_r]
+            
+            # F1 per class: 2 * P * R / (P + R)
+            f1_per_class = torch.zeros_like(tp)
+            denom_f1 = precision_per_class + recall_per_class
+            mask_f1 = denom_f1 > 0
+            f1_per_class[mask_f1] = 2 * (precision_per_class[mask_f1] * recall_per_class[mask_f1]) / denom_f1[mask_f1]
+            
+            # Store Macro-Averages
+            self.eval_batch_metrics.precision = precision_per_class.mean().item()
+            self.eval_batch_metrics.recall = recall_per_class.mean().item()
+            self.eval_batch_metrics.f1_score = f1_per_class.mean().item()
             
             self.eval_batch_metrics.k1 = self._compute_k1(labels, embeddings, centroids)
             self.eval_batch_metrics.k5 = self._compute_k5(labels, embeddings, centroids)
@@ -230,23 +251,7 @@ class Metrics:
             confusion_matrix[true_label_idx, predicted_label_idx] += 1
         return confusion_matrix
 
-    def _compute_precision(self, tp: int, fp: int) -> float:
-        """Compute precision from confusion matrix values."""
-        if tp + fp == 0:
-            return 0.0
-        return tp / (tp + fp)
-    
-    def _compute_recall(self, tp: int, fn: int) -> float:
-        """Compute recall from confusion matrix values."""
-        if tp + fn == 0:
-            return 0.0
-        return tp / (tp + fn)
-    
-    def _compute_f1_score(self, precision: float, recall: float) -> float:
-        """Compute F1 score from precision and recall."""
-        if precision + recall == 0:
-            return 0.0
-        return 2 * (precision * recall) / (precision + recall)
+
     
     def _compute_k1(
             self, 
