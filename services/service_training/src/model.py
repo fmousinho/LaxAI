@@ -1,6 +1,7 @@
 import logging
 logger = logging.getLogger(__name__)
 
+import random
 import torch
 import torch.nn as nn
 from torchvision.models import resnet50, ResNet50_Weights
@@ -113,6 +114,8 @@ class LacrosseReIDResNet(nn.Module):
     def __init__(self, embedding_dim=512, pretrained=True):
         super().__init__()
         
+        logger.info("Initializing LacrosseReIDResNet - NORMALIZED VERSION")
+        
         # 1. Load Standard Pretrained Weights
         if pretrained:
             logger.info("Loading ResNet50 ImageNet weights...")
@@ -176,8 +179,19 @@ class LacrosseReIDResNet(nn.Module):
         
         embedding = self.classifier(feat)
         
+        # Debug logging
+        if self.training and random.random() < 0.01: # Log 1% of the time
+             norm_before = torch.norm(embedding, p=2, dim=1).mean().item()
+             logger.info(f"DEBUG: Embedding norm before normalization: {norm_before}")
+
         # Always normalize embeddings for Triplet Loss
-        return F.normalize(embedding, p=2, dim=1)
+        normalized_embedding = F.normalize(embedding, p=2, dim=1)
+        
+        if self.training and random.random() < 0.01:
+             norm_after = torch.norm(normalized_embedding, p=2, dim=1).mean().item()
+             logger.info(f"DEBUG: Embedding norm after normalization: {norm_after}")
+             
+        return normalized_embedding
 
     def _weights_init_kaiming(self, m):
         classname = m.__class__.__name__

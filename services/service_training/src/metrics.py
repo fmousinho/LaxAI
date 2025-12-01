@@ -79,6 +79,7 @@ class Metrics:
 
         self._maybe_log_to_wandb(epoch)
         self._log_to_logger(epoch)
+        
 
         # Reset accumulations for next epoch
         self.epoch_accumulations = MetricsData()
@@ -86,10 +87,11 @@ class Metrics:
 
         # Eval accuulations reset needs cannot be done in finalize_eval_epoch_metrics
         # because it is must be called after common _maybe_log_to_wandb
-        self.eval_epoch_accumulations = EvalData()
-        self.running_num_eval_batches_in_epoch = 0
-        self.eval_metrics_available = False
-
+        if self.eval_metrics_available:
+            self._log_eval_to_logger(epoch)
+            self.eval_epoch_accumulations = EvalData()
+            self.running_num_eval_batches_in_epoch = 0
+            self.eval_metrics_available = False
 
     def update_eval_batch_data(
             self, 
@@ -123,7 +125,7 @@ class Metrics:
 
     def finalize_eval_epoch_metrics(self, epoch: int):
         """Calculates evaluation epoch metrics based on accumulated averages.
-        Logs metrics to standard logger. WandB logging triggered in finalize_epoch_metrics.
+        Logging is done by finalize_epoch_metrics.
         """
         if self.running_num_eval_batches_in_epoch == 0:
             logger.warning(f"No evaluation batches processed in epoch {epoch}. Cannot finalize eval metrics.")
@@ -132,7 +134,6 @@ class Metrics:
         # Use operator overloading for cleaner averagingse
         self.eval_epoch_metrics = self.eval_epoch_accumulations / self.running_num_eval_batches_in_epoch
         self.eval_metrics_available = True
-        self._log_eval_to_logger(epoch)
    
 
 
@@ -340,14 +341,14 @@ class Metrics:
     def _log_to_logger(self, epoch: int):
         """Log epoch metrics to standard logger."""
         logger.info(f"🧮 Epoch {epoch} Metrics - ")
-        for field_name, value in self.epoch_accumulations.model_dump().items():
+        for field_name, value in self.epoch_metrics.model_dump().items():
             logger.info(f". - {field_name}: {value:.6f}")
 
     def _log_eval_to_logger(self, epoch: int):
         """Log evaluation epoch metrics to standard logger."""
         logger.info(f"🧮 Eval Epoch {epoch} Metrics - ")
-        for field_name, value in self.eval_epoch_accumulations.model_dump().items():
-            logger.info(f". - {field_name}: {value / self.running_num_eval_batches_in_epoch}")
+        for field_name, value in self.eval_metrics.model_dump().items():
+            logger.info(f". - {field_name}: {value}")
             
 
     def _maybe_log_to_wandb(self, epoch: int):
@@ -355,14 +356,14 @@ class Metrics:
         if self.wandb_logger is not None:
             
             metrics_dict = {}
-            for field_name, value in self.epoch_accumulations.model_dump().items():
+            for field_name, value in self.epoch_metrics.model_dump().items():
                 metrics_dict[f"train/{field_name}"] = value
 
             # Eval metrics are not updated in every epoch
             if self.eval_metrics_available:
                 eval_dict = {}
-                for field_name, value in self.eval_epoch_accumulations.model_dump().items():
-                    eval_dict[f"eval/{field_name}"] = value / self.running_num_eval_batches_in_epoch
+                for field_name, value in self.eval_metrics.model_dump().items():
+                    eval_dict[f"eval/{field_name}"] = value
                 metrics_dict.update(eval_dict)
             
             self.wandb_logger.log_metrics(metrics_dict, step=epoch)
