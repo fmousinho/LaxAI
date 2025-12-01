@@ -831,15 +831,35 @@ class WandbLogger:
         """
         if artifact_name is None:
             artifact_name = self._get_checkpoint_name()
+            logger.info(f"Auto-detected checkpoint name: {artifact_name}")
             
         artifact_path = self._construct_artifact_path(artifact_name, version)
+        logger.info(f"Constructed artifact path: {artifact_path}")
         
+        # Try to load with sanitized name first
+        artifact_dir = None
         try:
+            logger.info(f"Attempting to download artifact from WandB...")
             artifact = self.wandb_api.artifact(artifact_path, type="model_checkpoint")
             artifact_dir = artifact.download()
+            logger.info(f"✅ Successfully downloaded artifact to: {artifact_dir}")
         except Exception as e:
-            logger.info(f"Checkpoint {artifact_name}:{version} not found: {e}")
-            return None
+            logger.warning(f"❌ Checkpoint {artifact_path} not found: {e}")
+            
+            # Fallback: try with original run name (no sanitization) if we have a run
+            if self.run and hasattr(self.run, 'name') and self.run.name:
+                original_name = f"checkpoint-{self.run.name}"
+                fallback_path = self._construct_artifact_path(original_name, version)
+                logger.info(f"Trying fallback with original run name: {fallback_path}")
+                try:
+                    artifact = self.wandb_api.artifact(fallback_path, type="model_checkpoint")
+                    artifact_dir = artifact.download()
+                    logger.info(f"✅ Successfully downloaded artifact using fallback to: {artifact_dir}")
+                except Exception as e2:
+                    logger.warning(f"❌ Fallback also failed: {e2}")
+                    return None
+            else:
+                return None
 
         # Find checkpoint file
         checkpoint_files = [f for f in os.listdir(artifact_dir) if f.endswith('.pth')]
