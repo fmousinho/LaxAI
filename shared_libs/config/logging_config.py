@@ -30,6 +30,7 @@ class GCPJSONFormatter(logging.Formatter):
             "severity": record.levelname,  # GCP uses "severity" for log level
             "logger": record.name,
             "message": record.getMessage(),
+            "module": record.module
         }
         
         # Add exception info if present
