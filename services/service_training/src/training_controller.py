@@ -72,7 +72,11 @@ class TrainingController():
         self.load_model_and_datasets()
 
         # Optimizer and scheduler depend on model parameters
-        self.optimizer = AdamW(self.model.parameters(), lr=self.training_params.lr_initial)
+        self.optimizer = AdamW(
+            self.model.parameters(), 
+            lr=self.training_params.lr_initial,
+            weight_decay=self.training_params.weight_decay
+        )
         self.lr_scheduler = ReduceLROnPlateau(
             optimizer=self.optimizer,
             mode='min',

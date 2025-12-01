@@ -29,6 +29,7 @@ class TrainingParams(BaseModel):
     lr_initial: float = Field(default=training_config.learning_rate, description="Learning rate for optimizer")
     lr_scheduler_patience: int = Field(default=training_config.lr_scheduler_patience, description="LR scheduler patience")
     lr_scheduler_factor: float = Field(default=training_config.lr_scheduler_factor, description="LR scheduler factor")
+    weight_decay: float = Field(default=training_config.weight_decay, description="Weight decay for optimizer")
 
     early_stopping_patience: int = Field(default=training_config.early_stopping_patience or 10, description="Early stopping patience")
 

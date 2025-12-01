@@ -37,6 +37,7 @@ def semi_hard_triplet_loss(
     # Handle case where no semi-hard triplets exist
     if mask.sum() == 0:
         # Fall back to all triplets when no semi-hard triplets exist
+        logger.warning("No semi-hard triplets found. Falling back to all triplets (hard + easy).")
         triplet_loss = torch.clamp(pos_dist - neg_dist + margin, min=0.0)
         return triplet_loss.mean()
     
