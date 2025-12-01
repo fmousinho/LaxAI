@@ -82,6 +82,12 @@ class Metrics:
         self.epoch_accumulations = MetricsData()
         self.running_num_batches_in_epoch = 0
 
+        # Eval accuulations reset needs cannot be done in finalize_eval_epoch_metrics
+        # because it is must be called after common _maybe_log_to_wandb
+        self.eval_epoch_accumulations = EvalData()
+        self.running_num_eval_batches_in_epoch = 0
+
+
     def update_eval_batch_data(
             self, 
             epoch: int, 
@@ -125,8 +131,6 @@ class Metrics:
 
         self._log_eval_to_logger(epoch)
    
-        self.eval_epoch_accumulations = EvalData()
-        self.running_num_eval_batches_in_epoch = 0
 
 
     # ===== Computation Helpers =====
@@ -355,6 +359,7 @@ class Metrics:
             eval_dict = {}
             if self.eval_epoch_accumulations is not None:
                 for field_name, value in self.eval_epoch_accumulations.model_dump().items():
-                    eval_dict[f"eval/{field_name}"] = value / self.running_num_eval_batches_in_epoch    
+                    eval_dict[f"eval/{field_name}"] = value / self.running_num_eval_batches_in_epoch
+                metrics_dict.update(eval_dict)
             
             self.wandb_logger.log_metrics(metrics_dict, step=epoch)
