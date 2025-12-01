@@ -182,14 +182,14 @@ class LacrosseReIDResNet(nn.Module):
         # Debug logging
         if self.training and random.random() < 0.01: # Log 1% of the time
              norm_before = torch.norm(embedding, p=2, dim=1).mean().item()
-             logger.info(f"DEBUG: Embedding norm before normalization: {norm_before}")
+             logger.debug(f"Embedding norm before normalization: {norm_before}")
 
         # Always normalize embeddings for Triplet Loss
         normalized_embedding = F.normalize(embedding, p=2, dim=1)
         
         if self.training and random.random() < 0.01:
              norm_after = torch.norm(normalized_embedding, p=2, dim=1).mean().item()
-             logger.info(f"DEBUG: Embedding norm after normalization: {norm_after}")
+             logger.debug(f"Embedding norm after normalization: {norm_after}")
              
         return normalized_embedding
 
