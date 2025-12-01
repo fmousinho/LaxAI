@@ -152,11 +152,12 @@ class TrackingJobProxy:
                 }
                 try:
                     doc_ref = self._progress_collection.document(task_id)
-                    if not doc_ref.get().exists:
+                    doc_snapshot = doc_ref.get()
+                    if not doc_snapshot.exists:
                         doc_ref.set(doc)
                         logger.info(f"Persisted run mapping for task_id={task_id} -> operation={execution_name}")
                     else:
-                        logger.warning(f"Mapping for task_id={task_id} already exists; not overwriting")
+                        logger.debug(f"Mapping for task_id={task_id} already exists; not overwriting")
                 except Exception as fe:
                     logger.error(f"Failed to persist run mapping for task_id={task_id}: {fe}")
 

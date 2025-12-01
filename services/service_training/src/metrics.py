@@ -348,7 +348,7 @@ class Metrics:
         """Log evaluation epoch metrics to standard logger."""
         logger.info(f"🧮 Eval Epoch {epoch} Metrics - ")
         for field_name, value in self.eval_epoch_metrics.model_dump().items():
-            logger.info(f". - {field_name}: {value}")
+            logger.info(f". - {field_name}: {value:.6f}")
             
 
     def _maybe_log_to_wandb(self, epoch: int):
