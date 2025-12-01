@@ -211,8 +211,8 @@ class TrainingController():
                     # Load model state
                     model.load_state_dict(checkpoint_data['model_state_dict'])
                     
-                    # Set starting epoch
-                    self.starting_epoch = checkpoint_data.get('epoch', 0) + 1
+                    saved_epoch = checkpoint_data['lr_scheduler_state_dict'].get('last_epoch')
+                    self.starting_epoch = (saved_epoch or 0) + 1
                     logger.info(f"✅ Resuming training from epoch {self.starting_epoch}")
                 else:
                     logger.warning(f"❌ No checkpoint found for run {self.wandb_run_name}, falling back to 'latest'")
