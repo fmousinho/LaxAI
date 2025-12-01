@@ -77,7 +77,7 @@ class TrainingJobProxy:
             raise ValueError("tenant_id is required in the payload")
         
         # Determine run name (prefer custom_name, fallback to wandb_run_name)
-        run_name = payload.get("custom_name") or payload.get("wandb_run_name") or "training-run"
+        run_name = payload.get("wandb_run_name") or "training-run"
 
         # Build command arguments
         args = [

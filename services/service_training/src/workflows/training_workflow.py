@@ -179,6 +179,7 @@ class TrainingWorkflow:
                 "action": "auto_resume",
                 "tenant_id": self.tenant_id,
                 "task_id": self.task_id,
+                "wandb_run_name": self.wandb_run_name,  # Preserve WandB run name for checkpoint loading
                 "training_params": training_params_dict,
                 "eval_params": self.eval_params.dict() if self.eval_params else {},
                 "dataset_address": self.dataset_address,

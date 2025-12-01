@@ -199,20 +199,23 @@ class TrainingController():
             
             if weights_source == "checkpoint":
                 logger.info("Attempting to load model weights from checkpoint")
+                logger.info(f"Current WandB run name: {self.wandb_run_name}")
                 # load_checkpoint returns Optional[StateDicts]
                 # We pass None to let it auto-detect the checkpoint name based on the current run
                 checkpoint_data = self.wandb_logger.load_checkpoint()
                 
                 if checkpoint_data:
+                    logger.info(f"✅ Checkpoint loaded successfully")
+                    logger.info(f"Checkpoint contains epoch: {checkpoint_data.get('epoch', 'NOT_FOUND')}")
                     model = ReIdModel(pretrained=False)
                     # Load model state
                     model.load_state_dict(checkpoint_data['model_state_dict'])
                     
                     # Set starting epoch
                     self.starting_epoch = checkpoint_data.get('epoch', 0) + 1
-                    logger.info(f"Resuming training from epoch {self.starting_epoch}")
+                    logger.info(f"✅ Resuming training from epoch {self.starting_epoch}")
                 else:
-                    logger.warning(f"No checkpoint found for run {self.wandb_run_name}, falling back to 'latest'")
+                    logger.warning(f"❌ No checkpoint found for run {self.wandb_run_name}, falling back to 'latest'")
                     weights_source = "latest"
             
             if weights_source == "latest":
