@@ -32,6 +32,8 @@ class Metrics:
         self.eval_epoch_metrics = EvalData()
         self.eval_epoch_accumulations: Optional[EvalData] = None
         self.running_num_eval_batches_in_epoch = 0
+
+        self.eval_metrics_available = False
        
         self.wandb_logger = wandb_logger
 
@@ -86,6 +88,7 @@ class Metrics:
         # because it is must be called after common _maybe_log_to_wandb
         self.eval_epoch_accumulations = EvalData()
         self.running_num_eval_batches_in_epoch = 0
+        self.eval_metrics_available = False
 
 
     def update_eval_batch_data(
@@ -113,7 +116,7 @@ class Metrics:
             
             self.eval_batch_metrics.k1 = self._compute_k1(labels, embeddings, centroids)
             self.eval_batch_metrics.k5 = self._compute_k5(labels, embeddings, centroids)
-            self.eval_batch_metrics.map = self._compute_map(labels, embeddings, centroids)
+            self.eval_batch_metrics.mean_avg_precision = self._compute_map(labels, embeddings, centroids)
 
             self._accumulate_eval_epoch_metrics(epoch, self.eval_batch_metrics)
 
@@ -128,7 +131,7 @@ class Metrics:
 
         # Use operator overloading for cleaner averagingse
         self.eval_epoch_metrics = self.eval_epoch_accumulations / self.running_num_eval_batches_in_epoch
-
+        self.eval_metrics_available = True
         self._log_eval_to_logger(epoch)
    
 
@@ -355,9 +358,9 @@ class Metrics:
             for field_name, value in self.epoch_accumulations.model_dump().items():
                 metrics_dict[f"train/{field_name}"] = value
 
-            # Eval metrics are not updated in every epoch, so log values are repeated
-            eval_dict = {}
-            if self.eval_epoch_accumulations is not None:
+            # Eval metrics are not updated in every epoch
+            if self.eval_metrics_available:
+                eval_dict = {}
                 for field_name, value in self.eval_epoch_accumulations.model_dump().items():
                     eval_dict[f"eval/{field_name}"] = value / self.running_num_eval_batches_in_epoch
                 metrics_dict.update(eval_dict)

@@ -171,7 +171,7 @@ class TrainingLoop:
             raise RuntimeError(error_msg)
                 
     def maybe_run_mid_train_evaluation(self):
-        if self.current_epoch % EPOCHS_PER_VAL == 0:
+        if self.current_epoch % EPOCHS_PER_VAL == 0 or self.current_epoch == self.num_epochs - 1:
             logger.info(f"--- Running Validation after Epoch {self.current_epoch} ---")
             self.mid_train_evaluation()
 

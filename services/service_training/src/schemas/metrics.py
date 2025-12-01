@@ -45,7 +45,7 @@ class EvalData(BaseModel):
     f1_score: Optional[float] = Field(default=0.0, description="F1 score")
     k1: Optional[float] = Field(default=0.0, description="Top-1 accuracy")
     k5: Optional[float] = Field(default=0.0, description="Top-5 accuracy")
-    map: Optional[float] = Field(default=0.0, description="Mean Average Precision")
+    mean_avg_precision: Optional[float] = Field(default=0.0, description="Mean Average Precision")
 
     def __add__(self, other: 'EvalData') -> 'EvalData':
         """Add two EvalData instances for accumulation."""
