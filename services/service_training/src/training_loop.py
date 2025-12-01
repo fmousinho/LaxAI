@@ -17,7 +17,7 @@ from metrics import Metrics
 
 # Constants
 BATCHES_PER_LOG_MSG = 10
-EPOCHS_PER_VAL = 50
+EPOCHS_PER_VAL = 10
 EPOCHS_PER_CHECKPOINT = 10
 
 
