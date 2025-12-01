@@ -207,6 +207,7 @@ class TrainingLoop:
                 logger.warning("WandB logger not initialized, skipping checkpoint save.")
                 return
             state_dicts = {
+                'epoch': self.current_epoch,
                 'model_state_dict': self.model.state_dict(),           
                 'optimizer_state_dict': self.optimizer.state_dict(),   
                 'lr_scheduler_state_dict': self.lr_scheduler.state_dict(),    

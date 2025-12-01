@@ -98,6 +98,7 @@ def safe_wandb_operation(default_return=None):
 
 class StateDicts(TypedDict):
     """Type definition for checkpoint state dictionaries."""
+    epoch: int
     model_state_dict: Dict[str, Any]
     optimizer_state_dict: Dict[str, Any]
     lr_scheduler_state_dict: Dict[str, Any]
