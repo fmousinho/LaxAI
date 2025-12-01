@@ -99,6 +99,7 @@ def safe_wandb_operation(default_return=None):
 class StateDicts(TypedDict):
     """Type definition for checkpoint state dictionaries."""
     epoch: int
+    wandb_run_id: Optional[str]
     model_state_dict: Dict[str, Any]
     optimizer_state_dict: Dict[str, Any]
     lr_scheduler_state_dict: Dict[str, Any]
@@ -264,7 +265,7 @@ class WandbLogger:
     @requires_wandb_enabled
     @safe_wandb_operation(default_return=False)
     def init_run(self, config: Dict[str, Any], run_name: str = wandb_config.run_name,
-                 tags: Optional[List[str]] = None) -> bool:
+                 tags: Optional[List[str]] = None, run_id: Optional[str] = None) -> bool:
         """
         Initialize a new wandb run.
 
@@ -272,6 +273,7 @@ class WandbLogger:
             config: Configuration dictionary to log
             run_name: Optional custom run name
             tags: Optional list of tags (will be merged with default tags)
+            run_id: Optional run ID to resume a specific run
 
         Returns:
             bool: True if initialization successful, False otherwise
@@ -290,12 +292,18 @@ class WandbLogger:
             "reinit": "return_previous",
             "resume": "allow"
         }
+        
+        # If run_id is provided, use it to resume that specific run
+        if run_id:
+            run_params["id"] = run_id
+            logger.info(f"Resuming WandB run with ID: {run_id}")
+            
         # Initialize wandb run
         self.run = wandb.init(**run_params)
 
         self.initialized = True
 
-        logger.info(f"✅ Wandb run initialized: {self.run.name}")
+        logger.info(f"✅ Wandb run initialized: {self.run.name} (ID: {self.run.id})")
         logger.info(f"   Project: {wandb_config.project}")
         logger.info(f"   Entity: {wandb_config.entity}")
         logger.info(f"   Tags: {all_tags}")
@@ -454,6 +462,7 @@ class WandbLogger:
         
         for future in self._pending_futures:
             try:
+                # Get result to ensure any exceptions are raised
                 future.result(timeout=60)
             except (NameError, AttributeError, TypeError) as e:
                 # Critical errors indicate bugs - collect and re-raise
@@ -625,7 +634,7 @@ class WandbLogger:
     @monitor_memory
     @requires_wandb_initialized
     @safe_wandb_operation()
-    def save_checkpoint(self, state_dicts: StateDicts, epoch: int, task_id: str) -> Optional[str]:
+    def save_checkpoint(self, state_dicts: StateDicts, epoch: int, task_id: str, wandb_run_id: Optional[str] = None) -> Optional[str]:
         """
         Save training checkpoint to wandb artifacts for resumption purposes.
     
@@ -637,8 +646,11 @@ class WandbLogger:
                 - model_state_dict: Model's state dict
                 - optimizer_state_dict: Optimizer's state dict
                 - lr_scheduler_state_dict: LR scheduler's state dict
+                - epoch: Current epoch number
+                - wandb_run_id: Optional WandB run ID to persist
             epoch: Current epoch number (for filename)
             task_id: Training task identifier (not used here)
+            wandb_run_id: Optional WandB run ID to persist (if not in state_dicts)
             
         Returns:
             Artifact reference string
@@ -648,6 +660,10 @@ class WandbLogger:
         missing_keys = [key for key in required_keys if key not in state_dicts]
         if missing_keys:
             raise ValueError(f"checkpoint_data missing required keys: {missing_keys}")
+
+        # Add wandb_run_id to state_dicts if provided
+        if wandb_run_id and 'wandb_run_id' not in state_dicts:
+            state_dicts['wandb_run_id'] = wandb_run_id
 
         # Check epoch consistency
         if 'lr_scheduler_state_dict' in state_dicts:

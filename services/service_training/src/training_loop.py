@@ -215,7 +215,8 @@ class TrainingLoop:
             self.wandb_logger.save_checkpoint(
                 state_dicts=state_dicts,
                 epoch=self.current_epoch,
-                task_id=self.task_id
+                task_id=self.task_id,
+                wandb_run_id=self.wandb_logger.run.id if self.wandb_logger.run else None
             )
 
 

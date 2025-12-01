@@ -47,6 +47,7 @@ class TrainingController():
 
         self.tenant_id = tenant_id
         self.wandb_run_name = wandb_run_name
+        self.wandb_run_id = None  # Initialize run ID
         self.task_id = task_id
 
         self.storage_client = get_storage(tenant_id)
@@ -151,11 +152,12 @@ class TrainingController():
 
 
     def setup_wandb_logger(self, run_name: str):
-        """Setup WandB logger for the training pipeline."""
+        """Initialize WandB logger."""
         config = {
-            "tenant_id": self.tenant_id,
-            "training_params": {**self.training_params.dict()},
-            "eval_params": {**self.eval_params.dict()}
+            "training_params": self.training_params.model_dump(),
+            "eval_params": self.eval_params.model_dump(),
+            "task_id": self.task_id,
+            "tenant_id": self.tenant_id
         }
         
         # Add components if they are already initialized
@@ -170,7 +172,12 @@ class TrainingController():
         if hasattr(self, 'margin') and self.margin:
             config["margin"] = self.margin
             
-        self.wandb_logger.init_run(config=config, run_name=run_name)
+        # Pass wandb_run_id if available to resume the run
+        self.wandb_logger.init_run(
+            config=config, 
+            run_name=run_name,
+            run_id=self.wandb_run_id
+        )
 
     def update_wandb_config(self):
         """Update WandB config with model details after initialization."""
@@ -207,6 +214,12 @@ class TrainingController():
                 if checkpoint_data:
                     logger.info(f"✅ Checkpoint loaded successfully")
                     logger.info(f"Checkpoint contains epoch: {checkpoint_data.get('epoch', 'NOT_FOUND')}")
+                    
+                    # Extract WandB Run ID if present
+                    if 'wandb_run_id' in checkpoint_data:
+                        self.wandb_run_id = checkpoint_data['wandb_run_id']
+                        logger.info(f"Found WandB Run ID in checkpoint: {self.wandb_run_id}")
+
                     model = ReIdModel(pretrained=False)
                     # Load model state
                     model.load_state_dict(checkpoint_data['model_state_dict'])
@@ -216,6 +229,10 @@ class TrainingController():
                     saved_epoch = checkpoint_data.get('epoch')
                     if saved_epoch is not None:
                         self.starting_epoch = saved_epoch + 1
+                    else:
+                        # Fallback for old checkpoints
+                        saved_epoch = checkpoint_data['lr_scheduler_state_dict'].get('last_epoch')
+                        self.starting_epoch = saved_epoch + 1 if saved_epoch else 0
                    
                     logger.info(f"✅ Resuming training from epoch {self.starting_epoch}")
                 else:
