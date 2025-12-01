@@ -162,6 +162,8 @@ class TrainingLoop:
 
                 self.current_epoch += 1
 
+            self.wandb_logger.save_model_to_registry(self.model, self.model.model_name)
+
             logger.info("🎉 Training Complete!!!")
             return self.model
 
