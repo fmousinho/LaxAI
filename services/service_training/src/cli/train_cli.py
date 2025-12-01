@@ -264,24 +264,11 @@ def main():
         # Print results
         print("\n" + "="*60)
         print("🏁 TRAINING WORKFLOW COMPLETED")
-        print("="*60)
-        print(f"📈 Status: {result.get('status', 'unknown')}")
-        print(f"📁 Datasets found: {result.get('datasets_found', 0)}")
-        print(f"✅ Successful runs: {result.get('successful_runs', 0)}")
-        print(f"📊 Total runs: {result.get('total_runs', 0)}")
-
-        training_results = result.get('training_results') or []
-        if training_results:
-            print("\n📋 Dataset Results:")
-            for training_result in training_results:
-                status_icon = "✅" if training_result['status'] == 'success' else "❌"
-                print(f"  {status_icon} {training_result['dataset']}: {training_result['status']}")
-
-        print(f"\n🎯 Custom name: {result.get('custom_name', '')}")
+        print(f"\n🎯 WandB run name: {args.wandb_run_name}")
         print("="*60)
 
         # Exit with appropriate code
-        if result.get('status') == 'completed' and result.get('successful_runs', 0) > 0:
+        if result.get('status') == 'completed':
             print("🎉 Training workflow completed successfully!")
             sys.exit(0)
         elif result.get('status') == 'cancelled':
