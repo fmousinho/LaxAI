@@ -125,10 +125,10 @@ class EvaluatorConfig:
         0.7  # Starting similarity threshold for evaluation (adjusted during evaluation)
     )
     number_of_workers: int = (
-        0 if sys.platform != "darwin" else 0
+        8 if sys.platform != "darwin" else 0
     )  # Number of workers for DataLoader
     eval_batch_size: int = 32  # Batch size for embedding generation
-    prefetch_factor: int = 2  # Number of batches to prefetch for DataLoader
+    prefetch_factor: int = 4  # Number of batches to prefetch for DataLoader
 
 
 @dataclass
