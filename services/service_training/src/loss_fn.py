@@ -1,6 +1,8 @@
 import logging
 logger = logging.getLogger(__name__)
 
+from typing import Literal 
+
 import torch
 import torch.nn.functional as F
 from torch.nn import TripletMarginWithDistanceLoss

@@ -171,7 +171,7 @@ class LacrossePlayerDataset(Dataset):
         
         return self.negative_candidates[anchor_player]
 
-    @lru_cache(maxsize=1000)
+    @lru_cache(maxsize=10000)
     def _get_cached_image(self, blob_path: str):
         """Cache frequently accessed images to avoid repeated downloads."""
         try:
