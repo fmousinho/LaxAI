@@ -204,7 +204,7 @@ class TrainingLoop:
 
     def maybe_save_checkpoint(self, epoch: int, model: nn.Module, optimizer: torch.optim.Optimizer, lr_scheduler: Any):
         """Save model checkpoint at regular intervals."""
-        if epoch % EPOCHS_PER_CHECKPOINT == 0:
+        if epoch % EPOCHS_PER_CHECKPOINT == 0 or epoch == self.num_epochs - 1:
             self.save_checkpoint()
 
     def save_checkpoint(self):      
