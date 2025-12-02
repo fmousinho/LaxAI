@@ -15,6 +15,8 @@ class MetricsData(BaseModel):
     mining_semi_hard: Optional[float] = Field(default=0.0, description="Ratio of semi-hard triplets")
     mining_easy: Optional[float] = Field(default=0.0, description="Ratio of easy triplets")
     model_variance: Optional[float] = Field(default=0.0, description="Embedding variance")
+    learning_rate: Optional[float] = Field(default=0.0, description="Current learning rate")
+    weight_decay: Optional[float] = Field(default=0.0, description="Weight decay value")
 
     def __add__(self, other: 'MetricsData') -> 'MetricsData':
         """Add two MetricsData instances for accumulation."""

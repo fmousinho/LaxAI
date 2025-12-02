@@ -65,10 +65,15 @@ class Metrics:
             self.batch_metrics.model_variance = self._compute_embeddings_variance(anchor_embs)
             self._accumulate_epoch_metrics(epoch, self.batch_metrics)
 
-    def finalize_epoch_metrics(self, epoch: int):
+    def finalize_epoch_metrics(self, epoch: int, learning_rate: float = None, weight_decay: float = None):
         """
         Calculates epoch metrics based on acculated averages.
         Logs metrics to standard logger and Weights & Biases if provided.
+        
+        Args:
+            epoch: Current epoch number
+            learning_rate: Current learning rate value
+            weight_decay: Weight decay value
         """
         if self.running_num_batches_in_epoch == 0:
             logger.warning(f"No batches processed in epoch {epoch}. Cannot finalize metrics.")
@@ -76,6 +81,12 @@ class Metrics:
 
         # Use operator overloading for cleaner averaging
         self.epoch_metrics = self.epoch_accumulations / self.running_num_batches_in_epoch
+        
+        # Set learning rate and weight decay directly in epoch_metrics
+        if learning_rate is not None:
+            self.epoch_metrics.learning_rate = learning_rate
+        if weight_decay is not None:
+            self.epoch_metrics.weight_decay = weight_decay
 
         self._maybe_log_to_wandb(epoch)
         self._log_to_logger(epoch)

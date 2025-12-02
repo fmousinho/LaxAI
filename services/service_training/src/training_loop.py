@@ -153,7 +153,11 @@ class TrainingLoop:
                     self.save_checkpoint()
                     return
 
-                self.metrics.finalize_epoch_metrics(epoch)
+                # Extract optimizer values for metrics
+                current_lr = self.optimizer.param_groups[0]['lr']
+                weight_decay = self.optimizer.param_groups[0].get('weight_decay', 0.0)
+                
+                self.metrics.finalize_epoch_metrics(epoch, current_lr, weight_decay)
                 
                 # Step the learning rate scheduler with the epoch loss
                 # ReduceLROnPlateau requires a metric to decide whether to reduce LR
