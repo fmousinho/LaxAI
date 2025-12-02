@@ -40,6 +40,10 @@ class TrainingParams(BaseModel):
         default="checkpoint", 
         description="Use 'checkpoint' to resume from wandb, 'latest' for previous saved model, 'reset' to use ResNet defaults"
         )
+    loss_function: Literal["triplet_margin", "semi_hard_triplet"] = Field(
+        default="triplet_margin", 
+        description="Loss function to use for training"
+        )
 
 
 class ModelParams(BaseModel):

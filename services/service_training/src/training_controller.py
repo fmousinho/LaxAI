@@ -58,7 +58,7 @@ class TrainingController():
         self.eval_params = eval_params
 
         self.wandb_logger = wandb_logger
-        self.loss_fn = loss_fn
+        self.loss_fn = loss_fn (self.training_params.loss_function)
         
         # Initialize to None before loading
         self.model = None

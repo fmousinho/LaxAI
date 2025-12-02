@@ -49,9 +49,38 @@ def semi_hard_triplet_loss(
     return triplet_loss.mean()
 
 
-# Standardize loss function name for imports
-loss_fn = semi_hard_triplet_loss
+def triplet_margin_loss(
+    anchor: torch.Tensor,
+    positive: torch.Tensor,
+    negative: torch.Tensor,
+    margin: float = 0.5,
+) -> torch.Tensor:
+    """
+    Compute the Triplet Margin Loss.
+    
+    Args:
+        anchor: Tensor of shape (N, D) representing anchor embeddings
+        positive: Tensor of shape (N, D) representing positive embeddings
+        negative: Tensor of shape (N, D) representing negative embeddings
+        margin: Margin for triplet loss
+    Returns:
+        Scalar tensor representing the triplet loss.
+    """
+    return TripletMarginWithDistanceLoss(margin=margin)(anchor, positive, negative)
 
-logger.info("Loss function: Semi-hard Triplet Loss")
+
+
+
+# Standardize loss function name for imports
+def loss_fn(loss_function: Literal["triplet_margin", "semi_hard_triplet"] = "triplet_margin") -> torch.Tensor:
+    if loss_function == "triplet_margin":
+        return triplet_margin_loss
+    elif loss_function == "semi_hard_triplet":
+        return semi_hard_triplet_loss
+    else:
+        raise ValueError(f"Unknown loss function: {loss_function}")
+
+
+
 
 
