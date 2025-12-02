@@ -26,28 +26,6 @@ import wandb
 WANDB_AVAILABLE = True
 
 
-def monitor_memory(func: Callable) -> Callable:
-    """Decorator to monitor memory usage around external methods."""
-    @wraps(func)
-    def wrapper(self, *args, **kwargs):
-        # Skip monitoring for internal methods
-        if func.__name__.startswith('_'):
-            return func(self, *args, **kwargs)
-            
-        process = psutil.Process()
-        memory_before = process.memory_info().rss / 1024 / 1024
-        
-        try:
-            result = func(self, *args, **kwargs)
-            return result
-        finally:
-            memory_after = process.memory_info().rss / 1024 / 1024
-            memory_delta = memory_after - memory_before
-            
-            if abs(memory_delta) > 50:
-                logger.info(f"Memory usage for {func.__name__}: {memory_before:.1f}MB → {memory_after:.1f}MB (Δ{memory_delta:+.1f}MB)")
-    return wrapper
-
 
 def requires_wandb_enabled(func: Callable) -> Callable:
     """Decorator to check if wandb is enabled before executing method."""
@@ -261,7 +239,6 @@ class WandbLogger:
 
     
     
-    @monitor_memory
     @requires_wandb_enabled
     @safe_wandb_operation(default_return=False)
     def init_run(self, config: Dict[str, Any], run_name: str = wandb_config.run_name,
@@ -400,7 +377,6 @@ class WandbLogger:
             return False, [], [], err
     
 
-    @monitor_memory
     @requires_wandb_initialized
     @safe_wandb_operation()
     def log_summary(self, summary: Dict[str, Any]) -> None:
@@ -413,7 +389,6 @@ class WandbLogger:
         self.run.summary.update(summary)
         logger.info(f"Logged summary metrics: {list(summary.keys())}")
 
-    @monitor_memory
     @requires_wandb_initialized
     @safe_wandb_operation()
     def log_metrics(self, metrics: Dict[str, Any], step: Optional[int] = None) -> None:
@@ -426,7 +401,6 @@ class WandbLogger:
         """
         self.run.log(metrics, step=step)
     
-    @monitor_memory
     @requires_wandb_initialized
     @safe_wandb_operation()
     def finish(self) -> None:
@@ -612,26 +586,8 @@ class WandbLogger:
                 logger.debug(f"Could not delete artifact {artifact_name}: {e}")
                 raise
 
-    @monitor_memory
-    @requires_wandb_initialized
-    @safe_wandb_operation()
-    def watch_model(self, model: torch.nn.Module, log_freq: Optional[int] = None) -> None:
-        """
-        Watch model for gradients and parameters.
-        
-        Args:
-            model: PyTorch model to watch
-            log_freq: Frequency to log gradients
-        """
-        freq = log_freq or wandb_config.log_frequency
-        self.run.watch(model, log_freq=freq)
-        logger.info(f"Started watching model with log frequency: {freq}")
 
 
-
-
-
-    @monitor_memory
     @requires_wandb_initialized
     @safe_wandb_operation()
     def save_checkpoint(self, state_dicts: StateDicts, epoch: int, task_id: str, wandb_run_id: Optional[str] = None) -> Optional[str]:
@@ -830,8 +786,6 @@ class WandbLogger:
 
    
          
-
-    @monitor_memory
     @requires_wandb_enabled
     @safe_wandb_operation()
     def load_checkpoint(self, artifact_name: Optional[str] = None, version: str = "latest", run_name: Optional[str] = None) -> Optional[StateDicts]:
@@ -910,7 +864,6 @@ class WandbLogger:
         return checkpoint_data
 
 
-    @monitor_memory
     @requires_wandb_enabled
     @safe_wandb_operation()
     def load_model_from_registry(self, model_class, collection_name: str, 
@@ -995,7 +948,6 @@ class WandbLogger:
             logger.error(f"Failed to load model: {err}")
             return None
 
-    @monitor_memory
     @requires_wandb_initialized
     @safe_wandb_operation()
     def save_model_to_registry(self, model: torch.nn.Module, collection_name: str, 
@@ -1231,7 +1183,6 @@ class WandbLogger:
         except Exception as e:
             logger.error(f"Failed to cleanup {artifact_type} artifacts for {collection_name}: {e}")
 
-    @monitor_memory  
     @requires_wandb_initialized
     @safe_wandb_operation()
     def cleanup_checkpoints(self, keep_latest: int = 2) -> None:
@@ -1257,46 +1208,6 @@ class WandbLogger:
         else:
             logger.warning("No executor available for checkpoint cleanup")
 
-    @monitor_memory
-    @requires_wandb_initialized
-    @safe_wandb_operation()
-    def log_training_metrics(self, epoch: int, train_loss: float, val_loss: Optional[float] = None, 
-                        learning_rate: Optional[float] = None, **kwargs) -> None:
-        """Log training metrics for an epoch."""
-        metrics = {
-            "epoch": epoch,
-            "train_loss": train_loss,
-            **kwargs
-        }
-        
-        if val_loss is not None:
-            metrics["val_loss"] = val_loss
-        if learning_rate is not None:
-            metrics["learning_rate"] = learning_rate
-        
-        self.run.log(metrics)
-        logger.debug(f"Logged training metrics for epoch {epoch}")
-
-    @monitor_memory
-    @requires_wandb_initialized
-    @safe_wandb_operation()
-    def log_batch_metrics(self, batch_idx: int, epoch: int, batch_loss: float, **kwargs) -> None:
-        """Log batch-level metrics during training."""
-        metrics = {
-            "batch_loss": batch_loss,
-            "epoch": epoch,
-            "batch": batch_idx,
-            **kwargs
-        }
-        self.run.log(metrics)
-
-    @monitor_memory
-    @requires_wandb_initialized
-    @safe_wandb_operation()
-    def update_run_config(self, config_dict: Dict[str, Any]) -> None:
-        """Update the wandb run config."""
-        self.run.config.update(config_dict, allow_val_change=True)
-        logger.debug(f"Updated wandb run config with: {list(config_dict.keys())}")
 
     def _sanitize_artifact_name(self, name: Optional[str]) -> str:
         """Sanitize artifact names for wandb compatibility."""
@@ -1311,63 +1222,7 @@ class WandbLogger:
             logger.debug(f"Sanitized artifact name: '{name}' -> '{safe}'")
         return safe
 
-    def _force_memory_cleanup(self) -> None:
-        """Force aggressive memory cleanup for large artifacts during long training runs."""
-        try:
-            
-            # Clear any pending operations that might hold large objects
-            if self._pending_futures:
-                # Only keep futures that are still running, remove completed ones
-                self._pending_futures = [f for f in self._pending_futures if not f.done()]
-            
-            logger.debug("Forced memory cleanup completed")
-            
-        except Exception as e:
-            logger.debug(f"Memory cleanup failed (non-critical): {e}")
 
-    def force_cleanup_now(self) -> None:
-        """Manually trigger memory cleanup - can be called from training code."""
-        logger.info("🔧 Manual memory cleanup triggered")
-        self._force_memory_cleanup()
-        
-        # Also clean up any completed async operations
-        if self._pending_futures:
-            completed_count = len([f for f in self._pending_futures if f.done()])
-            if completed_count > 0:
-                logger.info(f"🧹 Cleaned up {completed_count} completed async operations")
-
-    def _monitor_wandb_processes(self) -> int:
-        """Monitor and count WandB-related processes for performance testing.
-        
-        Returns:
-            int: Number of WandB-related processes currently running
-        """
-        try:
-            import psutil
-            current_process = psutil.Process()
-            wandb_process_count = 0
-            
-            # Count WandB-related processes
-            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-                try:
-                    if proc.info['name'] and 'wandb' in proc.info['name'].lower():
-                        wandb_process_count += 1
-                    elif proc.info['cmdline']:
-                        cmdline_str = ' '.join(proc.info['cmdline'])
-                        if 'wandb' in cmdline_str.lower():
-                            wandb_process_count += 1
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-            
-            logger.debug(f"Found {wandb_process_count} WandB-related processes")
-            return wandb_process_count
-            
-        except ImportError:
-            logger.warning("psutil not available for process monitoring")
-            return 0
-        except Exception as e:
-            logger.warning(f"Error monitoring WandB processes: {e}")
-            return 0
 
 # Global instance
 wandb_logger = WandbLogger()

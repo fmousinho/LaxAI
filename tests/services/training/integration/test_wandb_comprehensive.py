@@ -287,13 +287,6 @@ class TestWandbLoggerIntegration:
         
         # Simulate training epochs
         for epoch in range(3):
-            # Log training metrics
-            logger_instance.log_training_metrics(
-                epoch=epoch,
-                train_loss=1.0/(epoch+1),
-                val_loss=0.8/(epoch+1),
-                learning_rate=0.001 * (0.9 ** epoch)
-            )
             
             # Save checkpoint
             logger_instance.save_checkpoint(
