@@ -1470,7 +1470,19 @@ def _upload_checkpoint_in_subprocess(
     finally:
         # Ensure the run is finished to stop the subprocess
         if run:
+            run_id_to_delete = run.id
+            run_path = f"{entity}/{project}/{run_id_to_delete}"
             run.finish()
+            
+            # Delete the temporary run but keep the artifacts
+            try:
+                logger.info(f"Attempting to delete temporary run: {run_path}")
+                api = wandb.Api()
+                run_obj = api.run(run_path)
+                run_obj.delete(delete_artifacts=False)
+                logger.info(f"✅ Successfully deleted temporary run: {run_path}")
+            except Exception as e:
+                logger.warning(f"Failed to delete temporary run {run_path}: {e}")
         # Clean up the temporary file
         if os.path.exists(checkpoint_path):
             try:
