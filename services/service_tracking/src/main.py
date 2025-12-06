@@ -3,7 +3,7 @@
 Main entry point for LaxAI Service Tracking.
 
 This script is the entry point for the Cloud Run job that executes track generation.
-It parses command line arguments and runs the UnverifiedTrackGenerationWorkflow.
+It parses command line arguments and runs the TrackingController.
 """
 
 import argparse
@@ -48,14 +48,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from workflows.create_unverified_tracks import UnverifiedTrackGenerationWorkflow
+from schemas.tracking import TrackingParams
+from tracking_controller import TrackingController
 
 
 def main():
     """Main entry point for the tracking service."""
     parser = argparse.ArgumentParser(description='LaxAI Service Tracking')
     parser.add_argument('--tenant_id', required=True, help='Tenant ID for GCS operations')
-    parser.add_argument('--custom_name', default='track_generation_workflow_run',
+    parser.add_argument('--custom_name', default='track_generation_run',
                        help='Custom name for the track generation run')
     parser.add_argument('--verbose', action='store_true', default=True,
                        help='Enable verbose logging')
@@ -65,6 +66,17 @@ def main():
                        help='Maximum number of videos to process (None for all)')
     parser.add_argument('--task_id', default=None,
                        help='Task ID for tracking this run')
+
+    # Tracking Params
+    parser.add_argument('--nms-iou-threshold', type=float, default=None, help='NMS IOU threshold')
+    parser.add_argument('--prediction-threshold', type=float, default=None, help='Prediction confidence threshold')
+    parser.add_argument('--model-checkpoint', type=str, default=None, help='Detection model checkpoint name')
+    parser.add_argument('--track-activation-threshold', type=float, default=None, help='Track activation threshold')
+    parser.add_argument('--lost-track-buffer', type=int, default=None, help='Lost track buffer size')
+    parser.add_argument('--minimum-matching-threshold', type=float, default=None, help='Minimum matching threshold')
+    parser.add_argument('--minimum-consecutive-frames', type=int, default=None, help='Minimum consecutive frames for track')
+    parser.add_argument('--model-input-width', type=int, default=224, help='Model input width')
+    parser.add_argument('--model-input-height', type=int, default=224, help='Model input height')
 
     args = parser.parse_args()
 
@@ -76,17 +88,31 @@ def main():
     logger.info(f"Task ID: {args.task_id}")
 
     try:
-        # Create and run the workflow
-        workflow = UnverifiedTrackGenerationWorkflow(
-            tenant_id=args.tenant_id,
-            verbose=args.verbose,
-            custom_name=args.custom_name,
+        # Create TrackingParams
+        tracking_params = TrackingParams(
             resume_from_checkpoint=args.resume_from_checkpoint,
-            task_id=args.task_id,
-            video_limit=args.video_limit
+            video_limit=args.video_limit,
+            nms_iou_threshold=args.nms_iou_threshold,
+            prediction_threshold=args.prediction_threshold if args.prediction_threshold is not None else TrackingParams.model_fields['prediction_threshold'].default,
+            model_checkpoint=args.model_checkpoint if args.model_checkpoint is not None else TrackingParams.model_fields['model_checkpoint'].default,
+            track_activation_threshold=args.track_activation_threshold if args.track_activation_threshold is not None else TrackingParams.model_fields['track_activation_threshold'].default,
+            lost_track_buffer=args.lost_track_buffer if args.lost_track_buffer is not None else TrackingParams.model_fields['lost_track_buffer'].default,
+            minimum_matching_threshold=args.minimum_matching_threshold if args.minimum_matching_threshold is not None else TrackingParams.model_fields['minimum_matching_threshold'].default,
+            minimum_consecutive_frames=args.minimum_consecutive_frames if args.minimum_consecutive_frames is not None else TrackingParams.model_fields['minimum_consecutive_frames'].default,
+            model_input_width=args.model_input_width,
+            model_input_height=args.model_input_height
         )
 
-        result = workflow.execute()
+        # Create and run the controller
+        controller = TrackingController(
+            tenant_id=args.tenant_id,
+            tracking_params=tracking_params,
+            custom_name=args.custom_name,
+            task_id=args.task_id,
+            verbose=args.verbose
+        )
+
+        result = controller.run()
 
         logger.info(f"Track generation completed with result: {result}")
         return 0

@@ -1,4 +1,6 @@
 import logging
+logger = logging.getLogger(__name__)
+
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import cv2
@@ -8,7 +10,7 @@ import torch
 
 from shared_libs.config.all_config import model_config, tracker_config
 
-logger = logging.getLogger(__name__)
+
 
 
 def warp_bbox(

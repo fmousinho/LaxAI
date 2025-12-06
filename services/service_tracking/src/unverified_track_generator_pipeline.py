@@ -112,6 +112,7 @@ from shared_libs.common.pipeline_step import StepStatus
 from shared_libs.common.pipeline import Pipeline, PipelineStatus
 from shared_libs.config.all_config import DetectionConfig, detection_config, model_config
 from shared_libs.utils.id_generator import create_video_id, create_run_id
+from schemas.tracking import TrackingParams
 from shared_libs.common.tracker import AffineAwareByteTrack
 from shared_libs.common.detection_utils import detections_to_json
 
@@ -411,7 +412,7 @@ class TrackGeneratorPipeline(Pipeline):
     MIN_CROP_CONTRAST = 20.0
 
     def __init__(self, 
-                 config: DetectionConfig, 
+                 tracking_params: TrackingParams, 
                  tenant_id: str, 
                  verbose: bool = True, 
                  task_id: Optional[str] = None,
@@ -423,8 +424,7 @@ class TrackGeneratorPipeline(Pipeline):
         Configures the processing steps for player detection and tracking.
         
         Args:
-            config (DetectionConfig): Detection configuration object containing model settings,
-                GCS bucket information, and processing parameters
+            tracking_params (TrackingParams): Tracking configuration object.
             tenant_id (str): The tenant ID for data organization and access control in multi-tenant environments
             verbose (bool): Enable detailed logging throughout the pipeline for monitoring progress
             task_id (Optional[str]): Task ID for progress tracking and status updates
@@ -434,7 +434,20 @@ class TrackGeneratorPipeline(Pipeline):
             RuntimeError: If the detection model or tracker fails to initialize
             ValueError: If tenant_id is empty or config contains invalid parameters
         """
-        self.config = config
+        self.tracking_params = tracking_params
+        
+        # Construct DetectionConfig from TrackingParams
+        # Start with default config and override with params
+        self.config = detection_config
+        if tracking_params.nms_iou_threshold is not None:
+            self.config.nms_iou_threshold = tracking_params.nms_iou_threshold
+        self.config.prediction_threshold = tracking_params.prediction_threshold
+        self.config.prediction_threshold = tracking_params.prediction_threshold
+        self.config.model_checkpoint = tracking_params.model_checkpoint
+        
+        # Log model input dimensions
+        logger.info(f"Model input dimensions: {tracking_params.model_input_width}x{tracking_params.model_input_height}")
+        
         self.tenant_id = tenant_id
         self.video_capture = None
         self.dataloader_workers = 2
@@ -451,18 +464,6 @@ class TrackGeneratorPipeline(Pipeline):
         # Store tenant_id for path generation
         self.tenant_id = tenant_id
         self.task_id = task_id
-        
-        # Initialize Firestore client for progress updates
-        if task_id:
-            try:
-                self.firestore_client = firestore.Client()
-                self.progress_collection = self.firestore_client.collection('tracking_progress')
-                logger.info(f"Initialized Firestore progress tracking for task_id: {task_id}")
-            except Exception as e:
-                logger.warning(f"Failed to initialize Firestore client for progress tracking: {e}")
-                self.firestore_client = None
-        else:
-            self.firestore_client = None
         
         # Detection model is required for training pipeline
         try:
@@ -541,18 +542,7 @@ class TrackGeneratorPipeline(Pipeline):
             self._crop_executor.shutdown(wait=False)
             logger.debug("Crop extraction process pool shut down")
 
-    def _update_progress(self, progress_data: Dict[str, Any]) -> None:
-        """Update progress in Firestore for real-time tracking."""
-        if not self.firestore_client or not self.task_id:
-            return
-        
-        try:
-            doc_ref = self.progress_collection.document(self.task_id)
-            progress_data['updated_at'] = datetime.now(timezone.utc).isoformat()
-            doc_ref.set(progress_data, merge=True)
-            logger.debug(f"Updated progress for task {self.task_id}: {progress_data}")
-        except Exception as e:
-            logger.warning(f"Failed to update progress in Firestore: {e}")
+
 
     async def _execute_parallel_operations_async(self,
                                                tasks: List[Tuple] | List[str],
@@ -1230,19 +1220,11 @@ class TrackGeneratorPipeline(Pipeline):
                         self.detection_model.batch_size,
                     )
 
-                self._update_progress(
-                    {
-                        "status": "running",
-                        "progress_percent": (processed_frames / total_frames) * 100 if total_frames else 0.0,
-                        "frames_processed": processed_frames,
-                        "total_frames": total_frames,
-                        "detections_count": detections_count,
-                        "current_video": video_guid,
-                    }
-                )
+
                 logger.info("Status updated to 'running' - starting frame processing")
 
                 frame_buffer: List[np.ndarray] = []
+                resized_frame_buffer: List[np.ndarray] = []
                 frame_indices_buffer: List[int] = []
                 batch_id_counter = 0
                 next_frame_index = resume_frame if resume_frame > 0 else 0
@@ -1268,15 +1250,21 @@ class TrackGeneratorPipeline(Pipeline):
                                 break
 
                             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # type: ignore
+                            
+                            # Resize for detection
+                            target_w = self.tracking_params.model_input_width
+                            target_h = self.tracking_params.model_input_height
+                            resized_frame_rgb = cv2.resize(frame_rgb, (target_w, target_h))
 
                             if use_batch_detection:
                                 frame_buffer.append(frame_rgb)
+                                resized_frame_buffer.append(resized_frame_rgb)
                                 frame_indices_buffer.append(next_frame_index)
                                 next_frame_index += 1
 
                                 if len(frame_buffer) >= self.detection_model.batch_size:
                                     detection_start = time.time()
-                                    batch_results = self.detection_model.generate_detections_batch(frame_buffer)  # type: ignore
+                                    batch_results = self.detection_model.generate_detections_batch(resized_frame_buffer)  # type: ignore
                                     detection_time = time.time() - detection_start
 
                                     for position, (frame_rgb_buffered, detections, frame_idx) in enumerate(
@@ -1284,6 +1272,13 @@ class TrackGeneratorPipeline(Pipeline):
                                     ):
                                         if type(detections) is not sv.Detections or detections is None:
                                             detections = sv.Detections.empty()
+                                        
+                                        # Scale detections back to original resolution
+                                        orig_h, orig_w = frame_rgb_buffered.shape[:2]
+                                        x_scale = orig_w / target_w
+                                        y_scale = orig_h / target_h
+                                        detections.xyxy[:, [0, 2]] *= x_scale
+                                        detections.xyxy[:, [1, 3]] *= y_scale
 
                                         queue_put_start = time.perf_counter()
                                         await detection_queue.put(
@@ -1304,15 +1299,23 @@ class TrackGeneratorPipeline(Pipeline):
                                             queue_metrics["producer_wait_max"] = queue_put_wait
 
                                     frame_buffer.clear()
+                                    resized_frame_buffer.clear()
                                     frame_indices_buffer.clear()
                                     batch_id_counter += 1
                             else:
                                 detection_start = time.time()
-                                detections = self.detection_model.generate_detections(frame_rgb)
+                                detections = self.detection_model.generate_detections(resized_frame_rgb)
                                 detection_time = time.time() - detection_start
 
                                 if type(detections) is not sv.Detections or detections is None:
                                     detections = sv.Detections.empty()
+                                
+                                # Scale detections back to original resolution
+                                orig_h, orig_w = frame_rgb.shape[:2]
+                                x_scale = orig_w / target_w
+                                y_scale = orig_h / target_h
+                                detections.xyxy[:, [0, 2]] *= x_scale
+                                detections.xyxy[:, [1, 3]] *= y_scale
 
                                 queue_put_start = time.perf_counter()
                                 await detection_queue.put(
@@ -1346,7 +1349,7 @@ class TrackGeneratorPipeline(Pipeline):
                         if use_batch_detection and frame_buffer:
                             try:
                                 detection_start = time.time()
-                                batch_results = self.detection_model.generate_detections_batch(frame_buffer)  # type: ignore
+                                batch_results = self.detection_model.generate_detections_batch(resized_frame_buffer)  # type: ignore
                                 detection_time = time.time() - detection_start
 
                                 for position, (frame_rgb_buffered, detections, frame_idx) in enumerate(
@@ -1354,6 +1357,13 @@ class TrackGeneratorPipeline(Pipeline):
                                 ):
                                     if type(detections) is not sv.Detections or detections is None:
                                         detections = sv.Detections.empty()
+                                    
+                                    # Scale detections back to original resolution
+                                    orig_h, orig_w = frame_rgb_buffered.shape[:2]
+                                    x_scale = orig_w / target_w
+                                    y_scale = orig_h / target_h
+                                    detections.xyxy[:, [0, 2]] *= x_scale
+                                    detections.xyxy[:, [1, 3]] *= y_scale
 
                                     queue_put_start = time.perf_counter()
                                     await detection_queue.put(
@@ -1521,16 +1531,7 @@ class TrackGeneratorPipeline(Pipeline):
                                 total_frames,
                                 detections_count,
                             )
-                            self._update_progress(
-                                {
-                                    "status": "running",
-                                    "progress_percent": progress_percent,
-                                    "frames_processed": processed_frames,
-                                    "total_frames": total_frames,
-                                    "detections_count": detections_count,
-                                    "current_video": video_guid,
-                                }
-                            )
+
 
                         if (
                             payload.batch_position == payload.batch_size - 1
@@ -2026,13 +2027,7 @@ class TrackGeneratorPipeline(Pipeline):
         logger.info("Initiating graceful stop of the pipeline...")
         
         # Update Firestore status to cancelled immediately
-        self._update_progress({
-            'status': 'cancelled',
-            'frames_processed': frame_number,
-            'detections_count': detections_count,
-            'cancellation_reason': 'Stop requested during detection processing'
-        })
-        logger.info(f"Updated Firestore status to 'cancelled' for task_id: {self.task_id}")
+        logger.info(f"Pipeline cancelled for task_id: {self.task_id}")
         
         if crop_tasks:
             logger.info(f"Processing remaining {len(crop_tasks)} crop tasks before stopping...")

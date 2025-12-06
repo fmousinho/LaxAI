@@ -1,4 +1,6 @@
 import logging
+logger = logging.getLogger(__name__)
+
 import os
 import sys
 import tempfile
@@ -13,9 +15,7 @@ from rfdetr import RFDETRBase  # type: ignore
 from supervision import Detections
 
 from shared_libs.config.all_config import detection_config, wandb_config
-from shared_libs.utils.env_secrets import setup_environment_secrets
 
-setup_environment_secrets()
 
 import wandb
 
@@ -23,7 +23,6 @@ warnings.filterwarnings(
     "ignore", message=r".*The `Scope\.user` setter is deprecated.*", category=DeprecationWarning
 )
 
-logger = logging.getLogger(__name__)
 
 REGISTRY_NAME = "wandb-registry-model"
 COLLECTION_NAME = "Detections"
@@ -73,7 +72,7 @@ class DetectionModel:
         # Set batch size based on device if not explicitly provided
         if batch_size is None:
             if self.device.type == "cuda":
-                self.batch_size = detection_config.batch_size  # Default 16 for GPU
+                self.batch_size = detection_config.batch_size  
             else:
                 self.batch_size = 1  # CPU/MPS: process one frame at a time
         else:
