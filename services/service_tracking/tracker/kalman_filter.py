@@ -269,45 +269,18 @@ class KalmanFilter(object):
         else:
             raise ValueError('invalid distance metric')
 
-    def warp(self, mean, covariance, warp_matrix):
-        """
-        Warp the state to the new frame coordinates using the affine transformation.
+    def compensate_cam_motion(self, mean, covariance, scale_transform, translation_transform):
+        """Compensate for camera motion by updating the state mean and covariance."""
         
-        Parameters
-        ----------
-        mean : ndarray
-            The 8 dimensional mean vector of the object state.
-        covariance : ndarray
-            The 8x8 dimensional covariance matrix.
-        warp_matrix : ndarray
-            The 2x3 affine transformation matrix (R | T) describing motion 
-            from the previous frame to the current frame.
-
-        Returns
-        -------
-        (ndarray, ndarray)
-            The warped mean and covariance.
-        """
-        # Extract rotation/scale (2x2) and translation (2x1) parts
-        R = warp_matrix[:2, :2]
-        T = warp_matrix[:2, 2]
-
-        # 1. Update Mean
-        # Transform the center position (x, y) with the full affine (R*x + T)
-        mean[:2] = np.dot(R, mean[:2]) + T
+        # Update Mean: x' = x * S + T (element-wise)
+        mean = mean * scale_transform + translation_transform
+            
+        # Update Covariance: P' = J P J^T
+        # Since J is diagonal matrix of S, P'_ij = S_i * P_ij * S_j
+        # This is equivalent to element-wise multiplication by outer product of S
+        S_outer = np.outer(scale_transform, scale_transform)
         
-        # Transform the velocity (vx, vy) with only the rotation/scale (R*v)
-        # Velocity is a vector, so it is not affected by translation.
-        mean[4:6] = np.dot(R, mean[4:6])
-
-        # 2. Update Covariance
-        # We need to construct a Jacobian matrix J (8x8) to rotate the covariance.
-        # J = diag(R, I, R, I) assuming independent transformation for pos/vel.
-        J = np.eye(8)
-        J[:2, :2] = R   # Rotation for position block
-        J[4:6, 4:6] = R # Rotation for velocity block
-
-        # P_new = J * P * J.T
-        covariance = np.linalg.multi_dot((J, covariance, J.T))
-
+        covariance = covariance * S_outer
+            
         return mean, covariance
+        
