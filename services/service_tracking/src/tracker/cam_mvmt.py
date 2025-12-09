@@ -57,17 +57,22 @@ def calculate_transform(
     y1_std = np.std(good1[:, 1])
     y2_std = np.std(good2[:, 1])
 
-    affine_transform = cv2.estimateAffinePartial2D(good1, good2, method=cv2.RANSAC)
-    M = np.eye(8)
-    M[:2, :2] = affine_transform[:2, :2]
-    M[4:6, 4:6] = affine_transform[:2, :2]
+    affine_ret = cv2.estimateAffinePartial2D(good1, good2, method=cv2.RANSAC)
+    affine_matrix = affine_ret[0]
+    
+    if affine_matrix is None:
+        return np.eye(8), np.zeros(8)
 
-    s = np.linalg.norm(affine_transform[1, :])
+    M = np.eye(8)
+    M[:2, :2] = affine_matrix[:, :2]
+    M[4:6, 4:6] = affine_matrix[:, :2]
+
+    s = np.linalg.norm(affine_matrix[0, :2])
     s = np.clip(s, 1e-4, 1.2)
     M[3,3] = s
     M[7,7] = s
 
-    T[:2] = affine_transform[2, :]
+    T[:2] = affine_matrix[:, 2]
     
     return M, T
     

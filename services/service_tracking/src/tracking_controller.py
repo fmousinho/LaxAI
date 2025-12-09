@@ -15,10 +15,9 @@ import numpy as np
 from shared_libs.common.google_storage import GCSPaths, get_storage
 from shared_libs.utils.id_generator import create_simple_uuid
 from schemas.tracking import TrackingParams
-from shared_libs.common.detection import DetectionModel
 
 from detection import DetectionModel
-from tracker.byte_tracker import ByteTracker
+from tracker.byte_tracker import BYTETracker
 from tracker.cam_mvmt import calculate_transform
 
 DEFAULT_CONFIDENCE_THRESHOLD = 0.4
@@ -37,11 +36,11 @@ class TrackingController:
         self.tracking_params = tracking_params
         self.wandb_run_name = wandb_run_name
 
-        self.storage_client = get_storage(tenant_id)
-        self.path_manager = GCSPaths()
+        #self.storage_client = get_storage(tenant_id)
+        #self.path_manager = GCSPaths()
 
         self.detector = DetectionModel()
-        self.tracker = ByteTracker(self.tracking_params)
+        self.tracker = BYTETracker(self.tracking_params)
 
     def run (self, video_path: str, tracks_save_path: str):
         """
@@ -49,11 +48,12 @@ class TrackingController:
 
         Args:
             video_path: Path to the video file (URL or local path).
+            tracks_save_path: Path to the json file where the tracks will be saved.
 
         Returns:
             TBD.
         """
-        logger.info(f"Starting Tracking Controller for tenant: {self.tenant_id}")
+        logger.info(f"Starting Tracking Controller")
 
         original_video_path = video_path
         # Gets video into cv2
@@ -72,6 +72,7 @@ class TrackingController:
         frame_count = 0
         prev_frame = None
         all_tracks = []
+        ttl_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         while True:
             ret, frame_bgr = cap.read()
             if not ret:
@@ -85,7 +86,7 @@ class TrackingController:
             # detection_obj.xyxy is [N, 4], detection_obj.confidence is [N]
 
             # Filter out non-player detections
-            player_mask = detections_obj.class_ids == 3
+            player_mask = detections_obj.class_id == 3
             detections_obj = detections_obj[player_mask]
             
             if detections_obj.xyxy.shape[0] > 0:
@@ -99,9 +100,13 @@ class TrackingController:
                 S, T = None, None
             
             frame_tracks = self.tracker.update(detections, S, T)
-            all_tracks.append(frame_tracks)
+            all_tracks.append(frame_tracks.copy())
             frame_count += 1
             prev_frame = frame
+            
+            # Log progress
+            if frame_count % 10 == 0:
+                logger.info(f"Processed {frame_count}/{ttl_frames} frames")
 
         cap.release()
 
@@ -111,15 +116,16 @@ class TrackingController:
     def save_tracks(self, tracks_list: List[List], video_source: str, tracks_save_path: str):
         serialized_tracks = []
         for frame_tracks in tracks_list:
+            serialized_frame_tracks = []
             for track in frame_tracks:
                 # Convert STrack object to dictionary
                 track_dict = {
-                    "frame_id": int(track.frame_id),
                     "track_id": int(track.track_id),
-                    "bbox": [float(x) for x in track.tlwh],  # tlwh format
+                    "bbox": [int(x) for x in track.tlbr],  # tlbr format
                     "score": float(track.score)
                 }
-                serialized_tracks.append(track_dict)
+                serialized_frame_tracks.append(track_dict)
+            serialized_tracks.append({"frame_id": int(track.frame_id), "tracks": serialized_frame_tracks})
         
         output_data = {
             "video_source": video_source,

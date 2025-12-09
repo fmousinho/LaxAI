@@ -172,7 +172,7 @@ class BYTETracker(object):
         self.frame_id = 0
        
         self.track_activation_threshold = args.track_activation_threshold
-        self.minimum_activation_threshold = args.minimum_activation_threshold
+        self.minimum_matching_threshold = args.minimum_matching_threshold
         self.det_thresh = args.prediction_threshold
         self.buffer_size = int(frame_rate / 30.0 * args.lost_track_buffer)
         self.max_time_lost = self.buffer_size
@@ -242,7 +242,7 @@ class BYTETracker(object):
         dists = matching.iou_distance(strack_pool, detections)
         # if not self.args.mot20:
         #     dists = matching.fuse_score(dists, detections)
-        matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.minimum_activation_threshold)
+        matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.minimum_matching_threshold)
 
         for itracked, idet in matches:
             track = strack_pool[itracked]
