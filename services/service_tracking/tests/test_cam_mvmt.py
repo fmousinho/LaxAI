@@ -52,7 +52,7 @@ class TestCamMvmt(unittest.TestCase):
             print("Translation T:", T)
             
             # Assertions
-            self.assertEqual(M.shape, (8,))
+            self.assertEqual(M.shape, (8, 8))
             self.assertEqual(T.shape, (8,))
             
             # Translation should be present in X/Y (indices 0, 1)
@@ -64,8 +64,8 @@ class TestCamMvmt(unittest.TestCase):
             self.assertEqual(T[4], 0)
             self.assertEqual(T[5], 0)
             
-            # Scale should be Ones for pure translation (element-wise identities)
-            self.assertTrue(np.allclose(M, np.ones(8)))
+            # Scale should be Identity for pure translation
+            self.assertTrue(np.allclose(M, np.eye(8)))
             
         except Exception as e:
             self.fail(f"calculate_transform failed with exception: {e}")

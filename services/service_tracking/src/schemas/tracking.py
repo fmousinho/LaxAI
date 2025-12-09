@@ -21,7 +21,6 @@ class TrackingParams(BaseModel):
     # Detection Config
     nms_iou_threshold: Optional[float] = Field(default=detection_config.nms_iou_threshold, description="NMS IOU threshold")
     prediction_threshold: float = Field(default=detection_config.prediction_threshold, description="Prediction confidence threshold")
-    model_checkpoint: str = Field(default=detection_config.model_checkpoint, description="Detection model checkpoint name")
     
     # Tracker Config
     track_activation_threshold: float = Field(default=tracker_config.track_activation_threshold, description="Track activation threshold")
@@ -30,12 +29,9 @@ class TrackingParams(BaseModel):
     minimum_consecutive_frames: int = Field(default=tracker_config.minimum_consecutive_frames, description="Minimum consecutive frames for track")
     
     # Pipeline Config
-    video_limit: Optional[int] = Field(default=None, description="Maximum number of videos to process")
     resume_from_checkpoint: bool = Field(default=True, description="Resume from checkpoint if available")
     
-    # Model Config
-    model_input_width: int = Field(default=224, description="Model input width")
-    model_input_height: int = Field(default=224, description="Model input height")
+
 
 
 class TrackingRequest(BaseModel):

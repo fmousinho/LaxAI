@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 
 from typing import Optional
+from schemas.tracking import TrackingParams
 from .kalman_filter import KalmanFilter
 from . import matching
 from .basetrack import BaseTrack, TrackState
@@ -75,14 +76,18 @@ class STrack(BaseTrack):
         T_array: The T array for the Kalman filter.
         The arrays update the current state of the filter by K' = K * S_array + T_array
         """
-        self.mean, self.covariance = self.kalman_filter.compensate_cam_motion(
+        self.mean, self.covariance = self.shared_kalman.compensate_cam_motion(
             self.mean, self.covariance, S_array, T_array
         )
 
     @staticmethod
     def multi_compensate_cam_motion(stracks, S_array, T_array):
-        for st in stracks:
-            st.compensate_cam_motion(S_array, T_array)
+        multi_mean = np.asarray([st.mean for st in stracks])
+        multi_covariance = np.asarray([st.covariance for st in stracks])
+        multi_mean, multi_covariance = STrack.shared_kalman.multi_compensate_cam_motion(multi_mean, multi_covariance, S_array, T_array)
+        for st, mean, covariance in zip(stracks, multi_mean, multi_covariance):
+            st.mean = mean
+            st.covariance = covariance
 
     def update(self, new_track, frame_id):
         """
@@ -159,25 +164,30 @@ class STrack(BaseTrack):
 
 
 class BYTETracker(object):
-    def __init__(self, args, frame_rate=30):
+    def __init__(self, args: TrackingParams, frame_rate=30):
         self.tracked_stracks = []  # type: list[STrack]
         self.lost_stracks = []  # type: list[STrack]
         self.removed_stracks = []  # type: list[STrack]
 
         self.frame_id = 0
-        self.args = args
-        #self.det_thresh = args.track_thresh
-        self.det_thresh = args.track_thresh + 0.1
-        self.buffer_size = int(frame_rate / 30.0 * args.track_buffer)
+       
+        self.track_activation_threshold = args.track_activation_threshold
+        self.minimum_activation_threshold = args.minimum_activation_threshold
+        self.det_thresh = args.prediction_threshold
+        self.buffer_size = int(frame_rate / 30.0 * args.lost_track_buffer)
         self.max_time_lost = self.buffer_size
         self.kalman_filter = KalmanFilter()
 
     def update(self, detections_array: np.ndarray, S_array: Optional[np.ndarray], T_array: Optional[np.ndarray]):
         """
-        detections_array: np.ndarray - The detections, expected to be in the format N x [x1, y1, x2, y2, score]
-        S_array: Optional[np.ndarray] - The scale array for the Kalman filter.
-        T_array: Optional[np.ndarray] - The T array for the Kalman filter.
-        The arrays update the current state of the filter by K' = K * S_array + T_array
+        Args:
+            detections_array: np.ndarray - The detections, expected to be in the format N x [x1, y1, x2, y2, score]
+            S_array: Optional[np.ndarray] - The scale array for the Kalman filter.
+            T_array: Optional[np.ndarray] - The T array for the Kalman filter.
+            The arrays update the current state of the filter by K' = K * S_array + T_array
+        
+        Returns:
+            A list of tracks
         """
         
         self.frame_id += 1
@@ -194,9 +204,9 @@ class BYTETracker(object):
             scores = detections_array[:, 4] * detections_array[:, 5]
             bboxes = detections_array[:, :4]  # x1y1x2y2
 
-        remain_inds = scores > self.args.track_thresh
+        remain_inds = scores > self.track_activation_threshold
         inds_low = scores > 0.1
-        inds_high = scores < self.args.track_thresh
+        inds_high = scores < self.track_activation_threshold
 
         inds_second = np.logical_and(inds_low, inds_high)
         dets_second = bboxes[inds_second]
@@ -223,7 +233,6 @@ class BYTETracker(object):
         ''' Step 2: First association, with high score detection boxes'''
         strack_pool = joint_stracks(tracked_stracks, self.lost_stracks)
 
-
         # Compensate the camera motion, if arrays are provided
         if S_array is not None and T_array is not None:
             STrack.multi_compensate_cam_motion(strack_pool, S_array, T_array)
@@ -231,9 +240,9 @@ class BYTETracker(object):
         # Predict the current location with KF
         STrack.multi_predict(strack_pool)
         dists = matching.iou_distance(strack_pool, detections)
-        if not self.args.mot20:
-            dists = matching.fuse_score(dists, detections)
-        matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.args.match_thresh)
+        # if not self.args.mot20:
+        #     dists = matching.fuse_score(dists, detections)
+        matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.minimum_activation_threshold)
 
         for itracked, idet in matches:
             track = strack_pool[itracked]
@@ -275,8 +284,8 @@ class BYTETracker(object):
         '''Deal with unconfirmed tracks, usually tracks with only one beginning frame'''
         detections = [detections[i] for i in u_detection]
         dists = matching.iou_distance(unconfirmed, detections)
-        if not self.args.mot20:
-            dists = matching.fuse_score(dists, detections)
+        # if not self.args.mot20:
+        #     dists = matching.fuse_score(dists, detections)
         matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=0.7)
         for itracked, idet in matches:
             unconfirmed[itracked].update(detections[idet], self.frame_id)

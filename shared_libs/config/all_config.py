@@ -137,7 +137,7 @@ class DetectionConfig:
 
     nms_iou_threshold: Optional[float] = None
     player_class_id: int = 3
-    prediction_threshold: float = 0.6
+    prediction_threshold: float = 0.4  # Used by RFDETR
     model_checkpoint: str = "detection_latest.pth"
     output_video_path: str = "results.mp4"
     crop_extract_interval: int = 5

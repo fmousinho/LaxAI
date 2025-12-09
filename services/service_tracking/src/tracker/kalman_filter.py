@@ -269,18 +269,16 @@ class KalmanFilter(object):
         else:
             raise ValueError('invalid distance metric')
 
-    def compensate_cam_motion(self, mean, covariance, scale_transform, translation_transform):
-        """Compensate for camera motion by updating the state mean and covariance."""
+    def multi_compensate_cam_motion(self, means, covariances, scale_transform, translation_transform):
+        """Compensate for camera motion by updating the state mean and covariance for multiple tracks."""
+        # means: (N, 8), scale: (8, 8), translation: (8,)
+        # x' = S x + T -> ( (S @ means.T).T ) + T = means @ S.T + T
+        # Since S is diagonal symmetric, S.T = S
+        compensated_means = means @ scale_transform + translation_transform
         
-        # Update Mean: x' = x * S + T (element-wise)
-        mean = mean * scale_transform + translation_transform
-            
-        # Update Covariance: P' = J P J^T
-        # Since J is diagonal matrix of S, P'_ij = S_i * P_ij * S_j
-        # This is equivalent to element-wise multiplication by outer product of S
-        S_outer = np.outer(scale_transform, scale_transform)
+        # covariances: (N, 8, 8)
+        # P' = S P S^T
+        compensated_covariances = covariances @ scale_transform @ scale_transform.T
         
-        covariance = covariance * S_outer
-            
-        return mean, covariance
+        return compensated_means, compensated_covariances
         

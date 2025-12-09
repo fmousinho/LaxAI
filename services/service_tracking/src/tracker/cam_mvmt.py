@@ -18,9 +18,9 @@ def calculate_transform(
         frame2: The second frame, in RGB. 
     
     Returns:
-        A tuple of the transform and translation vector.
-        Transform S is a 8x1 array with the scale changes on the diagonal.
-        Translation T is a 8x1 vector with the translation changes.
+        A tuple of the transform and translation vector as numpy arrays.
+        Transform Matrix M is a 8x8 array with the scale changes on the diagonal.
+        Translation Vector T is a 8x1 vector with the translation changes.
         Indices are ordered as: x, y, a, h, vx, vy, va, vh
         Use as: transform @ [x, y, a, h, vx, vy, va, vh] + translation
     """
@@ -32,7 +32,7 @@ def calculate_transform(
     
     # If no features found, return identity
     if pts1 is None:
-        return np.ones(8), np.zeros(8)
+        return np.eye(8), np.zeros(8)
 
     pts2, status, err = cv2.calcOpticalFlowPyrLK(frame1_gray, frame2_gray, pts1, None)
 
@@ -41,9 +41,9 @@ def calculate_transform(
     good2 = pts2[status == 1]
     
     if len(good1) < 3:
-        return np.ones(8), np.zeros(8)
+        return np.eye(8), np.zeros(8)
     
-    S = np.ones(8)
+    S = np.eye(8)
     T = np.zeros(8)
     
     # Translation
@@ -56,39 +56,23 @@ def calculate_transform(
     # Estimate scale by comparing standard deviation of point distribution in Y
     y1_std = np.std(good1[:, 1])
     y2_std = np.std(good2[:, 1])
-    
-    y_scale = 1.0
-    if y1_std > 1e-4:
-        y_scale = y2_std / y1_std
-        
-    if abs(y_scale-1) > 0.03:
-        max_scale = 1.2
-        min_scale = .8
-        S[3] = np.clip(y_scale, min_scale, max_scale)
-        S[7] = np.clip(y_scale, min_scale, max_scale)
 
-    # Aspect ratio change (a)
-    # Estimate scale in X
-    x1_std = np.std(good1[:, 0])
-    x2_std = np.std(good2[:, 0])
-    
-    x_scale = 1.0
-    if x1_std > 1e-4:
-        x_scale = x2_std / x1_std
-        
-    # Scale of aspect ratio is x_scale / y_scale
-    if y_scale > 1e-4:
-        a_scale = x_scale/y_scale
-    else:
-        a_scale = 1.0
-        
-    if abs(a_scale-1) > 0.03:
-        max_scale = 1.2
-        min_scale = .8
-        S[2] = np.clip(a_scale, min_scale, max_scale)
-        S[6] = np.clip(a_scale, min_scale, max_scale)
+    affine_transform = cv2.estimateAffinePartial2D(good1, good2, method=cv2.RANSAC)
+    M = np.eye(8)
+    M[:2, :2] = affine_transform[:2, :2]
+    M[4:6, 4:6] = affine_transform[:2, :2]
 
-    return S, T 
+    s = np.linalg.norm(affine_transform[1, :])
+    s = np.clip(s, 1e-4, 1.2)
+    M[3,3] = s
+    M[7,7] = s
+
+    T[:2] = affine_transform[2, :]
+    
+    return M, T
+    
+    
+
 
 
     
