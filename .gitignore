@@ -62,3 +62,5 @@ dist/
 .DS_Store
 Thumbs.db
 tests/services/tracking/test_data/test_video.mp4
+detections.json
+tracks.json

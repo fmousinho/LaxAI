@@ -16,8 +16,9 @@ from . import matching
 from .basetrack import BaseTrack, TrackState
 
 COMPENSATE_CAM_MOTION = True  # Affine transform to track camera motion signifantly improves accuracy
-LOW_CONF_MATCHING_THRESH = 0.4
-UNCONFIRMED_MATCHING_THRESH = 0.7
+HIGH_CONF_MAX_MATCH_DISTANCE = 0.3
+LOW_CONF_MAX_MATCH_DISTANCE = 0.5
+UNCONFIRMED_MAX_MATCH_DISTANCE = 0.5
 
 class STrack(BaseTrack):
     shared_kalman = KalmanFilter()
@@ -168,7 +169,7 @@ class BYTETracker(object):
         self.frame_id = 0
        
         self.track_activation_threshold = args.track_activation_threshold
-        self.minimum_matching_threshold = args.minimum_matching_threshold
+        self.max_match_distance = args.max_match_distance
         self.prediction_threshold = args.prediction_threshold
         self.buffer_size = int(frame_rate / 30.0 * args.lost_track_buffer)
         self.max_time_lost = self.buffer_size
@@ -251,7 +252,7 @@ class BYTETracker(object):
 
         if len(strack_pool_array) > 0 and len(bboxes_high) > 0:
             dists = matching.iou_distance(strack_pool_array, bboxes_high)
-            matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.minimum_matching_threshold)
+            matches, u_track, u_detection = matching.linear_assignment(dists, thresh=HIGH_CONF_MAX_MATCH_DISTANCE)
         else:
             matches = []
             u_track = np.arange(len(strack_pool_array))
@@ -279,7 +280,7 @@ class BYTETracker(object):
         
         if len(unmatched_tracks_array) > 0 and len(bboxes_low) > 0:
             dists = matching.iou_distance(unmatched_tracks_array, bboxes_low)
-            matches, u_track_second, u_detection_second = matching.linear_assignment(dists, thresh=LOW_CONF_MATCHING_THRESH)
+            matches, u_track_second, u_detection_second = matching.linear_assignment(dists, thresh=LOW_CONF_MAX_MATCH_DISTANCE)
         else:
             matches = []
             u_track_second = np.arange(len(unmatched_tracks_array))
@@ -323,7 +324,7 @@ class BYTETracker(object):
 
         if len(unconfirmed_tracks_array) > 0 and len(unmatched_bbox_array) > 0:
             dists = matching.iou_distance(unconfirmed_tracks_array, unmatched_bbox_array)
-            matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=UNCONFIRMED_MATCHING_THRESH)
+            matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=UNCONFIRMED_MAX_MATCH_DISTANCE)
         else:
             matches = []
             u_unconfirmed = np.arange(len(unconfirmed_tracks))

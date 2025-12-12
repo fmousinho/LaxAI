@@ -42,13 +42,14 @@ class TrackingController:
         self.detector = DetectionModel()
         self.tracker = BYTETracker(self.tracking_params)
 
-    def run (self, video_path: str, tracks_save_path: str):
+    def run (self, video_path: str, tracks_save_path: str, detections_save_path: Optional[str] = None):
         """
         Generates detections and tracks from a given video.
 
         Args:
             video_path: Path to the video file (URL or local path).
             tracks_save_path: Path to the json file where the tracks will be saved.
+            detections_save_path: Path to the json file where the detections will be saved.
 
         Returns:
             TBD.
@@ -72,6 +73,7 @@ class TrackingController:
         frame_count = 0
         prev_frame = None
         all_tracks = []
+        all_detections = []
         ttl_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         while True:
             ret, frame_bgr = cap.read()
@@ -81,9 +83,6 @@ class TrackingController:
             frame = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
             detections_obj = self.detector.predict(frame, threshold=DEFAULT_CONFIDENCE_THRESHOLD)
-            # Detections need to be properly formatted for ByteTracker
-            # ByteTracker expects: [x1, y1, x2, y2, score]
-            # detection_obj.xyxy is [N, 4], detection_obj.confidence is [N]
 
             # Filter out non-player detections
             player_mask = detections_obj.class_id == 3
@@ -99,18 +98,23 @@ class TrackingController:
             else:
                 S, T = None, None
             
-            frame_tracks = self.tracker.update(detections, S, T)
+            frame_tracks = self.tracker.assign_tracks_to_detections(detections, S, T)
             all_tracks.append(frame_tracks.copy())
+            if detections_save_path is not None:
+                all_detections.append(detections.copy())
+            
             frame_count += 1
             prev_frame = frame
             
             # Log progress
-            if frame_count % 10 == 0:
+            if frame_count % 50 == 0:
                 logger.info(f"Processed {frame_count}/{ttl_frames} frames")
 
         cap.release()
 
         self.save_tracks(all_tracks, original_video_path, tracks_save_path)
+        if detections_save_path is not None:
+            self.save_detections(all_detections, original_video_path, detections_save_path)
         return True
 
     def save_tracks(self, tracks_list: List[List], video_source: str, tracks_save_path: str):

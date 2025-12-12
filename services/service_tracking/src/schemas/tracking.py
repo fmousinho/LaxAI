@@ -16,17 +16,17 @@ from shared_libs.config.all_config import (
 
 
 class TrackingParams(BaseModel):
-    """Tracking hyperparameters - mirrors DetectionConfig and TrackerConfig."""
+    """Tracking hyperparameters - mirrors DetectionConfi    g and TrackerConfig."""
 
     # Detection Config
     nms_iou_threshold: Optional[float] = Field(default=detection_config.nms_iou_threshold, description="NMS IOU threshold")
     prediction_threshold: float = Field(default=detection_config.prediction_threshold, description="Prediction confidence threshold")
     
     # Tracker Config
-    track_activation_threshold: float = Field(default=tracker_config.track_activation_threshold, description="Track activation threshold")
-    lost_track_buffer: int = Field(default=tracker_config.lost_track_buffer, description="Lost track buffer size")
-    minimum_matching_threshold: float = Field(default=tracker_config.minimum_matching_threshold, description="Minimum matching threshold")
-    minimum_consecutive_frames: int = Field(default=tracker_config.minimum_consecutive_frames, description="Minimum consecutive frames for track")
+    track_activation_threshold: float = Field(default=tracker_config.track_activation_threshold, description="Used to separate high and low confidence detections")
+    lost_track_buffer: int = Field(default=tracker_config.lost_track_buffer, description="How many frames to wait before declaring a track lost")
+    max_match_distance: float = Field(default=tracker_config.max_match_distance, description="Max distance for tracks to be matched")
+    min_consecutive_frames: int = Field(default=tracker_config.min_consecutive_frames, description="Minimum consecutive frames for tracks to be confirmed")
     
     # Pipeline Config
     resume_from_checkpoint: bool = Field(default=True, description="Resume from checkpoint if available")
