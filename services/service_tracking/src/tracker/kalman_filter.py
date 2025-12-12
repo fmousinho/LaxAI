@@ -272,13 +272,20 @@ class KalmanFilter(object):
     def multi_compensate_cam_motion(self, means, covariances, scale_transform, translation_transform):
         """Compensate for camera motion by updating the state mean and covariance for multiple tracks."""
         # means: (N, 8), scale: (8, 8), translation: (8,)
-        # x' = S x + T -> ( (S @ means.T).T ) + T = means @ S.T + T
-        # Since S is diagonal symmetric, S.T = S
-        compensated_means = means @ scale_transform + translation_transform
         
-        # covariances: (N, 8, 8)
-        # P' = S P S^T
-        compensated_covariances = covariances @ scale_transform @ scale_transform.T
+        # Mean update
+        # State vector x is usually column vector (8,1) in formula x' = S*x + T
+        # Here means is (N, 8) row vectors.
+        # x'^T = (S*x + T)^T = x^T * S^T + T^T
+        # means_new = means @ S.T + T
+        compensated_means = means @ scale_transform.T + translation_transform
+        
+        # Covariance update
+        # P' = S * P * S^T
+        # covariances is (N, 8, 8)
+        # We perform matrix multiplication: S @ P @ S.T
+        # numpy broadcast handles (8,8) @ (N,8,8) correctly as (N,8,8)
+        compensated_covariances = scale_transform @ covariances @ scale_transform.T
         
         return compensated_means, compensated_covariances
         

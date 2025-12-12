@@ -28,13 +28,10 @@ class TrackingController:
     Handles video discovery, pipeline execution, and status reporting.
     """
 
-    def __init__(
-        self,
-        tracking_params: TrackingParams,
-        wandb_run_name: str = "track_generation_run",
-    ):
+    def __init__(self, tracking_params: TrackingParams, wandb_run_name: Optional[str] = None, wandb_config: Optional[Dict] = None):
         self.tracking_params = tracking_params
         self.wandb_run_name = wandb_run_name
+        self.wandb_config = wandb_config
 
         #self.storage_client = get_storage(tenant_id)
         #self.path_manager = GCSPaths()
@@ -58,17 +55,21 @@ class TrackingController:
 
         original_video_path = video_path
         # Gets video into cv2
-        if video_path.startswith(('http://', 'https://')):
+        # If it's a GCS path, download it locally
+        if video_path.startswith("gs://"):
+            local_path = f"/tmp/{os.path.basename(video_path)}"
+            download_blob(video_path, local_path)
+            video_path = local_path
+        elif video_path.startswith(('http://', 'https://')):
             logger.info(f"Downloading video from URL: {video_path}")
             with tempfile.NamedTemporaryFile(delete=True, suffix='.mp4') as temp_file:
                 urllib.request.urlretrieve(video_path, temp_file.name)
                 video_path = temp_file.name
-                cap = cv2.VideoCapture(video_path)
-        else:
-            cap = cv2.VideoCapture(video_path)
-
+        
+        cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
-            raise ValueError(f"Could not open video source: {video_path}")
+            logger.error(f"Error opening video file {video_path}")
+            return False
 
         frame_count = 0
         prev_frame = None
@@ -88,7 +89,7 @@ class TrackingController:
             player_mask = detections_obj.class_id == 3
             detections_obj = detections_obj[player_mask]
             
-            if detections_obj.xyxy.shape[0] > 0:
+            if len(detections_obj.xyxy) > 0:
                  detections = np.column_stack((detections_obj.xyxy, detections_obj.confidence))
             else:
                 detections = np.empty((0, 5))
@@ -112,42 +113,22 @@ class TrackingController:
 
         cap.release()
 
-        self.save_tracks(all_tracks, original_video_path, tracks_save_path)
+        # Save tracks using unified serialization module
+        track_serialization.save(
+            objects_per_frame=all_tracks,
+            video_source=original_video_path,
+            save_path=tracks_save_path,
+            use_track_id=True
+        )
+        
         if detections_save_path is not None:
-            self.save_detections(all_detections, original_video_path, detections_save_path)
+            track_serialization.save(
+                objects_per_frame=all_detections,
+                video_source=original_video_path,
+                save_path=detections_save_path,
+                use_track_id=False
+            )
+            
         return True
-
-    def save_tracks(self, tracks_list: List[List], video_source: str, tracks_save_path: str):
-        serialized_tracks = []
-        for frame_tracks in tracks_list:
-            serialized_frame_tracks = []
-            for track in frame_tracks:
-                # Convert STrack object to dictionary
-                track_dict = {
-                    "track_id": int(track.track_id),
-                    "bbox": [int(x) for x in track.tlbr],  # tlbr format
-                    "score": float(track.score)
-                }
-                serialized_frame_tracks.append(track_dict)
-            serialized_tracks.append({"frame_id": int(track.frame_id), "tracks": serialized_frame_tracks})
-        
-        output_data = {
-            "video_source": video_source,
-            "tracks": serialized_tracks
-        }
-
-        # Create directory if it doesn't exist
-        os.makedirs(os.path.dirname(os.path.abspath(tracks_save_path)), exist_ok=True)
-
-        with open(tracks_save_path, 'w') as f:
-            json.dump(output_data, f, indent=4)
-        
-
-
-
-
-        
-
-
 
 

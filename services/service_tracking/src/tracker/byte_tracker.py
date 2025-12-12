@@ -16,9 +16,9 @@ from . import matching
 from .basetrack import BaseTrack, TrackState
 
 COMPENSATE_CAM_MOTION = True  # Affine transform to track camera motion signifantly improves accuracy
-HIGH_CONF_MAX_MATCH_DISTANCE = 0.3
-LOW_CONF_MAX_MATCH_DISTANCE = 0.5
-UNCONFIRMED_MAX_MATCH_DISTANCE = 0.5
+
+LOW_CONF_MAX_MATCH_DISTANCE = 0.7
+UNCONFIRMED_MAX_MATCH_DISTANCE = 0.7
 
 class STrack(BaseTrack):
     shared_kalman = KalmanFilter()
@@ -243,16 +243,20 @@ class BYTETracker(object):
         ''' Step 2: First association, with high score detection boxes'''
         strack_pool = joint_stracks(tracked_stracks, self.lost_stracks)
 
-        # Compensate the camera motion, if arrays are provided
+        # Compensate the camera motion, if arrays are provided and valid
         if S_array is not None and T_array is not None and COMPENSATE_CAM_MOTION:
-            STrack.multi_compensate_cam_motion(strack_pool, S_array, T_array)
+            # Check for NaNs or Infs which cause RuntimeWarnings
+            if np.isfinite(S_array).all() and np.isfinite(T_array).all():
+                STrack.multi_compensate_cam_motion(strack_pool, S_array, T_array)
+            else:
+                logger.warning(f"Frame {self.frame_id}: Invalid camera motion arrays (NaN/Inf detected). Skipping compensation.")
 
         STrack.multi_predict(strack_pool)
         strack_pool_array = np.array([track.tlbr for track in strack_pool])
 
         if len(strack_pool_array) > 0 and len(bboxes_high) > 0:
             dists = matching.iou_distance(strack_pool_array, bboxes_high)
-            matches, u_track, u_detection = matching.linear_assignment(dists, thresh=HIGH_CONF_MAX_MATCH_DISTANCE)
+            matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.max_match_distance)
         else:
             matches = []
             u_track = np.arange(len(strack_pool_array))
