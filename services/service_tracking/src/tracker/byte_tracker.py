@@ -1,3 +1,6 @@
+import logging
+logger = logging.getLogger(__name__)
+
 import numpy as np
 from collections import deque
 import os
@@ -6,11 +9,15 @@ import copy
 import torch
 import torch.nn.functional as F
 
-from typing import Optional
+from typing import Optional, List
 from schemas.tracking import TrackingParams
 from .kalman_filter import KalmanFilter
 from . import matching
 from .basetrack import BaseTrack, TrackState
+
+COMPENSATE_CAM_MOTION = True  # Affine transform to track camera motion signifantly improves accuracy
+LOW_CONF_MATCHING_THRESH = 0.4
+UNCONFIRMED_MATCHING_THRESH = 0.7
 
 class STrack(BaseTrack):
     shared_kalman = KalmanFilter()
@@ -52,9 +59,7 @@ class STrack(BaseTrack):
 
         self.tracklet_len = 0
         self.state = TrackState.Tracked
-        if frame_id == 1:
-            self.is_activated = True
-        # self.is_activated = True
+        self.is_activated = True
         self.frame_id = frame_id
         self.start_frame = frame_id
 
@@ -70,15 +75,6 @@ class STrack(BaseTrack):
             self.track_id = self.next_id()
         self.score = new_track.score
 
-    def compensate_cam_motion (self, S_array: np.ndarray, T_array: np.ndarray):
-        """
-        S_array: The scale array for the Kalman filter.
-        T_array: The T array for the Kalman filter.
-        The arrays update the current state of the filter by K' = K * S_array + T_array
-        """
-        self.mean, self.covariance = self.shared_kalman.compensate_cam_motion(
-            self.mean, self.covariance, S_array, T_array
-        )
 
     @staticmethod
     def multi_compensate_cam_motion(stracks, S_array, T_array):
@@ -173,12 +169,12 @@ class BYTETracker(object):
        
         self.track_activation_threshold = args.track_activation_threshold
         self.minimum_matching_threshold = args.minimum_matching_threshold
-        self.det_thresh = args.prediction_threshold
+        self.prediction_threshold = args.prediction_threshold
         self.buffer_size = int(frame_rate / 30.0 * args.lost_track_buffer)
         self.max_time_lost = self.buffer_size
         self.kalman_filter = KalmanFilter()
 
-    def update(self, detections_array: np.ndarray, S_array: Optional[np.ndarray], T_array: Optional[np.ndarray]):
+    def update(self, detections_array: np.ndarray, S_array: Optional[np.ndarray], T_array: Optional[np.ndarray]) -> List[STrack]:
         """
         Args:
             detections_array: np.ndarray - The detections, expected to be in the format N x [x1, y1, x2, y2, score]
@@ -187,16 +183,20 @@ class BYTETracker(object):
             The arrays update the current state of the filter by K' = K * S_array + T_array
         
         Returns:
-            A list of tracks
+            A list of stracks
         """
         
         self.frame_id += 1
-        activated_starcks = []
+        detections_array = detections_array.copy()
+        S_array = S_array.copy() if S_array is not None else None
+        T_array = T_array.copy() if T_array is not None else None
+        
+        activated_stracks = []
         refind_stracks = []
         lost_stracks = []
         removed_stracks = []
 
-        if detections_array.shape[1] == 5:
+        if detections_array.shape[1] >= 5:
             scores = detections_array[:, 4]
             bboxes = detections_array[:, :4]
         else:
@@ -204,114 +204,168 @@ class BYTETracker(object):
             scores = detections_array[:, 4] * detections_array[:, 5]
             bboxes = detections_array[:, :4]  # x1y1x2y2
 
-        remain_inds = scores > self.track_activation_threshold
-        inds_low = scores > 0.1
-        inds_high = scores < self.track_activation_threshold
+        remain_inds_mask = np.where(scores >= self.prediction_threshold)[0]
+        logger.debug(f"FRAME {self.frame_id}")
 
-        inds_second = np.logical_and(inds_low, inds_high)
-        dets_second = bboxes[inds_second]
-        dets = bboxes[remain_inds]
-        scores_keep = scores[remain_inds]
-        scores_second = scores[inds_second]
+        # All detections indexes are based on the "keep" array
+        scores_keep = scores[remain_inds_mask]
+        bboxes_keep = bboxes[remain_inds_mask]
+        
+        low_conf_mask = np.where(scores_keep < self.track_activation_threshold)[0]
+        high_conf_mask = np.where(scores_keep >= self.track_activation_threshold)[0]
 
-        if len(dets) > 0:
-            '''Detections'''
-            detections = [STrack(STrack.tlbr_to_tlwh(tlbr), s) for
-                          (tlbr, s) in zip(dets, scores_keep)]
-        else:
-            detections = []
+        bboxes_low = bboxes_keep[low_conf_mask]
+        bboxes_high = bboxes_keep[high_conf_mask]
+        scores_low = scores_keep[low_conf_mask]
+        scores_high = scores_keep[high_conf_mask]
+
+        # Logging variables
+        n_tracks_reconfirmed = 0
+        n_tracks_refind = 0
+        n_tracks_confirmed = 0
+        n_tracks_new = 0
+        n_tracks_lost = 0
+        n_tracks_removed_or_unconfirmed = 0
+
+        logger.debug(f"total detections: {len(scores_keep)} | thresh: {self.track_activation_threshold} | high conf: {len(high_conf_mask)} | low: {len(low_conf_mask)}")
 
         ''' Add newly detected tracklets to tracked_stracks'''
-        unconfirmed = []
+        unconfirmed_tracks = []
         tracked_stracks = []  # type: list[STrack]
         for track in self.tracked_stracks:
             if not track.is_activated:
-                unconfirmed.append(track)
+                unconfirmed_tracks.append(track)
             else:
                 tracked_stracks.append(track)
+        logger.debug(f"activate stracks before association: {len(tracked_stracks)} | unconfirmed: {len(unconfirmed_tracks)} | lost: {len(self.lost_stracks)}")
 
         ''' Step 2: First association, with high score detection boxes'''
         strack_pool = joint_stracks(tracked_stracks, self.lost_stracks)
 
         # Compensate the camera motion, if arrays are provided
-        if S_array is not None and T_array is not None:
+        if S_array is not None and T_array is not None and COMPENSATE_CAM_MOTION:
             STrack.multi_compensate_cam_motion(strack_pool, S_array, T_array)
 
-        # Predict the current location with KF
         STrack.multi_predict(strack_pool)
-        dists = matching.iou_distance(strack_pool, detections)
-        # if not self.args.mot20:
-        #     dists = matching.fuse_score(dists, detections)
-        matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.minimum_matching_threshold)
+        strack_pool_array = np.array([track.tlbr for track in strack_pool])
+
+        if len(strack_pool_array) > 0 and len(bboxes_high) > 0:
+            dists = matching.iou_distance(strack_pool_array, bboxes_high)
+            matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.minimum_matching_threshold)
+        else:
+            matches = []
+            u_track = np.arange(len(strack_pool_array))
+            u_detection = np.arange(len(bboxes_high))
+        
+        unmatched_tracks_array = strack_pool_array[u_track]
+        unmatched_tracks = [strack_pool[i] for i in u_track]
 
         for itracked, idet in matches:
             track = strack_pool[itracked]
-            det = detections[idet]
+            bbox = bboxes_high[idet]
+            score = scores_high[idet]
+            self._detection_to_track_map[high_conf_mask[idet]] = track.track_id
+            
             if track.state == TrackState.Tracked:
-                track.update(detections[idet], self.frame_id)
-                activated_starcks.append(track)
+                track.update(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id)
+                activated_stracks.append(track)
+                n_tracks_reconfirmed += 1
             else:
-                track.re_activate(det, self.frame_id, new_id=False)
+                track.re_activate(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id, new_id=False)
                 refind_stracks.append(track)
+                n_tracks_refind += 1
 
         ''' Step 3: Second association, with low score detection boxes'''
-        # association the untrack to the low score detections
-        if len(dets_second) > 0:
-            '''Detections'''
-            detections_second = [STrack(STrack.tlbr_to_tlwh(tlbr), s) for
-                          (tlbr, s) in zip(dets_second, scores_second)]
+        
+        if len(unmatched_tracks_array) > 0 and len(bboxes_low) > 0:
+            dists = matching.iou_distance(unmatched_tracks_array, bboxes_low)
+            matches, u_track_second, u_detection_second = matching.linear_assignment(dists, thresh=LOW_CONF_MATCHING_THRESH)
         else:
-            detections_second = []
-        r_tracked_stracks = [strack_pool[i] for i in u_track if strack_pool[i].state == TrackState.Tracked]
-        dists = matching.iou_distance(r_tracked_stracks, detections_second)
-        matches, u_track, u_detection_second = matching.linear_assignment(dists, thresh=0.5)
-        for itracked, idet in matches:
-            track = r_tracked_stracks[itracked]
-            det = detections_second[idet]
-            if track.state == TrackState.Tracked:
-                track.update(det, self.frame_id)
-                activated_starcks.append(track)
-            else:
-                track.re_activate(det, self.frame_id, new_id=False)
-                refind_stracks.append(track)
+            matches = []
+            u_track_second = np.arange(len(unmatched_tracks_array))
+            u_detection_second = np.arange(len(bboxes_low))
 
-        for it in u_track:
-            track = r_tracked_stracks[it]
-            if not track.state == TrackState.Lost:
+        unmatched_tracks_second = [unmatched_tracks[i] for i in u_track_second]
+        unmatched_tracks_array_second = unmatched_tracks_array[u_track_second]
+
+        for itracked, idet in matches:
+            track = unmatched_tracks[itracked]
+            bbox = bboxes_low[idet]
+            score = scores_low[idet]
+            self._detection_to_track_map[low_conf_mask[idet]] = track.track_id
+
+            if track.state == TrackState.Tracked:
+                track.update(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id)
+                activated_stracks.append(track)
+                n_tracks_reconfirmed += 1
+            else:
+                track.re_activate(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id, new_id=False)
+                refind_stracks.append(track)
+                n_tracks_refind += 1
+
+        for track in unmatched_tracks_second:
+            if track.state != TrackState.Lost:
                 track.mark_lost()
                 lost_stracks.append(track)
+                n_tracks_lost += 1
+                logger.debug(f"lost track: {track.track_id}  |  bbox: {track.tlbr.astype(int)} | score: {track.score:.2f}")
 
+        
         '''Deal with unconfirmed tracks, usually tracks with only one beginning frame'''
-        detections = [detections[i] for i in u_detection]
-        dists = matching.iou_distance(unconfirmed, detections)
-        # if not self.args.mot20:
-        #     dists = matching.fuse_score(dists, detections)
-        matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=0.7)
+        unmatched_detections_mask = np.concatenate((high_conf_mask[u_detection], low_conf_mask[u_detection_second]), axis=0)
+        unmatched_bbox_array = bboxes_keep[unmatched_detections_mask]
+        unmatched_scores_array = scores_keep[unmatched_detections_mask]
+        unconfirmed_tracks_array = np.array([track.tlbr for track in unconfirmed_tracks]) if len(unconfirmed_tracks) > 0 else np.empty((0, 4))
+
+        if logger.level == logging.DEBUG:
+            for i in unmatched_detections_mask:
+                logger.debug(f"unmatched detection: {bboxes_keep[i].astype(int)} | score: {scores_keep[i]:.2f}")
+
+        if len(unconfirmed_tracks_array) > 0 and len(unmatched_bbox_array) > 0:
+            dists = matching.iou_distance(unconfirmed_tracks_array, unmatched_bbox_array)
+            matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=UNCONFIRMED_MATCHING_THRESH)
+        else:
+            matches = []
+            u_unconfirmed = np.arange(len(unconfirmed_tracks))
+            u_detection = np.arange(len(unmatched_bbox_array))
+
         for itracked, idet in matches:
-            unconfirmed[itracked].update(detections[idet], self.frame_id)
-            activated_starcks.append(unconfirmed[itracked])
-        for it in u_unconfirmed:
-            track = unconfirmed[it]
+            track = unconfirmed_tracks[itracked]
+            bbox = unmatched_bbox_array[idet]
+            score = unmatched_scores_array[idet]
+            track.update(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id)
+            activated_stracks.append(track)
+            self._detection_to_track_map[unmatched_detections_mask[idet]] = track.track_id
+            n_tracks_removed_or_unconfirmed += 1
+
+        unmatched_detections_mask = unmatched_detections_mask[u_detection]
+        unmatched_detections_array = np.column_stack((bboxes_keep[unmatched_detections_mask], scores_keep[unmatched_detections_mask])) if len(unmatched_detections_mask) > 0 else np.empty((0, 5))
+        unconfirmed_tracks_remaining = [unconfirmed_tracks[i] for i in u_unconfirmed]
+
+        for track in unconfirmed_tracks_remaining:
             track.mark_removed()
             removed_stracks.append(track)
+            n_tracks_removed_or_unconfirmed += 1
 
         """ Step 4: Init new stracks"""
-        for inew in u_detection:
-            track = detections[inew]
-            if track.score < self.det_thresh:
-                continue
+        for i, inew in enumerate(unmatched_detections_array):
+            bbox = inew[:4]
+            score = inew[4]
+            track = STrack(STrack.tlbr_to_tlwh(bbox), score)
             track.activate(self.kalman_filter, self.frame_id)
-            activated_starcks.append(track)
+            activated_stracks.append(track)
+            self._detection_to_track_map[unmatched_detections_mask[i]] = track.track_id
+            n_tracks_new += 1
+
         """ Step 5: Update state"""
         for track in self.lost_stracks:
             if self.frame_id - track.end_frame > self.max_time_lost:
                 track.mark_removed()
                 removed_stracks.append(track)
-
-        # print('Ramained match {} s'.format(t4-t3))
+                n_tracks_removed_or_unconfirmed += 1
 
         self.tracked_stracks = [t for t in self.tracked_stracks if t.state == TrackState.Tracked]
-        self.tracked_stracks = joint_stracks(self.tracked_stracks, activated_starcks)
+        self.tracked_stracks = joint_stracks(self.tracked_stracks, activated_stracks)
         self.tracked_stracks = joint_stracks(self.tracked_stracks, refind_stracks)
         self.lost_stracks = sub_stracks(self.lost_stracks, self.tracked_stracks)
         self.lost_stracks.extend(lost_stracks)
@@ -321,8 +375,54 @@ class BYTETracker(object):
         # get scores of lost tracks
         output_stracks = [track for track in self.tracked_stracks if track.is_activated]
 
+        logger.debug (
+            f"tracks reconfirmed: {n_tracks_reconfirmed} | "
+            f"refound: {n_tracks_refind} | "
+            f"confirmed: {n_tracks_confirmed} | "
+            f"new: {n_tracks_new} | "
+            f"lost: {n_tracks_lost} | "
+            f"removed/unconfirmed: {n_tracks_removed_or_unconfirmed}"
+            )
         return output_stracks
 
+
+    def assign_tracks_to_detections(self, detections_array: np.ndarray, S_array: Optional[np.ndarray], T_array: Optional[np.ndarray]) -> np.ndarray:
+        """
+        Update the tracker with new detections and camera motion compensation, and returns the detection array with updated tracks.
+        
+        This method is optimized to avoid redundant matching by tracking detection-to-track assignments during the update process.
+        
+        Args:
+            detections_array: Array of detections in the format (N, 5) where N is the number of detections.
+            S_array: Array of scale transformations for camera motion compensation.
+            T_array: Array of translation transformations for camera motion compensation.
+        
+        Returns:
+            np.ndarray: Array with dimensions (N, 6) with updated tracks, with the format [x1, y1, x2, y2, score, track_id].
+            Unknown detections are returned with track_id = -1.
+        """
+        original_detections = detections_array.copy()
+        # Store a mapping that will be populated during update
+        self._detection_to_track_map = {}
+        
+        # Call update (which will populate the map through internal tracking)
+        _ = self.update(detections_array, S_array, T_array)
+        
+        # Create output array with track IDs initialized to -1
+        detections_with_tracks = np.column_stack((
+            original_detections, 
+            np.full(len(original_detections), -1, dtype=np.int32)
+        ))
+        
+        # Apply the mapping
+        for det_idx, track_id in self._detection_to_track_map.items():
+            if det_idx < len(detections_with_tracks):
+                detections_with_tracks[det_idx, 5] = track_id
+        
+        # Clean up temporary mapping
+        delattr(self, '_detection_to_track_map')
+        
+        return detections_with_tracks
 
 def joint_stracks(tlista, tlistb):
     exists = {}

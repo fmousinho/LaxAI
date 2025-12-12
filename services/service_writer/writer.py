@@ -5,6 +5,7 @@
 
 
 import logging
+logger = logging.getLogger(__name__)
 
 import colorsys
 import random
@@ -18,37 +19,40 @@ import colorsys
 import random
 from typing import List, Tuple
 
+from shared_libs.common import track_serialization
+
 class Writer:
     def __init__(self, video_path: str, tracks_path: str, output_path: str):
         self.video_path = video_path
-        self.all_tracks = self.load_tracks(tracks_path)
+        self.tracks_by_frame = track_serialization.load_for_writing(tracks_path)
         self.output_path = output_path
-        if video_path != all_tracks["video_source"]:
-            logger.error("Video path does not match video source in tracks")
 
 
-    def load_tracks(self, tracks_path: str):
-        with open(tracks_path, 'r') as f:
-            data = json.load(f)
-        return data
+    def run(self):
+        self.write_frames()
+
+
+
 
     def write_frames(self):
         cap = cv2.VideoCapture(self.video_path)
         if not cap.isOpened():
             logger.error("Error opening video file")
             return
-        tracks = self.all_tracks["tracks"]
         output = cv2.VideoWriter(self.output_path, cv2.VideoWriter_fourcc(*'mp4v'), 30, (1920, 1080))
         frame_count = 0
         while True:
             ret, frame_bgr = cap.read()
             if not ret:
                 break
-            frame_tracks = tracks[frame_count]
+            frame_tracks = self.tracks_by_frame.get(frame_count, [])  
             for track in frame_tracks:
-                cv2.rectangle(frame_bgr, tuple(track["bbox"]), self.get_color(track["id"]), 2)
+                cv2.rectangle(frame_bgr, tuple(track["bbox"][0:2]), tuple(track["bbox"][2:4]), get_color(track["track_id"]), 2)
+                cv2.putText(frame_bgr, str(track["track_id"]), tuple(track["bbox"][0:2]), cv2.FONT_HERSHEY_SIMPLEX, .6, get_color(track["track_id"]), 2)
             output.write(frame_bgr)
             frame_count += 1
+            if frame_count % 50 == 0:
+                logger.info(f"Processed frame {frame_count}")
         cap.release()
         output.release()
     
