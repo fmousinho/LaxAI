@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 import logging
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import shared_libs.config.logging_config
 logger = logging.getLogger(__name__)
 
 import argparse

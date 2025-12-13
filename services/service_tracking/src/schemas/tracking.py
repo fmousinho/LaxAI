@@ -10,7 +10,6 @@ from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field
 
 from shared_libs.config.all_config import (
-    detection_config,
     tracker_config,
 )
 
@@ -19,8 +18,7 @@ class TrackingParams(BaseModel):
     """Tracking hyperparameters - mirrors DetectionConfi    g and TrackerConfig."""
 
     # Detection Config
-    nms_iou_threshold: Optional[float] = Field(default=detection_config.nms_iou_threshold, description="NMS IOU threshold")
-    prediction_threshold: float = Field(default=detection_config.prediction_threshold, description="Prediction confidence threshold")
+    prediction_threshold: float = Field(default=tracker_config.prediction_threshold, description="Prediction confidence threshold")
     
     # Tracker Config
     track_activation_threshold: float = Field(default=tracker_config.track_activation_threshold, description="Used to separate high and low confidence detections")

@@ -47,7 +47,7 @@ def main():
     # Tracking Params
     parser.add_argument('--prediction_threshold', type=float, default=None, help='Minimum confidence for detections to be considered')
     parser.add_argument('--track_activation_threshold', type=float, default=None, help='Track activation threshold')
-    parser.add_argument('--lost_track_buffer', type=int, default=None, help='Lost track buffer size')
+    parser.add_argument('--lost_track_buffer', type=int, default=None, help='Number of frames to wait before removing a lost track')
     parser.add_argument('--max_match_distance', type=float, default=None, help='Max distance for tracks to be matched')
     parser.add_argument('--min_consecutive_frames', type=int, default=None, help='Minimum consecutive frames for track confirmation')
 

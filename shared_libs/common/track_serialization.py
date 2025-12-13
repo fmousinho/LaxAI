@@ -48,8 +48,8 @@ def save(
             track_objects.append(track_dict)
             
         serialized_frames.append({
-            "frame_id": frame_idx, # 0-indexed
-            "track_objects":  
+            "frame_id": frame_idx,
+            "track_objects": track_objects
         })
 
     output_data = {
