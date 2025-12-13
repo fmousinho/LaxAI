@@ -17,7 +17,7 @@ from .basetrack import BaseTrack, TrackState
 
 COMPENSATE_CAM_MOTION = True  # Affine transform to track camera motion signifantly improves accuracy
 
-LOW_CONF_MAX_MATCH_DISTANCE = 0.6
+LOW_CONF_MAX_MATCH_DISTANCE = 0.6 # 1-IOU
 UNCONFIRMED_MAX_MATCH_DISTANCE = 0.7
 
 class STrack(BaseTrack):
@@ -104,7 +104,7 @@ class STrack(BaseTrack):
         self.mean, self.covariance = self.kalman_filter.update(
             self.mean, self.covariance, self.tlwh_to_xyah(new_tlwh))
         self.state = TrackState.Tracked
-        if self.tracklet_len >= 10:  # This will be overridden by logic in BYTETracker.update, but kept for safety/logic consistency if used elsewhere
+        if self.tracklet_len >= 10 :  # This will be overridden by logic in BYTETracker.update, but kept for safety/logic consistency if used elsewhere
              self.is_activated = True
 
         self.score = new_track.score
@@ -176,8 +176,7 @@ class BYTETracker(object):
         self.max_match_distance = args.max_match_distance
         self.prediction_threshold = args.prediction_threshold
         self.min_consecutive_frames = args.min_consecutive_frames
-        self.buffer_size = int(frame_rate / 30.0 * args.lost_track_buffer)
-        self.max_time_lost = self.buffer_size
+        self.lost_track_buffer = args.lost_track_buffer
         self.kalman_filter = KalmanFilter()
 
     def update(self, detections_array: np.ndarray, S_array: Optional[np.ndarray], T_array: Optional[np.ndarray]) -> List[STrack]:
@@ -347,7 +346,7 @@ class BYTETracker(object):
             score = unmatched_scores_array[idet]
             track.update(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id)
             
-            if track.tracklet_len >= self.min_consecutive_frames:
+            if track.is_activated == True:
                 n_tracks_confirmed += 1
             else:
                 n_tracks_pending_confirmation += 1
@@ -376,7 +375,7 @@ class BYTETracker(object):
 
         """ Step 5: Update state for lost tracks"""
         for track in self.lost_stracks:
-            if self.frame_id - track.end_frame > self.max_time_lost:
+            if self.frame_id - track.end_frame > self.lost_track_buffer:
                 track.mark_removed()
                 removed_stracks.append(track)
                 n_tracks_removed += 1
@@ -443,41 +442,34 @@ class BYTETracker(object):
         return detections_with_tracks
 
 def joint_stracks(tlista, tlistb):
-    exists = {}
-    res = []
-    for t in tlista:
-        exists[t.track_id] = 1
-        res.append(t)
-    for t in tlistb:
-        tid = t.track_id
-        if not exists.get(tid, 0):
-            exists[tid] = 1
-            res.append(t)
-    return res
+    """
+    Join two track lists, ensuring unique track IDs.
+    Retains the instance from the FIRST list if duplicates exist.
+    """
+    tmp = {t.track_id: t for t in tlistb}
+    tmp.update({t.track_id: t for t in tlista})
+    return list(tmp.values())
 
 
 def sub_stracks(tlista, tlistb):
-    stracks = {}
-    for t in tlista:
-        stracks[t.track_id] = t
-    for t in tlistb:
-        tid = t.track_id
-        if stracks.get(tid, 0):
-            del stracks[tid]
-    return list(stracks.values())
+    """
+    Remove tracks in tlistb from tlista based on track ID.
+    """
+    exclude_ids = {t.track_id for t in tlistb}
+    return [t for t in tlista if t.track_id not in exclude_ids]
 
 
 def remove_duplicate_stracks(stracksa, stracksb):
     pdist = matching.iou_distance(stracksa, stracksb)
     pairs = np.where(pdist < 0.15)
-    dupa, dupb = list(), list()
+    dupa, dupb = set(), set()
     for p, q in zip(*pairs):
         timep = stracksa[p].frame_id - stracksa[p].start_frame
         timeq = stracksb[q].frame_id - stracksb[q].start_frame
         if timep > timeq:
-            dupb.append(q)
+            dupb.add(q)
         else:
-            dupa.append(p)
-    resa = [t for i, t in enumerate(stracksa) if not i in dupa]
-    resb = [t for i, t in enumerate(stracksb) if not i in dupb]
+            dupa.add(p)
+    resa = [t for i, t in enumerate(stracksa) if i not in dupa]
+    resb = [t for i, t in enumerate(stracksb) if i not in dupb]
     return resa, resb
