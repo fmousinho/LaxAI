@@ -29,10 +29,6 @@ class Writer:
 
 
     def run(self):
-        self.write_frames()
-
-
-    def write_frames(self):
         cap = cv2.VideoCapture(self.video_path)
         if not cap.isOpened():
             logger.error("Error opening video file")

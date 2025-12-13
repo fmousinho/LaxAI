@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
-"""
-Main entry point for LaxAI Service Tracking.
-
-This script is the entry point for the Cloud Run job that executes track generation.
-It parses command line arguments and runs the TrackingController.
-"""
+import logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 import argparse
-import logging
 import os
 import sys
 import warnings
 
+from writer import Writer
 
 
 def main():
@@ -20,13 +17,13 @@ def main():
 
     parser.add_argument('--video_path', required=True, help='Path to the video file that will be processed')
     parser.add_argument('--tracks_path', default="tracks.json", help='Path to the json file where the tracks will be saved')
+    parser.add_argument('--output_path', default="output.mp4", help='Path to the output video file')
 
     args = parser.parse_args()
 
     try:
-       pass # Run the service
-        
-    
+       writer = Writer(args.video_path, args.tracks_path, args.output_path)
+       writer.run()
 
     except Exception as e:
         logger.error(f"Service failed: {e}", exc_info=True)
