@@ -118,17 +118,15 @@ class TrackingController:
         track_serialization.save(
             objects_per_frame=all_tracks,
             video_source=original_video_path,
-            save_path=tracks_save_path,
-            use_track_id=True
+            save_path=tracks_save_path
         )
         
         if detections_save_path is not None:
             track_serialization.save(
                 objects_per_frame=all_detections,
                 video_source=original_video_path,
-                save_path=detections_save_path,
-                use_track_id=False
-            )
+                save_path=detections_save_path
+        )
             
         return True
 

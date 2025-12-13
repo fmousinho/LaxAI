@@ -1,9 +1,3 @@
-
-
-
-
-
-
 import logging
 logger = logging.getLogger(__name__)
 
@@ -11,13 +5,7 @@ import colorsys
 import random
 from typing import List, Tuple
 
-
-
-import json
 import cv2
-import colorsys
-import random
-from typing import List, Tuple
 
 from shared_libs.common import track_serialization
 
@@ -50,9 +38,6 @@ class Writer:
         cap.release()
         output.release()
     
-
-
-
 
 def _generate_distinct_colors(n: int = 50) -> List[Tuple[int, int, int]]:
     """

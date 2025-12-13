@@ -6,15 +6,14 @@ from typing import List, Union, Dict, Any
 def save(
     objects_per_frame: List[List[Any]],
     video_source: str,
-    save_path: str,
-    use_track_id: bool = True
+    save_path: str
 ):
     """
     Save tracks or detections to a JSON file.
 
     Args:
         objects_per_frame: List of frames, where each frame contains a list of objects.
-                           Objects can be STrack instances or numpy arrays [x1, y1, x2, y2, score].
+                           Objects can be STrack instances or numpy arrays [x1, y1, x2, y2, score, track_id].
         video_source: Path to the source video.
         save_path: Output JSON path.
         use_track_id: Whether to look for and save track_id.
@@ -22,38 +21,35 @@ def save(
     serialized_frames = []
     
     for frame_idx, frame_objects in enumerate(objects_per_frame):
-        serialized_frame_objects = []
+        track_objects = []
         for obj in frame_objects:
             # Handle STrack objects
             if hasattr(obj, 'tlbr'):
-                bbox = [float(x) for x in obj.tlbr]
+                bbox = [int(x) for x in obj.tlbr]
                 score = float(obj.score)
-                track_id = int(obj.track_id) if use_track_id else -1
+                track_id = int(obj.track_id)
             # Handle numpy arrays [x1, y1, x2, y2, score] or [x1, y1, x2, y2, score, track_id]
             elif isinstance(obj, np.ndarray):
-                bbox = [float(x) for x in obj[:4]]
+                bbox = [int(x) for x in obj[:4]]
                 score = float(obj[4]) if len(obj) > 4 else 0.0
-                if use_track_id and len(obj) > 5:
+                if len(obj) > 5:
                      track_id = int(obj[5])
                 else:
                      track_id = -1
             else:
-                continue
-
-            # Ensure track_id is present if requested, default to -1
-            if not use_track_id:
-                track_id = -1
+                logger.error(f"Unsupported object type: {type(obj)}")
+                return
 
             track_dict = {
                 "track_id": track_id,
                 "bbox": bbox,
                 "score": score
             }
-            serialized_frame_objects.append(track_dict)
+            track_objects.append(track_dict)
             
         serialized_frames.append({
             "frame_id": frame_idx, # 0-indexed
-            "track_objects": serialized_frame_objects
+            "track_objects":  
         })
 
     output_data = {

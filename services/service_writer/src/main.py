@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 import logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 import argparse
-import os
 import sys
-import warnings
 
 from writer import Writer
 
