@@ -17,7 +17,7 @@ from .basetrack import BaseTrack, TrackState
 
 COMPENSATE_CAM_MOTION = True  # Affine transform to track camera motion signifantly improves accuracy
 
-LOW_CONF_MAX_MATCH_DISTANCE = 0.7
+LOW_CONF_MAX_MATCH_DISTANCE = 0.6
 UNCONFIRMED_MAX_MATCH_DISTANCE = 0.7
 
 class STrack(BaseTrack):
@@ -60,7 +60,10 @@ class STrack(BaseTrack):
 
         self.tracklet_len = 0
         self.state = TrackState.Tracked
-        self.is_activated = True
+        # if self.frame_id == 0:
+        #     self.is_activated = True
+        # else:
+        #     self.is_activated = False
         self.frame_id = frame_id
         self.start_frame = frame_id
 
@@ -70,7 +73,7 @@ class STrack(BaseTrack):
         )
         self.tracklet_len = 0
         self.state = TrackState.Tracked
-        self.is_activated = True
+        # self.is_activated = True
         self.frame_id = frame_id
         if new_id:
             self.track_id = self.next_id()
@@ -101,7 +104,8 @@ class STrack(BaseTrack):
         self.mean, self.covariance = self.kalman_filter.update(
             self.mean, self.covariance, self.tlwh_to_xyah(new_tlwh))
         self.state = TrackState.Tracked
-        self.is_activated = True
+        if self.tracklet_len >= 10:  # This will be overridden by logic in BYTETracker.update, but kept for safety/logic consistency if used elsewhere
+             self.is_activated = True
 
         self.score = new_track.score
 
@@ -171,6 +175,7 @@ class BYTETracker(object):
         self.track_activation_threshold = args.track_activation_threshold
         self.max_match_distance = args.max_match_distance
         self.prediction_threshold = args.prediction_threshold
+        self.min_consecutive_frames = args.min_consecutive_frames
         self.buffer_size = int(frame_rate / 30.0 * args.lost_track_buffer)
         self.max_time_lost = self.buffer_size
         self.kalman_filter = KalmanFilter()
@@ -221,12 +226,13 @@ class BYTETracker(object):
         scores_high = scores_keep[high_conf_mask]
 
         # Logging variables
-        n_tracks_reconfirmed = 0
-        n_tracks_refind = 0
-        n_tracks_confirmed = 0
-        n_tracks_new = 0
-        n_tracks_lost = 0
-        n_tracks_removed_or_unconfirmed = 0
+        n_tracks_reconfirmed = 0  # Already tracked and "is_activated", updated with new detection
+        n_tracks_refind = 0  # Already tracked but "is_activated" = False (was lost), updated with new detection and is_activated = True
+        n_tracks_confirmed = 0  # Already tracked and just became "is_active" because of number of consecutive detections
+        n_tracks_new = 0  # New tracklet
+        n_tracks_lost = 0  # Became "is_activated" = False (was lost) because no matching detection was found
+        n_tracks_pending_confirmation = 0 #  Hasn't reached the number of consecutive detections to become is_activated = True yet
+        n_tracks_removed = 0 # Became "is_activated" = False (was lost) for longer than the buffer size or was never confirmed
 
         logger.debug(f"total detections: {len(scores_keep)} | thresh: {self.track_activation_threshold} | high conf: {len(high_conf_mask)} | low: {len(low_conf_mask)}")
 
@@ -235,16 +241,17 @@ class BYTETracker(object):
         tracked_stracks = []  # type: list[STrack]
         for track in self.tracked_stracks:
             if not track.is_activated:
+                #  Confusingly, unconfirmed tracks are tracked but not activated in STrack class
                 unconfirmed_tracks.append(track)
             else:
                 tracked_stracks.append(track)
-        logger.debug(f"activate stracks before association: {len(tracked_stracks)} | unconfirmed: {len(unconfirmed_tracks)} | lost: {len(self.lost_stracks)}")
+        logger.debug(f"is_activated stracks before association: {len(tracked_stracks)} | pending conf: {len(unconfirmed_tracks)} | lost: {len(self.lost_stracks)}")
 
         ''' Step 2: First association, with high score detection boxes'''
         strack_pool = joint_stracks(tracked_stracks, self.lost_stracks)
 
         # Compensate the camera motion, if arrays are provided and valid
-        if S_array is not None and T_array is not None and COMPENSATE_CAM_MOTION:
+        if len(strack_pool) > 0 and S_array is not None and T_array is not None and COMPENSATE_CAM_MOTION:
             # Check for NaNs or Infs which cause RuntimeWarnings
             if np.isfinite(S_array).all() and np.isfinite(T_array).all():
                 STrack.multi_compensate_cam_motion(strack_pool, S_array, T_array)
@@ -316,7 +323,7 @@ class BYTETracker(object):
                 logger.debug(f"lost track: {track.track_id}  |  bbox: {track.tlbr.astype(int)} | score: {track.score:.2f}")
 
         
-        '''Deal with unconfirmed tracks, usually tracks with only one beginning frame'''
+        '''Deal with unconfirmed tracks'''
         unmatched_detections_mask = np.concatenate((high_conf_mask[u_detection], low_conf_mask[u_detection_second]), axis=0)
         unmatched_bbox_array = bboxes_keep[unmatched_detections_mask]
         unmatched_scores_array = scores_keep[unmatched_detections_mask]
@@ -339,9 +346,14 @@ class BYTETracker(object):
             bbox = unmatched_bbox_array[idet]
             score = unmatched_scores_array[idet]
             track.update(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id)
+            
+            if track.tracklet_len >= self.min_consecutive_frames:
+                n_tracks_confirmed += 1
+            else:
+                n_tracks_pending_confirmation += 1
+                 
             activated_stracks.append(track)
             self._detection_to_track_map[unmatched_detections_mask[idet]] = track.track_id
-            n_tracks_removed_or_unconfirmed += 1
 
         unmatched_detections_mask = unmatched_detections_mask[u_detection]
         unmatched_detections_array = np.column_stack((bboxes_keep[unmatched_detections_mask], scores_keep[unmatched_detections_mask])) if len(unmatched_detections_mask) > 0 else np.empty((0, 5))
@@ -350,7 +362,7 @@ class BYTETracker(object):
         for track in unconfirmed_tracks_remaining:
             track.mark_removed()
             removed_stracks.append(track)
-            n_tracks_removed_or_unconfirmed += 1
+            n_tracks_removed += 1
 
         """ Step 4: Init new stracks"""
         for i, inew in enumerate(unmatched_detections_array):
@@ -362,12 +374,12 @@ class BYTETracker(object):
             self._detection_to_track_map[unmatched_detections_mask[i]] = track.track_id
             n_tracks_new += 1
 
-        """ Step 5: Update state"""
+        """ Step 5: Update state for lost tracks"""
         for track in self.lost_stracks:
             if self.frame_id - track.end_frame > self.max_time_lost:
                 track.mark_removed()
                 removed_stracks.append(track)
-                n_tracks_removed_or_unconfirmed += 1
+                n_tracks_removed += 1
 
         self.tracked_stracks = [t for t in self.tracked_stracks if t.state == TrackState.Tracked]
         self.tracked_stracks = joint_stracks(self.tracked_stracks, activated_stracks)
@@ -386,7 +398,8 @@ class BYTETracker(object):
             f"confirmed: {n_tracks_confirmed} | "
             f"new: {n_tracks_new} | "
             f"lost: {n_tracks_lost} | "
-            f"removed/unconfirmed: {n_tracks_removed_or_unconfirmed}"
+            f"pending conf: {n_tracks_pending_confirmation} | "
+            f"removed: {n_tracks_removed}"
             )
         return output_stracks
 
