@@ -17,7 +17,7 @@ from .basetrack import BaseTrack, TrackState
 
 COMPENSATE_CAM_MOTION = True  # Affine transform to track camera motion signifantly improves accuracy
 
-LOW_CONF_MAX_MATCH_DISTANCE = 0.6 # 1-IOU
+LOW_CONF_MAX_MATCH_DISTANCE = 0.9 # 1-IOU
 UNCONFIRMED_MAX_MATCH_DISTANCE = 0.7
 
 class STrack(BaseTrack):
@@ -104,8 +104,8 @@ class STrack(BaseTrack):
         self.mean, self.covariance = self.kalman_filter.update(
             self.mean, self.covariance, self.tlwh_to_xyah(new_tlwh))
         self.state = TrackState.Tracked
-        if self.tracklet_len >= 10 :  # This will be overridden by logic in BYTETracker.update, but kept for safety/logic consistency if used elsewhere
-             self.is_activated = True
+        # if self.tracklet_len >= 10 :  # This will be overridden by logic in BYTETracker.update, but kept for safety/logic consistency if used elsewhere
+        #      self.is_activated = True
 
         self.score = new_track.score
 
@@ -328,10 +328,6 @@ class BYTETracker(object):
         unmatched_scores_array = scores_keep[unmatched_detections_mask]
         unconfirmed_tracks_array = np.array([track.tlbr for track in unconfirmed_tracks]) if len(unconfirmed_tracks) > 0 else np.empty((0, 4))
 
-        if logger.level == logging.DEBUG:
-            for i in unmatched_detections_mask:
-                logger.debug(f"unmatched detection: {bboxes_keep[i].astype(int)} | score: {scores_keep[i]:.2f}")
-
         if len(unconfirmed_tracks_array) > 0 and len(unmatched_bbox_array) > 0:
             dists = matching.iou_distance(unconfirmed_tracks_array, unmatched_bbox_array)
             matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=UNCONFIRMED_MAX_MATCH_DISTANCE)
@@ -346,17 +342,23 @@ class BYTETracker(object):
             score = unmatched_scores_array[idet]
             track.update(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id)
             
-            if track.is_activated == True:
+            if track.tracklet_len >= self.min_consecutive_frames:
+                track.is_activated = True
+                activated_stracks.append(track)
                 n_tracks_confirmed += 1
             else:
+                activated_stracks.append(track) # Unconfirmed tracks are part of the activated_stracks list, but are not "is_activated"
                 n_tracks_pending_confirmation += 1
                  
-            activated_stracks.append(track)
             self._detection_to_track_map[unmatched_detections_mask[idet]] = track.track_id
 
         unmatched_detections_mask = unmatched_detections_mask[u_detection]
         unmatched_detections_array = np.column_stack((bboxes_keep[unmatched_detections_mask], scores_keep[unmatched_detections_mask])) if len(unmatched_detections_mask) > 0 else np.empty((0, 5))
         unconfirmed_tracks_remaining = [unconfirmed_tracks[i] for i in u_unconfirmed]
+
+        if logger.level == logging.DEBUG:
+            for i in unmatched_detections_mask:
+                logger.debug(f"unmatched detection: {bboxes_keep[i].astype(int)} | score: {scores_keep[i]:.2f}")
 
         for track in unconfirmed_tracks_remaining:
             track.mark_removed()
@@ -380,14 +382,10 @@ class BYTETracker(object):
                 removed_stracks.append(track)
                 n_tracks_removed += 1
 
-        self.tracked_stracks = [t for t in self.tracked_stracks if t.state == TrackState.Tracked]
-        self.tracked_stracks = joint_stracks(self.tracked_stracks, activated_stracks)
-        self.tracked_stracks = joint_stracks(self.tracked_stracks, refind_stracks)
-        self.lost_stracks = sub_stracks(self.lost_stracks, self.tracked_stracks)
-        self.lost_stracks.extend(lost_stracks)
-        self.lost_stracks = sub_stracks(self.lost_stracks, self.removed_stracks)
+        self.tracked_stracks = joint_stracks(activated_stracks, refind_stracks)
         self.removed_stracks.extend(removed_stracks)
-        self.tracked_stracks, self.lost_stracks = remove_duplicate_stracks(self.tracked_stracks, self.lost_stracks)
+        self.lost_stracks = lost_stracks
+  
         # get scores of lost tracks
         output_stracks = [track for track in self.tracked_stracks if track.is_activated]
 
