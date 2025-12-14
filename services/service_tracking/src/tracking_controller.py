@@ -1,6 +1,7 @@
 import logging
 logger = logging.getLogger(__name__)
 
+
 import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -12,14 +13,15 @@ import cv2
 import json
 import numpy as np
 
+from shared_libs.common.wandb_logger import wandb_logger
 from shared_libs.common import track_serialization
-from shared_libs.common.google_storage import GCSPaths, get_storage
-from shared_libs.utils.id_generator import create_simple_uuid
+from shared_libs.common.model import ReIdModel
 
 from schemas.tracking import TrackingParams
 from detection import DetectionModel
 from tracker.byte_tracker import BYTETracker
 from tracker.cam_mvmt import calculate_transform
+
 
 DEFAULT_CONFIDENCE_THRESHOLD = 0.4
 
@@ -33,12 +35,21 @@ class TrackingController:
         self.tracking_params = tracking_params
         self.wandb_run_name = wandb_run_name
         self.wandb_config = wandb_config
-
-        #self.storage_client = get_storage(tenant_id)
-        #self.path_manager = GCSPaths()
-
         self.detector = DetectionModel()
         self.tracker = BYTETracker(self.tracking_params)
+        self.device_str = "cpu"
+
+        self.wandb_logger = wandb_logger
+
+        self.reid_model = self.wandb_logger.load_model_from_registry(
+                    model_class=ReIdModel,
+                    collection_name=ReIdModel.model_name,
+                    alias="latest",
+                    device=self.device_str,
+                    pretrained=False
+                )
+        if self.reid_model is None:
+            raise ValueError("ReID model not found in registry")
 
     def run (self, video_path: str, tracks_save_path: str, detections_save_path: Optional[str] = None):
         """

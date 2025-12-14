@@ -6,26 +6,20 @@ This script is the entry point for the Cloud Run job that executes track generat
 It parses command line arguments and runs the TrackingController.
 """
 
-
 import logging
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import shared_libs.config.logging_config
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 logging.getLogger("tracker.byte_tracker").setLevel(logging.DEBUG)
 
+from shared_libs.utils.env_secrets import setup_environment_secrets
+setup_environment_secrets()
 
 import argparse
-import os
-import sys
 import warnings
-
-
-
-# Ensure shared_libs can be imported
-sys.path.insert(0, '/app')
-
-# Ensure src directory is in path for absolute imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from schemas.tracking import TrackingParams
 from tracking_controller import TrackingController
