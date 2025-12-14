@@ -29,6 +29,7 @@ class STrack(BaseTrack):
         self.kalman_filter = None
         self.mean, self.covariance = None, None
         self.is_activated = False
+        self.features = None
 
         self.score = score
         self.tracklet_len = 0
@@ -165,7 +166,7 @@ class STrack(BaseTrack):
 
 
 class BYTETracker(object):
-    def __init__(self, args: TrackingParams, frame_rate=30):
+    def __init__(self, args: TrackingParams, frame_rate=30, reid_model: Optional[torch.nn.Module] = None):
         self.tracked_stracks = []  # type: list[STrack]
         self.lost_stracks = []  # type: list[STrack]
         self.removed_stracks = []  # type: list[STrack]
@@ -178,6 +179,8 @@ class BYTETracker(object):
         self.min_consecutive_frames = args.min_consecutive_frames
         self.lost_track_buffer = args.lost_track_buffer
         self.kalman_filter = KalmanFilter()
+        self.reid_enabled = reid_model is not None
+        self.reid_model = reid_model
 
     def update(self, detections_array: np.ndarray, S_array: Optional[np.ndarray], T_array: Optional[np.ndarray]) -> List[STrack]:
         """
@@ -235,21 +238,19 @@ class BYTETracker(object):
 
         logger.debug(f"total detections: {len(scores_keep)} | thresh: {self.track_activation_threshold} | high conf: {len(high_conf_mask)} | low: {len(low_conf_mask)}")
 
-        ''' Add newly detected tracklets to tracked_stracks'''
-        unconfirmed_tracks = []
+        # Add newly detected tracklets to tracked_stracks
+        pending_confirmation_tracks = []
         tracked_stracks = []  # type: list[STrack]
         for track in self.tracked_stracks:
             if not track.is_activated:
-                #  Confusingly, unconfirmed tracks are tracked but not activated in STrack class
-                unconfirmed_tracks.append(track)
+                pending_confirmation_tracks.append(track)
             else:
                 tracked_stracks.append(track)
-        logger.debug(f"is_activated stracks before association: {len(tracked_stracks)} | pending conf: {len(unconfirmed_tracks)} | lost: {len(self.lost_stracks)}")
+        logger.debug(f"is_activated stracks before association: {len(tracked_stracks)} | pending conf: {len(pending_confirmation_tracks)} | lost: {len(self.lost_stracks)}")
 
-        ''' Step 2: First association, with high score detection boxes'''
         strack_pool = joint_stracks(tracked_stracks, self.lost_stracks)
 
-        # Compensate the camera motion, if arrays are provided and valid
+        # Camera motion compensation, if arrays are provided and valid
         if len(strack_pool) > 0 and S_array is not None and T_array is not None and COMPENSATE_CAM_MOTION:
             # Check for NaNs or Infs which cause RuntimeWarnings
             if np.isfinite(S_array).all() and np.isfinite(T_array).all():
@@ -260,6 +261,7 @@ class BYTETracker(object):
         STrack.multi_predict(strack_pool)
         strack_pool_array = np.array([track.tlbr for track in strack_pool])
 
+        ''' Step 1: First association, with high score detection boxes'''
         if len(strack_pool_array) > 0 and len(bboxes_high) > 0:
             dists = matching.iou_distance(strack_pool_array, bboxes_high)
             matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.max_match_distance)
@@ -267,7 +269,7 @@ class BYTETracker(object):
             matches = []
             u_track = np.arange(len(strack_pool_array))
             u_detection = np.arange(len(bboxes_high))
-        
+
         unmatched_tracks_array = strack_pool_array[u_track]
         unmatched_tracks = [strack_pool[i] for i in u_track]
 
@@ -286,8 +288,7 @@ class BYTETracker(object):
                 refind_stracks.append(track)
                 n_tracks_refind += 1
 
-        ''' Step 3: Second association, with low score detection boxes'''
-        
+        ''' Step 2: Second association, with low score detection boxes'''
         if len(unmatched_tracks_array) > 0 and len(bboxes_low) > 0:
             dists = matching.iou_distance(unmatched_tracks_array, bboxes_low)
             matches, u_track_second, u_detection_second = matching.linear_assignment(dists, thresh=LOW_CONF_MAX_MATCH_DISTANCE)
@@ -320,24 +321,23 @@ class BYTETracker(object):
                 lost_stracks.append(track)
                 n_tracks_lost += 1
                 logger.debug(f"lost track: {track.track_id}  |  bbox: {track.tlbr.astype(int)} | score: {track.score:.2f}")
-
-        
-        '''Deal with unconfirmed tracks'''
+ 
+        '''Step 3: Deal with pending confirmation tracks'''
         unmatched_detections_mask = np.concatenate((high_conf_mask[u_detection], low_conf_mask[u_detection_second]), axis=0)
         unmatched_bbox_array = bboxes_keep[unmatched_detections_mask]
         unmatched_scores_array = scores_keep[unmatched_detections_mask]
-        unconfirmed_tracks_array = np.array([track.tlbr for track in unconfirmed_tracks]) if len(unconfirmed_tracks) > 0 else np.empty((0, 4))
+        pending_confirmation_tracks_array = np.array([track.tlbr for track in pending_confirmation_tracks]) if len(pending_confirmation_tracks) > 0 else np.empty((0, 4))
 
-        if len(unconfirmed_tracks_array) > 0 and len(unmatched_bbox_array) > 0:
-            dists = matching.iou_distance(unconfirmed_tracks_array, unmatched_bbox_array)
-            matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=UNCONFIRMED_MAX_MATCH_DISTANCE)
+        if len(pending_confirmation_tracks_array) > 0 and len(unmatched_bbox_array) > 0:
+            dists = matching.iou_distance(pending_confirmation_tracks_array, unmatched_bbox_array)
+            matches, u_pending_confirmation, u_detection = matching.linear_assignment(dists, thresh=UNCONFIRMED_MAX_MATCH_DISTANCE)
         else:
             matches = []
-            u_unconfirmed = np.arange(len(unconfirmed_tracks))
+            u_unconfirmed = np.arange(len(pending_confirmation_tracks))
             u_detection = np.arange(len(unmatched_bbox_array))
 
         for itracked, idet in matches:
-            track = unconfirmed_tracks[itracked]
+            track = pending_confirmation_tracks[itracked]
             bbox = unmatched_bbox_array[idet]
             score = unmatched_scores_array[idet]
             track.update(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id)
@@ -354,12 +354,13 @@ class BYTETracker(object):
 
         unmatched_detections_mask = unmatched_detections_mask[u_detection]
         unmatched_detections_array = np.column_stack((bboxes_keep[unmatched_detections_mask], scores_keep[unmatched_detections_mask])) if len(unmatched_detections_mask) > 0 else np.empty((0, 5))
-        unconfirmed_tracks_remaining = [unconfirmed_tracks[i] for i in u_unconfirmed]
+        unconfirmed_tracks_remaining = [pending_confirmation_tracks[i] for i in u_unconfirmed]
 
         if logger.level == logging.DEBUG:
             for i in unmatched_detections_mask:
                 logger.debug(f"unmatched detection: {bboxes_keep[i].astype(int)} | score: {scores_keep[i]:.2f}")
 
+        # Tracks pending confirmation that are not matched right away are removed
         for track in unconfirmed_tracks_remaining:
             track.mark_removed()
             removed_stracks.append(track)
@@ -372,6 +373,8 @@ class BYTETracker(object):
             track = STrack(STrack.tlbr_to_tlwh(bbox), score)
             track.activate(self.kalman_filter, self.frame_id)
             activated_stracks.append(track)
+            if self.reid_enabled:
+                track.reid_feat = self.initiate_track_reid_features(track)
             self._detection_to_track_map[unmatched_detections_mask[i]] = track.track_id
             n_tracks_new += 1
 
@@ -382,13 +385,11 @@ class BYTETracker(object):
                 removed_stracks.append(track)
                 n_tracks_removed += 1
 
+        # Update tracker state
         self.tracked_stracks = joint_stracks(activated_stracks, refind_stracks)
         self.removed_stracks.extend(removed_stracks)
         self.lost_stracks = lost_stracks
   
-        # get scores of lost tracks
-        output_stracks = [track for track in self.tracked_stracks if track.is_activated]
-
         logger.debug (
             f"tracks reconfirmed: {n_tracks_reconfirmed} | "
             f"refound: {n_tracks_refind} | "
@@ -398,10 +399,15 @@ class BYTETracker(object):
             f"pending conf: {n_tracks_pending_confirmation} | "
             f"removed: {n_tracks_removed}"
             )
+
+        # Return only confirmed tracks
+        output_stracks = [track for track in self.tracked_stracks if track.is_activated]
         return output_stracks
 
 
-    def assign_tracks_to_detections(self, detections_array: np.ndarray, S_array: Optional[np.ndarray], T_array: Optional[np.ndarray]) -> np.ndarray:
+    def assign_tracks_to_detections(
+        self, detections_array: np.ndarray, S_array: Optional[np.ndarray], T_array: Optional[np.ndarray]
+        ) -> np.ndarray:
         """
         Update the tracker with new detections and camera motion compensation, and returns the detection array with updated tracks.
         
@@ -438,6 +444,14 @@ class BYTETracker(object):
         delattr(self, '_detection_to_track_map')
         
         return detections_with_tracks
+
+
+    def initiate_track_reid_features(self, track: STrack):
+        """
+        Uses class reid model to extract features from track bounding box
+        """
+        bbox = track.tlbr
+        track.features = self.reid_model(bbox)
 
 def joint_stracks(tlista, tlistb):
     """

@@ -22,7 +22,7 @@ from detection import DetectionModel
 from tracker.byte_tracker import BYTETracker
 from tracker.cam_mvmt import calculate_transform
 
-
+ENABLE_REID = True
 DEFAULT_CONFIDENCE_THRESHOLD = 0.4
 
 class TrackingController:
@@ -31,25 +31,28 @@ class TrackingController:
     Handles video discovery, pipeline execution, and status reporting.
     """
 
-    def __init__(self, tracking_params: TrackingParams, wandb_run_name: Optional[str] = None, wandb_config: Optional[Dict] = None):
+    def __init__(self, tracking_params: TrackingParams, wandb_run_name: Optional[str] = None):
         self.tracking_params = tracking_params
         self.wandb_run_name = wandb_run_name
-        self.wandb_config = wandb_config
         self.detector = DetectionModel()
-        self.tracker = BYTETracker(self.tracking_params)
         self.device_str = "cpu"
+        self.reid_model = None
 
-        self.wandb_logger = wandb_logger
-
-        self.reid_model = self.wandb_logger.load_model_from_registry(
-                    model_class=ReIdModel,
-                    collection_name=ReIdModel.model_name,
+        if ENABLE_REID:
+            self.wandb_logger = wandb_logger
+            self.reid_model = self.wandb_logger.load_model_from_registry(
+                        model_class=ReIdModel,
+                        collection_name=ReIdModel.model_name,
                     alias="latest",
                     device=self.device_str,
                     pretrained=False
                 )
-        if self.reid_model is None:
-            raise ValueError("ReID model not found in registry")
+            if self.reid_model is None:
+                raise ValueError("ReID model not found in registry")
+            self.reid_model.eval()
+        
+        self.tracker = BYTETracker(self.tracking_params, reid_model=self.reid_model)
+            
 
     def run (self, video_path: str, tracks_save_path: str, detections_save_path: Optional[str] = None):
         """
