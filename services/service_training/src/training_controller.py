@@ -19,13 +19,14 @@ import torchvision.transforms as transforms
 from shared_libs.common.google_storage import GCSPaths, get_storage
 from shared_libs.config.transforms import get_transforms
 from shared_libs.utils.id_generator import create_simple_uuid
-
+from shared_libs.common.wandb_logger import wandb_logger
+from shared_libs.common.model import ReIdModel
 
 from schemas.training import TrainingParams, EvalParams
-from wandb_logger import wandb_logger
+
 from training_loop import TrainingLoop
 from loss_fn import loss_fn
-from model import ReIdModel
+
 from eval_dataset import load_eval_dataset
 from dataset import LacrossePlayerDataset
 
