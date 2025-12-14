@@ -1,7 +1,7 @@
 import logging
 logger = logging.getLogger(__name__)
 
-from typing import Literal 
+from typing import Literal, Callable
 
 import torch
 import torch.nn.functional as F
@@ -74,7 +74,9 @@ def triplet_margin_loss(
 
 
 # Standardize loss function name for imports
-def loss_fn(loss_function: Literal["triplet_margin", "semi_hard_triplet"] = "triplet_margin") -> torch.Tensor:
+def loss_fn(
+        loss_function: Literal["triplet_margin", "semi_hard_triplet"] = "triplet_margin"
+        ) -> Callable[[torch.Tensor, torch.Tensor, torch.Tensor, float], torch.Tensor]:
     if loss_function == "triplet_margin":
         return triplet_margin_loss
     elif loss_function == "semi_hard_triplet":

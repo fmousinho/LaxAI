@@ -67,7 +67,7 @@ class TrainingWorkflow:
         """
         self.tenant_id = tenant_id
         self.wandb_run_name = wandb_run_name
-        self.training_params = training_params or TrainingParams()
+        self.training_params = training_params
         self.dataset_address = dataset_address
         self.eval_params = eval_params or EvalParams()
         self.task_id = task_id
@@ -260,13 +260,7 @@ class TrainingWorkflow:
                     datasets = [provided_address]
                 else:
                     datasets = provided_address
-            else:
-                # Discover datasets
-                if hasattr(self, 'discover_datasets'):
-                    datasets = self.discover_datasets()
-                else:
-                    logger.warning("discover_datasets method not found on TrainingWorkflow instance. No datasets will be used unless dataset_address is provided.")
-            
+           
             if not datasets:
                 logger.warning("No datasets found for training")
                 result = {
@@ -281,14 +275,14 @@ class TrainingWorkflow:
                 # Assuming TrainingParams has a dataset_address field that can take a list of strings
                 self.training_params.dataset_address = datasets
 
-            # Initialize TrainingController
-            controller = TrainingController(
-                tenant_id=self.tenant_id,
-                wandb_run_name=self.wandb_run_name,
-                training_params=self.training_params,
-                eval_params=self.eval_params,
-                task_id=self.task_id, # Pass task_id to controller for internal logging/tracking
-            )
+                # Initialize TrainingController
+                controller = TrainingController(
+                    tenant_id=self.tenant_id,
+                    wandb_run_name=self.wandb_run_name,
+                    training_params=self.training_params,
+                    eval_params=self.eval_params,
+                    task_id=self.task_id, # Pass task_id to controller for internal logging/tracking
+                )
 
             # Check for cancellation before training
             if self.cancellation_event and self.cancellation_event.is_set():

@@ -71,6 +71,11 @@ class TrainingController():
         
         self.load_model_and_datasets()
 
+        if self.model is None:
+            raise RuntimeError("Model initialization failed.")
+        if self.train_dataloader is None:
+            raise RuntimeError("Training DataLoader initialization failed.")
+
         # Optimizer and scheduler depend on model parameters
         self.optimizer = AdamW(
             self.model.parameters(), 

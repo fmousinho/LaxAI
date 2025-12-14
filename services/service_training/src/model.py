@@ -127,8 +127,36 @@ class LacrosseReIDResNet(nn.Module):
         
         # 2. Apply the Stride Trick (Layer 4 stride = 1)
         # This increases feature map size from 8x4 to 16x8 (for 256x128 input)
-        self.base_model.layer4[0].conv2.stride = (1, 1)
-        self.base_model.layer4[0].downsample[0].stride = (1, 1)
+        # Replace conv2 with stride (1,1) instead of (2,2)
+        old_conv2 = self.base_model.layer4[0].conv2
+        self.base_model.layer4[0].conv2 = nn.Conv2d(
+            old_conv2.in_channels, 
+            old_conv2.out_channels, 
+            kernel_size=old_conv2.kernel_size,
+            stride=(1, 1),
+            padding=old_conv2.padding,
+            bias=(old_conv2.bias is not None)
+        )
+        # Copy weights from original conv2
+        self.base_model.layer4[0].conv2.weight.data = old_conv2.weight.data.clone()
+        if old_conv2.bias is not None:
+            self.base_model.layer4[0].conv2.bias.data = old_conv2.bias.data.clone()
+        
+        # Replace downsample conv with stride (1,1) instead of (2,2)
+        if self.base_model.layer4[0].downsample is not None:
+            old_downsample_conv = self.base_model.layer4[0].downsample[0]
+            self.base_model.layer4[0].downsample[0] = nn.Conv2d(
+                old_downsample_conv.in_channels,
+                old_downsample_conv.out_channels,
+                kernel_size=old_downsample_conv.kernel_size,
+                stride=(1, 1),
+                padding=old_downsample_conv.padding,
+                bias=(old_downsample_conv.bias is not None)
+            )
+            # Copy weights from original downsample conv
+            self.base_model.layer4[0].downsample[0].weight.data = old_downsample_conv.weight.data.clone()
+            if old_downsample_conv.bias is not None:
+                self.base_model.layer4[0].downsample[0].bias.data = old_downsample_conv.bias.data.clone()
         
         # 3. Inject CBAM into Layers 2, 3, and 4
         # We replace the standard Bottleneck with our BottleneckCBAM

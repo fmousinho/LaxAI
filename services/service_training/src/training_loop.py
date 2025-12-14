@@ -32,9 +32,9 @@ class TrainingLoop:
                 optimizer: torch.optim.Optimizer,
                 lr_scheduler: Any,
                 margin: float,
+                wandb_logger,
                 starting_epoch: int = 1,
                 num_epochs: int = 10,
-                wandb_logger = None,
                 device: Optional[torch.device] = None,
                 task_id: Optional[str] = None
                 ):

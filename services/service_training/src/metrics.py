@@ -65,7 +65,7 @@ class Metrics:
             self.batch_metrics.model_variance = self._compute_embeddings_variance(anchor_embs)
             self._accumulate_epoch_metrics(epoch, self.batch_metrics)
 
-    def finalize_epoch_metrics(self, epoch: int, learning_rate: float = None, weight_decay: float = None):
+    def finalize_epoch_metrics(self, epoch: int, learning_rate: Optional[float] = None, weight_decay: Optional[float] = None):
         """
         Calculates epoch metrics based on acculated averages.
         Logs metrics to standard logger and Weights & Biases if provided.
@@ -164,8 +164,9 @@ class Metrics:
             return
 
         # Use operator overloading for cleaner averagingse
-        self.eval_epoch_metrics = self.eval_epoch_accumulations / self.running_num_eval_batches_in_epoch
-        self.eval_metrics_available = True
+        if self.eval_epoch_accumulations is not None:
+            self.eval_epoch_metrics = self.eval_epoch_accumulations / self.running_num_eval_batches_in_epoch
+            self.eval_metrics_available = True
    
 
 
