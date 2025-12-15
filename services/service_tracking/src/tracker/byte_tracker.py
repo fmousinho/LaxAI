@@ -264,7 +264,6 @@ class BYTETracker(object):
                 logger.warning(f"Frame {self.frame_id}: Invalid camera motion arrays (NaN/Inf detected). Skipping compensation.")
 
         STrack.multi_predict(strack_pool)
-        # strack_pool_array = np.array([track.tlbr for track in strack_pool])
 
         ''' Step 1: First association, with high score detection boxes'''
         if len(strack_pool) > 0 and len(bboxes_high) > 0:
@@ -300,7 +299,7 @@ class BYTETracker(object):
         if len(unmatched_tracks) > 0 and len(bboxes_low) > 0:
             if self.reid_enabled:
                 dists = matching.v_iou_reid_distance(unmatched_tracks, bboxes_low, self.get_embeddings, iou_thresh=.5)
-                matches, u_track_second, u_detection_second = matching.linear_assignment(dists, thresh=.8)
+                matches, u_track_second, u_detection_second = matching.linear_assignment(dists, thresh=.8) # thresh: cost
             else:
                 dists = matching.v_iou_distance(unmatched_tracks, bboxes_low)
                 matches, u_track_second, u_detection_second = matching.linear_assignment(dists, thresh=.5)
@@ -376,7 +375,12 @@ class BYTETracker(object):
             removed_stracks.append(track)
             n_tracks_removed += 1
 
-        """ Step 4: Init new stracks"""
+        """ Step 4: Deal with unmatched detections"""
+
+        """ Step 4.1: Scavenger for removed tracks"""
+      
+
+        """ 4.2: Create new tracks"""
         for i, inew in enumerate(unmatched_detections_array):
             bbox = inew[:4]
             score = inew[4]

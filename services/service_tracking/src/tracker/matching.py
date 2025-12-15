@@ -37,7 +37,16 @@ def _indices_to_matches(cost_matrix, indices, thresh):
     return matches, unmatched_a, unmatched_b
 
 
-def linear_assignment(cost_matrix, thresh):
+def linear_assignment(cost_matrix: np.ndarray, thresh: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Args:
+        cost_matrix: cost matrix
+        thresh: maximum cost (distance) for a match to be considered
+    Returns:
+        matches: array with indices of matches
+        unmatched_a: array with indices of unmatched detections
+        unmatched_b: array with indices of unmatched tracks
+    """
     if cost_matrix.size == 0:
         return np.empty((0, 2), dtype=int), tuple(range(cost_matrix.shape[0])), tuple(range(cost_matrix.shape[1]))
     matches, unmatched_a, unmatched_b = [], [], []
@@ -180,7 +189,7 @@ def fuse_score(cost_matrix, detections):
     return fuse_cost
 
 
-def v_iou_reid_distance(tracks: List, detections_bboxes: np.ndarray, embedding_func: Callable, iou_thresh=0.0, alpha=0.5) -> np.ndarray:
+def v_iou_reid_distance(tracks: List, detections_bboxes: np.ndarray, embedding_func: Callable, iou_thresh=0.0, alpha=0.7) -> np.ndarray:
     """
     Computes a cost matrix blending IoU and ReID distance.
     Only computes ReID distance for pairs with IoU > iou_thresh.
