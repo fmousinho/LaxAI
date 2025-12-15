@@ -114,7 +114,11 @@ class TrackingController:
             else:
                 S, T = None, None
             
-            frame_tracks = self.tracker.assign_tracks_to_detections(detections, S, T)
+            if ENABLE_REID:
+                frame_tracks = self.tracker.assign_tracks_to_detections(detections, S, T, frame)
+            else:
+                frame_tracks = self.tracker.assign_tracks_to_detections(detections, S, T)
+            
             all_tracks.append(frame_tracks.copy())
             if detections_save_path is not None:
                 all_detections.append(detections.copy())

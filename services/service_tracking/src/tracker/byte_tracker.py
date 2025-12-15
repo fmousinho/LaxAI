@@ -2,6 +2,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 import numpy as np
+import cv2
 from collections import deque
 import os
 import os.path as osp
@@ -180,7 +181,10 @@ class BYTETracker(object):
         self.lost_track_buffer = args.lost_track_buffer
         self.kalman_filter = KalmanFilter()
         self.reid_enabled = reid_model is not None
-        self.reid_model = reid_model
+        if self.reid_enabled:
+
+            self.reid_model_input_size = (224, 224)
+            self.reid_model = reid_model
 
     def update(self, detections_array: np.ndarray, S_array: Optional[np.ndarray], T_array: Optional[np.ndarray]) -> List[STrack]:
         """
@@ -330,7 +334,7 @@ class BYTETracker(object):
 
         if len(pending_confirmation_tracks_array) > 0 and len(unmatched_bbox_array) > 0:
             dists = matching.iou_distance(pending_confirmation_tracks_array, unmatched_bbox_array)
-            matches, u_pending_confirmation, u_detection = matching.linear_assignment(dists, thresh=UNCONFIRMED_MAX_MATCH_DISTANCE)
+            matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=UNCONFIRMED_MAX_MATCH_DISTANCE)
         else:
             matches = []
             u_unconfirmed = np.arange(len(pending_confirmation_tracks))
@@ -406,7 +410,7 @@ class BYTETracker(object):
 
 
     def assign_tracks_to_detections(
-        self, detections_array: np.ndarray, S_array: Optional[np.ndarray], T_array: Optional[np.ndarray]
+        self, detections_array: np.ndarray, S_array: Optional[np.ndarray], T_array: Optional[np.ndarray], frame: Optional[np.ndarray] = None
         ) -> np.ndarray:
         """
         Update the tracker with new detections and camera motion compensation, and returns the detection array with updated tracks.
@@ -417,6 +421,7 @@ class BYTETracker(object):
             detections_array: Array of detections in the format (N, 5) where N is the number of detections.
             S_array: Array of scale transformations for camera motion compensation.
             T_array: Array of translation transformations for camera motion compensation.
+            frame: Frame to extract features from, required if reid_enabled is True.
         
         Returns:
             np.ndarray: Array with dimensions (N, 6) with updated tracks, with the format [x1, y1, x2, y2, score, track_id].
@@ -425,6 +430,10 @@ class BYTETracker(object):
         original_detections = detections_array.copy()
         # Store a mapping that will be populated during update
         self._detection_to_track_map = {}
+        if self.reid_enabled and frame is None:
+            raise ValueError("Frame must be provided if reid_enabled is True.")
+        else:
+            self._frame = frame
         
         # Call update (which will populate the map through internal tracking)
         _ = self.update(detections_array, S_array, T_array)
@@ -445,13 +454,24 @@ class BYTETracker(object):
         
         return detections_with_tracks
 
-
     def initiate_track_reid_features(self, track: STrack):
         """
         Uses class reid model to extract features from track bounding box
         """
         bbox = track.tlbr
-        track.features = self.reid_model(bbox)
+        crop = self._frame[int(bbox[1]):int(bbox[3]), int(bbox[0]):int(bbox[2])]
+        crop = cv2.resize(crop, self.reid_model_input_size)
+        
+        # Convert to tensor and match model input format (N, C, H, W)
+        crop_tensor = torch.from_numpy(crop).float()
+        crop_tensor = crop_tensor.permute(2, 0, 1).unsqueeze(0)  # HWC -> CHW, add batch
+        crop_tensor = crop_tensor / 255.0  # Normalize [0, 1]
+
+        # Ensure tensor is on the same device as the model
+        device = next(self.reid_model.parameters()).device
+        crop_tensor = crop_tensor.to(device)
+
+        track.features = self.reid_model(crop_tensor)
 
 def joint_stracks(tlista, tlistb):
     """
