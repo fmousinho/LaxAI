@@ -268,8 +268,12 @@ class BYTETracker(object):
 
         ''' Step 1: First association, with high score detection boxes'''
         if len(strack_pool) > 0 and len(bboxes_high) > 0:
-            dists = matching.v_iou_distance(strack_pool, bboxes_high)
-            matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.max_match_distance)
+            if self.reid_enabled:
+                dists = matching.v_iou_reid_distance(strack_pool, bboxes_high, self.get_embeddings, iou_thresh=.3, reid_weight=.9)
+                matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.max_match_distance)
+            else:
+                dists = matching.v_iou_distance(strack_pool, bboxes_high)
+                matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.max_match_distance)
         
         else:
             matches = []
@@ -378,28 +382,29 @@ class BYTETracker(object):
 
         """ Step 4: Deal with unmatched detections"""
 
-        """ 4.1: Scavenger for removed tracks"""
+        """ 4.1: Scavenger for removed tracks (reid mode only)"""
       
-        if len(self.removed_stracks) > 0 and len(unmatched_detections_array) > 0:
-            dists = matching.v_iou_reid_distance(self.removed_stracks, unmatched_detections_array, self.get_embeddings, iou_thresh=0, reid_weight=1)
-            matches, u_track, u_detection = matching.linear_assignment(dists, thresh=.01)
+        if self.reid_enabled:
             scavenged_indices = set()
-            for itracked, idet in matches:
-                scavenged_indices.add(itracked)
-                track = self.removed_stracks[itracked]
-                bbox = unmatched_detections_array[idet, :4]
-                score = unmatched_detections_array[idet, 4]
-                track.update(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id)
-                activated_stracks.append(track)
-                self._detection_to_track_map[unmatched_detections_mask[idet]] = track.track_id
-                n_tracks_scavenged += 1
+            if len(self.removed_stracks) > 0 and len(unmatched_detections_array) > 0:
+                dists = matching.v_iou_reid_distance(self.removed_stracks, unmatched_detections_array, self.get_embeddings, iou_thresh=0, reid_weight=1)
+                matches, u_track, u_detection = matching.linear_assignment(dists, thresh=.01)
+                for itracked, idet in matches:
+                    scavenged_indices.add(itracked)
+                    track = self.removed_stracks[itracked]
+                    bbox = unmatched_detections_array[idet, :4]
+                    score = unmatched_detections_array[idet, 4]
+                    track.update(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id)
+                    activated_stracks.append(track)
+                    self._detection_to_track_map[unmatched_detections_mask[idet]] = track.track_id
+                    n_tracks_scavenged += 1
 
-        else:
-            u_detection = np.arange(len(unmatched_detections_array))
-            u_track = np.arange(len(self.removed_stracks))
+            else:
+                u_detection = np.arange(len(unmatched_detections_array))
+                u_track = np.arange(len(self.removed_stracks))
 
-        unmatched_detections_mask = unmatched_detections_mask[u_detection]
-        unmatched_detections_array = unmatched_detections_array[u_detection]
+            unmatched_detections_mask = unmatched_detections_mask[u_detection]
+            unmatched_detections_array = unmatched_detections_array[u_detection]
 
         """ 4.2: Create new tracks"""
         for i, inew in enumerate(unmatched_detections_array):
@@ -409,7 +414,8 @@ class BYTETracker(object):
             track.activate(self.kalman_filter, self.frame_id)
             activated_stracks.append(track)
             if self.reid_enabled:
-                track.reid_feat = self.initiate_track_reid_features(track)
+                if track.score > self.track_activation_threshold:  # Avoids creating embeddings for low confidence tracks
+                    track.reid_feat = self.initiate_track_reid_features(track)
             self._detection_to_track_map[unmatched_detections_mask[i]] = track.track_id
             n_tracks_new += 1
 
@@ -501,9 +507,16 @@ class BYTETracker(object):
         Updates the track's reid features using the given detection bounding box.
         Updates every 30 frames.
         """
-        # For now we purely overwrite, but an EMA (Exponential Moving Average) could be used here:
+        if track.score < self.track_activation_threshold:
+            return
+        
+        if track.features is None:
+            self.initiate_track_reid_features(track)
+            return
+        
         if track.tracklet_len % 30 != 0:
             return
+       
         alpha = REID_UPDATE_ALPHA
         new_feat = self.get_embeddings(track.tlbr)
         if new_feat is not None:
