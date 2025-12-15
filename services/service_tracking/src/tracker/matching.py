@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 from typing import List, Callable
 import cv2
 import numpy as np
@@ -189,7 +191,7 @@ def fuse_score(cost_matrix, detections):
     return fuse_cost
 
 
-def v_iou_reid_distance(tracks: List, detections_bboxes: np.ndarray, embedding_func: Callable, iou_thresh=0.0, alpha=0.7) -> np.ndarray:
+def v_iou_reid_distance(tracks: List, detections_bboxes: np.ndarray, embedding_func: Callable, iou_thresh=0.0, reid_weight=0.7) -> np.ndarray:
     """
     Computes a cost matrix blending IoU and ReID distance.
     Only computes ReID distance for pairs with IoU > iou_thresh.
@@ -198,7 +200,7 @@ def v_iou_reid_distance(tracks: List, detections_bboxes: np.ndarray, embedding_f
     :param detections_bboxes: np.ndarray 
     :param embedding_func: callable(tlbr) -> tensor/numpy
     :param iou_thresh: lower bound for overlap to consider ReID
-    :param alpha: weight for ReID distance (0.0 = only IoU, 1.0 = only ReID)
+    :param reid_weight: weight for ReID distance (0.0 = only IoU, 1.0 = only ReID)
     :return: cost_matrix np.ndarray
     """
     if len(tracks) == 0 or len(detections_bboxes) == 0:
@@ -274,7 +276,7 @@ def v_iou_reid_distance(tracks: List, detections_bboxes: np.ndarray, embedding_f
         iou_d = cost_matrix[r, c]
         
         # Blend
-        fused_cost = (1 - alpha) * iou_d + alpha * reid_dist
+        fused_cost = (1 - reid_weight) * iou_d + reid_weight * reid_dist
         
         cost_matrix[r, c] = fused_cost
         
