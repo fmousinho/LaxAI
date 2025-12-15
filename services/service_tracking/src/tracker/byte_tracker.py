@@ -29,15 +29,18 @@ class STrack(BaseTrack):
 
         # wait activate
         self._tlwh = np.asarray(tlwh, dtype=float)
-        self.kalman_filter = None
-        self.mean, self.covariance = None, None
+        self.kalman_filter: Optional[KalmanFilter] = None
+        self.mean: Optional[np.ndarray] = None
+        self.covariance: Optional[np.ndarray] = None
         self.is_activated = False
-        self.features = None
+        self.features: Optional[torch.Tensor] = None
 
         self.score = score
         self.tracklet_len = 0
 
     def predict(self):
+        if self.mean is None or self.kalman_filter is None:
+            return
         mean_state = self.mean.copy()
         if self.state != TrackState.Tracked:
             mean_state[7] = 0
@@ -56,7 +59,7 @@ class STrack(BaseTrack):
                 stracks[i].mean = mean
                 stracks[i].covariance = cov
 
-    def activate(self, kalman_filter, frame_id):
+    def activate(self, kalman_filter: KalmanFilter, frame_id: int):
         """Start a new tracklet"""
         self.kalman_filter = kalman_filter
         self.track_id = self.next_id()
@@ -72,6 +75,9 @@ class STrack(BaseTrack):
         self.start_frame = frame_id
 
     def re_activate(self, new_track, frame_id, new_id=False):
+        if self.kalman_filter is None:
+            raise ValueError("Kalman filter must be initialized before re-activation.")
+        
         self.mean, self.covariance = self.kalman_filter.update(
             self.mean, self.covariance, self.tlwh_to_xyah(new_track.tlwh)
         )
@@ -101,6 +107,8 @@ class STrack(BaseTrack):
         :type update_feature: bool
         :return:
         """
+        if self.kalman_filter is None:
+            raise ValueError("Kalman filter must be initialized before update.")
         self.frame_id = frame_id
         self.tracklet_len += 1
 
@@ -415,7 +423,7 @@ class BYTETracker(object):
             activated_stracks.append(track)
             if self.reid_enabled:
                 if track.score > self.track_activation_threshold:  # Avoids creating embeddings for low confidence tracks
-                    track.reid_feat = self.initiate_track_reid_features(track)
+                    track.features = self.initiate_track_reid_features(track)
             self._detection_to_track_map[unmatched_detections_mask[i]] = track.track_id
             n_tracks_new += 1
 
@@ -528,6 +536,9 @@ class BYTETracker(object):
         """
         Extracts embeddings for a given bounding box (tlbr).
         """
+        if self._frame is None or self.reid_model is None:
+            raise ValueError("Frame and reid_model must be set to extract embeddings.")
+        
         img_h, img_w = self._frame.shape[:2]
         
         x1 = max(0, int(tlbr[0]))
