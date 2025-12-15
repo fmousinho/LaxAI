@@ -383,7 +383,9 @@ class BYTETracker(object):
         if len(self.removed_stracks) > 0 and len(unmatched_detections_array) > 0:
             dists = matching.v_iou_reid_distance(self.removed_stracks, unmatched_detections_array, self.get_embeddings, iou_thresh=0, reid_weight=1)
             matches, u_track, u_detection = matching.linear_assignment(dists, thresh=.01)
+            scavenged_indices = set()
             for itracked, idet in matches:
+                scavenged_indices.add(itracked)
                 track = self.removed_stracks[itracked]
                 bbox = unmatched_detections_array[idet, :4]
                 score = unmatched_detections_array[idet, 4]
@@ -391,6 +393,7 @@ class BYTETracker(object):
                 activated_stracks.append(track)
                 self._detection_to_track_map[unmatched_detections_mask[idet]] = track.track_id
                 n_tracks_scavenged += 1
+
         else:
             u_detection = np.arange(len(unmatched_detections_array))
             u_track = np.arange(len(self.removed_stracks))
@@ -418,6 +421,8 @@ class BYTETracker(object):
                 n_tracks_removed += 1
 
         # Update tracker state
+        if self.reid_enabled and len(scavenged_indices) > 0:
+            self.removed_stracks = [t for i, t in enumerate(self.removed_stracks) if i not in scavenged_indices]
         self.tracked_stracks = joint_stracks(activated_stracks, refind_stracks)
         self.removed_stracks.extend(removed_stracks)
         self.lost_stracks = lost_stracks
