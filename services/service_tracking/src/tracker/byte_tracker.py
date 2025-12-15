@@ -264,18 +264,18 @@ class BYTETracker(object):
                 logger.warning(f"Frame {self.frame_id}: Invalid camera motion arrays (NaN/Inf detected). Skipping compensation.")
 
         STrack.multi_predict(strack_pool)
-        strack_pool_array = np.array([track.tlbr for track in strack_pool])
+        # strack_pool_array = np.array([track.tlbr for track in strack_pool])
 
         ''' Step 1: First association, with high score detection boxes'''
-        if len(strack_pool_array) > 0 and len(bboxes_high) > 0:
-            dists = matching.iou_distance(strack_pool_array, bboxes_high)
+        if len(strack_pool) > 0 and len(bboxes_high) > 0:
+            dists = matching.v_iou_distance(strack_pool, bboxes_high)
             matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.max_match_distance)
+        
         else:
             matches = []
-            u_track = np.arange(len(strack_pool_array))
+            u_track = np.arange(len(strack_pool))
             u_detection = np.arange(len(bboxes_high))
 
-        unmatched_tracks_array = strack_pool_array[u_track]
         unmatched_tracks = [strack_pool[i] for i in u_track]
 
         for itracked, idet in matches:
@@ -297,16 +297,19 @@ class BYTETracker(object):
                 self.update_track_reid_features(track)
 
         ''' Step 2: Second association, with low score detection boxes'''
-        if len(unmatched_tracks_array) > 0 and len(bboxes_low) > 0:
-            dists = matching.iou_distance(unmatched_tracks_array, bboxes_low)
-            matches, u_track_second, u_detection_second = matching.linear_assignment(dists, thresh=LOW_CONF_MAX_MATCH_DISTANCE)
+        if len(unmatched_tracks) > 0 and len(bboxes_low) > 0:
+            if self.reid_enabled:
+                dists = matching.v_iou_reid_distance(unmatched_tracks, bboxes_low, self.get_embeddings, iou_thresh=.5)
+                matches, u_track_second, u_detection_second = matching.linear_assignment(dists, thresh=.8)
+            else:
+                dists = matching.v_iou_distance(unmatched_tracks, bboxes_low)
+                matches, u_track_second, u_detection_second = matching.linear_assignment(dists, thresh=.5)
         else:
             matches = []
-            u_track_second = np.arange(len(unmatched_tracks_array))
+            u_track_second = np.arange(len(unmatched_tracks))
             u_detection_second = np.arange(len(bboxes_low))
 
         unmatched_tracks_second = [unmatched_tracks[i] for i in u_track_second]
-        unmatched_tracks_array_second = unmatched_tracks_array[u_track_second]
 
         for itracked, idet in matches:
             track = unmatched_tracks[itracked]
@@ -334,10 +337,9 @@ class BYTETracker(object):
         unmatched_detections_mask = np.concatenate((high_conf_mask[u_detection], low_conf_mask[u_detection_second]), axis=0)
         unmatched_bbox_array = bboxes_keep[unmatched_detections_mask]
         unmatched_scores_array = scores_keep[unmatched_detections_mask]
-        pending_confirmation_tracks_array = np.array([track.tlbr for track in pending_confirmation_tracks]) if len(pending_confirmation_tracks) > 0 else np.empty((0, 4))
 
-        if len(pending_confirmation_tracks_array) > 0 and len(unmatched_bbox_array) > 0:
-            dists = matching.iou_distance(pending_confirmation_tracks_array, unmatched_bbox_array)
+        if len(pending_confirmation_tracks) > 0 and len(unmatched_bbox_array) > 0:
+            dists = matching.v_iou_distance(pending_confirmation_tracks, unmatched_bbox_array)
             matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=UNCONFIRMED_MAX_MATCH_DISTANCE)
         else:
             matches = []
@@ -466,20 +468,20 @@ class BYTETracker(object):
         if feats is not None:
             track.features = feats
 
-
     def update_track_reid_features(self, track: STrack):
         """
         Updates the track's reid features using the given detection bounding box.
         Updates every 30 frames.
         """
         # For now we purely overwrite, but an EMA (Exponential Moving Average) could be used here:
-        if track.features % 30 != 0:
+        if track.tracklet_len % 30 != 0:
             return
         alpha = REID_UPDATE_ALPHA
         new_feat = self.get_embeddings(track.tlbr)
         if new_feat is not None:
             updated_features = alpha * track.features + (1 - alpha) * new_feat
             track.features = torch.nn.functional.normalize(updated_features, dim=1)
+            
 
     def get_embeddings(self, tlbr: np.ndarray) -> Optional[torch.Tensor]:
         """

@@ -1,3 +1,4 @@
+from typing import List, Callable
 import cv2
 import numpy as np
 import scipy
@@ -90,23 +91,22 @@ def iou_distance(atracks, btracks):
 
     return cost_matrix
 
-def v_iou_distance(atracks, btracks):
+def v_iou_distance(tracks: List, detections_arr: np.ndarray) -> np.ndarray:
     """
     Compute cost based on IoU
-    :type atracks: list[STrack]
-    :type btracks: list[STrack]
+    :type tracks: list[STrack]
+    :type detections_arr: np.ndarray
 
     :rtype cost_matrix np.ndarray
     """
 
-    if (len(atracks)>0 and isinstance(atracks[0], np.ndarray)) or (len(btracks) > 0 and isinstance(btracks[0], np.ndarray)):
-        atlbrs = atracks
-        btlbrs = btracks
+    tracks_tlbr = np.array([track.tlbr for track in tracks])
+    detections_tlbr = detections_arr[:, :4]
+    if tracks_tlbr.shape[0] == 0 or detections_tlbr.shape[0] == 0:
+        cost_matrix = np.empty((tracks_tlbr.shape[0], detections_tlbr.shape[0]))
     else:
-        atlbrs = [track.tlwh_to_tlbr(track.pred_bbox) for track in atracks]
-        btlbrs = [track.tlwh_to_tlbr(track.pred_bbox) for track in btracks]
-    _ious = ious(atlbrs, btlbrs)
-    cost_matrix = 1 - _ious
+        _ious = ious(tracks_tlbr, detections_tlbr)
+        cost_matrix = 1 - _ious
 
     return cost_matrix
 
@@ -124,7 +124,7 @@ def embedding_distance(tracks, detections, metric='cosine'):
     det_features = np.asarray([track.curr_feat for track in detections], dtype=float)
     #for i, track in enumerate(tracks):
         #cost_matrix[i, :] = np.maximum(0.0, cdist(track.smooth_feat.reshape(1,-1), det_features, metric))
-    track_features = np.asarray([track.smooth_feat for track in tracks], dtype=float)
+    track_features = np.asarray([track.features for track in tracks], dtype=float)
     cost_matrix = np.maximum(0.0, cdist(track_features, det_features, metric))  # Nomalized features
     return cost_matrix
 
@@ -176,6 +176,97 @@ def fuse_score(cost_matrix, detections):
     iou_sim = 1 - cost_matrix
     det_scores = np.array([det.score for det in detections])
     det_scores = np.expand_dims(det_scores, axis=0).repeat(cost_matrix.shape[0], axis=0)
-    fuse_sim = iou_sim * det_scores
     fuse_cost = 1 - fuse_sim
     return fuse_cost
+
+
+def v_iou_reid_distance(tracks: List, detections_bboxes: np.ndarray, embedding_func: Callable, iou_thresh=0.0, alpha=0.5) -> np.ndarray:
+    """
+    Computes a cost matrix blending IoU and ReID distance.
+    Only computes ReID distance for pairs with IoU > iou_thresh.
+    
+    :param tracks: list[STrack]
+    :param detections_bboxes: np.ndarray 
+    :param embedding_func: callable(tlbr) -> tensor/numpy
+    :param iou_thresh: lower bound for overlap to consider ReID
+    :param alpha: weight for ReID distance (0.0 = only IoU, 1.0 = only ReID)
+    :return: cost_matrix np.ndarray
+    """
+    if len(tracks) == 0 or len(detections_bboxes) == 0:
+        return np.empty((len(tracks), len(detections_bboxes)))
+
+    if detections_bboxes.shape[1] > 4:
+        detections_bboxes = detections_bboxes[:, :4]
+    elif detections_bboxes.shape[1] < 4:
+        raise ValueError("detections_bboxes must be of shape (N, 4)")
+        
+    # 1. Compute IoU Cost Matrix (1 - IoU)
+    cost_matrix = v_iou_distance(tracks, detections_bboxes)
+    
+    # Identify candidates where we have some overlap
+    # We want similarity = 1 - cost > thresh => cost < 1 - thresh
+    # Or just check simple IoU from 1-cost
+    ious = 1.0 - cost_matrix
+    candidates_mask = ious > iou_thresh
+    
+    if not np.any(candidates_mask):
+        return cost_matrix
+        
+    # Cache for detection embeddings to avoid re-running model for same detection
+    det_embeddings_cache = {}
+    
+    # 2. Iterate and apply ReID
+    # We'll modify the cost matrix in place for candidates
+    rows, cols = np.where(candidates_mask)
+    
+    for r, c in zip(rows, cols):
+        track = tracks[r]
+        det = detections_bboxes[c]
+        
+        # Get Track Embedding
+        # Assuming track has .features attribute which is a tensor or numpy array
+        if track.features is None:
+            continue
+            
+        track_feat = track.features
+        if hasattr(track_feat, 'cpu'):
+            track_feat = track_feat.cpu().numpy()
+        if len(track_feat.shape) == 1:
+            track_feat = track_feat.reshape(1, -1)
+            
+        # Get Detection Embedding
+        if c not in det_embeddings_cache:
+            # Assuming det is an STrack or has tlbr property
+            # Or det is the STrack associated with detection
+            bbox = det
+            feat = embedding_func(bbox)
+            if feat is None:
+                det_embeddings_cache[c] = None
+                continue
+                
+            if hasattr(feat, 'cpu'):
+                feat = feat.cpu().numpy()
+            if len(feat.shape) == 1:
+                feat = feat.reshape(1, -1)
+            det_embeddings_cache[c] = feat
+            
+        det_feat = det_embeddings_cache[c]
+        
+        if det_feat is None:
+            continue
+            
+        # Compute Cosine Distance (1 - Cosine Similarity)
+        # cdist returns distance. 'cosine' is 1 - u.v/(|u||v|)
+        # Range is [0, 2]. Normalize to [0, 1] by dividing by 2.0
+        reid_dist = cdist(track_feat, det_feat, metric='cosine')[0][0] / 2.0
+        
+        # 3. Fuse Scores
+        # Weighted average of the IoU distance and ReID distance
+        iou_d = cost_matrix[r, c]
+        
+        # Blend
+        fused_cost = (1 - alpha) * iou_d + alpha * reid_dist
+        
+        cost_matrix[r, c] = fused_cost
+        
+    return cost_matrix
