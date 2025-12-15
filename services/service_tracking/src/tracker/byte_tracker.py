@@ -240,6 +240,7 @@ class BYTETracker(object):
         n_tracks_lost = 0  # Became "is_activated" = False (was lost) because no matching detection was found
         n_tracks_pending_confirmation = 0 #  Hasn't reached the number of consecutive detections to become is_activated = True yet
         n_tracks_removed = 0 # Became "is_activated" = False (was lost) for longer than the buffer size or was never confirmed
+        n_tracks_scavenged = 0 # Matched a removed tracket
 
         logger.debug(f"total detections: {len(scores_keep)} | thresh: {self.track_activation_threshold} | high conf: {len(high_conf_mask)} | low: {len(low_conf_mask)}")
 
@@ -298,8 +299,8 @@ class BYTETracker(object):
         ''' Step 2: Second association, with low score detection boxes'''
         if len(unmatched_tracks) > 0 and len(bboxes_low) > 0:
             if self.reid_enabled:
-                dists = matching.v_iou_reid_distance(unmatched_tracks, bboxes_low, self.get_embeddings, iou_thresh=.5)
-                matches, u_track_second, u_detection_second = matching.linear_assignment(dists, thresh=.8) # thresh: cost
+                dists = matching.v_iou_reid_distance(unmatched_tracks, bboxes_low, self.get_embeddings, iou_thresh=.3, reid_weight=.8)
+                matches, u_track_second, u_detection_second = matching.linear_assignment(dists, thresh=.3) # thresh: cost
             else:
                 dists = matching.v_iou_distance(unmatched_tracks, bboxes_low)
                 matches, u_track_second, u_detection_second = matching.linear_assignment(dists, thresh=.5)
@@ -377,8 +378,25 @@ class BYTETracker(object):
 
         """ Step 4: Deal with unmatched detections"""
 
-        """ Step 4.1: Scavenger for removed tracks"""
+        """ 4.1: Scavenger for removed tracks"""
       
+        if len(self.removed_stracks) > 0 and len(unmatched_detections_array) > 0:
+            dists = matching.v_iou_reid_distance(self.removed_stracks, unmatched_detections_array, self.get_embeddings, iou_thresh=0, reid_weight=1)
+            matches, u_track, u_detection = matching.linear_assignment(dists, thresh=.01)
+            for itracked, idet in matches:
+                track = self.removed_stracks[itracked]
+                bbox = unmatched_detections_array[idet, :4]
+                score = unmatched_detections_array[idet, 4]
+                track.update(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id)
+                activated_stracks.append(track)
+                self._detection_to_track_map[unmatched_detections_mask[idet]] = track.track_id
+                n_tracks_scavenged += 1
+        else:
+            u_detection = np.arange(len(unmatched_detections_array))
+            u_track = np.arange(len(self.removed_stracks))
+
+        unmatched_detections_mask = unmatched_detections_mask[u_detection]
+        unmatched_detections_array = unmatched_detections_array[u_detection]
 
         """ 4.2: Create new tracks"""
         for i, inew in enumerate(unmatched_detections_array):
@@ -411,7 +429,8 @@ class BYTETracker(object):
             f"new: {n_tracks_new} | "
             f"lost: {n_tracks_lost} | "
             f"pending conf: {n_tracks_pending_confirmation} | "
-            f"removed: {n_tracks_removed}"
+            f"removed: {n_tracks_removed} | "
+            f"scavenged: {n_tracks_scavenged}"
             )
 
         # Return only confirmed tracks

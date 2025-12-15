@@ -1,6 +1,6 @@
 import logging
 logger = logging.getLogger(__name__)
-from typing import List, Callable
+from typing import List, Callable, Tuple
 import cv2
 import numpy as np
 import scipy
@@ -108,7 +108,7 @@ def v_iou_distance(tracks: List, detections_arr: np.ndarray) -> np.ndarray:
     :type tracks: list[STrack]
     :type detections_arr: np.ndarray
 
-    :rtype cost_matrix np.ndarray
+    :rtype cost_matrix: np.ndarray
     """
 
     tracks_tlbr = np.array([track.tlbr for track in tracks])
@@ -279,5 +279,9 @@ def v_iou_reid_distance(tracks: List, detections_bboxes: np.ndarray, embedding_f
         fused_cost = (1 - reid_weight) * iou_d + reid_weight * reid_dist
         
         cost_matrix[r, c] = fused_cost
+
+        if logger.getEffectiveLevel() == logging.DEBUG:
+            if iou_d < 1 and reid_dist < 1:
+                logger.debug(f"Track {track.track_id} vs Detection {det.astype(int)}: IoU dist {iou_d:.4f}, ReID dist {reid_dist:.4f}, Fused dist {fused_cost:.4f}")
         
     return cost_matrix
