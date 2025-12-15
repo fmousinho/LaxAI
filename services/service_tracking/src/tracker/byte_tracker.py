@@ -21,6 +21,8 @@ COMPENSATE_CAM_MOTION = True  # Affine transform to track camera motion signifan
 LOW_CONF_MAX_MATCH_DISTANCE = 0.9 # 1-IOU
 UNCONFIRMED_MAX_MATCH_DISTANCE = 0.7
 
+REID_UPDATE_ALPHA = 0.9
+
 class STrack(BaseTrack):
     shared_kalman = KalmanFilter()
     def __init__(self, tlwh, score):
@@ -182,7 +184,6 @@ class BYTETracker(object):
         self.kalman_filter = KalmanFilter()
         self.reid_enabled = reid_model is not None
         if self.reid_enabled:
-
             self.reid_model_input_size = (224, 224)
             self.reid_model = reid_model
 
@@ -291,6 +292,9 @@ class BYTETracker(object):
                 track.re_activate(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id, new_id=False)
                 refind_stracks.append(track)
                 n_tracks_refind += 1
+
+            if self.reid_enabled:
+                self.update_track_reid_features(track)
 
         ''' Step 2: Second association, with low score detection boxes'''
         if len(unmatched_tracks_array) > 0 and len(bboxes_low) > 0:
@@ -458,8 +462,40 @@ class BYTETracker(object):
         """
         Uses class reid model to extract features from track bounding box
         """
-        bbox = track.tlbr
-        crop = self._frame[int(bbox[1]):int(bbox[3]), int(bbox[0]):int(bbox[2])]
+        feats = self.get_embeddings(track.tlbr)
+        if feats is not None:
+            track.features = feats
+
+
+    def update_track_reid_features(self, track: STrack):
+        """
+        Updates the track's reid features using the given detection bounding box.
+        Updates every 30 frames.
+        """
+        # For now we purely overwrite, but an EMA (Exponential Moving Average) could be used here:
+        if track.features % 30 != 0:
+            return
+        alpha = REID_UPDATE_ALPHA
+        new_feat = self.get_embeddings(track.tlbr)
+        if new_feat is not None:
+            updated_features = alpha * track.features + (1 - alpha) * new_feat
+            track.features = torch.nn.functional.normalize(updated_features, dim=1)
+
+    def get_embeddings(self, tlbr: np.ndarray) -> Optional[torch.Tensor]:
+        """
+        Extracts embeddings for a given bounding box (tlbr).
+        """
+        img_h, img_w = self._frame.shape[:2]
+        
+        x1 = max(0, int(tlbr[0]))
+        y1 = max(0, int(tlbr[1]))
+        x2 = min(img_w, int(tlbr[2]))
+        y2 = min(img_h, int(tlbr[3]))
+        
+        if x2 <= x1 or y2 <= y1:
+            return None
+
+        crop = self._frame[y1:y2, x1:x2]
         crop = cv2.resize(crop, self.reid_model_input_size)
         
         # Convert to tensor and match model input format (N, C, H, W)
@@ -471,7 +507,9 @@ class BYTETracker(object):
         device = next(self.reid_model.parameters()).device
         crop_tensor = crop_tensor.to(device)
 
-        track.features = self.reid_model(crop_tensor)
+        with torch.no_grad():
+            return self.reid_model(crop_tensor).detach()
+        
 
 def joint_stracks(tlista, tlistb):
     """
