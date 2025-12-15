@@ -221,9 +221,7 @@ class BYTETracker(object):
             scores = detections_array[:, 4]
             bboxes = detections_array[:, :4]
         else:
-            detections_array = detections_array.cpu().numpy()
-            scores = detections_array[:, 4] * detections_array[:, 5]
-            bboxes = detections_array[:, :4]  # x1y1x2y2
+            raise ValueError("Detections array must have at least 5 columns: [x1, y1, x2, y2, score]")
 
         remain_inds_mask = np.where(scores >= self.prediction_threshold)[0]
         logger.debug(f"FRAME {self.frame_id}")
