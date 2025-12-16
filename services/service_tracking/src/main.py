@@ -14,7 +14,7 @@ import shared_libs.config.logging_config
 logger = logging.getLogger(__name__)
 
 logging.getLogger("tracker.byte_tracker").setLevel(logging.DEBUG)
-logging.getLogger("tracker.matching").setLevel(logging.DEBUG)
+# logging.getLogger("tracker.matching").setLevel(logging.DEBUG)
 
 from shared_libs.utils.env_secrets import setup_environment_secrets
 setup_environment_secrets()
