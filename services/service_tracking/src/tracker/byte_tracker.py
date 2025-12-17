@@ -39,14 +39,18 @@ class STrack(BaseTrack):
 
         self.score = score
         self.tracklet_len = 0
+        self.predicted_mean: Optional[np.ndarray] = None
+        self.match_cost: Optional[float] = 0.0
 
     def predict(self):
         if self.mean is None or self.kalman_filter is None:
             return
+        self.match_cost = None
         mean_state = self.mean.copy()
         if self.state != TrackState.Tracked:
             mean_state[7] = 0
-        self.mean, self.covariance = self.kalman_filter.predict(mean_state, self.covariance)
+        self.predicted_mean, self.covariance = self.kalman_filter.predict(mean_state, self.covariance)
+        self.mean = self.predicted_mean.copy()
 
     @staticmethod
     def multi_predict(stracks):
@@ -59,6 +63,7 @@ class STrack(BaseTrack):
             multi_mean, multi_covariance = STrack.shared_kalman.multi_predict(multi_mean, multi_covariance)
             for i, (mean, cov) in enumerate(zip(multi_mean, multi_covariance)):
                 stracks[i].mean = mean
+                stracks[i].predicted_mean = mean
                 stracks[i].covariance = cov
 
     def activate(self, kalman_filter: KalmanFilter, frame_id: int):
@@ -66,13 +71,9 @@ class STrack(BaseTrack):
         self.kalman_filter = kalman_filter
         self.track_id = self.next_id()
         self.mean, self.covariance = self.kalman_filter.initiate(self.tlwh_to_xyah(self._tlwh))
-
         self.tracklet_len = 0
         self.state = TrackState.Tracked
-        # if self.frame_id == 0:
-        #     self.is_activated = True
-        # else:
-        #     self.is_activated = False
+        self.predicted_mean = self.mean
         self.frame_id = frame_id
         self.start_frame = frame_id
 
@@ -118,10 +119,8 @@ class STrack(BaseTrack):
         self.mean, self.covariance = self.kalman_filter.update(
             self.mean, self.covariance, self.tlwh_to_xyah(new_tlwh))
         self.state = TrackState.Tracked
-        # if self.tracklet_len >= 10 :  # This will be overridden by logic in BYTETracker.update, but kept for safety/logic consistency if used elsewhere
-        #      self.is_activated = True
-
         self.score = new_track.score
+
 
     @property
     # @jit(nopython=True)
@@ -143,6 +142,17 @@ class STrack(BaseTrack):
         `(top left, bottom right)`.
         """
         ret = self.tlwh.copy()
+        ret[2:] += ret[:2]
+        return ret
+
+    @property
+    def predicted_tlbr(self):
+        """Convert predicted state to bounding box format `(min x, min y, max x, max y)`."""
+        if self.predicted_mean is None:
+             return self.tlbr
+        ret = self.predicted_mean[:4].copy()
+        ret[2] *= ret[3]
+        ret[:2] -= ret[2:] / 2
         ret[2:] += ret[:2]
         return ret
 
@@ -240,15 +250,13 @@ class BYTETracker(object):
         scores_low = scores_keep[low_conf_mask]
         scores_high = scores_keep[high_conf_mask]
 
-        # Logging variables
+
         n_tracks_reconfirmed = 0  # Already tracked and "is_activated", updated with new detection
         n_tracks_refind = 0  # Already tracked but "is_activated" = False (was lost), updated with new detection and is_activated = True
         n_tracks_confirmed = 0  # Already tracked and just became "is_active" because of number of consecutive detections
         n_tracks_new = 0  # New tracklet
         n_tracks_lost = 0  # Became "is_activated" = False (was lost) because no matching detection was found
         n_tracks_pending_confirmation = 0 #  Hasn't reached the number of consecutive detections to become is_activated = True yet
-        n_tracks_removed = 0 # Became "is_activated" = False (was lost) for longer than the buffer size or was never confirmed
-        n_tracks_scavenged = 0 # Matched a removed tracket
 
         logger.debug(f"total detections: {len(scores_keep)} | thresh: {self.track_activation_threshold} | high conf: {len(high_conf_mask)} | low: {len(low_conf_mask)}")
 
@@ -282,16 +290,11 @@ class BYTETracker(object):
             else:
                 dists = matching.v_iou_distance(strack_pool, bboxes_high)
                 matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.max_match_distance)
-        
         else:
             matches = []
             u_track = np.arange(len(strack_pool))
             u_detection = np.arange(len(bboxes_high))
-
-        if logger.getEffectiveLevel() == logging.DEBUG:
-            logger.debug(f"=== Frame {self.frame_id} Step 1 Associations ===")
-            current_dists = dists if 'dists' in locals() else None
-            log_association_details(self.frame_id, matches, u_track, strack_pool, current_dists)
+            dists = None
 
         unmatched_tracks = [strack_pool[i] for i in u_track]
 
@@ -299,6 +302,7 @@ class BYTETracker(object):
             track = strack_pool[itracked]
             bbox = bboxes_high[idet]
             score = scores_high[idet]
+            track.match_cost = dists[itracked, idet]
             self._detection_to_track_map[high_conf_mask[idet]] = track.track_id
             
             if track.state == TrackState.Tracked:
@@ -308,10 +312,11 @@ class BYTETracker(object):
             else:
                 track.re_activate(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id, new_id=False)
                 refind_stracks.append(track)
-                n_tracks_refind += 1
 
             if self.reid_enabled:
                 self.update_track_reid_features(track)
+
+        self.step_log("step 1", matches, unmatched_tracks, u_detection, dists)
 
         ''' Step 2: Second association, with low score detection boxes'''
         if len(unmatched_tracks) > 0 and len(bboxes_low) > 0:
@@ -333,6 +338,7 @@ class BYTETracker(object):
             track = unmatched_tracks[itracked]
             bbox = bboxes_low[idet]
             score = scores_low[idet]
+            track.match_cost = dists[itracked, idet]
             self._detection_to_track_map[low_conf_mask[idet]] = track.track_id
 
             if track.state == TrackState.Tracked:
@@ -342,18 +348,13 @@ class BYTETracker(object):
             else:
                 track.re_activate(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id, new_id=False)
                 refind_stracks.append(track)
-                n_tracks_refind += 1
 
         for track in unmatched_tracks_second:
             if track.state != TrackState.Lost:
                 track.mark_lost()
                 lost_stracks.append(track)
-                n_tracks_lost += 1
-        
-        if logger.getEffectiveLevel() == logging.DEBUG:
-            logger.debug(f"=== Frame {self.frame_id} Step 2 Associations ===")
-            current_dists = dists if 'dists' in locals() else None
-            log_association_details(self.frame_id, matches, u_track_second, unmatched_tracks, current_dists)
+
+        self.step_log("step 2", matches, unmatched_tracks, u_detection_second, dists)
  
         '''Step 3: Deal with pending confirmation tracks'''
         unmatched_detections_mask = np.concatenate((high_conf_mask[u_detection], low_conf_mask[u_detection_second]), axis=0)
@@ -373,6 +374,7 @@ class BYTETracker(object):
             track = pending_confirmation_tracks[itracked]
             bbox = unmatched_bbox_array[idet]
             score = unmatched_scores_array[idet]
+            track.match_cost = dists[itracked, idet]
             track.update(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id)
             
             if track.tracklet_len >= self.min_consecutive_frames:
@@ -385,25 +387,16 @@ class BYTETracker(object):
                  
             self._detection_to_track_map[unmatched_detections_mask[idet]] = track.track_id
 
-    
+        self.step_log("step 3", matches, unmatched_tracks, u_detection, dists)
+
         unmatched_detections_mask = unmatched_detections_mask[u_detection]
         unmatched_detections_array = np.column_stack((bboxes_keep[unmatched_detections_mask], scores_keep[unmatched_detections_mask])) if len(unmatched_detections_mask) > 0 else np.empty((0, 5))
         unconfirmed_tracks_remaining = [pending_confirmation_tracks[i] for i in u_unconfirmed]
-
-        if logger.getEffectiveLevel() == logging.DEBUG:
-            logger.debug(f"=== Frame {self.frame_id} Step 3 Associations ===")
-            current_dists = dists if 'dists' in locals() else None
-            log_association_details(self.frame_id, matches, u_unconfirmed, pending_confirmation_tracks, current_dists)
-
-        if logger.level == logging.DEBUG:
-            for i in unmatched_detections_mask:
-                logger.debug(f"unmatched detection: {bboxes_keep[i].astype(int)} | score: {scores_keep[i]:.2f}")
 
         # Tracks pending confirmation that are not matched right away are removed
         for track in unconfirmed_tracks_remaining:
             track.mark_removed()
             removed_stracks.append(track)
-            n_tracks_removed += 1
 
         """ Step 4: Deal with unmatched detections"""
 
@@ -421,10 +414,11 @@ class BYTETracker(object):
                     track = self.removed_stracks[itracked]
                     bbox = unmatched_detections_array[idet, :4]
                     score = unmatched_detections_array[idet, 4]
+                    track.match_cost = dists[itracked, idet]
+                    track.mark_scavenged()
                     track.update(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id)
                     activated_stracks.append(track)
                     self._detection_to_track_map[unmatched_detections_mask[idet]] = track.track_id
-                    n_tracks_scavenged += 1
 
             else:
                 u_detection = np.arange(len(unmatched_detections_array))
@@ -432,10 +426,7 @@ class BYTETracker(object):
                 matches = []
                 dists = None
 
-            if logger.getEffectiveLevel() == logging.DEBUG:
-                logger.debug(f"=== Frame {self.frame_id} Step 4.1 Associations ===")
-                current_dists = dists if 'dists' in locals() else None
-                log_association_details(self.frame_id, matches, u_track, self.removed_stracks, current_dists)
+            self.step_log("step 4.1", matches, unmatched_tracks, u_detection, dists)
 
             unmatched_detections_mask = unmatched_detections_mask[u_detection]
             unmatched_detections_array = unmatched_detections_array[u_detection]
@@ -453,41 +444,90 @@ class BYTETracker(object):
             self._detection_to_track_map[unmatched_detections_mask[i]] = track.track_id
             n_tracks_new += 1
 
-        if logger.getEffectiveLevel() == logging.DEBUG:
-            logger.debug(f"=== Frame {self.frame_id} Step 4.2 Associations ===")
-            current_dists = dists if 'dists' in locals() else None
-            log_ambiguous_matches(current_dists, self.removed_stracks)
+        self.step_log("step 4.2", None, None, None, None)
 
         """ Step 5: Update state for lost tracks"""
         for track in self.lost_stracks:
             if self.frame_id - track.end_frame > self.lost_track_buffer:
                 track.mark_removed()
                 removed_stracks.append(track)
-                n_tracks_removed += 1
             elif track.state == TrackState.Lost:
                 lost_stracks.append(track)
+
+        self.step_log("step 5", None, None, None, None)
 
         # Update tracker state
         if self.reid_enabled and len(scavenged_indices) > 0:
             removed_stracks = [t for i, t in enumerate(self.removed_stracks) if i not in scavenged_indices]
         self.tracked_stracks = joint_stracks(activated_stracks, refind_stracks)
-        self.removed_stracks.extend(removed_stracks)
+        self.removed_stracks = joint_stracks(self.removed_stracks, removed_stracks)
         self.lost_stracks = lost_stracks
-  
-        logger.debug (
+
+        
+        logger.debug(
             f"tracks reconfirmed: {n_tracks_reconfirmed} | "
-            f"refound: {n_tracks_refind} | "
+            f"refound: {len(refind_stracks)} | "
             f"confirmed: {n_tracks_confirmed} | "
             f"new: {n_tracks_new} | "
-            f"lost: {n_tracks_lost} | "
+            f"lost: {len(lost_stracks)} | "
             f"pending conf: {n_tracks_pending_confirmation} | "
-            f"removed: {n_tracks_removed} | "
-            f"scavenged: {n_tracks_scavenged}"
-            )
+            f"removed: {len(removed_stracks)} | "
+            f"scavenged: {len(scavenged_indices)}"
+        )
+        
+        if logger.getEffectiveLevel() == logging.DEBUG:
+            self.log_frame_summary()
 
         # Return only confirmed tracks
         output_stracks = [track for track in self.tracked_stracks if track.is_activated]
         return output_stracks
+
+    def log_frame_summary(self):
+        """
+        Log a summary of all tracks in the current frame, sorted by track ID.
+        """
+        all_tracks = self.tracked_stracks + self.lost_stracks + self.removed_stracks
+        # Sort by track_id
+        all_tracks.sort(key=lambda x: x.track_id)
+
+        states_for_metrics = ["Tracked", "Pending", "Lost"]
+        logger.debug(f"=== Frame {self.frame_id} Summary ===")
+        for t in all_tracks:
+            # Determine status string
+            status = "Unknown"
+            if t.state == TrackState.Tracked:
+                if t.is_activated:
+                    status = "Tracked"
+                else:
+                    status = "Pending"
+            elif t.state == TrackState.Lost:
+                status = "Lost"
+            elif t.state == TrackState.Removed and not t.is_activated:
+                status = "Ephemeral"
+            elif t.state == TrackState.Removed and t.is_activated:
+                status = "Removed"
+            
+            if t.state in states_for_metrics:
+                pred_str = f"[{pred_tlbr[0]:4.0f}, {pred_tlbr[1]:3.0f}, {pred_tlbr[2]:4.0f}, {pred_tlbr[3]:3.0f}]" 
+                curr_str = f"[{curr_tlbr[0]:4.0f}, {curr_tlbr[1]:3.0f}, {curr_tlbr[2]:4.0f}, {curr_tlbr[3]:3.0f}]"
+                cost_str = f"{t.match_cost:.4f}" if t.match_cost is not None else "N/A"
+                score_str = f"{t.score:.2f}"
+                pred_tlbr = t.predicted_tlbr
+                curr_tlbr = t.tlbr
+
+            else:
+                pred_str = None
+                curr_str = None
+                cost_str = None
+                score_str = None
+                pred_tlbr = None
+                curr_tlbr = None
+
+            logger.debug(
+                f"ID: {t.track_id:3d} | Status: {status:9s} | "
+                f"Score: {score_str} | Cost: {cost_str} | "
+                f"Pred TLBR: {pred_str} | TLBR: {curr_str}"
+            )
 
 
     def assign_tracks_to_detections(
@@ -594,6 +634,9 @@ class BYTETracker(object):
 
         with torch.no_grad():
             return self.reid_model(crop_tensor).detach()
+
+    def step_log(self, step, matches, unmatched_tracks, unmatched_detections, dists):
+        pass
         
 
 def joint_stracks(tlista, tlistb):
@@ -629,62 +672,3 @@ def remove_duplicate_stracks(stracksa, stracksb):
     resb = [t for i, t in enumerate(stracksb) if i not in dupb]
     return resa, resb
 
-
-def log_association_details(frame_id, matches, u_track, strack_pool, dists=None):
-    
-    if dists is None:
-        return
-
-    logger.debug(f"Matched Tracks:")
-    for idx, det_idx in matches:
-        costs = dists[idx]
-        mask = costs < 1.0
-        if not np.any(mask):
-            continue
-        
-        low_costs = costs[mask]
-        low_costs_str = np.array2string(low_costs, formatter={'float_kind': lambda x: f'{x:5.2f}'}, separator=', ')
-        
-        logger.debug(
-            f"Track {strack_pool[idx].track_id:5d} | costs < 1.0: {low_costs_str}"
-        )
-    logger.debug(f"Unmatched Tracks:")
-    for idx in u_track:
-        costs = dists[idx]
-        mask = costs < 1.0
-        if not np.any(mask):
-            continue
-        
-        low_costs = costs[mask]
-        low_costs_str = np.array2string(low_costs, formatter={'float_kind': lambda x: f'{x:5.2f}'}, separator=', ')
-
-        logger.debug(
-            f"Track {strack_pool[idx].track_id:5d} | costs < 1.0: {low_costs_str}"
-        )
-    log_ambiguous_matches(dists, strack_pool)
-
-def log_ambiguous_matches(dists, strack_pool):
-    
-    # Check for ambiguous matches (multiple tracks competing for same detection)
-    if dists is None:
-        return
-    for det_idx in range(dists.shape[1]):
-        # Find tracks with cost < 1 for this detection
-        valid_mask = dists[:, det_idx] < 1.0
-        if np.sum(valid_mask) > 1:
-            # Get the tracks and their costs
-            track_indices = np.where(valid_mask)[0]
-            costs = dists[track_indices, det_idx]
-            
-            # Check if any pair has diff < 0.1
-            # Sort costs to check adjacent differences
-            sort_idx = np.argsort(costs)
-            sorted_costs = costs[sort_idx]
-            sorted_track_indices = track_indices[sort_idx]
-            
-            if np.any(np.diff(sorted_costs) < 0.1):
-                ambiguous_msg = []
-                for k in range(len(sorted_costs)):
-                    t_id = strack_pool[sorted_track_indices[k]].track_id
-                    ambiguous_msg.append(f"T{t_id}:{sorted_costs[k]:.2f}")
-                logger.debug(f"Ambiguous detection {det_idx}: {', '.join(ambiguous_msg)}")
