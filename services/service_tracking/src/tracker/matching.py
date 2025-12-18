@@ -218,7 +218,7 @@ def v_iou_reid_distance(tracks: List, detections_bboxes: np.ndarray, embedding_f
     # We want similarity = 1 - cost > thresh => cost < 1 - thresh
     # Or just check simple IoU from 1-cost
     ious = 1.0 - cost_matrix
-    candidates_mask = ious > iou_thresh
+    candidates_mask = ious >= iou_thresh
     
     if not np.any(candidates_mask):
         return cost_matrix

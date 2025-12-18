@@ -407,7 +407,7 @@ class BYTETracker(object):
             scavenged_indices = set()
             if len(self.removed_stracks) > 0 and len(unmatched_detections_array) > 0:
                 dists = matching.v_iou_reid_distance(self.removed_stracks, unmatched_detections_array, self.get_embeddings, iou_thresh=0.0, reid_weight=1.0)
-                matches, u_track, u_detection = matching.linear_assignment(dists, thresh=.8)
+                matches, u_track, u_detection = matching.linear_assignment(dists, thresh=.5)
                 for itracked, idet in matches:
                     scavenged_indices.add(itracked)
                     track = self.removed_stracks[itracked]
@@ -425,7 +425,7 @@ class BYTETracker(object):
                 matches = []
                 dists = None
 
-            self.step_log("step 4.1", matches, unmatched_tracks, u_detection, dists)
+            self.step_log("step 4.1", matches, u_track, u_detection, dists)
 
             unmatched_detections_mask = unmatched_detections_mask[u_detection]
             unmatched_detections_array = unmatched_detections_array[u_detection]
@@ -476,7 +476,8 @@ class BYTETracker(object):
             f"scavenged: {len(scavenged_indices)}"
         )
         
-        if logger.getEffectiveLevel() == logging.DEBUG:
+        TRACK_BY_TRACK_LOG = True 
+        if logger.getEffectiveLevel() == logging.DEBUG and TRACK_BY_TRACK_LOG:
             self.log_frame_summary()
 
         # Return only confirmed tracks
@@ -487,7 +488,11 @@ class BYTETracker(object):
         """
         Log a summary of all tracks in the current frame, sorted by track ID.
         """
-        all_tracks = self.tracked_stracks + self.lost_stracks + self.removed_stracks
+        # Deduplicate tracks across lists to avoid duplicate IDs in the log
+        all_tracks = joint_stracks(
+            joint_stracks(self.tracked_stracks, self.lost_stracks),
+            self.removed_stracks
+        )
         # Sort by track_id
         all_tracks.sort(key=lambda x: x.track_id)
 
@@ -508,12 +513,14 @@ class BYTETracker(object):
             elif t.state == TrackState.Removed and t.is_activated:
                 status = "Removed"
             
-            if status in statuses_for_metrics:
+            if status in statuses_for_metrics or status == "Removed":
                 pred_tlbr = t.predicted_tlbr
                 curr_tlbr = t.tlbr
                 pred_str = f"[{pred_tlbr[0]:4.0f}, {pred_tlbr[1]:3.0f}, {pred_tlbr[2]:4.0f}, {pred_tlbr[3]:3.0f}]" 
                 curr_str = f"[{curr_tlbr[0]:4.0f}, {curr_tlbr[1]:3.0f}, {curr_tlbr[2]:4.0f}, {curr_tlbr[3]:3.0f}]"
                 cost_str = f"{t.match_cost:.4f}" if t.match_cost is not None else "N/A"
+                if status == "Removed":
+                    cost_str = "REMOVED"
                 score_str = f"{t.score:.2f}"
             else:
                 pred_str = None
@@ -636,7 +643,36 @@ class BYTETracker(object):
             return self.reid_model(crop_tensor).detach()
 
     def step_log(self, step, matches, unmatched_tracks, unmatched_detections, dists):
-        pass
+        if step == "step 1":
+            pass
+        elif step == "step 2":
+            pass
+        elif step == "step 3":
+            pass
+        elif step == "step 4.1":
+            if dists is None:
+                return
+            # Log matched (scavenged) tracks
+            if len(matches) > 0:
+                logger.debug(f"=== Scavenged Matches ===")
+                for itracked, idet in matches:
+                    track = self.removed_stracks[itracked]
+                    dist = dists[itracked, idet]
+                    logger.debug(f"SCAVENGED: Track ID {track.track_id} matched to det {idet} with distance: {dist:.4f}")
+            else:
+                logger.debug(f"No scavenged matches")
+            # Log unmatched tracks with their best distances
+            if len(unmatched_tracks) > 0:
+                logger.debug(f"=== Unmatched Removed Tracks (not scavenged) ===")
+                for idx in unmatched_tracks:
+                    track = self.removed_stracks[idx]
+                    t_dists = dists[idx]
+                    min_dist = np.min(t_dists) if len(t_dists) > 0 else float('inf')
+                    logger.debug(f"UNMATCHED: Track ID {track.track_id} best distance: {min_dist:.4f}")
+        elif step == "step 4.2":
+            pass
+        elif step == "step 5":
+            pass
         
 
 def joint_stracks(tlista, tlistb):
