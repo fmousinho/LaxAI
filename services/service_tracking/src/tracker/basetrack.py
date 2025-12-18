@@ -7,6 +7,7 @@ class TrackState(object):
     Tracked = 1
     Lost = 2
     Removed = 3
+    Ephemeral = 4
 
 
 class BaseTrack(object):
@@ -53,3 +54,6 @@ class BaseTrack(object):
 
     def mark_scavenged(self):
         self.state = TrackState.Tracked
+
+    def mark_ephemeral(self):
+        self.state = TrackState.Ephemeral

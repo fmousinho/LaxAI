@@ -193,6 +193,7 @@ class BYTETracker(object):
         self.tracked_stracks = []  # type: list[STrack]
         self.lost_stracks = []  # type: list[STrack]
         self.removed_stracks = []  # type: list[STrack]
+        self.ephemeral_stracks = []  # type: list[STrack]
 
         self.frame_id = 0
        
@@ -228,6 +229,7 @@ class BYTETracker(object):
         refind_stracks = []
         lost_stracks = []
         removed_stracks = []
+        ephemeral_stracks = []
 
         if detections_array.shape[1] >= 5:
             scores = detections_array[:, 4]
@@ -250,12 +252,9 @@ class BYTETracker(object):
         scores_low = scores_keep[low_conf_mask]
         scores_high = scores_keep[high_conf_mask]
 
-
         n_tracks_reconfirmed = 0  # Already tracked and "is_activated", updated with new detection
-        n_tracks_refind = 0  # Already tracked but "is_activated" = False (was lost), updated with new detection and is_activated = True
         n_tracks_confirmed = 0  # Already tracked and just became "is_active" because of number of consecutive detections
         n_tracks_new = 0  # New tracklet
-        n_tracks_lost = 0  # Became "is_activated" = False (was lost) because no matching detection was found
         n_tracks_pending_confirmation = 0 #  Hasn't reached the number of consecutive detections to become is_activated = True yet
 
         logger.debug(f"total detections: {len(scores_keep)} | thresh: {self.track_activation_threshold} | high conf: {len(high_conf_mask)} | low: {len(low_conf_mask)}")
@@ -395,8 +394,8 @@ class BYTETracker(object):
 
         # Tracks pending confirmation that are not matched right away are removed
         for track in unconfirmed_tracks_remaining:
-            track.mark_removed()
-            removed_stracks.append(track)
+            track.mark_ephemeral()
+            ephemeral_stracks.append(track)
 
         """ Step 4: Deal with unmatched detections"""
 
@@ -408,7 +407,7 @@ class BYTETracker(object):
             scavenged_indices = set()
             if len(self.removed_stracks) > 0 and len(unmatched_detections_array) > 0:
                 dists = matching.v_iou_reid_distance(self.removed_stracks, unmatched_detections_array, self.get_embeddings, iou_thresh=0.0, reid_weight=1.0)
-                matches, u_track, u_detection = matching.linear_assignment(dists, thresh=.5)
+                matches, u_track, u_detection = matching.linear_assignment(dists, thresh=.8)
                 for itracked, idet in matches:
                     scavenged_indices.add(itracked)
                     track = self.removed_stracks[itracked]
@@ -458,10 +457,12 @@ class BYTETracker(object):
 
         # Update tracker state
         if self.reid_enabled and len(scavenged_indices) > 0:
-            removed_stracks = [t for i, t in enumerate(self.removed_stracks) if i not in scavenged_indices]
-        self.tracked_stracks = joint_stracks(activated_stracks, refind_stracks)
+            self.removed_stracks = [t for i, t in enumerate(self.removed_stracks) if i not in scavenged_indices]
         self.removed_stracks = joint_stracks(self.removed_stracks, removed_stracks)
+        
+        self.tracked_stracks = joint_stracks(activated_stracks, refind_stracks)
         self.lost_stracks = lost_stracks
+        self.ephemeral_stracks = joint_stracks(self.ephemeral_stracks, ephemeral_stracks)
 
         
         logger.debug(
@@ -490,7 +491,7 @@ class BYTETracker(object):
         # Sort by track_id
         all_tracks.sort(key=lambda x: x.track_id)
 
-        states_for_metrics = ["Tracked", "Pending", "Lost"]
+        statuses_for_metrics = ["Tracked", "Pending", "Lost"]
         logger.debug(f"=== Frame {self.frame_id} Summary ===")
         for t in all_tracks:
             # Determine status string
@@ -507,14 +508,13 @@ class BYTETracker(object):
             elif t.state == TrackState.Removed and t.is_activated:
                 status = "Removed"
             
-            if t.state in states_for_metrics:
+            if status in statuses_for_metrics:
+                pred_tlbr = t.predicted_tlbr
+                curr_tlbr = t.tlbr
                 pred_str = f"[{pred_tlbr[0]:4.0f}, {pred_tlbr[1]:3.0f}, {pred_tlbr[2]:4.0f}, {pred_tlbr[3]:3.0f}]" 
                 curr_str = f"[{curr_tlbr[0]:4.0f}, {curr_tlbr[1]:3.0f}, {curr_tlbr[2]:4.0f}, {curr_tlbr[3]:3.0f}]"
                 cost_str = f"{t.match_cost:.4f}" if t.match_cost is not None else "N/A"
                 score_str = f"{t.score:.2f}"
-                pred_tlbr = t.predicted_tlbr
-                curr_tlbr = t.tlbr
-
             else:
                 pred_str = None
                 curr_str = None
