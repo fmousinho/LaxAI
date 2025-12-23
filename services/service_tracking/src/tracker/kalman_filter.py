@@ -178,16 +178,15 @@ class KalmanFilter(object):
             self._std_weight_velocity * mean[:, 3],
             1e-5 * np.ones_like(mean[:, 3]),
             self._std_weight_velocity * mean[:, 3]]
-        sqr = np.square(np.r_[std_pos, std_vel]).T
+        sqr = np.square(np.stack(std_pos + std_vel, axis=1))
 
-        motion_cov = []
-        for i in range(len(mean)):
-            motion_cov.append(np.diag(sqr[i]))
-        motion_cov = np.asarray(motion_cov)
+        n = len(mean)
+        motion_cov = np.zeros((n, 8, 8))
+        for i in range(8):
+            motion_cov[:, i, i] = sqr[:, i]
 
-        mean = np.dot(mean, self._motion_mat.T)
-        left = np.dot(self._motion_mat, covariance).transpose((1, 0, 2))
-        covariance = np.dot(left, self._motion_mat.T) + motion_cov
+        mean = mean @ self._motion_mat.T
+        covariance = self._motion_mat @ covariance @ self._motion_mat.T + motion_cov
 
         return mean, covariance
 
@@ -248,7 +247,7 @@ class KalmanFilter(object):
         -------
         ndarray
             Returns an array of length N, where the i-th element contains the
-            squared Mahalanobis distance between (mean, covariance) and
+            squared distance between (mean, covariance) and
             `measurements[i]`.
         """
         mean, covariance = self.project(mean, covariance)
@@ -288,4 +287,12 @@ class KalmanFilter(object):
         compensated_covariances = scale_transform @ covariances @ scale_transform.T
         
         return compensated_means, compensated_covariances
+
+def detection_np_tlbr_to_xyah(detection_np_tlbr: np.ndarray) -> np.ndarray:
+    """Convert detection from tlbr to xyah."""
+    detection_np_xyah = np.copy(detection_np_tlbr)
+    detection_np_xyah[:, 2] = detection_np_xyah[:, 2] - detection_np_xyah[:, 0]
+    detection_np_xyah[:, 3] = detection_np_xyah[:, 3] - detection_np_xyah[:, 1]
+    return detection_np_xyah
+    
         

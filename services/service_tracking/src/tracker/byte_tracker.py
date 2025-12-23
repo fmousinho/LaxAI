@@ -1,7 +1,7 @@
 import logging
 logger = logging.getLogger(__name__)
 
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 from collections import deque
 import os
@@ -14,7 +14,7 @@ import cv2
 
 from shared_libs.config.transforms import TRANSFORMS
 from schemas.tracking import TrackingParams
-from .kalman_filter import KalmanFilter
+from .kalman_filter import KalmanFilter, detection_np_tlbr_to_xyah
 from . import matching
 from .basetrack import BaseTrack, TrackState
 
@@ -41,6 +41,7 @@ class STrack(BaseTrack):
         self.tracklet_len = 0
         self.predicted_mean: Optional[np.ndarray] = None
         self.match_cost: Optional[float] = 0.0
+        self.initial_tlwh = np.asarray(tlwh, dtype=float)
 
     def predict(self):
         if self.mean is None or self.kalman_filter is None:
@@ -65,6 +66,7 @@ class STrack(BaseTrack):
                 stracks[i].mean = mean
                 stracks[i].predicted_mean = mean
                 stracks[i].covariance = cov
+                stracks[i].match_cost = None
 
     def activate(self, kalman_filter: KalmanFilter, frame_id: int):
         """Start a new tracklet"""
@@ -77,20 +79,18 @@ class STrack(BaseTrack):
         self.frame_id = frame_id
         self.start_frame = frame_id
 
-    def re_activate(self, new_track, frame_id, new_id=False):
+    def re_activate(self, det_strack: 'STrack', frame_id: int, new_id: bool = False):
         if self.kalman_filter is None:
             raise ValueError("Kalman filter must be initialized before re-activation.")
-        
+        detection_xyah = det_strack.to_xyah()
         self.mean, self.covariance = self.kalman_filter.update(
-            self.mean, self.covariance, self.tlwh_to_xyah(new_track.tlwh)
-        )
+            self.mean, self.covariance, detection_xyah)
         self.tracklet_len = 0
         self.state = TrackState.Tracked
-        # self.is_activated = True
         self.frame_id = frame_id
         if new_id:
             self.track_id = self.next_id()
-        self.score = new_track.score
+        self.score = det_strack.score
 
 
     @staticmethod
@@ -102,10 +102,10 @@ class STrack(BaseTrack):
             st.mean = mean
             st.covariance = covariance
 
-    def update(self, new_track, frame_id):
+    def update(self, det_strack: 'STrack', frame_id: int):
         """
         Update a matched track
-        :type new_track: STrack
+        :type det_strack: STrack
         :type frame_id: int
         :type update_feature: bool
         :return:
@@ -115,12 +115,11 @@ class STrack(BaseTrack):
         self.frame_id = frame_id
         self.tracklet_len += 1
 
-        new_tlwh = new_track.tlwh
+        new_xyah = det_strack.to_xyah()
         self.mean, self.covariance = self.kalman_filter.update(
-            self.mean, self.covariance, self.tlwh_to_xyah(new_tlwh))
+            self.mean, self.covariance, new_xyah)
         self.state = TrackState.Tracked
-        self.score = new_track.score
-
+        self.score = det_strack.score
 
     @property
     # @jit(nopython=True)
@@ -167,6 +166,11 @@ class STrack(BaseTrack):
         ret[2] /= ret[3]
         return ret
 
+    @property
+    def initial_tlwh(self):
+        return self.initial_tlwh.copy()
+
+
     def to_xyah(self):
         return self.tlwh_to_xyah(self.tlwh)
 
@@ -191,6 +195,7 @@ class STrack(BaseTrack):
 class BYTETracker(object):
     def __init__(self, args: TrackingParams, frame_rate=30, reid_model: Optional[torch.nn.Module] = None):
         self.tracked_stracks = []  # type: list[STrack]
+        self.pending_stracks = []  # type: list[STrack]
         self.lost_stracks = []  # type: list[STrack]
         self.removed_stracks = []  # type: list[STrack]
         self.ephemeral_stracks = []  # type: list[STrack]
@@ -203,10 +208,7 @@ class BYTETracker(object):
         self.min_consecutive_frames = args.min_consecutive_frames
         self.lost_track_buffer = args.lost_track_buffer
         self.kalman_filter = KalmanFilter()
-        self.reid_enabled = reid_model is not None
-        if self.reid_enabled:
-            self.reid_model_input_size = (224, 224)
-            self.reid_model = reid_model
+   
 
     def update(self, detections_array: np.ndarray, S_array: Optional[np.ndarray], T_array: Optional[np.ndarray]) -> List[STrack]:
         """
@@ -219,57 +221,40 @@ class BYTETracker(object):
         Returns:
             A list of stracks
         """
+
+        logger.debug("")
+        logger.debug(f"FRAME {self.frame_id} UPDATE")
         
-        self.frame_id += 1
-        detections_array = detections_array.copy()
+       
         S_array = S_array.copy() if S_array is not None else None
         T_array = T_array.copy() if T_array is not None else None
         
         activated_stracks = []
         refind_stracks = []
         lost_stracks = []
+        pending_stracks = []
         removed_stracks = []
         ephemeral_stracks = []
 
-        if detections_array.shape[1] >= 5:
-            scores = detections_array[:, 4]
-            bboxes = detections_array[:, :4]
+        detections = remove_border_detections_from(detections_array, frame_size=self.frame_size)
+
+        if detections.shape[1] >= 5:
+            scores = detections[:, 4]
         else:
             raise ValueError("Detections array must have at least 5 columns: [x1, y1, x2, y2, score]")
 
         remain_inds_mask = np.where(scores >= self.prediction_threshold)[0]
-        logger.debug(f"FRAME {self.frame_id}")
+        remain_detections = detections[remain_inds_mask]
 
-        # All detections indexes are based on the "keep" array
-        scores_keep = scores[remain_inds_mask]
-        bboxes_keep = bboxes[remain_inds_mask]
-        
-        low_conf_mask = np.where(scores_keep < self.track_activation_threshold)[0]
-        high_conf_mask = np.where(scores_keep >= self.track_activation_threshold)[0]
+        low_conf_mask = np.where(remain_detections[:,4] < self.track_activation_threshold)[0]
+        high_conf_mask = np.where(remain_detections[:,4] >= self.track_activation_threshold)[0]
 
-        bboxes_low = bboxes_keep[low_conf_mask]
-        bboxes_high = bboxes_keep[high_conf_mask]
-        scores_low = scores_keep[low_conf_mask]
-        scores_high = scores_keep[high_conf_mask]
+        detections_high = remain_detections[high_conf_mask]
+        detections_low = remain_detections[low_conf_mask]
 
-        n_tracks_reconfirmed = 0  # Already tracked and "is_activated", updated with new detection
-        n_tracks_confirmed = 0  # Already tracked and just became "is_active" because of number of consecutive detections
-        n_tracks_new = 0  # New tracklet
-        n_tracks_pending_confirmation = 0 #  Hasn't reached the number of consecutive detections to become is_activated = True yet
+        logger.debug(f"total detections: {len(remain_detections)} | thresh: {self.track_activation_threshold} | high conf: {len(high_conf_mask)} | low: {len(low_conf_mask)}")
 
-        logger.debug(f"total detections: {len(scores_keep)} | thresh: {self.track_activation_threshold} | high conf: {len(high_conf_mask)} | low: {len(low_conf_mask)}")
-
-        # Add newly detected tracklets to tracked_stracks
-        pending_confirmation_tracks = []
-        tracked_stracks = []  # type: list[STrack]
-        for track in self.tracked_stracks:
-            if not track.is_activated:
-                pending_confirmation_tracks.append(track)
-            else:
-                tracked_stracks.append(track)
-       #  logger.debug(f"is_activated stracks before association: {len(tracked_stracks)} | pending conf: {len(pending_confirmation_tracks)} | lost: {len(self.lost_stracks)}")
-
-        strack_pool = joint_stracks(tracked_stracks, self.lost_stracks)
+        strack_pool = joint_stracks(self.tracked_stracks, self.lost_stracks)
 
         # Camera motion compensation, if arrays are provided and valid
         if len(strack_pool) > 0 and S_array is not None and T_array is not None and COMPENSATE_CAM_MOTION:
@@ -282,168 +267,54 @@ class BYTETracker(object):
         STrack.multi_predict(strack_pool)
 
         ''' Step 1: First association, with high score detection boxes'''
-        if len(strack_pool) > 0 and len(bboxes_high) > 0:
-            if self.reid_enabled:
-                dists = matching.v_iou_reid_distance(strack_pool, bboxes_high, self.get_embeddings, iou_thresh=.3, reid_weight=.5)
-                matches, u_track, u_detection = matching.linear_assignment(dists, thresh=.9)
-            else:
-                dists = matching.v_iou_distance(strack_pool, bboxes_high)
-                matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.max_match_distance)
-        else:
-            matches = []
-            u_track = np.arange(len(strack_pool))
-            u_detection = np.arange(len(bboxes_high))
-            dists = None
-
-        unmatched_tracks = [strack_pool[i] for i in u_track]
-
-        for itracked, idet in matches:
-            track = strack_pool[itracked]
-            bbox = bboxes_high[idet]
-            score = scores_high[idet]
-            track.match_cost = dists[itracked, idet]
-            self._detection_to_track_map[high_conf_mask[idet]] = track.track_id
-            
-            if track.state == TrackState.Tracked:
-                track.update(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id)
-                activated_stracks.append(track)
-                n_tracks_reconfirmed += 1
-            else:
-                track.re_activate(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id, new_id=False)
-                refind_stracks.append(track)
-
-            if self.reid_enabled:
-                self.update_track_reid_features(track)
-
-        self.step_log("step 1", matches, unmatched_tracks, u_detection, dists)
+        logger.debug(f"=== Step 1: Association with high score detections ===")
+        (newly_activated_stracks, newly_refind_stracks, newly_pending_stracks, unmatched_stracks, unmatched_detections_s1) = self.association_step(
+            strack_pool, detections_high, max_match_distance=0.6
+        )
+        activated_stracks.extend(newly_activated_stracks)
+        refind_stracks.extend(newly_refind_stracks)
+        pending_stracks.extend(newly_pending_stracks)
 
         ''' Step 2: Second association, with low score detection boxes'''
-        if len(unmatched_tracks) > 0 and len(bboxes_low) > 0:
-            if self.reid_enabled:
-                dists = matching.v_iou_reid_distance(unmatched_tracks, bboxes_low, self.get_embeddings, iou_thresh=.4, reid_weight=.5)
-                matches, u_track_second, u_detection_second = matching.linear_assignment(dists, thresh=.8) # thresh: cost
-            else:
-                dists = matching.v_iou_distance(unmatched_tracks, bboxes_low)
-                matches, u_track_second, u_detection_second = matching.linear_assignment(dists, thresh=.5)
-        else:
-            matches = []
-            u_track_second = np.arange(len(unmatched_tracks))
-            u_detection_second = np.arange(len(bboxes_low))
-            dists = None
+        logger.debug(f"=== Step 2: Association with low score detections ====")
+        (newly_activated_stracks, newly_refind_stracks, newly_pending_stracks, unmatched_stracks, unmatched_detections_s2) = self.association_step(
+            unmatched_stracks, detections_low, max_match_distance=0.8
+        )
+        activated_stracks.extend(newly_activated_stracks)
+        refind_stracks.extend(newly_refind_stracks)
+        pending_stracks.extend(newly_pending_stracks)
 
-        unmatched_tracks_second = [unmatched_tracks[i] for i in u_track_second]
+        # Step 3 uses unmatched detections from both Step 1 and Step 2
+        unmatched_detections = np.concatenate((unmatched_detections_s1, unmatched_detections_s2), axis=0) 
 
-        for itracked, idet in matches:
-            track = unmatched_tracks[itracked]
-            bbox = bboxes_low[idet]
-            score = scores_low[idet]
-            track.match_cost = dists[itracked, idet]
-            self._detection_to_track_map[low_conf_mask[idet]] = track.track_id
-
-            if track.state == TrackState.Tracked:
-                track.update(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id)
-                activated_stracks.append(track)
-                n_tracks_reconfirmed += 1
-            else:
-                track.re_activate(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id, new_id=False)
-                refind_stracks.append(track)
-
-        for track in unmatched_tracks_second:
+        for track in unmatched_stracks:
             if track.state != TrackState.Lost:
                 track.mark_lost()
                 lost_stracks.append(track)
 
-        self.step_log("step 2", matches, unmatched_tracks, u_detection_second, dists)
- 
-        '''Step 3: Deal with pending confirmation tracks'''
-        unmatched_detections_mask = np.concatenate((high_conf_mask[u_detection], low_conf_mask[u_detection_second]), axis=0)
-        unmatched_bbox_array = bboxes_keep[unmatched_detections_mask]
-        unmatched_scores_array = scores_keep[unmatched_detections_mask]
+        """ Step 3: Deal with unconfirmed tracks """
+        logger.debug(f"=== Step 3: Deal with unconfirmed tracks =============")
+        (newly_activated_stracks, _, newly_pending_stracks, unmatched_stracks, unmatched_detections) = self.association_step(
+            self.pending_stracks, unmatched_detections, max_match_distance=0.8
+        )
+        activated_stracks.extend(newly_activated_stracks)
+        pending_stracks.extend(newly_pending_stracks)
 
-        if len(pending_confirmation_tracks) > 0 and len(unmatched_bbox_array) > 0:
-            dists = matching.v_iou_distance(pending_confirmation_tracks, unmatched_bbox_array)
-            matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=UNCONFIRMED_MAX_MATCH_DISTANCE)
-        else:
-            matches = []
-            u_unconfirmed = np.arange(len(pending_confirmation_tracks))
-            u_detection = np.arange(len(unmatched_bbox_array))
-            dists = None
-
-        for itracked, idet in matches:
-            track = pending_confirmation_tracks[itracked]
-            bbox = unmatched_bbox_array[idet]
-            score = unmatched_scores_array[idet]
-            track.match_cost = dists[itracked, idet]
-            track.update(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id)
-            
-            if track.tracklet_len >= self.min_consecutive_frames:
-                track.is_activated = True
-                activated_stracks.append(track)
-                n_tracks_confirmed += 1
-            else:
-                activated_stracks.append(track) # Unconfirmed tracks are part of the activated_stracks list, but are not "is_activated"
-                n_tracks_pending_confirmation += 1
-                 
-            self._detection_to_track_map[unmatched_detections_mask[idet]] = track.track_id
-
-        self.step_log("step 3", matches, unmatched_tracks, u_detection, dists)
-
-        unmatched_detections_mask = unmatched_detections_mask[u_detection]
-        unmatched_detections_array = np.column_stack((bboxes_keep[unmatched_detections_mask], scores_keep[unmatched_detections_mask])) if len(unmatched_detections_mask) > 0 else np.empty((0, 5))
-        unconfirmed_tracks_remaining = [pending_confirmation_tracks[i] for i in u_unconfirmed]
-
-        # Tracks pending confirmation that are not matched right away are removed
-        for track in unconfirmed_tracks_remaining:
+        for track in unmatched_stracks:
             track.mark_ephemeral()
             ephemeral_stracks.append(track)
 
-        """ Step 4: Deal with unmatched detections"""
-
-        """ 4.1: Scavenger for removed tracks (reid mode only)"""
-      
-        if self.reid_enabled:
-            
-            #  Detections in either side of the frame are more likely to be from a previous track
-            scavenged_indices = set()
-            if len(self.removed_stracks) > 0 and len(unmatched_detections_array) > 0:
-                dists = matching.v_iou_reid_distance(self.removed_stracks, unmatched_detections_array, self.get_embeddings, iou_thresh=0.0, reid_weight=1.0)
-                matches, u_track, u_detection = matching.linear_assignment(dists, thresh=.5)
-                for itracked, idet in matches:
-                    scavenged_indices.add(itracked)
-                    track = self.removed_stracks[itracked]
-                    bbox = unmatched_detections_array[idet, :4]
-                    score = unmatched_detections_array[idet, 4]
-                    track.match_cost = dists[itracked, idet]
-                    track.mark_scavenged()
-                    track.update(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id)
-                    activated_stracks.append(track)
-                    self._detection_to_track_map[unmatched_detections_mask[idet]] = track.track_id
-
-            else:
-                u_detection = np.arange(len(unmatched_detections_array))
-                u_track = np.arange(len(self.removed_stracks))
-                matches = []
-                dists = None
-
-            self.step_log("step 4.1", matches, u_track, u_detection, dists)
-
-            unmatched_detections_mask = unmatched_detections_mask[u_detection]
-            unmatched_detections_array = unmatched_detections_array[u_detection]
-
-        """ 4.2: Create new tracks"""
-        for i, inew in enumerate(unmatched_detections_array):
-            bbox = inew[:4]
-            score = inew[4]
+        """ Step 4: Create new tracks """
+        #logger.debug(f"=== Step 4: Create new tracks ========================")
+        for detection in unmatched_detections:
+            bbox = bboxes_from(detection[np.newaxis, :])[0]
+            score = scores_from(detection[np.newaxis, :])[0]
+            if score < self.prediction_threshold:
+                continue
             track = STrack(STrack.tlbr_to_tlwh(bbox), score)
             track.activate(self.kalman_filter, self.frame_id)
-            activated_stracks.append(track)
-            if self.reid_enabled:
-                if track.score > self.track_activation_threshold:  # Avoids creating embeddings for low confidence tracks
-                    track.features = self.initiate_track_reid_features(track)
-            self._detection_to_track_map[unmatched_detections_mask[i]] = track.track_id
-            n_tracks_new += 1
-
-        self.step_log("step 4.2", None, None, None, None)
+            pending_stracks.append(track)
+            self.update_with_track(detection, track)
 
         """ Step 5: Update state for lost tracks"""
         for track in self.lost_stracks:
@@ -453,36 +324,78 @@ class BYTETracker(object):
             elif track.state == TrackState.Lost:
                 lost_stracks.append(track)
 
-        self.step_log("step 5", None, None, None, None)
-
-        # Update tracker state
-        if self.reid_enabled and len(scavenged_indices) > 0:
-            self.removed_stracks = [t for i, t in enumerate(self.removed_stracks) if i not in scavenged_indices]
-        self.removed_stracks = joint_stracks(self.removed_stracks, removed_stracks)
-        
-        self.tracked_stracks = joint_stracks(activated_stracks, refind_stracks)
+        self.tracked_stracks = activated_stracks + refind_stracks
         self.lost_stracks = lost_stracks
-        self.ephemeral_stracks = joint_stracks(self.ephemeral_stracks, ephemeral_stracks)
-
+        self.pending_stracks = pending_stracks
+        self.removed_stracks.extend(removed_stracks)
+        self.ephemeral_stracks.extend(ephemeral_stracks)
         
-        logger.debug(
-            f"tracks reconfirmed: {n_tracks_reconfirmed} | "
-            f"refound: {len(refind_stracks)} | "
-            f"confirmed: {n_tracks_confirmed} | "
-            f"new: {n_tracks_new} | "
-            f"lost: {len(lost_stracks)} | "
-            f"pending conf: {n_tracks_pending_confirmation} | "
-            f"removed: {len(removed_stracks)} | "
-            f"scavenged: {len(scavenged_indices)}"
-        )
-        
-        TRACK_BY_TRACK_LOG = True 
+        TRACK_BY_TRACK_LOG = False 
         if logger.getEffectiveLevel() == logging.DEBUG and TRACK_BY_TRACK_LOG:
             self.log_frame_summary()
 
         # Return only confirmed tracks
-        output_stracks = [track for track in self.tracked_stracks if track.is_activated]
+        output_stracks = self.tracked_stracks
+
+        self.frame_id += 1
         return output_stracks
+
+    def association_step(self, 
+                         strack_pool: List[STrack], 
+                         detections: np.ndarray, 
+                         max_match_distance: float = 0.8,
+    ) -> Tuple[List[STrack], List[STrack], List[STrack], List[STrack], List[np.ndarray]]:
+        """
+        Performs an association step: cost calculation, matching, and track updates.
+        Returns: (activated_stracks, refind_stracks, unmatched_tracks, unmatched_detections)
+        """
+        activated_stracks = []
+        pending_stracks = []
+        refind_stracks = []
+        unmatched_tracks = []
+        unmatched_detections = []
+        
+        if len(strack_pool) > 0 and len(detections) > 0:
+            bboxes = bboxes_from(detections)
+            scores = scores_from(detections)
+            cost_matrix = matching.v_iou_distance(strack_pool, bboxes)
+            panalize_aspect_ratio_swings(cost_matrix, strack_pool, bboxes)
+            penalize_scale_swings(cost_matrix, strack_pool, bboxes)
+            matches, u_track, u_detection = matching.linear_assignment(cost_matrix, thresh=max_match_distance)
+            
+            for itracked, idet in matches:
+                strack = strack_pool[itracked]
+                bbox = bboxes[idet]
+                score = scores[idet]
+                strack.match_cost = cost_matrix[itracked, idet]
+                self.update_with_track(detections[idet], strack)
+                
+                if strack.state == TrackState.Tracked:
+                    strack.update(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id)
+                    if strack.tracklet_len >= self.min_consecutive_frames:
+                        strack.is_activated = True
+                        activated_stracks.append(strack)
+                    else:
+                        pending_stracks.append(strack)
+                else:
+                    strack.re_activate(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id, new_id=False)
+                    refind_stracks.append(strack)
+
+                logger.debug(f"Track {strack.track_id:4d} matched with detection {idet:2d} with cost {cost_matrix[itracked, idet]:.4f}")
+
+            unmatched_tracks = [strack_pool[i] for i in u_track]
+            if logger.getEffectiveLevel() == logging.DEBUG:
+                for i in u_track:
+                    logger.debug(f"Track {strack_pool[i].track_id:4d} unmatched, best cost {cost_matrix[i].min():.4f}") 
+            
+            unmatched_detections = detections[u_detection]
+            if logger.getEffectiveLevel() == logging.DEBUG:
+                for i in u_detection:
+                    logger.debug(f"Detection {i:2d} unmatched, best cost {cost_matrix[:, i].min():.4f}")
+
+            return activated_stracks, refind_stracks, pending_stracks, unmatched_tracks, unmatched_detections
+        else:
+            return [], [], [], strack_pool, detections
 
     def log_frame_summary(self):
         """
@@ -538,7 +451,7 @@ class BYTETracker(object):
 
 
     def assign_tracks_to_detections(
-        self, detections_array: np.ndarray, S_array: Optional[np.ndarray], T_array: Optional[np.ndarray], frame: Optional[np.ndarray] = None
+        self, detections_array: np.ndarray, S_array: Optional[np.ndarray], T_array: Optional[np.ndarray], frame: np.ndarray
         ) -> np.ndarray:
         """
         Update the tracker with new detections and camera motion compensation, and returns the detection array with updated tracks.
@@ -549,130 +462,54 @@ class BYTETracker(object):
             detections_array: Array of detections in the format (N, 5) where N is the number of detections.
             S_array: Array of scale transformations for camera motion compensation.
             T_array: Array of translation transformations for camera motion compensation.
-            frame: Frame to extract features from, required if reid_enabled is True.
+            frame: Frame to extract features from.
         
         Returns:
             np.ndarray: Array with dimensions (N, 6) with updated tracks, with the format [x1, y1, x2, y2, score, track_id].
             Unknown detections are returned with track_id = -1.
         """
-        original_detections = detections_array.copy()
-        # Store a mapping that will be populated during update
-        self._detection_to_track_map = {}
-        if self.reid_enabled and frame is None:
-            raise ValueError("Frame must be provided if reid_enabled is True.")
-        else:
-            self._frame = frame
-        
-        # Call update (which will populate the map through internal tracking)
-        _ = self.update(detections_array, S_array, T_array)
-        
-        # Create output array with track IDs initialized to -1
-        detections_with_tracks = np.column_stack((
-            original_detections, 
-            np.full(len(original_detections), -1, dtype=np.int32)
-        ))
-        
-        # Apply the mapping
-        for det_idx, track_id in self._detection_to_track_map.items():
-            if det_idx < len(detections_with_tracks):
-                detections_with_tracks[det_idx, 5] = track_id
-        
-        # Clean up temporary mapping
-        delattr(self, '_detection_to_track_map')
-        
-        return detections_with_tracks
+        # Prepare 7-column array: [x1, y1, x2, y2, score, track_id, original_index, is_activated]
+        n = len(detections_array)
+        detections = np.zeros((n, 8))
+        detections[:, :5] = detections_array[:, :5]
+        detections[:, 5] = -1
+        detections[:, 6] = np.arange(n)
 
-    def initiate_track_reid_features(self, track: STrack):
+        self.frame_size = (frame.shape[1], frame.shape[0])
+        # Store reference for update_with_track
+        self._original_detections = detections
+        
+        _ = self.update(detections, S_array, T_array)
+
+        confirmed_tracks_only = True
+        self._original_detections[:, 5] *= self._original_detections[:, 7] if confirmed_tracks_only else 1 
+ 
+        return self._original_detections[:, :6]
+
+
+    def update_with_track(self, detection: np.ndarray, track: STrack):
         """
-        Uses class reid model to extract features from track bounding box
+        Updates the detection to track mapping based on the current tracks.
+        
+        Args:
+            detection (np.ndarray): The detection to update (1, :)
+            track (STrack): The track to update.
         """
-        feats = self.get_embeddings(track.tlbr)
-        if feats is not None:
-            track.features = feats
-
-    def update_track_reid_features(self, track: STrack):
-        """
-        Updates the track's reid features using the given detection bounding box.
-        Updates every 30 frames.
-        """
-        if track.score < self.track_activation_threshold:
-            return
         
-        if track.features is None:
-            self.initiate_track_reid_features(track)
-            return
+        if len(detection.shape) > 1:
+            raise ValueError("Detection must be a 1D array")
         
-        if track.tracklet_len % 30 != 0:
-            return
-       
-        alpha = REID_UPDATE_ALPHA
-        new_feat = self.get_embeddings(track.tlbr)
-        if new_feat is not None:
-            updated_features = alpha * track.features + (1 - alpha) * new_feat
-            track.features = torch.nn.functional.normalize(updated_features, dim=1)
-            
-
-    def get_embeddings(self, tlbr: np.ndarray) -> Optional[torch.Tensor]:
-        """
-        Extracts embeddings for a given bounding box (tlbr).
-        """
-        if self._frame is None or self.reid_model is None:
-            raise ValueError("Frame and reid_model must be set to extract embeddings.")
+        # Update local copy (though often a copy, useful if reused in same scope)
+        detection[5] = track.track_id
         
-        img_h, img_w = self._frame.shape[:2]
-        
-        x1 = max(0, int(tlbr[0]))
-        y1 = max(0, int(tlbr[1]))
-        x2 = min(img_w, int(tlbr[2]))
-        y2 = min(img_h, int(tlbr[3]))
-        
-        if x2 <= x1 or y2 <= y1:
-            return None
+        # Update original array if available
+        if hasattr(self, '_original_detections') and self._original_detections is not None:
+             # Ensure we don't go out of bounds if detection doesn't have 7th column (though it should)
+             if detection.shape[0] >= 8:
+                 idx = int(detection[6])
+                 self._original_detections[idx, 5] = track.track_id
+                 self._original_detections[idx, 7] = 1 if track.is_activated else 0
 
-        crop = self._frame[y1:y2, x1:x2]
-        transform = TRANSFORMS["inference_for_non_pil"]
-        
-        crop_tensor = transform(crop)
-        crop_tensor = crop_tensor.unsqueeze(0) # Add batch dimension (C, H, W) -> (1, C, H, W)
-
-        # Ensure tensor is on the same device as the model
-        device = next(self.reid_model.parameters()).device
-        crop_tensor = crop_tensor.to(device)
-
-        with torch.no_grad():
-            return self.reid_model(crop_tensor).detach()
-
-    def step_log(self, step, matches, unmatched_tracks, unmatched_detections, dists):
-        if step == "step 1":
-            pass
-        elif step == "step 2":
-            pass
-        elif step == "step 3":
-            pass
-        elif step == "step 4.1":
-            if dists is None:
-                return
-            # Log matched (scavenged) tracks
-            if len(matches) > 0:
-                logger.debug(f"=== Scavenged Matches ===")
-                for itracked, idet in matches:
-                    track = self.removed_stracks[itracked]
-                    dist = dists[itracked, idet]
-                    logger.debug(f"SCAVENGED: Track ID {track.track_id} matched to det {idet} with distance: {dist:.4f}")
-            else:
-                logger.debug(f"No scavenged matches")
-            # Log unmatched tracks with their best distances
-            if len(unmatched_tracks) > 0:
-                logger.debug(f"=== Unmatched Removed Tracks (not scavenged) ===")
-                for idx in unmatched_tracks:
-                    track = self.removed_stracks[idx]
-                    t_dists = dists[idx]
-                    min_dist = np.min(t_dists) if len(t_dists) > 0 else float('inf')
-                    logger.debug(f"UNMATCHED: Track ID {track.track_id} best distance: {min_dist:.4f}")
-        elif step == "step 4.2":
-            pass
-        elif step == "step 5":
-            pass
         
 
 def joint_stracks(tlista, tlistb):
@@ -707,4 +544,40 @@ def remove_duplicate_stracks(stracksa, stracksb):
     resa = [t for i, t in enumerate(stracksa) if i not in dupa]
     resb = [t for i, t in enumerate(stracksb) if i not in dupb]
     return resa, resb
+
+def remove_border_detections_from(detections: np.ndarray, frame_size: Tuple[int, int] = (1920, 1080), margin: int = 10) -> np.ndarray:
+    """
+    Removes detections that touch the border to improve embedding quality. Modifies the original array in place.
+
+    Args:
+        detections (np.ndarray): Array of detections with shape (N, 5) where N is the number of detections.
+        frame_size (Tuple[int, int]): Tuple of (width, height) of the frame.
+        margin (int): Number of pixels to leave from the border.
+    """
+    if len(detections) > 0:
+        img_w, img_h = frame_size
+        bboxes_remain = detections[:, :4]
+        not_touching_border = (
+                (bboxes_remain[:, 0] > margin) & 
+                (bboxes_remain[:, 1] > margin) & 
+                (bboxes_remain[:, 2] < img_w - margin) & 
+                (bboxes_remain[:, 3] < img_h - margin)
+            )
+        return detections[not_touching_border]
+
+def panalize_aspect_ratio_swings(cost_matrix: np.ndarray, stracks: List[STrack], detections: np.ndarray, factor: float = 1.0):
+    if len(stracks) != cost_matrix.shape[0] or len(detections) != cost_matrix.shape[1]:
+        raise ValueError("Cost matrix dimensions do not match the number of tracks and detections")
+    cost_matrix += matching.aspect_ratio_distance(stracks, detections) * factor
+
+def penalize_scale_swings(cost_matrix: np.ndarray, stracks: List[STrack], detections: np.ndarray, factor: float = 1.2):
+    if len(stracks) != cost_matrix.shape[0] or len(detections) != cost_matrix.shape[1]:
+        raise ValueError("Cost matrix dimensions do not match the number of tracks and detections")
+    cost_matrix += matching.scale_distance(stracks, detections) * factor
+
+def bboxes_from(detections: np.ndarray) -> np.ndarray:
+    return detections[:, :4]
+        
+def scores_from(detections: np.ndarray) -> np.ndarray:
+    return detections[:, 4]
 

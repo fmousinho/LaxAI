@@ -1,6 +1,6 @@
 import logging
 logger = logging.getLogger(__name__)
-from typing import List, Callable, Tuple
+from typing import List, Callable, Tuple, Optional
 import cv2
 import numpy as np
 import scipy
@@ -102,11 +102,69 @@ def iou_distance(atracks, btracks):
 
     return cost_matrix
 
+def aspect_ratio_distance(tracks: List, detections: np.ndarray) -> np.ndarray:
+    """
+    Compute cost based on aspect ratio difference
+    :type tracks: list[STrack]
+    :type detections: np.ndarray
+    :rtype cost_matrix np.ndarray
+    """
+    if len(tracks) == 0 or len(detections) == 0:
+        return np.empty((len(tracks), len(detections)))
+
+    tracks_xyah = np.array([track.to_xyah() for track in tracks])
+    detections_tlbr = detections[:, :4]
+
+    tracks_ar = tracks_xyah[:, 2]
+
+    detections_w = detections_tlbr[:, 2] - detections_tlbr[:, 0]
+    detections_h = detections_tlbr[:, 3] - detections_tlbr[:, 1]
+    detections_ar = detections_w / (detections_h + 1e-6)
+
+    tracks_ar = tracks_ar[:, np.newaxis] # (N, 1)
+    detections_ar = detections_ar[np.newaxis, :] # (1, M)
+    
+    r1 = tracks_ar / (detections_ar + 1e-6)
+    r2 = detections_ar / (tracks_ar + 1e-6)
+    
+    min_r = np.minimum(r1, r2)
+    cost_matrix = 1 - min_r
+    
+    return cost_matrix
+
+def scale_distance(tracks: List, detections: np.ndarray) -> np.ndarray:
+    """
+    Compute cost based on scale difference
+    :type tracks: list[STrack]
+    :type detections: np.ndarray
+    :rtype cost_matrix np.ndarray
+    """
+    if len(tracks) == 0 or len(detections) == 0:
+        return np.empty((len(tracks), len(detections)))
+    
+    tracks_xyah = np.array([track.to_xyah() for track in tracks])
+    detections_tlbr = detections[:, :4]
+
+    tracks_h = tracks_xyah[:, 3]
+    detections_h = detections_tlbr[:, 3] - detections_tlbr[:, 1]
+    
+    tracks_h = tracks_h[:, np.newaxis] # (N, 1)
+    detections_h = detections_h[np.newaxis, :] # (1, M)
+    
+    r1 = tracks_h / (detections_h + 1e-6)
+    r2 = detections_h / (tracks_h + 1e-6)
+    
+    min_r = np.minimum(r1, r2)
+    cost_matrix = 1 - min_r
+    
+    return cost_matrix
+
+
 def v_iou_distance(tracks: List, detections_arr: np.ndarray) -> np.ndarray:
     """
     Compute cost based on IoU
     :type tracks: list[STrack]
-    :type detections_arr: np.ndarray
+    :type detections_arr: np.ndarray in tlbr format
 
     :rtype cost_matrix: np.ndarray
     """
@@ -120,6 +178,29 @@ def v_iou_distance(tracks: List, detections_arr: np.ndarray) -> np.ndarray:
         cost_matrix = 1 - _ious
 
     return cost_matrix
+
+def spatial_distance(tracks: List, detections_tlbr: np.ndarray) -> np.ndarray:
+    """
+    Computes Euclidean distance between track centers and detection centers.
+    
+    :param tracks: list[STrack] - tracks with .tlbr attribute
+    :param detections_tlbr: np.ndarray - detection bboxes (N, 4) in tlbr format
+    :return: distance matrix of shape (len(tracks), len(detections))
+    """
+    if len(tracks) == 0 or len(detections_tlbr) == 0:
+        return np.empty((len(tracks), len(detections_tlbr)))
+    
+    # Track centers from tlbr
+    track_centers = np.array([
+        [(t.tlbr[0] + t.tlbr[2]) / 2, (t.tlbr[1] + t.tlbr[3]) / 2]
+        for t in tracks
+    ])
+    # Detection centers from tlbr
+    det_centers = np.column_stack([
+        (detections_tlbr[:, 0] + detections_tlbr[:, 2]) / 2,
+        (detections_tlbr[:, 1] + detections_tlbr[:, 3]) / 2
+    ])
+    return cdist(track_centers, det_centers, metric='euclidean')
 
 def embedding_distance(tracks, detections, metric='cosine'):
     """
@@ -141,14 +222,28 @@ def embedding_distance(tracks, detections, metric='cosine'):
 
 
 def gate_cost_matrix(kf, cost_matrix, tracks, detections, only_position=False):
+    """
+    :param kf: KalmanFilter object
+    :param cost_matrix: np.ndarray
+    :param tracks: list[STrack]
+    :param detections: np.ndarray in tlbr format
+    :param only_position: bool
+    :return: cost_matrix np.ndarray
+    """
+    detections_xyah = np.zeros_like(detections)
+    detections_xyah[:, 0] = (detections[:, 0] + detections[:, 2]) / 2 # x
+    detections_xyah[:, 1] = (detections[:, 1] + detections[:, 3]) / 2 # y
+    detections_xyah[:, 3] = detections[:, 3] - detections[:, 1]       # h
+    # Avoid division by zero
+    detections_xyah[:, 2] = (detections[:, 2] - detections[:, 0]) / (detections_xyah[:, 3] + 1e-6) # a
+    
     if cost_matrix.size == 0:
         return cost_matrix
     gating_dim = 2 if only_position else 4
     gating_threshold = kalman_filter.chi2inv95[gating_dim]
-    measurements = np.asarray([det.to_xyah() for det in detections])
     for row, track in enumerate(tracks):
         gating_distance = kf.gating_distance(
-            track.mean, track.covariance, measurements, only_position)
+            track.mean, track.covariance, detections_xyah, only_position)
         cost_matrix[row, gating_distance > gating_threshold] = np.inf
     return cost_matrix
 
@@ -191,14 +286,22 @@ def fuse_score(cost_matrix, detections):
     return fuse_cost
 
 
-def v_iou_reid_distance(tracks: List, detections_bboxes: np.ndarray, embedding_func: Callable, iou_thresh=0.0, reid_weight=0.7) -> np.ndarray:
+def v_iou_reid_distance(
+    tracks: List, 
+    detections_bboxes: np.ndarray, 
+    embedding_func: Callable, 
+    kalman_filter_obj: Optional[kalman_filter.KalmanFilter] = None,
+    iou_thresh=0.0, 
+    reid_weight=0.7,
+) -> np.ndarray:
     """
     Computes a cost matrix blending IoU and ReID distance.
     Only computes ReID distance for pairs with IoU > iou_thresh.
     
     :param tracks: list[STrack]
-    :param detections_bboxes: np.ndarray 
+    :param detections_bboxes: np.ndarray in tlbr format
     :param embedding_func: callable(tlbr) -> tensor/numpy
+    :param kalman_filter_obj: KalmanFilter object
     :param iou_thresh: lower bound for overlap to consider ReID
     :param reid_weight: weight for ReID distance (0.0 = only IoU, 1.0 = only ReID)
     :return: cost_matrix np.ndarray
@@ -214,6 +317,10 @@ def v_iou_reid_distance(tracks: List, detections_bboxes: np.ndarray, embedding_f
     # 1. Compute IoU Cost Matrix (1 - IoU)
     cost_matrix = v_iou_distance(tracks, detections_bboxes)
     
+    # 2. Apply spatial gating if configured
+    if kalman_filter_obj is not None:
+        cost_matrix = gate_cost_matrix(kalman_filter_obj, cost_matrix, tracks, detections_bboxes)
+    
     # Identify candidates where we have some overlap
     # We want similarity = 1 - cost > thresh => cost < 1 - thresh
     # Or just check simple IoU from 1-cost
@@ -226,13 +333,17 @@ def v_iou_reid_distance(tracks: List, detections_bboxes: np.ndarray, embedding_f
     # Cache for detection embeddings to avoid re-running model for same detection
     det_embeddings_cache = {}
     
-    # 2. Iterate and apply ReID
+    # 3. Iterate and apply ReID
     # We'll modify the cost matrix in place for candidates
     rows, cols = np.where(candidates_mask)
     
     for r, c in zip(rows, cols):
         track = tracks[r]
         det = detections_bboxes[c]
+        
+        # Skip if already gated
+        if cost_matrix[r, c] == np.inf:
+            continue
         
         # Get Track Embedding
         # Assuming track has .features attribute which is a tensor or numpy array
@@ -271,7 +382,7 @@ def v_iou_reid_distance(tracks: List, detections_bboxes: np.ndarray, embedding_f
         # Range is [0, 2]. Normalize to [0, 1] by dividing by 2.0
         reid_dist = cdist(track_feat, det_feat, metric='cosine')[0][0] / 2.0
         
-        # 3. Fuse Scores
+        # 4. Fuse Scores
         # Weighted average of the IoU distance and ReID distance
         iou_d = cost_matrix[r, c]
         

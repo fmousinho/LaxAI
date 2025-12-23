@@ -66,7 +66,7 @@ class TrackerConfig:
     track_activation_threshold: float = 0.6
     lost_track_buffer: int = 30
     max_match_distance: float = 0.8
-    min_consecutive_frames: int = 3
+    min_consecutive_frames: int = 5
     crop_save_interval: int = 5
 
 
