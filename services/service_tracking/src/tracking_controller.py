@@ -21,6 +21,7 @@ from schemas.tracking import TrackingParams
 from detection import DetectionModel
 from tracker.byte_tracker import BYTETracker
 from tracker.cam_mvmt import calculate_transform
+from utils import emb_files
 
 ENABLE_REID = True
 DEFAULT_CONFIDENCE_THRESHOLD = 0.4
@@ -54,7 +55,7 @@ class TrackingController:
         self.tracker = BYTETracker(self.tracking_params, reid_model=self.reid_model)
             
 
-    def run (self, video_path: str, tracks_save_path: str, detections_save_path: Optional[str] = None):
+    def run (self, video_path: str, tracks_save_path: str, detections_save_path: Optional[str] = None, embeddings_save_path: Optional[str] = None):
         """
         Generates detections and tracks from a given video.
 
@@ -145,6 +146,34 @@ class TrackingController:
                 video_source=original_video_path,
                 save_path=detections_save_path
         )
+
+        if embeddings_save_path is not None:
+            # Collect all tracks (deduplicated by track_id)
+            # The tracker keeps track of tracked, lost, and removed.
+            # Using byte_tracker.joint_stracks to get unique objects might be useful, or manual dict.
+            all_stracks = {}
+            
+            # Helper to add tracks
+            def add_unique_tracks(tracks):
+                for t in tracks:
+                    if t.track_id not in all_stracks and t.features is not None:
+                        all_stracks[t.track_id] = t
+            
+            add_unique_tracks(self.tracker.tracked_stracks)
+            add_unique_tracks(self.tracker.lost_stracks)
+            add_unique_tracks(self.tracker.removed_stracks)
+            
+            # Format for saving
+            embeddings_dict = {}
+            for tid, t in all_stracks.items():
+                embeddings_dict[tid] = {
+                    'mean': t.features.cpu(),
+                    'variance': t.features_variance.cpu() if t.features_variance is not None else None,
+                    'count': t.features_count
+                }
+            
+            logger.info(f"Saving {len(embeddings_dict)} track embeddings to {embeddings_save_path}")
+            emb_files.save_embeddings(embeddings_dict, embeddings_save_path)
             
         return True
 

@@ -26,6 +26,11 @@ class TrackingParams(BaseModel):
     max_match_distance: float = Field(default=tracker_config.max_match_distance, description="Max distance for tracks to be matched")
     min_consecutive_frames: int = Field(default=tracker_config.min_consecutive_frames, description="Minimum consecutive frames for tracks to be confirmed")
     
+    # Embedding Config
+    embedding_update_frequency: int = Field(default=30, description="Frequency (in frames) to update track embeddings")
+    embedding_quality_threshold: float = Field(default=0.8, description="Minimum detection score to trigger embedding update")
+    embedding_min_detection_confidence: float = Field(default=0.6, description="Minimum confidence for detections to be considered for embeddings")
+    
     # Pipeline Config
     resume_from_checkpoint: bool = Field(default=True, description="Resume from checkpoint if available")
     

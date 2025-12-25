@@ -36,12 +36,14 @@ class STrack(BaseTrack):
         self.covariance: Optional[np.ndarray] = None
         self.is_activated = False
         self.features: Optional[torch.Tensor] = None
+        self.features_variance: Optional[torch.Tensor] = None
+        self.features_count = 0
 
         self.score = score
         self.tracklet_len = 0
         self.predicted_mean: Optional[np.ndarray] = None
         self.match_cost: Optional[float] = 0.0
-        self.initial_tlwh = np.asarray(tlwh, dtype=float)
+        self._initial_tlwh = np.asarray(tlwh, dtype=float)
 
     def predict(self):
         if self.mean is None or self.kalman_filter is None:
@@ -168,7 +170,7 @@ class STrack(BaseTrack):
 
     @property
     def initial_tlwh(self):
-        return self.initial_tlwh.copy()
+        return self._initial_tlwh.copy()
 
 
     def to_xyah(self):
@@ -208,6 +210,12 @@ class BYTETracker(object):
         self.min_consecutive_frames = args.min_consecutive_frames
         self.lost_track_buffer = args.lost_track_buffer
         self.kalman_filter = KalmanFilter()
+
+        self.embedding_update_frequency = args.embedding_update_frequency
+        self.embedding_quality_threshold = args.embedding_quality_threshold
+        self.embedding_min_detection_confidence = args.embedding_min_detection_confidence
+        self.reid_model = reid_model
+        self.reid_model_input_size = (224, 224)
    
 
     def update(self, detections_array: np.ndarray, S_array: Optional[np.ndarray], T_array: Optional[np.ndarray]) -> List[STrack]:
@@ -237,6 +245,7 @@ class BYTETracker(object):
         ephemeral_stracks = []
 
         detections = remove_border_detections_from(detections_array, frame_size=self.frame_size)
+        
 
         if detections.shape[1] >= 5:
             scores = detections[:, 4]
@@ -295,7 +304,7 @@ class BYTETracker(object):
         """ Step 3: Deal with unconfirmed tracks """
         logger.debug(f"=== Step 3: Deal with unconfirmed tracks =============")
         (newly_activated_stracks, _, newly_pending_stracks, unmatched_stracks, unmatched_detections) = self.association_step(
-            self.pending_stracks, unmatched_detections, max_match_distance=0.8
+            self.pending_stracks, unmatched_detections, max_match_distance=0.6
         )
         activated_stracks.extend(newly_activated_stracks)
         pending_stracks.extend(newly_pending_stracks)
@@ -305,7 +314,7 @@ class BYTETracker(object):
             ephemeral_stracks.append(track)
 
         """ Step 4: Create new tracks """
-        #logger.debug(f"=== Step 4: Create new tracks ========================")
+        logger.debug(f"=== Step 4: Create new tracks ========================")
         for detection in unmatched_detections:
             bbox = bboxes_from(detection[np.newaxis, :])[0]
             score = scores_from(detection[np.newaxis, :])[0]
@@ -313,22 +322,37 @@ class BYTETracker(object):
                 continue
             track = STrack(STrack.tlbr_to_tlwh(bbox), score)
             track.activate(self.kalman_filter, self.frame_id)
+            if track.score >= self.embedding_quality_threshold:
+                self.initiate_track_reid_features(track)
             pending_stracks.append(track)
             self.update_with_track(detection, track)
+            bbox_str = ", ".join(f"{int(x):4d}" for x in bbox)
+            logger.debug(f"New track {track.track_id:4d} created with score {score:.4f}, TLBR [{bbox_str}]")
 
         """ Step 5: Update state for lost tracks"""
+        logger.debug(f"=== Step 5: Update state for lost tracks =============")
         for track in self.lost_stracks:
             if self.frame_id - track.end_frame > self.lost_track_buffer:
                 track.mark_removed()
                 removed_stracks.append(track)
+                tlbr_str = ", ".join(f"{int(x):4d}" for x in track.tlbr)
+                logger.debug(f"Track {track.track_id:4d} removed, TLBR [{tlbr_str}]")
             elif track.state == TrackState.Lost:
                 lost_stracks.append(track)
+                tlbr_str = ", ".join(f"{int(x):4d}" for x in track.tlbr)
+                logger.debug(f"Track {track.track_id:4d} lost, TLBR [{tlbr_str}]")
 
         self.tracked_stracks = activated_stracks + refind_stracks
         self.lost_stracks = lost_stracks
         self.pending_stracks = pending_stracks
         self.removed_stracks.extend(removed_stracks)
         self.ephemeral_stracks.extend(ephemeral_stracks)
+        
+        # Update embeddings for confirmed tracks
+        all_tracks_for_overlap = self.tracked_stracks + self.lost_stracks
+        for track in self.tracked_stracks:
+            if track.is_activated:
+                self.update_track_reid_features(track, all_tracks_for_overlap, detections)
         
         TRACK_BY_TRACK_LOG = False 
         if logger.getEffectiveLevel() == logging.DEBUG and TRACK_BY_TRACK_LOG:
@@ -360,13 +384,14 @@ class BYTETracker(object):
             scores = scores_from(detections)
             cost_matrix = matching.v_iou_distance(strack_pool, bboxes)
             panalize_aspect_ratio_swings(cost_matrix, strack_pool, bboxes)
-            penalize_scale_swings(cost_matrix, strack_pool, bboxes)
+            # penalize_scale_swings(cost_matrix, strack_pool, bboxes)
+            cost_matrix = gate_cost_matrix_height(cost_matrix, strack_pool, detections, threshold=0.2)
             matches, u_track, u_detection = matching.linear_assignment(cost_matrix, thresh=max_match_distance)
             
             for itracked, idet in matches:
                 strack = strack_pool[itracked]
                 bbox = bboxes[idet]
-                score = scores[idet]
+                score = scores[idet]    
                 strack.match_cost = cost_matrix[itracked, idet]
                 self.update_with_track(detections[idet], strack)
                 
@@ -380,18 +405,20 @@ class BYTETracker(object):
                 else:
                     strack.re_activate(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id, new_id=False)
                     refind_stracks.append(strack)
-
-                logger.debug(f"Track {strack.track_id:4d} matched with detection {idet:2d} with cost {cost_matrix[itracked, idet]:.4f}")
+                bbox_str = ", ".join(f"{int(x):4d}" for x in bbox)
+                logger.debug(f"Track {strack.track_id:4d} matched with cost {cost_matrix[itracked, idet]:.4f}, conf {score:.4f}, TLBR [{bbox_str}]")
 
             unmatched_tracks = [strack_pool[i] for i in u_track]
             if logger.getEffectiveLevel() == logging.DEBUG:
                 for i in u_track:
-                    logger.debug(f"Track {strack_pool[i].track_id:4d} unmatched, best cost {cost_matrix[i].min():.4f}") 
+                    tlbr_str = ", ".join(f"{int(x):4d}" for x in strack_pool[i].tlbr)
+                    logger.debug(f"Track {strack_pool[i].track_id:4d} NOT matched, best cost {cost_matrix[i].min():.4f}, TLBR [{tlbr_str}]") 
             
             unmatched_detections = detections[u_detection]
             if logger.getEffectiveLevel() == logging.DEBUG:
                 for i in u_detection:
-                    logger.debug(f"Detection {i:2d} unmatched, best cost {cost_matrix[:, i].min():.4f}")
+                    tlbr_str = ", ".join(f"{int(x):4d}" for x in detections[i, :4])
+                    logger.debug(f"Detection NOT matched, best cost {cost_matrix[:, i].min():.4f}, conf {detections[i, 4]:.4f}, TLBR [{tlbr_str}]")
 
             return activated_stracks, refind_stracks, pending_stracks, unmatched_tracks, unmatched_detections
         else:
@@ -476,16 +503,137 @@ class BYTETracker(object):
         detections[:, 6] = np.arange(n)
 
         self.frame_size = (frame.shape[1], frame.shape[0])
+        self.frame_size = (frame.shape[1], frame.shape[0])
+        self._frame = frame
         # Store reference for update_with_track
         self._original_detections = detections
         
         _ = self.update(detections, S_array, T_array)
 
         confirmed_tracks_only = True
-        self._original_detections[:, 5] *= self._original_detections[:, 7] if confirmed_tracks_only else 1 
+        if confirmed_tracks_only:
+            self._original_detections[:, 5][self._original_detections[:, 7] == 0] = -1 
  
         return self._original_detections[:, :6]
 
+
+    def initiate_track_reid_features(self, track: STrack):
+        """
+        Uses class reid model to extract features from track bounding box
+        """
+        feats = self.get_embeddings(track.tlbr)
+        if feats is not None:
+            track.features = feats
+            # Initialize variance with zeros or small epsilon
+            track.features_variance = torch.zeros_like(feats)
+            track.features_count = 1
+
+    def update_track_reid_features(self, track: STrack, all_tracks: List[STrack], all_detections: np.ndarray):
+        """
+        Updates the track's reid features using the given detection bounding box.
+        Updates every N frames.
+        """
+        if track.score < self.embedding_quality_threshold:
+            return
+        
+        if track.features is None:
+            self.initiate_track_reid_features(track)
+            return
+        
+        if track.tracklet_len % self.embedding_update_frequency != 0:
+            return
+
+        # Overlap Check
+        current_bbox = track.tlbr
+        
+        # 1. Check vs other detections
+        if len(all_detections) > 0:
+             ious_dets = matching.bbox_ious(
+                 np.ascontiguousarray(all_detections[:, :4], dtype=float), 
+                 current_bbox[np.newaxis, :]
+            )
+             # Filter out the detection that likely belongs to this track (highest IoU/closest)
+             # But simplistic check: if ANY other detection has IoU > 0, it's risky.
+             # Actually, we need to exclude the detection matched to THIS track.
+             # Since we don't have the matched detection index easily passed here without refactoring,
+             # we can assume "significant" overlap is bad.
+             # If IoU > 0.05 with MORE than one detection (itself), it's ambiguous.
+             # Or, since we are in `update`, the track IS associated.
+             # Let's count how many detections have IoU > 0.
+             count_overlaps = np.sum(ious_dets > 0.0)
+             if count_overlaps > 1: # Itself + another
+                 return 
+
+        # 2. Check vs other tracks (projected)
+        # We need to exclude 'self' from the list
+        other_tracks = [t for t in all_tracks if t.track_id != track.track_id]
+        if len(other_tracks) > 0:
+            other_tlbrs = np.array([t.tlbr for t in other_tracks], dtype=float)
+            ious_tracks = matching.bbox_ious(other_tlbrs, current_bbox[np.newaxis, :])
+            if np.any(ious_tracks > 0.0):
+                return
+       
+        alpha = REID_UPDATE_ALPHA
+        new_feat = self.get_embeddings(track.tlbr)
+        
+        if new_feat is not None:
+            # Welford's online algorithm approximation or simple EMA for variance
+            # Variance_EMA_new = alpha * Variance_EMA_old + (1-alpha) * (new_feat - Mean_EMA_new) * (new_feat - Mean_EMA_old)
+            # But let's stick to the simpler EMA plan:
+            # Var_new = alpha * Var_old + (1 - alpha) * (new_feat - old_mean)**2
+            
+            old_mean = track.features
+            diff = new_feat - old_mean
+            
+            # Update mean
+            track.features = torch.nn.functional.normalize(
+                alpha * track.features + (1 - alpha) * new_feat, dim=1
+            )
+            
+            # Update variance
+            track.features_variance = alpha * track.features_variance + (1 - alpha) * (diff ** 2)
+            track.features_count += 1
+            
+
+    def get_embeddings(self, tlbr: np.ndarray) -> Optional[torch.Tensor]:
+        """
+        Extracts embeddings for a given bounding box (tlbr).
+        """
+        # Need access to frame. We stored it in _original_detections context or need to store it in self._frame
+        # In the original file, self._frame wasn't stored in `assign_tracks_to_detections`. 
+        # I need to ensure self._frame is available. 
+        # `assign_tracks_to_detections` sets `self.frame_size` but not `self._frame`.
+        # I need to modify `assign_tracks_to_detections` to store `self._frame`.
+        
+        if not hasattr(self, '_frame') or self._frame is None:
+             # Fallback if frame is not available (should not happen if flow is correct)
+             return None
+             
+        if self.reid_model is None:
+             return None # Can't extract
+        
+        img_h, img_w = self._frame.shape[:2]
+        
+        x1 = max(0, int(tlbr[0]))
+        y1 = max(0, int(tlbr[1]))
+        x2 = min(img_w, int(tlbr[2]))
+        y2 = min(img_h, int(tlbr[3]))
+        
+        if x2 <= x1 or y2 <= y1:
+            return None
+
+        crop = self._frame[y1:y2, x1:x2]
+        transform = TRANSFORMS["inference_for_non_pil"]
+        
+        crop_tensor = transform(crop)
+        crop_tensor = crop_tensor.unsqueeze(0) # Add batch dimension (C, H, W) -> (1, C, H, W)
+
+        # Ensure tensor is on the same device as the model
+        device = next(self.reid_model.parameters()).device
+        crop_tensor = crop_tensor.to(device)
+
+        with torch.no_grad():
+            return self.reid_model(crop_tensor).detach()
 
     def update_with_track(self, detection: np.ndarray, track: STrack):
         """
@@ -495,7 +643,6 @@ class BYTETracker(object):
             detection (np.ndarray): The detection to update (1, :)
             track (STrack): The track to update.
         """
-        
         if len(detection.shape) > 1:
             raise ValueError("Detection must be a 1D array")
         
@@ -565,12 +712,12 @@ def remove_border_detections_from(detections: np.ndarray, frame_size: Tuple[int,
             )
         return detections[not_touching_border]
 
-def panalize_aspect_ratio_swings(cost_matrix: np.ndarray, stracks: List[STrack], detections: np.ndarray, factor: float = 1.0):
+def panalize_aspect_ratio_swings(cost_matrix: np.ndarray, stracks: List[STrack], detections: np.ndarray, factor: float = .5):
     if len(stracks) != cost_matrix.shape[0] or len(detections) != cost_matrix.shape[1]:
         raise ValueError("Cost matrix dimensions do not match the number of tracks and detections")
     cost_matrix += matching.aspect_ratio_distance(stracks, detections) * factor
 
-def penalize_scale_swings(cost_matrix: np.ndarray, stracks: List[STrack], detections: np.ndarray, factor: float = 1.2):
+def penalize_scale_swings(cost_matrix: np.ndarray, stracks: List[STrack], detections: np.ndarray, factor: float = 1.0):
     if len(stracks) != cost_matrix.shape[0] or len(detections) != cost_matrix.shape[1]:
         raise ValueError("Cost matrix dimensions do not match the number of tracks and detections")
     cost_matrix += matching.scale_distance(stracks, detections) * factor
@@ -580,4 +727,34 @@ def bboxes_from(detections: np.ndarray) -> np.ndarray:
         
 def scores_from(detections: np.ndarray) -> np.ndarray:
     return detections[:, 4]
+
+def gate_cost_matrix_height(cost_matrix: np.ndarray, tracks: List, detections: np.ndarray, threshold: float = 0.2) -> np.ndarray:
+    """
+    Gate association if height change is too large.
+    :param cost_matrix:
+    :param tracks: list[STrack]
+    :param detections: np.ndarray (N, >=4) in tlbr format
+    :param threshold: max relative change in height
+    :return: cost_matrix
+    """
+    if cost_matrix.size == 0 or len(tracks) == 0 or len(detections) == 0:
+        return cost_matrix
+
+    detections_tlbr = detections[:, :4]
+    det_heights = detections_tlbr[:, 3] - detections_tlbr[:, 1]
+    
+    # We use track.tlbr which computes it from mean
+    track_heights = np.array([(t.tlbr[3] - t.tlbr[1]) for t in tracks])
+    
+    # Expand for broadcasting
+    # tracks: (N, 1), dets: (1, M)
+    t_h = track_heights[:, np.newaxis]
+    d_h = det_heights[np.newaxis, :]
+    
+    # Check relative difference: abs(t - d) / t
+    # Add epsilon to avoid div by zero
+    diff = np.abs(t_h - d_h) / (t_h + 1e-6)
+    
+    cost_matrix[diff > threshold] = np.inf
+    return cost_matrix
 
