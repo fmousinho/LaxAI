@@ -123,12 +123,10 @@ def aspect_ratio_distance(tracks: List, detections: np.ndarray) -> np.ndarray:
 
     tracks_ar = tracks_ar[:, np.newaxis] # (N, 1)
     detections_ar = detections_ar[np.newaxis, :] # (1, M)
+
+    r = abs(np.log(tracks_ar) - np.log(detections_ar))
     
-    r1 = tracks_ar / (detections_ar + 1e-6)
-    r2 = detections_ar / (tracks_ar + 1e-6)
-    
-    min_r = np.minimum(r1, r2)
-    cost_matrix = 1 - min_r
+    cost_matrix = r
     
     return cost_matrix
 
@@ -395,4 +393,109 @@ def v_iou_reid_distance(
             if iou_d < 1 and reid_dist < 1:
                 logger.debug(f"Track {track.track_id} vs Detection {det.astype(int)}: IoU dist {iou_d:.4f}, ReID dist {reid_dist:.4f}, Fused dist {fused_cost:.4f}")
         
+    return cost_matrix
+
+# ===========================================================================
+# Cost Matrix Modifiers (Penalties & Gates)
+# ===========================================================================
+
+def penalize_aspect_ratio(cost_matrix, tracks, detections, factor=0.5):
+    """Add penalty to cost matrix based on aspect ratio changes."""
+    if len(tracks) != cost_matrix.shape[0] or len(detections) != cost_matrix.shape[1]:
+        raise ValueError("Cost matrix dimensions do not match")
+    cost_matrix += aspect_ratio_distance(tracks, detections) * factor
+    return cost_matrix
+
+
+def penalize_scale(cost_matrix, tracks, detections, factor=1.0):
+    """Add penalty to cost matrix based on scale changes."""
+    if len(tracks) != cost_matrix.shape[0] or len(detections) != cost_matrix.shape[1]:
+        raise ValueError("Cost matrix dimensions do not match")
+    cost_matrix += scale_distance(tracks, detections) * factor
+    return cost_matrix
+
+
+def gate_height(cost_matrix, tracks, detections, threshold=0.2):
+    """Gate association if height change exceeds threshold."""
+    if cost_matrix.size == 0 or len(tracks) == 0 or len(detections) == 0:
+        return cost_matrix
+    
+    det_heights = detections[:, 3] - detections[:, 1]
+    track_heights = np.array([(t.tlbr[3] - t.tlbr[1]) for t in tracks])
+    
+    t_h = track_heights[:, np.newaxis]
+    d_h = det_heights[np.newaxis, :]
+    diff = np.abs(t_h - d_h) / (t_h + 1e-6)
+    
+    cost_matrix[diff > threshold] = np.inf
+    return cost_matrix
+
+
+def enforce_min_distance(cost_matrix, tracks, detections, min_dist: float = .2):
+    """
+    Gate association if best cost is not sufficiently better than second-best.
+    
+    For each track (row), if the difference between the best and second-best detection
+    is less than min_dist, set all costs for that track to infinity (no valid match).
+    
+    Args:
+        cost_matrix: Current cost matrix (tracks x detections)
+        tracks: List of tracks
+        detections: Detection array
+        min_dist: Minimum required difference between best and second-best cost
+        
+    Returns:
+        Modified cost matrix with ambiguous matches gated
+    """
+    if cost_matrix.size == 0 or len(tracks) == 0 or len(detections) == 0:
+        return cost_matrix
+    
+    # For each track (row), check if best match is sufficiently better than second-best
+    for track_idx in range(cost_matrix.shape[0]):
+        row_costs = cost_matrix[track_idx, :]
+        
+        # Get valid (non-infinite) costs
+        valid_costs = row_costs[row_costs < np.inf]
+        
+        if len(valid_costs) >= 2:
+            # Sort to get best and second-best
+            sorted_costs = np.sort(valid_costs)
+            best_cost = sorted_costs[0]
+            second_best_cost = sorted_costs[1]
+            
+            # If margin is too small, invalidate all matches for this track
+            if (second_best_cost - best_cost) < min_dist:
+                cost_matrix[track_idx, :] = np.inf
+    
+    return cost_matrix
+    
+
+
+def compute_association_cost(
+    tracks,
+    detections,
+    kalman_filter_obj=None,
+    apply_aspect_ratio_penalty=True,
+    apply_height_gate=True,
+    apply_enforce_min_distance=True,
+    aspect_ratio_factor=0.5,
+    height_threshold=0.2,
+    enforce_min_distance_threshold=0.1,
+):
+    """Compute full association cost matrix with all penalties and gates applied."""
+    bboxes = detections[:, :4]
+    cost_matrix = v_iou_distance(tracks, bboxes)
+    
+    if apply_aspect_ratio_penalty:
+        cost_matrix = penalize_aspect_ratio(cost_matrix, tracks, detections, factor=aspect_ratio_factor)
+    
+    if apply_height_gate:
+        cost_matrix = gate_height(cost_matrix, tracks, detections, threshold=height_threshold)
+    
+    if kalman_filter_obj is not None:
+        cost_matrix = gate_cost_matrix(kalman_filter_obj, cost_matrix, tracks, detections)
+    
+    if apply_enforce_min_distance:
+        cost_matrix = enforce_min_distance(cost_matrix, tracks, detections)
+    
     return cost_matrix

@@ -107,6 +107,16 @@ class TrackingController:
             
             if len(detections_obj.xyxy) > 0:
                  detections = np.column_stack((detections_obj.xyxy, detections_obj.confidence))
+                 
+                 # Apply detection filtering pipeline (NMS + border removal)
+                 from utils.detection_filters import filter_detections_pipeline
+                 detections = filter_detections_pipeline(
+                     detections,
+                     frame_size=(frame.shape[1], frame.shape[0]),  # (width, height)
+                     track_predictions=None,  # Will be handled in byte_tracker
+                     nms_iou_threshold=0.3,
+                     border_margin=2,
+                 )
             else:
                 detections = np.empty((0, 5))
 
@@ -132,6 +142,10 @@ class TrackingController:
                 logger.info(f"Processed {frame_count}/{ttl_frames} frames")
 
         cap.release()
+        
+        # Log prediction accuracy statistics
+        logger.info(f"Video processing complete. Logging prediction statistics...")
+        self.tracker.log_prediction_statistics()
 
         # Save tracks using unified serialization module
         track_serialization.save(

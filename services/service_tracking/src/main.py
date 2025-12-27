@@ -33,6 +33,7 @@ def main():
     parser.add_argument('--video_path', required=True, help='Path to the video file that will be processed')
     parser.add_argument('--output_path', default="tracks.json", help='Path to the json file where the tracks will be saved')
     parser.add_argument('--detections_save_path', default=None, help='If provided, detections wil be saved to this path')
+    parser.add_argument('--embeddings_save_path', default=None, help='If provided, embeddings wil be saved to this path')
 
     parser.add_argument('--wandb_run_name', default=None,
                        help='Custom name for the track generation run')
@@ -56,8 +57,8 @@ def main():
             track_activation_threshold=args.track_activation_threshold if args.track_activation_threshold is not None else TrackingParams.model_fields['track_activation_threshold'].default,
             lost_track_buffer=args.lost_track_buffer if args.lost_track_buffer is not None else TrackingParams.model_fields['lost_track_buffer'].default,
             max_match_distance=args.max_match_distance if args.max_match_distance is not None else TrackingParams.model_fields['max_match_distance'].default,
-            min_consecutive_frames=args.min_consecutive_frames if args.min_consecutive_frames is not None else TrackingParams.model_fields['min_consecutive_frames'].default
-        )
+            min_consecutive_frames=args.min_consecutive_frames if args.min_consecutive_frames is not None else TrackingParams.model_fields['min_consecutive_frames'].default,
+         )
 
         # Create and run the controller
         controller = TrackingController(
@@ -65,7 +66,7 @@ def main():
             wandb_run_name=args.wandb_run_name
         )
 
-        result = controller.run(args.video_path, args.output_path)
+        result = controller.run(args.video_path, args.output_path, args.detections_save_path, args.embeddings_save_path)
 
         logger.info(f"Track generation completed with result: {result}")
         return 0

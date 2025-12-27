@@ -87,7 +87,7 @@ class STrack(BaseTrack):
         detection_xyah = det_strack.to_xyah()
         self.mean, self.covariance = self.kalman_filter.update(
             self.mean, self.covariance, detection_xyah)
-        self.tracklet_len = 0
+        # self.tracklet_len = 0
         self.state = TrackState.Tracked
         self.frame_id = frame_id
         if new_id:
@@ -216,6 +216,10 @@ class BYTETracker(object):
         self.embedding_min_detection_confidence = args.embedding_min_detection_confidence
         self.reid_model = reid_model
         self.reid_model_input_size = (224, 224)
+        
+        # Track prediction accuracy metrics
+        self.prediction_errors = []  # Store all prediction errors for variance calculation
+        self.observed_velocities = []  # Store observed velocities for empirical std_weight_velocity
    
 
     def update(self, detections_array: np.ndarray, S_array: Optional[np.ndarray], T_array: Optional[np.ndarray]) -> List[STrack]:
@@ -243,9 +247,9 @@ class BYTETracker(object):
         pending_stracks = []
         removed_stracks = []
         ephemeral_stracks = []
-
-        detections = remove_border_detections_from(detections_array, frame_size=self.frame_size)
-        
+        # Apply detection filtering (border removal + ambiguous rejection)
+        from utils.detection_filters import remove_border_detections
+        detections = remove_border_detections(detections_array, frame_size=self.frame_size, margin=2)
 
         if detections.shape[1] >= 5:
             scores = detections[:, 4]
@@ -264,6 +268,19 @@ class BYTETracker(object):
         logger.debug(f"total detections: {len(remain_detections)} | thresh: {self.track_activation_threshold} | high conf: {len(high_conf_mask)} | low: {len(low_conf_mask)}")
 
         strack_pool = joint_stracks(self.tracked_stracks, self.lost_stracks)
+        
+        # Reject ambiguous detections that overlap with multiple tracks
+        if len(strack_pool) > 0 and len(remain_detections) > 0:
+            from utils.detection_filters import reject_ambiguous_detections
+            track_predictions = np.array([t.predicted_tlbr for t in strack_pool])
+            remain_detections = reject_ambiguous_detections(remain_detections, track_predictions, iou_threshold=0.4)
+            
+            # Re-split into high and low confidence after rejection
+            low_conf_mask = np.where(remain_detections[:,4] < self.track_activation_threshold)[0]
+            high_conf_mask = np.where(remain_detections[:,4] >= self.track_activation_threshold)[0]
+            detections_high = remain_detections[high_conf_mask]
+            detections_low = remain_detections[low_conf_mask]
+            logger.debug(f"After ambiguous rejection: {len(remain_detections)} detections | high: {len(high_conf_mask)} | low: {len(low_conf_mask)}")
 
         # Camera motion compensation, if arrays are provided and valid
         if len(strack_pool) > 0 and S_array is not None and T_array is not None and COMPENSATE_CAM_MOTION:
@@ -278,7 +295,7 @@ class BYTETracker(object):
         ''' Step 1: First association, with high score detection boxes'''
         logger.debug(f"=== Step 1: Association with high score detections ===")
         (newly_activated_stracks, newly_refind_stracks, newly_pending_stracks, unmatched_stracks, unmatched_detections_s1) = self.association_step(
-            strack_pool, detections_high, max_match_distance=0.6
+            strack_pool, detections_high, max_match_distance=0.8
         )
         activated_stracks.extend(newly_activated_stracks)
         refind_stracks.extend(newly_refind_stracks)
@@ -287,7 +304,7 @@ class BYTETracker(object):
         ''' Step 2: Second association, with low score detection boxes'''
         logger.debug(f"=== Step 2: Association with low score detections ====")
         (newly_activated_stracks, newly_refind_stracks, newly_pending_stracks, unmatched_stracks, unmatched_detections_s2) = self.association_step(
-            unmatched_stracks, detections_low, max_match_distance=0.8
+            unmatched_stracks, detections_low, max_match_distance=0.5
         )
         activated_stracks.extend(newly_activated_stracks)
         refind_stracks.extend(newly_refind_stracks)
@@ -304,7 +321,7 @@ class BYTETracker(object):
         """ Step 3: Deal with unconfirmed tracks """
         logger.debug(f"=== Step 3: Deal with unconfirmed tracks =============")
         (newly_activated_stracks, _, newly_pending_stracks, unmatched_stracks, unmatched_detections) = self.association_step(
-            self.pending_stracks, unmatched_detections, max_match_distance=0.6
+            self.pending_stracks, unmatched_detections, max_match_distance=0.8
         )
         activated_stracks.extend(newly_activated_stracks)
         pending_stracks.extend(newly_pending_stracks)
@@ -335,12 +352,12 @@ class BYTETracker(object):
             if self.frame_id - track.end_frame > self.lost_track_buffer:
                 track.mark_removed()
                 removed_stracks.append(track)
-                tlbr_str = ", ".join(f"{int(x):4d}" for x in track.tlbr)
-                logger.debug(f"Track {track.track_id:4d} removed, TLBR [{tlbr_str}]")
+                pred_tlbr_str = ", ".join(f"{int(x):4d}" for x in track.predicted_tlbr)
+                logger.debug(f"Track {track.track_id:4d} removed, pred TLBR [{pred_tlbr_str}]")
             elif track.state == TrackState.Lost:
                 lost_stracks.append(track)
-                tlbr_str = ", ".join(f"{int(x):4d}" for x in track.tlbr)
-                logger.debug(f"Track {track.track_id:4d} lost, TLBR [{tlbr_str}]")
+                pred_tlbr_str = ", ".join(f"{int(x):4d}" for x in track.predicted_tlbr)
+                logger.debug(f"Track {track.track_id:4d} lost, pred TLBR [{pred_tlbr_str}]")
 
         self.tracked_stracks = activated_stracks + refind_stracks
         self.lost_stracks = lost_stracks
@@ -382,10 +399,17 @@ class BYTETracker(object):
         if len(strack_pool) > 0 and len(detections) > 0:
             bboxes = bboxes_from(detections)
             scores = scores_from(detections)
-            cost_matrix = matching.v_iou_distance(strack_pool, bboxes)
-            panalize_aspect_ratio_swings(cost_matrix, strack_pool, bboxes)
-            # penalize_scale_swings(cost_matrix, strack_pool, bboxes)
-            cost_matrix = gate_cost_matrix_height(cost_matrix, strack_pool, detections, threshold=0.2)
+            
+            # Compute full association cost with all penalties and gates
+            cost_matrix = matching.compute_association_cost(
+                strack_pool,
+                detections,
+                kalman_filter_obj=None,  # Can be added later if needed
+                apply_aspect_ratio_penalty=True,
+                apply_height_gate=True,
+                aspect_ratio_factor=0.6,
+                height_threshold=0.2,
+            )
             matches, u_track, u_detection = matching.linear_assignment(cost_matrix, thresh=max_match_distance)
             
             for itracked, idet in matches:
@@ -393,6 +417,25 @@ class BYTETracker(object):
                 bbox = bboxes[idet]
                 score = scores[idet]    
                 strack.match_cost = cost_matrix[itracked, idet]
+                
+                # Calculate prediction error (difference between predicted and actual TLBR)
+                pred_tlbr = strack.predicted_tlbr
+                actual_tlbr = bbox
+                error = np.abs(pred_tlbr - actual_tlbr)  # Element-wise absolute difference
+                self.prediction_errors.append(error)
+                
+                # Calculate observed velocity (change in position from last update)
+                # The Kalman state has velocities at indices 4-7: [vx, vy, va, vh]
+                # We can extract the actual velocity from the state after update
+                if strack.mean is not None:
+                    # Store velocity components (vx, vy, vh) - skip aspect ratio velocity
+                    observed_vel = np.array([
+                        strack.mean[4],  # vx (center x velocity)
+                        strack.mean[5],  # vy (center y velocity)
+                        strack.mean[7]   # vh (height velocity)
+                    ])
+                    self.observed_velocities.append(observed_vel)
+                
                 self.update_with_track(detections[idet], strack)
                 
                 if strack.state == TrackState.Tracked:
@@ -406,13 +449,14 @@ class BYTETracker(object):
                     strack.re_activate(STrack(STrack.tlbr_to_tlwh(bbox), score), self.frame_id, new_id=False)
                     refind_stracks.append(strack)
                 bbox_str = ", ".join(f"{int(x):4d}" for x in bbox)
-                logger.debug(f"Track {strack.track_id:4d} matched with cost {cost_matrix[itracked, idet]:.4f}, conf {score:.4f}, TLBR [{bbox_str}]")
+                pred_tlbr_str = ", ".join(f"{int(x):4d}" for x in strack.predicted_tlbr)
+                logger.debug(f"Track {strack.track_id:4d} matched with cost {cost_matrix[itracked, idet]:.4f}, conf {score:.4f}, TLBR [{bbox_str}], pred TLBR [{pred_tlbr_str}]")
 
             unmatched_tracks = [strack_pool[i] for i in u_track]
             if logger.getEffectiveLevel() == logging.DEBUG:
                 for i in u_track:
-                    tlbr_str = ", ".join(f"{int(x):4d}" for x in strack_pool[i].tlbr)
-                    logger.debug(f"Track {strack_pool[i].track_id:4d} NOT matched, best cost {cost_matrix[i].min():.4f}, TLBR [{tlbr_str}]") 
+                    pred_tlbr_str = ", ".join(f"{int(x):4d}" for x in strack_pool[i].predicted_tlbr)
+                    logger.debug(f"Track {strack_pool[i].track_id:4d} NOT matched, best cost {cost_matrix[i].min():.4f}, pred TLBR [{pred_tlbr_str}]") 
             
             unmatched_detections = detections[u_detection]
             if logger.getEffectiveLevel() == logging.DEBUG:
@@ -515,6 +559,89 @@ class BYTETracker(object):
             self._original_detections[:, 5][self._original_detections[:, 7] == 0] = -1 
  
         return self._original_detections[:, :6]
+
+    def log_prediction_statistics(self):
+        """
+        Compute and log variance statistics for prediction errors and observed velocities.
+        This should be called at the end of video processing.
+        """
+        if len(self.prediction_errors) == 0:
+            logger.info("No prediction errors recorded")
+            return
+        
+        # Convert list to numpy array for easier computation
+        errors_array = np.array(self.prediction_errors)  # Shape: (N, 4) where 4 is [x1, y1, x2, y2]
+        
+        # Compute statistics for each coordinate
+        mean_errors = np.mean(errors_array, axis=0)
+        variance_errors = np.var(errors_array, axis=0)
+        std_errors = np.std(errors_array, axis=0)
+        
+        # Overall statistics (average across all coordinates)
+        overall_mean = np.mean(mean_errors)
+        overall_variance = np.mean(variance_errors)
+        overall_std = np.mean(std_errors)
+        
+        logger.info("=" * 80)
+        logger.info("PREDICTION ACCURACY STATISTICS")
+        logger.info("=" * 80)
+        logger.info(f"Total matches analyzed: {len(self.prediction_errors)}")
+        logger.info("")
+        logger.info("Per-coordinate statistics (x1, y1, x2, y2):")
+        logger.info(f"  Mean error:     [{mean_errors[0]:6.2f}, {mean_errors[1]:6.2f}, {mean_errors[2]:6.2f}, {mean_errors[3]:6.2f}]")
+        logger.info(f"  Std deviation:  [{std_errors[0]:6.2f}, {std_errors[1]:6.2f}, {std_errors[2]:6.2f}, {std_errors[3]:6.2f}]")
+        logger.info(f"  Variance:       [{variance_errors[0]:6.2f}, {variance_errors[1]:6.2f}, {variance_errors[2]:6.2f}, {variance_errors[3]:6.2f}]")
+        logger.info("")
+        logger.info(f"Overall statistics:")
+        logger.info(f"  Mean error:     {overall_mean:6.2f} pixels")
+        logger.info(f"  Std deviation:  {overall_std:6.2f} pixels")
+        logger.info(f"  Variance:       {overall_variance:6.2f} pixels²")
+        logger.info("=" * 80)
+        
+        # Compute velocity statistics
+        if len(self.observed_velocities) > 0:
+            velocities_array = np.array(self.observed_velocities)  # Shape: (N, 3) where 3 is [vx, vy, vh]
+            
+            # Compute statistics for each velocity component
+            mean_velocities = np.mean(velocities_array, axis=0)
+            std_velocities = np.std(velocities_array, axis=0)
+            variance_velocities = np.var(velocities_array, axis=0)
+            
+            # Get typical height from the data (for normalization)
+            # We'll use the mean height from all tracks
+            typical_height = np.mean([t.tlbr[3] - t.tlbr[1] for t in self.tracked_stracks + self.lost_stracks if hasattr(t, 'tlbr')])
+            
+            # Calculate empirical std_weight_velocity
+            # The Kalman filter uses: std_vel = std_weight_velocity * height
+            # So: std_weight_velocity = std_vel / height
+            # We want the standard deviation of velocity normalized by height
+            empirical_std_weight_vx = std_velocities[0] / typical_height if typical_height > 0 else 0
+            empirical_std_weight_vy = std_velocities[1] / typical_height if typical_height > 0 else 0
+            empirical_std_weight_vh = std_velocities[2] / typical_height if typical_height > 0 else 0
+            
+            # Average across x and y (position velocities)
+            empirical_std_weight_velocity = (empirical_std_weight_vx + empirical_std_weight_vy) / 2.0
+            
+            logger.info("")
+            logger.info("=" * 80)
+            logger.info("VELOCITY STATISTICS")
+            logger.info("=" * 80)
+            logger.info(f"Total velocity samples: {len(self.observed_velocities)}")
+            logger.info(f"Typical object height:  {typical_height:.2f} pixels")
+            logger.info("")
+            logger.info("Per-component statistics (vx, vy, vh):")
+            logger.info(f"  Mean velocity:  [{mean_velocities[0]:6.2f}, {mean_velocities[1]:6.2f}, {mean_velocities[2]:6.2f}] px/frame")
+            logger.info(f"  Std deviation:  [{std_velocities[0]:6.2f}, {std_velocities[1]:6.2f}, {std_velocities[2]:6.2f}] px/frame")
+            logger.info(f"  Variance:       [{variance_velocities[0]:6.2f}, {variance_velocities[1]:6.2f}, {variance_velocities[2]:6.2f}] (px/frame)²")
+            logger.info("")
+            logger.info("Empirical std_weight_velocity (normalized by height):")
+            logger.info(f"  vx component:   {empirical_std_weight_vx:.6f}")
+            logger.info(f"  vy component:   {empirical_std_weight_vy:.6f}")
+            logger.info(f"  vh component:   {empirical_std_weight_vh:.6f}")
+            logger.info(f"  RECOMMENDED:    {empirical_std_weight_velocity:.6f}  (average of vx, vy)")
+            logger.info("")
+            logger.info(f"Current std_weight_velocity in KalmanFilter: {self.kalman_filter._std_weight_velocity:.6f}")
+            logger.info("=" * 80)
 
 
     def initiate_track_reid_features(self, track: STrack):
@@ -692,7 +819,7 @@ def remove_duplicate_stracks(stracksa, stracksb):
     resb = [t for i, t in enumerate(stracksb) if i not in dupb]
     return resa, resb
 
-def remove_border_detections_from(detections: np.ndarray, frame_size: Tuple[int, int] = (1920, 1080), margin: int = 10) -> np.ndarray:
+def remove_border_detections_from(detections: np.ndarray, frame_size: Tuple[int, int] = (1920, 1080), margin: int = 2) -> np.ndarray:
     """
     Removes detections that touch the border to improve embedding quality. Modifies the original array in place.
 
@@ -728,7 +855,7 @@ def bboxes_from(detections: np.ndarray) -> np.ndarray:
 def scores_from(detections: np.ndarray) -> np.ndarray:
     return detections[:, 4]
 
-def gate_cost_matrix_height(cost_matrix: np.ndarray, tracks: List, detections: np.ndarray, threshold: float = 0.2) -> np.ndarray:
+def gate_cost_matrix_height(cost_matrix: np.ndarray, tracks: List, detections: np.ndarray, threshold: float = 0.1) -> np.ndarray:
     """
     Gate association if height change is too large.
     :param cost_matrix:
