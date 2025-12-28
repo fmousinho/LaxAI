@@ -18,12 +18,13 @@ def main():
 
     parser.add_argument('--video_path', required=True, help='Path to the video file that will be processed')
     parser.add_argument('--tracks_path', default="tracks.json", help='Path to the json file where the tracks will be saved')
+    parser.add_argument('--players_path', default=None, help='Path to the players.json file for track remapping')
     parser.add_argument('--output_path', default="output.mp4", help='Path to the output video file')
 
     args = parser.parse_args()
 
     try:
-       writer = Writer(args.video_path, args.tracks_path, args.output_path)
+       writer = Writer(args.video_path, args.tracks_path, args.output_path, args.players_path)
        writer.run()
 
     except Exception as e:

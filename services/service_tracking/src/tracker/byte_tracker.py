@@ -35,7 +35,7 @@ class STrack(BaseTrack):
         self.mean: Optional[np.ndarray] = None
         self.covariance: Optional[np.ndarray] = None
         self.is_activated = False
-        self.features: Optional[torch.Tensor] = None
+        self.features: List[torch.Tensor] = []
         self.features_variance: Optional[torch.Tensor] = None
         self.features_count = 0
 
@@ -650,9 +650,7 @@ class BYTETracker(object):
         """
         feats = self.get_embeddings(track.tlbr)
         if feats is not None:
-            track.features = feats
-            # Initialize variance with zeros or small epsilon
-            track.features_variance = torch.zeros_like(feats)
+            track.features = [feats]
             track.features_count = 1
 
     def update_track_reid_features(self, track: STrack, all_tracks: List[STrack], all_detections: np.ndarray):
@@ -700,25 +698,11 @@ class BYTETracker(object):
             if np.any(ious_tracks > 0.0):
                 return
        
-        alpha = REID_UPDATE_ALPHA
         new_feat = self.get_embeddings(track.tlbr)
         
         if new_feat is not None:
-            # Welford's online algorithm approximation or simple EMA for variance
-            # Variance_EMA_new = alpha * Variance_EMA_old + (1-alpha) * (new_feat - Mean_EMA_new) * (new_feat - Mean_EMA_old)
-            # But let's stick to the simpler EMA plan:
-            # Var_new = alpha * Var_old + (1 - alpha) * (new_feat - old_mean)**2
-            
-            old_mean = track.features
-            diff = new_feat - old_mean
-            
-            # Update mean
-            track.features = torch.nn.functional.normalize(
-                alpha * track.features + (1 - alpha) * new_feat, dim=1
-            )
-            
-            # Update variance
-            track.features_variance = alpha * track.features_variance + (1 - alpha) * (diff ** 2)
+            # Append new feature to list
+            track.features.append(new_feat)
             track.features_count += 1
             
 

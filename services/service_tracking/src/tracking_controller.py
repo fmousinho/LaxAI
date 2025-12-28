@@ -12,6 +12,7 @@ import os
 import cv2
 import json
 import numpy as np
+import torch
 
 from shared_libs.common.wandb_logger import wandb_logger
 from shared_libs.common import track_serialization
@@ -180,9 +181,20 @@ class TrackingController:
             # Format for saving
             embeddings_dict = {}
             for tid, t in all_stracks.items():
+                features_list = t.features
+                if not features_list:
+                    continue
+                    
+                # Stack them: List[(1, D)] -> (N, D)
+                # Assumes features are (1, D) tensors
+                stacked_feats = torch.cat(features_list, dim=0).cpu()
+                
+                # Calculate mean for backward compatibility
+                mean_feat = torch.mean(stacked_feats, dim=0)
+                
                 embeddings_dict[tid] = {
-                    'mean': t.features.cpu(),
-                    'variance': t.features_variance.cpu() if t.features_variance is not None else None,
+                    'mean': mean_feat,
+                    'all': stacked_feats,
                     'count': t.features_count
                 }
             

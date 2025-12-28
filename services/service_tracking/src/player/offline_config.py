@@ -20,6 +20,12 @@ class OfflinePlayerConfig:
     max_players_per_team: int = 22  
     """Maximum players per team (including substitutes)."""
     
+    default_players_per_team: int = 15
+    """Default number of players per team if not auto-estimated."""
+    
+    auto_estimate_player_count: bool = True
+    """Use silhouette analysis to estimate player count from anchors."""
+    
     # Spatial/velocity constraints
     fps: float = 30.0
     """Video frame rate."""
@@ -49,6 +55,9 @@ class OfflinePlayerConfig:
     # Appearance matching
     similarity_threshold: float = 0.65
     """Minimum cosine similarity for track-to-player matching."""
+    
+    anchor_similarity_threshold: float = 0.70
+    """Higher threshold for initial anchor clustering (more strict)."""
     
     max_embeddings_per_player: int = 50
     """Maximum embeddings to store per player (for embedding bank)."""

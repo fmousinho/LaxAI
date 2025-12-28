@@ -154,8 +154,11 @@ class OfflinePlayerAssociator:
         
         for frame_data in tracks_data.get('frames', []):
             frame_id = frame_data['frame_id']
-            for obj in frame_data.get('objects', []):
+            for obj in frame_data.get('track_objects', []):
                 track_id = obj['track_id']
+                if track_id < 0:
+                    continue  # Skip untracked detections
+                
                 bbox = tuple(obj.get('bbox', obj.get('tlbr', [0, 0, 0, 0])))
                 track_frames[track_id].append((frame_id, bbox))
         
@@ -196,8 +199,11 @@ class OfflinePlayerAssociator:
         """
         logger.info("Starting offline player association...")
         
-        # Phase 1: Team clustering
+        # Phase 1: Team Clustering
         self._cluster_teams()
+        
+        # Phase 1b: Infer missing teams (spatial propagation)
+        self._infer_missing_teams()
         
         # Phase 2: Build constraint graph
         constraints = self._build_constraints()
@@ -210,7 +216,10 @@ class OfflinePlayerAssociator:
         # Phase 4: Enforce global consistency
         self._enforce_global_consistency()
         
-        logger.info(f"Created {len(self.players)} players from {len(self.tracks)} tracks")
+        # Phase 5: Merge fragmented players (spatial/temporal only)
+        self._merge_fragmented_players()
+        
+        logger.info(f"Final Count: {len(self.players)} players from {len(self.tracks)} tracks")
         
         return self.export()
     
@@ -246,10 +255,54 @@ class OfflinePlayerAssociator:
         for i, track_id in enumerate(track_ids):
             self.tracks[track_id].team_id = int(labels[i])
         
-        # Assign team 0 to tracks without embeddings
+        # Assign team -1 to tracks without embeddings (will be inferred later)
         for track in self.tracks.values():
             if track.team_id is None:
+                track.team_id = -1
+                
+    def _infer_missing_teams(self):
+        """Infer team IDs for tracks without embeddings based on spatial proximity."""
+        logger.info("Phase 1b: Inferring missing teams...")
+        
+        sorted_tracks = sorted(self.tracks.values(), key=lambda t: t.start_frame)
+        inferred_count = 0
+        
+        # Forward pass
+        active_tracks = [] # List of (track, team_id)
+        for track in sorted_tracks:
+            # Update active tracks (remove old ones)
+            active_tracks = [t for t in active_tracks if t[0].end_frame >= track.start_frame - 30]
+            
+            if track.team_id == -1:
+                # Find nearest active track with a team
+                best_team = -1
+                min_dist = float('inf')
+                
+                for other, team in active_tracks:
+                    if team == -1: continue
+                    
+                    dist = np.linalg.norm(np.array(track.first_center) - np.array(other.last_center))
+                    if dist < min_dist:
+                        min_dist = dist
+                        best_team = team
+                
+                if best_team != -1 and min_dist < 200: # Reasonable jump distance
+                    track.team_id = best_team
+                    inferred_count += 1
+            
+            if track.team_id != -1:
+                active_tracks.append((track, track.team_id))
+        
+        # Assign remaining to nearest centroid (fallback) or default to 0 if totally lost
+        # Actually, let's just default remaining to 0 if inference fails, or distribute evenly?
+        # For now, default remaining to 0 to ensure process continues
+        remaining = 0
+        for track in self.tracks.values():
+            if track.team_id == -1:
                 track.team_id = 0
+                remaining += 1
+                
+        logger.info(f"Inferred teams for {inferred_count} tracks. Defaulted {remaining} to team 0.")
         
         # Log team distribution
         team_counts = defaultdict(int)
@@ -341,110 +394,384 @@ class OfflinePlayerAssociator:
             return 'edge'
         return 'mid'
     
+    def _build_tracks_by_frame(self) -> Dict[int, List[TrackInfo]]:
+        """Build mapping of frame_id -> List[TrackInfo] for tracks active in that frame."""
+        tracks_by_frame = defaultdict(list)
+        for track in self.tracks.values():
+            for frame_id in range(track.start_frame, track.end_frame + 1):
+                tracks_by_frame[frame_id].append(track)
+        return tracks_by_frame
+    
+    def _find_anchor_frame(self, tracks_by_frame: Dict[int, List[TrackInfo]]) -> int:
+        """
+        Find frame with most detections. If tie, use best quality.
+        Quality = avg embedding strength + avg duration of tracks in frame.
+        """
+        best_frame = None
+        best_count = 0
+        best_quality = 0.0
+        
+        for frame_id, tracks in tracks_by_frame.items():
+            count = len(tracks)
+            quality = sum(
+                (1.0 if t.embedding_mean is not None else 0.0) + (t.duration / 100.0)
+                for t in tracks
+            ) / max(count, 1)
+            
+            if count > best_count or (count == best_count and quality > best_quality):
+                best_frame = frame_id
+                best_count = count
+                best_quality = quality
+        
+        logger.info(f"Anchor frame: {best_frame} with {best_count} tracks (quality={best_quality:.2f})")
+        return best_frame
+    
+    def _get_anchor_tracks(self, tracks: List[TrackInfo], frame_id: int) -> List[TrackInfo]:
+        """Get all tracks active in the anchor frame."""
+        return [t for t in tracks if t.start_frame <= frame_id <= t.end_frame]
+    
+    def _estimate_player_count(self, anchor_tracks: List[TrackInfo]) -> int:
+        """
+        Estimate optimal player count using silhouette analysis.
+        """
+        from sklearn.metrics import silhouette_score
+        
+        embeddings = np.array([t.embedding_mean for t in anchor_tracks 
+                              if t.embedding_mean is not None])
+        
+        min_players = self.config.min_players_per_team
+        max_players = self.config.max_players_per_team
+        
+        if len(embeddings) < min_players:
+            logger.warning(f"Not enough embeddings ({len(embeddings)}) for player estimation")
+            return self.config.default_players_per_team
+        
+        best_k = min_players
+        best_score = -1
+        
+        for k in range(min_players, min(max_players + 1, len(embeddings))):
+            clustering = AgglomerativeClustering(n_clusters=k)
+            labels = clustering.fit_predict(embeddings)
+            try:
+                score = silhouette_score(embeddings, labels)
+                if score > best_score:
+                    best_score = score
+                    best_k = k
+            except:
+                continue
+        
+        logger.info(f"Estimated {best_k} players (silhouette score={best_score:.3f})")
+        return best_k
+    
     def _assign_players_for_team(
         self, 
         team_id: int, 
         team_tracks: List[TrackInfo],
         constraints: Dict
     ):
-        """Assign tracks to players within a team."""
+        """Assign tracks to players within a team using similarity-first approach."""
         logger.info(f"Phase 3: Assigning players for team {team_id} "
                    f"({len(team_tracks)} tracks)")
         
         if not team_tracks:
             return
         
-        # Sort tracks by start frame
-        sorted_tracks = sorted(team_tracks, key=lambda t: t.start_frame)
+        # Step 1: Find anchor frame and tracks
+        team_tracks_by_frame = {}
+        for track in team_tracks:
+            for frame_id in range(track.start_frame, track.end_frame + 1):
+                if frame_id not in team_tracks_by_frame:
+                    team_tracks_by_frame[frame_id] = []
+                team_tracks_by_frame[frame_id].append(track)
         
-        # Greedy assignment with appearance matching
-        for track in sorted_tracks:
-            best_player = self._find_best_player_match(track, constraints)
-            
-            if best_player is not None:
-                # Attach to existing player
-                best_player.add_track(track)
-                track.player_id = best_player.player_id
-                self.track_to_player[track.track_id] = best_player.player_id
-            else:
-                # Create new player
-                player = PlayerInfo(
-                    player_id=self.next_player_id,
-                    team_id=team_id,
-                )
+        anchor_frame = self._find_anchor_frame(team_tracks_by_frame)
+        anchor_tracks = self._get_anchor_tracks(team_tracks, anchor_frame)
+        
+        # Step 2: Estimate or use default player count
+        if self.config.auto_estimate_player_count and len(anchor_tracks) >= self.config.min_players_per_team:
+            n_players = self._estimate_player_count(anchor_tracks)
+        else:
+            n_players = self.config.default_players_per_team
+        
+        logger.info(f"Creating {n_players} initial players from {len(anchor_tracks)} anchor tracks")
+        
+        # Step 3: Seed initial players
+        # Every track in the anchor frame MUST be a different player
+        logger.info(f"Seeding {len(anchor_tracks)} players from anchor frame {anchor_frame}")
+        for track in anchor_tracks:
+            self._create_player_from_track(track, team_id)
+        
+        # Step 4: Build all valid (player, track) pairs with similarities
+        candidates = self._build_assignment_candidates(team_tracks, constraints)
+        
+        # Step 5: Assign tracks by similarity (greedy from highest)
+        self._assign_by_similarity(candidates, constraints)
+        
+        # Step 6: Handle orphan tracks
+        # Any track not yet assigned that is long enough gets its own player
+        assigned_tracks = set(self.track_to_player.keys())
+        orphans_promoted = 0
+        for track in team_tracks:
+            if track.track_id not in assigned_tracks and track.duration > 15:
+                self._create_player_from_track(track, team_id)
+                orphans_promoted += 1
+        
+        if orphans_promoted > 0:
+            logger.info(f"Promoted {orphans_promoted} significant orphan tracks to new players.")
+    
+    def _create_players_from_anchors(
+        self,
+        anchor_tracks: List[TrackInfo],
+        n_players: int,
+        team_id: int
+    ):
+        """Cluster anchor tracks into initial players."""
+        # Get embeddings
+        embeddings = np.array([t.embedding_mean for t in anchor_tracks 
+                              if t.embedding_mean is not None])
+        valid_anchors = [t for t in anchor_tracks if t.embedding_mean is not None]
+        
+        if len(embeddings) < n_players:
+            # Fallback: create one player per anchor
+            for track in anchor_tracks:
+                self._create_player_from_track(track, team_id)
+            return
+        
+        # Cluster with AgglomerativeClustering
+        clustering = AgglomerativeClustering(n_clusters=n_players)
+        labels = clustering.fit_predict(embeddings)
+        
+        # Create players and assign anchor tracks
+        player_clusters = defaultdict(list)
+        for track, label in zip(valid_anchors, labels):
+            player_clusters[label].append(track)
+        
+        for cluster_tracks in player_clusters.values():
+            player = PlayerInfo(
+                player_id=self.next_player_id,
+                team_id=team_id,
+            )
+            for track in cluster_tracks:
                 player.add_track(track)
-                
-                self.players[player.player_id] = player
                 track.player_id = player.player_id
                 self.track_to_player[track.track_id] = player.player_id
-                self.next_player_id += 1
+            
+            self.players[player.player_id] = player
+            self.next_player_id += 1
     
-    def _find_best_player_match(
+    def _create_player_from_track(self, track: TrackInfo, team_id: int):
+        """Create a new player with single track."""
+        player = PlayerInfo(
+            player_id=self.next_player_id,
+            team_id=team_id,
+        )
+        player.add_track(track)
+        track.player_id = player.player_id
+        self.track_to_player[track.track_id] = player.player_id
+        
+        self.players[player.player_id] = player
+        self.next_player_id += 1
+    
+    def _build_assignment_candidates(
         self,
-        track: TrackInfo,
+        team_tracks: List[TrackInfo],
         constraints: Dict
-    ) -> Optional[PlayerInfo]:
-        """Find best matching player for a track."""
-        if track.embedding_mean is None:
-            return None
-        
+    ) -> List[Tuple[PlayerInfo, TrackInfo, float]]:
+        """Build all valid (player, track, similarity) tuples."""
         candidates = []
+        assigned_tracks = set(self.track_to_player.keys())
         
-        for player in self.players.values():
-            # Must be same team
-            if player.team_id != track.team_id:
+        for track in team_tracks:
+            if track.track_id in assigned_tracks:
+                continue  # Already assigned to a player
+            
+            if track.embedding_mean is None:
+                continue  # No embedding to match
+            
+            for player in self.players.values():
+                if player.team_id != track.team_id:
+                    continue  # Different team
+                
+                # Check constraints with all player's existing tracks
+                valid = all(
+                    constraints.get((track.track_id, existing_tid), True)
+                    for existing_tid in player.track_ids
+                )
+                
+                if not valid:
+                    continue
+                
+                # Compute similarity
+                sim = player.similarity_to(track.embedding_mean)
+                
+                # Apply birth-type boost
+                if track.birth_type == 'mid':
+                    sim *= self.config.mid_birth_priority_boost
+                
+                if sim >= self.config.similarity_threshold:
+                    candidates.append((player, track, sim))
+        
+        return candidates
+    
+    def _assign_by_similarity(self, candidates: List[Tuple[PlayerInfo, TrackInfo, float]], constraints: Dict):
+        """Assign tracks to players greedily from highest similarity, checking constraints dynamically."""
+        # Sort by similarity descending
+        candidates.sort(key=lambda x: x[2], reverse=True)
+        
+        assigned_tracks = set(self.track_to_player.keys())
+        
+        for player, track, sim in candidates:
+            if track.track_id in assigned_tracks:
                 continue
             
-            # Check constraints with all player's tracks
-            can_match = True
-            for existing_track_id in player.track_ids:
-                key = (track.track_id, existing_track_id)
-                if key in constraints and not constraints[key]:
-                    can_match = False
+            # CRITICAL: Dynamic conflict check against the player's CURRENT tracks
+            conflict = False
+            for existing_tid in player.track_ids:
+                if not constraints.get((track.track_id, existing_tid), True):
+                    conflict = True
                     break
             
-            if not can_match:
+            if conflict:
                 continue
             
-            # Compute appearance similarity
-            similarity = player.similarity_to(track.embedding_mean)
-            
-            # Apply birth-type boost
-            if track.birth_type == 'mid':
-                similarity *= self.config.mid_birth_priority_boost
-            
-            if similarity >= self.config.similarity_threshold:
-                candidates.append((player, similarity))
-        
-        if not candidates:
-            return None
-        
-        # Return best match
-        return max(candidates, key=lambda x: x[1])[0]
+            # Assign!
+            player.add_track(track)
+            track.player_id = player.player_id
+            self.track_to_player[track.track_id] = player.player_id
+            assigned_tracks.add(track.track_id)
     
     def _enforce_global_consistency(self):
         """Ensure no player appears multiple times in same frame."""
         logger.info("Phase 4: Enforcing global consistency...")
         
-        # Build frame -> [(track_id, player_id)] mapping
-        frame_assignments: Dict[int, List[Tuple[int, int]]] = defaultdict(list)
+        # 1. Identify conflicts
+        player_frame_map = defaultdict(list) # player_id -> [frame_id]
+        player_to_tracks = defaultdict(list) # player_id -> [track_info]
         
         for track in self.tracks.values():
-            for frame_id in range(track.start_frame, track.end_frame + 1):
-                frame_assignments[frame_id].append(
-                    (track.track_id, track.player_id)
-                )
+            if track.player_id is not None:
+                player_to_tracks[track.player_id].append(track)
         
-        # Check for conflicts
-        conflicts = 0
-        for frame_id, assignments in frame_assignments.items():
-            player_ids = [p for _, p in assignments if p is not None]
-            if len(player_ids) != len(set(player_ids)):
-                conflicts += 1
-                # TODO: Resolve conflicts
+        conflicts_resolved = 0
         
-        if conflicts > 0:
-            logger.warning(f"Found {conflicts} frames with player conflicts")
+        for player_id, tracks in player_to_tracks.items():
+            # Sort tracks by duration (keep the best ones)
+            sorted_tracks = sorted(tracks, key=lambda t: t.duration, reverse=True)
+            
+            occupied_frames = set()
+            for track in sorted_tracks:
+                track_frames = set(range(track.start_frame, track.end_frame + 1))
+                
+                if track_frames & occupied_frames:
+                    # Conflict! This track must be moved to a new player
+                    conflicts_resolved += 1
+                    
+                    new_player = PlayerInfo(
+                        player_id=self.next_player_id,
+                        team_id=track.team_id,
+                    )
+                    # Deep update: remove from old player, add to new
+                    old_player = self.players[player_id]
+                    old_player.track_ids.remove(track.track_id)
+                    # Filter track_segments
+                    old_player.track_segments = [s for s in old_player.track_segments if s[0] != track.track_id]
+                    
+                    # Setup new player
+                    new_player.add_track(track)
+                    track.player_id = new_player.player_id
+                    self.track_to_player[track.track_id] = new_player.player_id
+                    
+                    self.players[new_player.player_id] = new_player
+                    self.next_player_id += 1
+                else:
+                    occupied_frames.update(track_frames)
+        
+        if conflicts_resolved > 0:
+            logger.info(f"Resolved {conflicts_resolved} track conflicts by splitting players.")
+            
+    def _merge_fragmented_players(self):
+        """
+        Merge players that are likely the same person based on spatial/temporal feasibility.
+        This handles cases where embeddings were missing but the physical path makes sense.
+        """
+        logger.info("Phase 5: Merging fragmented players...")
+        merged_count = 0
+        
+        # Sort players by start frame
+        sorted_players = sorted(
+            self.players.values(), 
+            key=lambda p: min(t[1] for t in p.track_segments) if p.track_segments else 0
+        )
+        
+        # Simple greedy merge
+        active_players = list(sorted_players)
+        
+        # We need a new validated list because we'll be removing items
+        final_players = []
+        
+        while active_players:
+            current = active_players.pop(0)
+            
+            # Try to merge with best subsequent player
+            best_match = None
+            best_gap = float('inf')
+            
+            # Look at potential matches (naive O(N^2) but N is small now)
+            # Find the closest future player that fits constraints
+            for candidate in active_players:
+                if candidate.team_id != current.team_id:
+                    continue
+                
+                # Check feasibility between LAST track of current and FIRST track of candidate
+                last_track_id = current.track_ids[-1]
+                first_track_id = candidate.track_ids[0]
+                
+                track_i = self.tracks[last_track_id]
+                track_j = self.tracks[first_track_id]
+                
+                # Must be strictly after
+                if track_j.start_frame <= track_i.end_frame:
+                    continue
+                
+                if self._spatially_feasible(track_i, track_j):
+                    gap = track_j.start_frame - track_i.end_frame
+                    if gap < best_gap:
+                        best_gap = gap
+                        best_match = candidate
+            
+            if best_match and best_gap < 900: # 30 seconds max gap for blind merge
+                # Merge candidate INTO current
+                for tid in best_match.track_ids:
+                    # Update mappings
+                    self.track_to_player[tid] = current.player_id
+                    current.track_ids.append(tid)
+                    
+                    # Update segments
+                    for seg in best_match.track_segments:
+                        if seg[0] == tid:
+                            current.track_segments.append(seg)
+                    
+                    # Add embeddings
+                    track = self.tracks[tid]
+                    if track.embedding_mean is not None:
+                        current.embedding_bank.append(track.embedding_mean)
+                
+                # Sort tracks in current player
+                current.track_segments.sort(key=lambda x: x[1])
+                
+                # Remove best_match from processing list
+                active_players.remove(best_match)
+                # Remove from main dict
+                del self.players[best_match.player_id]
+                
+                # Re-add current to list to potentialy merge again!
+                active_players.insert(0, current)
+                merged_count += 1
+            else:
+                final_players.append(current)
+        
+        if merged_count > 0:
+            logger.info(f"Merged {merged_count} fragmented player identities.")
     
     def export(self) -> Dict:
         """Export results to dictionary."""
