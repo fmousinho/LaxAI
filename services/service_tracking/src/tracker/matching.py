@@ -431,7 +431,7 @@ def gate_height(cost_matrix, tracks, detections, threshold=0.2):
     return cost_matrix
 
 
-def enforce_min_distance(cost_matrix, tracks, detections, min_dist: float = .2):
+def enforce_min_distance(cost_matrix, tracks, detections, min_dist: float = .25):
     """
     Gate association if best cost is not sufficiently better than second-best.
     
@@ -480,7 +480,7 @@ def compute_association_cost(
     apply_enforce_min_distance=True,
     aspect_ratio_factor=0.5,
     height_threshold=0.2,
-    enforce_min_distance_threshold=0.1,
+    enforce_min_distance_threshold=0.2,
 ):
     """Compute full association cost matrix with all penalties and gates applied."""
     bboxes = detections[:, :4]

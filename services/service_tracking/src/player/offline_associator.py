@@ -501,11 +501,8 @@ class OfflinePlayerAssociator:
         for track in anchor_tracks:
             self._create_player_from_track(track, team_id)
         
-        # Step 4: Build all valid (player, track) pairs with similarities
-        candidates = self._build_assignment_candidates(team_tracks, constraints)
-        
-        # Step 5: Assign tracks by similarity (greedy from highest)
-        self._assign_by_similarity(candidates, constraints)
+        # Step 4 & 5: Assign tracks dynamically
+        self._assign_tracks_dynamic(team_tracks, team_id, constraints)
         
         # Step 6: Handle orphan tracks
         # Any track not yet assigned that is long enough gets its own player
@@ -572,73 +569,103 @@ class OfflinePlayerAssociator:
         self.players[player.player_id] = player
         self.next_player_id += 1
     
-    def _build_assignment_candidates(
-        self,
-        team_tracks: List[TrackInfo],
-        constraints: Dict
-    ) -> List[Tuple[PlayerInfo, TrackInfo, float]]:
-        """Build all valid (player, track, similarity) tuples."""
-        candidates = []
-        assigned_tracks = set(self.track_to_player.keys())
+    def _assign_tracks_dynamic(self, team_tracks: List[TrackInfo], team_id: int, constraints: Dict):
+        """
+        Assigns tracks to players dynamically using a similarity matrix.
+        Updates player embeddings after each assignment to improve subsequent matches.
+        """
+        # 1. Filter tracks for this phase
+        # Only consider unassigned tracks with embeddings
+        candidate_tracks = []
+        assigned_track_ids = set(self.track_to_player.keys())
         
-        for track in team_tracks:
-            if track.track_id in assigned_tracks:
-                continue  # Already assigned to a player
-            
-            if track.embedding_mean is None:
-                continue  # No embedding to match
-            
-            for player in self.players.values():
-                if player.team_id != track.team_id:
-                    continue  # Different team
-                
-                # Check constraints with all player's existing tracks
-                valid = all(
-                    constraints.get((track.track_id, existing_tid), True)
-                    for existing_tid in player.track_ids
-                )
-                
-                if not valid:
-                    continue
-                
-                # Compute similarity
-                sim = player.similarity_to(track.embedding_mean)
-                
-                # Apply birth-type boost
-                if track.birth_type == 'mid':
-                    sim *= self.config.mid_birth_priority_boost
-                
-                if sim >= self.config.similarity_threshold:
-                    candidates.append((player, track, sim))
+        for t in team_tracks:
+            if t.track_id not in assigned_track_ids and t.embedding_mean is not None:
+                candidate_tracks.append(t)
         
-        return candidates
-    
-    def _assign_by_similarity(self, candidates: List[Tuple[PlayerInfo, TrackInfo, float]], constraints: Dict):
-        """Assign tracks to players greedily from highest similarity, checking constraints dynamically."""
-        # Sort by similarity descending
-        candidates.sort(key=lambda x: x[2], reverse=True)
+        if not candidate_tracks:
+            return
+
+        # Get players for this team
+        team_players = [p for p in self.players.values() if p.team_id == team_id]
+        if not team_players:
+            return
+
+        # 2. Build initial Similarity Matrix
+        # Rows: Tracks, Cols: Players
+        n_tracks = len(candidate_tracks)
+        n_players = len(team_players)
         
-        assigned_tracks = set(self.track_to_player.keys())
+        # We'll use a dense matrix for similarities. -1.0 indicates invalid/low score.
+        # -2.0 indicates track assigned.
+        sim_matrix = np.full((n_tracks, n_players), -1.0)
         
-        for player, track, sim in candidates:
-            if track.track_id in assigned_tracks:
-                continue
-            
-            # CRITICAL: Dynamic conflict check against the player's CURRENT tracks
-            conflict = False
+        # Pre-compute valid mask based on static constraints
+        # valid_mask[t, p] is True if track t CAN be assigned to player p
+        valid_mask = np.ones((n_tracks, n_players), dtype=bool)
+        
+        for j, player in enumerate(team_players):
             for existing_tid in player.track_ids:
-                if not constraints.get((track.track_id, existing_tid), True):
-                    conflict = True
-                    break
+                for i, track in enumerate(candidate_tracks):
+                    if not constraints.get((track.track_id, existing_tid), True):
+                        valid_mask[i, j] = False
+        
+        # Initial similarity calculation
+        for j, player in enumerate(team_players):
+            for i, track in enumerate(candidate_tracks):
+                if valid_mask[i, j]:
+                    sim = player.similarity_to(track.embedding_mean)
+                    # Apply boost
+                    if track.birth_type == 'mid':
+                        sim *= self.config.mid_birth_priority_boost
+                    sim_matrix[i, j] = sim
+        
+        # 3. Greedy Assignment Loop
+        logger.info(f"Starting dynamic assignment for {n_tracks} tracks x {n_players} players")
+        assignments_made = 0
+        
+        while True:
+            # Find global max
+            max_idx = np.argmax(sim_matrix)
+            t_idx, p_idx = np.unravel_index(max_idx, sim_matrix.shape)
+            max_sim = sim_matrix[t_idx, p_idx]
             
-            if conflict:
-                continue
+            if max_sim < self.config.similarity_threshold:
+                break
+                
+            # Assign
+            track = candidate_tracks[t_idx]
+            player = team_players[p_idx]
             
-            # Assign!
             player.add_track(track)
             track.player_id = player.player_id
             self.track_to_player[track.track_id] = player.player_id
-            assigned_tracks.add(track.track_id)
+            assignments_made += 1
+            
+            # Mask this row (track assigned)
+            sim_matrix[t_idx, :] = -2.0
+            
+            # Update this player's column (p_idx)
+            # 1. Update constraints: Check if remaining (valid) tracks conflict with the NEWLY added track
+            for i in range(n_tracks):
+                if sim_matrix[i, p_idx] == -2.0: continue # Already assigned
+                if not valid_mask[i, p_idx]: continue # Already invalid
+                
+                # Check new constraint
+                if not constraints.get((candidate_tracks[i].track_id, track.track_id), True):
+                    valid_mask[i, p_idx] = False
+                    sim_matrix[i, p_idx] = -1.0
+            
+            # 2. Recalculate similarities for valid tracks against updated player (if still valid)
+            for i in range(n_tracks):
+                if sim_matrix[i, p_idx] != -2.0 and valid_mask[i, p_idx]:
+                    # Re-calc sim with updated embedding bank
+                    sim = player.similarity_to(candidate_tracks[i].embedding_mean)
+                    if candidate_tracks[i].birth_type == 'mid':
+                        sim *= self.config.mid_birth_priority_boost
+                    sim_matrix[i, p_idx] = sim
+
+        logger.info(f"Assigned {assignments_made} tracks dynamically.")
     
     def _enforce_global_consistency(self):
         """Ensure no player appears multiple times in same frame."""

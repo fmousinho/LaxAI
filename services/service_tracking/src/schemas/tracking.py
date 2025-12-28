@@ -27,7 +27,7 @@ class TrackingParams(BaseModel):
     min_consecutive_frames: int = Field(default=tracker_config.min_consecutive_frames, description="Minimum consecutive frames for tracks to be confirmed")
     
     # Embedding Config
-    embedding_update_frequency: int = Field(default=10, description="Frequency (in frames) to update track embeddings")
+    embedding_update_frequency: int = Field(default=5, description="Frequency (in frames) to update track embeddings")
     embedding_quality_threshold: float = Field(default=0.6, description="Minimum detection score to trigger embedding update")
     embedding_min_detection_confidence: float = Field(default=0.6, description="Minimum confidence for detections to be considered for embeddings")
     
