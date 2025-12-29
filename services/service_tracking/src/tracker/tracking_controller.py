@@ -14,12 +14,11 @@ import json
 import numpy as np
 import torch
 
-from shared_libs.common.google_storage import GoogleStorageClient
 from shared_libs.common.wandb_logger import wandb_logger
 from shared_libs.common import track_serialization
 from shared_libs.common.model import ReIdModel
 
-from schemas.tracking import TrackingParams
+from tracker.config import TrackingParams
 from tracker.detection import DetectionModel
 from tracker.byte_tracker import BYTETracker
 from tracker.cam_mvmt import calculate_transform
@@ -34,14 +33,12 @@ class TrackingController:
     Handles video discovery, pipeline execution, and status reporting.
     """
 
-    def __init__(self, tracking_params: TrackingParams, tenant_id: str, wandb_run_name: Optional[str] = None):
+    def __init__(self, tracking_params: TrackingParams, wandb_run_name: Optional[str] = None):
         self.tracking_params = tracking_params
-        self.tenant_id = tenant_id
         self.wandb_run_name = wandb_run_name
         self.detector = DetectionModel()
         self.device_str = "cpu"
         self.reid_model = None
-        self.storage_client = GoogleStorageClient(tenant_id)
 
         if ENABLE_REID:
             self.wandb_logger = wandb_logger
@@ -73,26 +70,10 @@ class TrackingController:
         """
         logger.info(f"Starting Tracking Controller")
 
-        original_video_path = video_path
-        # Gets video into cv2
-        # If it's a GCS path, download it locally
-        if video_path.startswith("gs://"):
-            local_path = f"/tmp/{os.path.basename(video_path)}"
-            # Strip gs://bucket/tenant/ if present
-            blob_path = video_path
-            prefix = f"gs://{self.storage_client.config.bucket_name}/{self.tenant_id}/"
-            if blob_path.startswith(prefix):
-                blob_path = blob_path[len(prefix):]
-            elif blob_path.startswith(f"gs://{self.storage_client.config.bucket_name}/"):
-                blob_path = blob_path[len(f"gs://{self.storage_client.config.bucket_name}/"):]
-            
-            self.storage_client.download_blob(blob_path, local_path)
-            video_path = local_path
-        elif video_path.startswith(('http://', 'https://')):
-            logger.info(f"Downloading video from URL: {video_path}")
-            with tempfile.NamedTemporaryFile(delete=True, suffix='.mp4') as temp_file:
-                urllib.request.urlretrieve(video_path, temp_file.name)
-                video_path = temp_file.name
+        # Verify the video path is a local file
+        if not os.path.exists(video_path):
+            logger.error(f"Video file not found: {video_path}")
+            return False
         
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():

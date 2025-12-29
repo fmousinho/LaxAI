@@ -1,17 +1,69 @@
 """
-Tracking API request/response schemas for the tracking service.
+Tracking API request/response schemas and configuration for the tracking service.
 Explicit Pydantic models that use config defaults directly.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from shared_libs.config.all_config import (
     tracker_config,
 )
+
+
+class DetectionModelConfig(BaseSettings):
+    """Configuration for the detection model, including WandB artifact settings."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    # WandB settings
+    wandb_api_key: str = Field(
+        ...,
+        description="WandB API key for authentication",
+    )
+    wandb_model_artifact: str = Field(
+        default="fmousinho76-home-org/wandb-registry-model/Detections:latest",
+        description="WandB artifact path for the detection model",
+    )
+    wandb_project: str = Field(
+        default="LaxAI-Tracking",
+        description="WandB project name for tracking model downloads",
+    )
+    wandb_run_name: str = Field(
+        default="model-download",
+        description="WandB run name for model download operations",
+    )
+
+    # Model file settings
+    artifact_file_name: str = Field(
+        default="common-models-detection_latest.pth",
+        description="Filename of the model weights within the artifact",
+    )
+    num_classes: int = Field(
+        default=6,
+        description="Number of classes the model was trained with",
+    )
+
+    # Device settings
+    device: Optional[str] = Field(
+        default=None,
+        description="Device to run the model on (cuda/mps/cpu). Auto-detected if None.",
+    )
+
+
+# Global detection model config instance
+detection_model_config = DetectionModelConfig()
+
 
 
 class TrackingParams(BaseModel):

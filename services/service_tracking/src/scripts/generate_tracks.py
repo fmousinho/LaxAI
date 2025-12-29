@@ -2,8 +2,14 @@
 """
 Main entry point for LaxAI Service Tracking.
 
-This script is the entry point for the Cloud Run job that executes track generation.
-It parses command line arguments and runs the TrackingController.
+This script processes a local video file to generate object tracks using the ByteTrack algorithm,
+handling detection, embedding extraction, and track association.
+
+Usage Example:
+    python services/service_tracking/src/scripts/generate_tracks.py \
+        --video_path "/path/to/video.mp4" \
+        --output_path "tracks.json" \
+        --prediction_threshold 0.6
 """
 
 import logging
@@ -22,7 +28,7 @@ setup_environment_secrets()
 import argparse
 import warnings
 
-from schemas.tracking import TrackingParams
+from tracker.config import TrackingParams
 from tracker.tracking_controller import TrackingController
 
 
@@ -30,23 +36,53 @@ def main():
     """Main entry point for the tracking service."""
     parser = argparse.ArgumentParser(description='LaxAI Service Tracking')
 
-    parser.add_argument('--video_path', required=True, help='Path to the video file that will be processed')
-    parser.add_argument('--tenant_id', required=True, help='Tenant identifier for the tracking job')
-    parser.add_argument('--output_path', default="tracks.json", help='Path to the json file where the tracks will be saved')
-    parser.add_argument('--detections_save_path', default=None, help='If provided, detections wil be saved to this path')
-    parser.add_argument('--embeddings_save_path', default=None, help='If provided, embeddings wil be saved to this path')
+    parser.add_argument(
+        '--video_path', required=True,
+        help='Path to the local video file that will be processed'
+    )
+    parser.add_argument(
+        '--output_path', default="tracks.json",
+        help='Path to the json file where the tracks will be saved'
+    )
+    parser.add_argument(
+        '--detections_save_path', default=None,
+        help='If provided, detections wil be saved to this path'
+    )
+    parser.add_argument(
+        '--embeddings_save_path', default=None,
+        help='If provided, embeddings wil be saved to this path'
+    )
 
-    parser.add_argument('--wandb_run_name', default=None,
-                       help='Custom name for the track generation run')
-    parser.add_argument('--resume_from_checkpoint', action='store_true', default=True,
-                       help='Resume track generation from checkpoint if available')
+    parser.add_argument(
+        '--wandb_run_name', default=None,
+        help='Custom name for the track generation run'
+    )
+    parser.add_argument(
+        '--resume_from_checkpoint', action='store_true', default=True,
+        help='Resume track generation from checkpoint if available'
+    )
 
     # Tracking Params
-    parser.add_argument('--prediction_threshold', type=float, default=None, help='Minimum confidence for detections to be considered')
-    parser.add_argument('--track_activation_threshold', type=float, default=None, help='Track activation threshold')
-    parser.add_argument('--lost_track_buffer', type=int, default=None, help='Number of frames to wait before removing a lost track')
-    parser.add_argument('--max_match_distance', type=float, default=None, help='Max distance for tracks to be matched')
-    parser.add_argument('--min_consecutive_frames', type=int, default=None, help='Minimum consecutive frames for track confirmation')
+    parser.add_argument(
+        '--prediction_threshold', type=float, default=None,
+        help='Minimum confidence for detections to be considered'
+    )
+    parser.add_argument(
+        '--track_activation_threshold', type=float, default=None,
+        help='Track activation threshold'
+    )
+    parser.add_argument(
+        '--lost_track_buffer', type=int, default=None,
+        help='Number of frames to wait before removing a lost track'
+    )
+    parser.add_argument(
+        '--max_match_distance', type=float, default=None,
+        help='Max distance for tracks to be matched'
+    )
+    parser.add_argument(
+        '--min_consecutive_frames', type=int, default=None,
+        help='Minimum consecutive frames for track confirmation'
+    )
 
     args = parser.parse_args()
 
@@ -64,7 +100,6 @@ def main():
         # Create and run the controller
         controller = TrackingController(
             tracking_params=tracking_params,
-            tenant_id=args.tenant_id,
             wandb_run_name=args.wandb_run_name
         )
 

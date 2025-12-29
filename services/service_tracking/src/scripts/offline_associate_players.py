@@ -55,8 +55,8 @@ def main():
         help='Video FPS (default: 30)'
     )
     parser.add_argument(
-        '--similarity-threshold', type=float, default=0.65,
-        help='Minimum similarity for matching (default: 0.65)'
+        '--similarity-threshold', type=float, default=0.75,
+        help='Minimum similarity for matching (default: 0.75)'
     )
     parser.add_argument(
         '--min-players', type=int, default=11,
