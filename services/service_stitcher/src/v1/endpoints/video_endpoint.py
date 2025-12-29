@@ -1,7 +1,7 @@
 from fastapi import HTTPException, APIRouter, Query
 from fastapi.responses import StreamingResponse
-from ...video_manager import VideoManager
-from ..schemas.video_schema import (
+from video_manager import VideoManager
+from v1.schemas.video_schema import (
     GetPlayersResponse,
     PlayerCreate,
     PlayerListItem,

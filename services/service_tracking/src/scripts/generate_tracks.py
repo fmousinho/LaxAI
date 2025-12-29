@@ -23,7 +23,7 @@ import argparse
 import warnings
 
 from schemas.tracking import TrackingParams
-from tracking_controller import TrackingController
+from tracker.tracking_controller import TrackingController
 
 
 def main():
@@ -31,6 +31,7 @@ def main():
     parser = argparse.ArgumentParser(description='LaxAI Service Tracking')
 
     parser.add_argument('--video_path', required=True, help='Path to the video file that will be processed')
+    parser.add_argument('--tenant_id', required=True, help='Tenant identifier for the tracking job')
     parser.add_argument('--output_path', default="tracks.json", help='Path to the json file where the tracks will be saved')
     parser.add_argument('--detections_save_path', default=None, help='If provided, detections wil be saved to this path')
     parser.add_argument('--embeddings_save_path', default=None, help='If provided, embeddings wil be saved to this path')
@@ -63,6 +64,7 @@ def main():
         # Create and run the controller
         controller = TrackingController(
             tracking_params=tracking_params,
+            tenant_id=args.tenant_id,
             wandb_run_name=args.wandb_run_name
         )
 

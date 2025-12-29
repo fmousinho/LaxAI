@@ -30,7 +30,7 @@ class OfflinePlayerConfig:
     fps: float = 30.0
     """Video frame rate."""
     
-    max_speed_meters_per_second: float = 10.0
+    max_speed_meters_per_second: float = 8.0
     """Max player speed in m/s (~22 mph, sprint speed)."""
     
     pixels_per_meter: float = 20.0

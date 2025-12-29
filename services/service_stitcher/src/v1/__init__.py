@@ -2,7 +2,7 @@
 
 import logging
 from fastapi import APIRouter
-from .endpoints.video_endpoint import router as video_router
+from v1.endpoints.video_endpoint import router as video_router
 
 logger = logging.getLogger(__name__)
 

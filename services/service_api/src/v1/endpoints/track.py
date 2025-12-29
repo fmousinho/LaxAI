@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 from google.api_core.exceptions import GoogleAPIError
 from google.cloud import pubsub_v1, firestore  # type: ignore
 
-from ..schemas.tracking import TrackingRequest, TrackingResponse, TrackingStatus
+from v1.schemas.tracking import TrackingRequest, TrackingResponse, TrackingStatus
 
 logger = logging.getLogger(__name__)
 

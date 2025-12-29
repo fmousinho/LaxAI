@@ -10,8 +10,8 @@ try:
 except ImportError:
     FIRESTORE_AVAILABLE = False
 
-from .schemas.firestore import TrainingJobDocument
-from .state_machine import TrainingJobState, StateTransition
+from schemas.firestore import TrainingJobDocument
+from state_machine import TrainingJobState, StateTransition
 
 logger = logging.getLogger(__name__)
 

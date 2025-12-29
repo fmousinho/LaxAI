@@ -1,6 +1,6 @@
 """Training service schemas package."""
 
-from .training import (
+from schemas.training import (
     TrainingParams,
     ModelParams,
     EvalParams,

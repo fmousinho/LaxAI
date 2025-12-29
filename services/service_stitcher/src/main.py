@@ -50,7 +50,7 @@ from typing import List
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 # Import API routers
-from .v1 import router
+from v1 import router
 
 
 
@@ -91,7 +91,7 @@ async def lifespan(app: FastAPI):
     finally:
         logger.info("Shutting down LaxAI Stitcher Service...")
         # Cleanup video sessions on shutdown
-        from .v1.endpoints.video_endpoint import video_managers
+        from v1.endpoints.video_endpoint import video_managers
         if video_managers:
             logger.info(f"Cleaning up {len(video_managers)} active video sessions...")
             video_managers.clear()

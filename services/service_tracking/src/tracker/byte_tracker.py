@@ -14,9 +14,9 @@ import cv2
 
 from shared_libs.config.transforms import TRANSFORMS
 from schemas.tracking import TrackingParams
-from .kalman_filter import KalmanFilter, detection_np_tlbr_to_xyah
-from . import matching
-from .basetrack import BaseTrack, TrackState
+from tracker.kalman_filter import KalmanFilter, detection_np_tlbr_to_xyah
+from tracker import matching
+from tracker.basetrack import BaseTrack, TrackState
 
 COMPENSATE_CAM_MOTION = True  # Affine transform to track camera motion signifantly improves accuracy
 
@@ -248,7 +248,7 @@ class BYTETracker(object):
         removed_stracks = []
         ephemeral_stracks = []
         # Apply detection filtering (border removal + ambiguous rejection)
-        from utils.detection_filters import remove_border_detections
+        from tracking_utils.detection_filters import remove_border_detections
         detections = remove_border_detections(detections_array, frame_size=self.frame_size, margin=2)
 
         if detections.shape[1] >= 5:
@@ -271,7 +271,7 @@ class BYTETracker(object):
         
         # Reject ambiguous detections that overlap with multiple tracks
         if len(strack_pool) > 0 and len(remain_detections) > 0:
-            from utils.detection_filters import reject_ambiguous_detections
+            from tracking_utils.detection_filters import reject_ambiguous_detections
             track_predictions = np.array([t.predicted_tlbr for t in strack_pool])
             remain_detections = reject_ambiguous_detections(remain_detections, track_predictions, iou_threshold=0.4)
             

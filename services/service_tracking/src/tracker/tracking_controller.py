@@ -14,15 +14,16 @@ import json
 import numpy as np
 import torch
 
+from shared_libs.common.google_storage import GoogleStorageClient
 from shared_libs.common.wandb_logger import wandb_logger
 from shared_libs.common import track_serialization
 from shared_libs.common.model import ReIdModel
 
 from schemas.tracking import TrackingParams
-from detection import DetectionModel
+from tracker.detection import DetectionModel
 from tracker.byte_tracker import BYTETracker
 from tracker.cam_mvmt import calculate_transform
-from utils import emb_files
+from tracking_utils import emb_files
 
 ENABLE_REID = True
 DEFAULT_CONFIDENCE_THRESHOLD = 0.4
@@ -33,12 +34,14 @@ class TrackingController:
     Handles video discovery, pipeline execution, and status reporting.
     """
 
-    def __init__(self, tracking_params: TrackingParams, wandb_run_name: Optional[str] = None):
+    def __init__(self, tracking_params: TrackingParams, tenant_id: str, wandb_run_name: Optional[str] = None):
         self.tracking_params = tracking_params
+        self.tenant_id = tenant_id
         self.wandb_run_name = wandb_run_name
         self.detector = DetectionModel()
         self.device_str = "cpu"
         self.reid_model = None
+        self.storage_client = GoogleStorageClient(tenant_id)
 
         if ENABLE_REID:
             self.wandb_logger = wandb_logger
@@ -75,7 +78,15 @@ class TrackingController:
         # If it's a GCS path, download it locally
         if video_path.startswith("gs://"):
             local_path = f"/tmp/{os.path.basename(video_path)}"
-            download_blob(video_path, local_path)
+            # Strip gs://bucket/tenant/ if present
+            blob_path = video_path
+            prefix = f"gs://{self.storage_client.config.bucket_name}/{self.tenant_id}/"
+            if blob_path.startswith(prefix):
+                blob_path = blob_path[len(prefix):]
+            elif blob_path.startswith(f"gs://{self.storage_client.config.bucket_name}/"):
+                blob_path = blob_path[len(f"gs://{self.storage_client.config.bucket_name}/"):]
+            
+            self.storage_client.download_blob(blob_path, local_path)
             video_path = local_path
         elif video_path.startswith(('http://', 'https://')):
             logger.info(f"Downloading video from URL: {video_path}")
@@ -110,7 +121,7 @@ class TrackingController:
                  detections = np.column_stack((detections_obj.xyxy, detections_obj.confidence))
                  
                  # Apply detection filtering pipeline (NMS + border removal)
-                 from utils.detection_filters import filter_detections_pipeline
+                 from tracking_utils.detection_filters import filter_detections_pipeline
                  detections = filter_detections_pipeline(
                      detections,
                      frame_size=(frame.shape[1], frame.shape[0]),  # (width, height)
@@ -121,15 +132,12 @@ class TrackingController:
             else:
                 detections = np.empty((0, 5))
 
-            if frame_count > 0:
+            if frame_count > 0 and prev_frame is not None:
                 S, T = calculate_transform(prev_frame, frame)
             else:
                 S, T = None, None
             
-            if ENABLE_REID:
-                frame_tracks = self.tracker.assign_tracks_to_detections(detections, S, T, frame)
-            else:
-                frame_tracks = self.tracker.assign_tracks_to_detections(detections, S, T)
+            frame_tracks = self.tracker.assign_tracks_to_detections(detections, S, T, frame)
             
             all_tracks.append(frame_tracks.copy())
             if detections_save_path is not None:

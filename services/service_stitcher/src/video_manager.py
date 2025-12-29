@@ -16,7 +16,7 @@ from typing import Dict, Tuple, cast, Any, Optional, List
 from PIL import Image
 from supervision import Detections
 
-from .frame_cache import RollingFrameCache
+from frame_cache import RollingFrameCache
 
 import shared_libs.config.logging_config 
 from shared_libs.common.player_manager import initialize_player_manager, load_player_manager, Player

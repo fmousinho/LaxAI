@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, Union
 from pydantic import BaseModel, Field
 
-from ..state_machine import TrainingJobState
+from state_machine import TrainingJobState
 
 
 class TrainingJobDocument(BaseModel):

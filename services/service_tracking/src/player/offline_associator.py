@@ -18,7 +18,7 @@ from sklearn.metrics import silhouette_samples
 from collections import defaultdict
 import json
 
-from .offline_config import OfflinePlayerConfig
+from player.offline_config import OfflinePlayerConfig
 
 logger = logging.getLogger(__name__)
 

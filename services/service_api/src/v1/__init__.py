@@ -2,9 +2,9 @@
 
 from fastapi import APIRouter
 
-from .endpoints.train import router as train_router
-from .endpoints.track import router as track_router
-from .endpoints.stitch import router as stitch_router
+from v1.endpoints.train import router as train_router
+from v1.endpoints.track import router as track_router
+from v1.endpoints.stitch import router as stitch_router
 
 # Use normalized routing: /api/v1/{service}/...
 router = APIRouter()
