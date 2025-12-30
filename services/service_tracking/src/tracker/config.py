@@ -3,17 +3,10 @@ Tracking API request/response schemas and configuration for the tracking service
 Explicit Pydantic models that use config defaults directly.
 """
 
-from __future__ import annotations
-
-import os
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-from shared_libs.config.all_config import (
-    tracker_config,
-)
 
 
 class DetectionModelConfig(BaseSettings):
@@ -25,11 +18,10 @@ class DetectionModelConfig(BaseSettings):
         extra="ignore",
         case_sensitive=False,
     )
-
     # WandB settings
     wandb_api_key: str = Field(
         ...,
-        description="WandB API key for authentication",
+        description="WandB API key for authentication. Used to download the detection model from WandB.",
     )
     wandb_model_artifact: str = Field(
         default="fmousinho76-home-org/wandb-registry-model/Detections:latest",
@@ -37,85 +29,142 @@ class DetectionModelConfig(BaseSettings):
     )
     wandb_project: str = Field(
         default="LaxAI-Tracking",
-        description="WandB project name for tracking model downloads",
+        description="WandB project name for tracking model downloads. Used by WandB to group runs.",
     )
     wandb_run_name: str = Field(
         default="model-download",
-        description="WandB run name for model download operations",
+        description="WandB run name for model download operations.",
     )
-
     # Model file settings
     artifact_file_name: str = Field(
         default="common-models-detection_latest.pth",
-        description="Filename of the model weights within the artifact",
+        description="Filename of the model weights within the artifact.",
     )
     num_classes: int = Field(
         default=6,
-        description="Number of classes the model was trained with",
+        description="Number of classes the model was trained with. If not provided, it is automatically detected.",
     )
-
     # Device settings
     device: Optional[str] = Field(
         default=None,
         description="Device to run the model on (cuda/mps/cpu). Auto-detected if None.",
     )
 
-
 # Global detection model config instance
 detection_model_config = DetectionModelConfig()
 
 
+class TrackingParams(BaseSettings):
+    """Tracking hyperparameters - mirrors DetectionConfig and TrackerConfig."""
 
-class TrackingParams(BaseModel):
-    """Tracking hyperparameters - mirrors DetectionConfi    g and TrackerConfig."""
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
 
-    # Detection Config
-    prediction_threshold: float = Field(default=tracker_config.prediction_threshold, description="Prediction confidence threshold")
-    
-    # Tracker Config
-    track_activation_threshold: float = Field(default=tracker_config.track_activation_threshold, description="Used to separate high and low confidence detections")
-    lost_track_buffer: int = Field(default=tracker_config.lost_track_buffer, description="How many frames to wait before declaring a track lost")
-    max_match_distance: float = Field(default=tracker_config.max_match_distance, description="Max distance for tracks to be matched")
-    min_consecutive_frames: int = Field(default=tracker_config.min_consecutive_frames, description="Minimum consecutive frames for tracks to be confirmed")
+    # Detection Params
+    default_confidence_threshold: float = Field(
+        default=0.4,
+        description="Default detection confidence threshold. Detections with lower values are discarded.",
+    )
+    nms_iou_threshold: float = Field(
+        default=0.3,
+        description="Detections that overlap (IoU) with each other by more than this threshold are discarded.",
+    )
+    border_margin: int = Field(
+        default=2,
+        description="Detections with bounding box less than border_margin from the frame's edges are discarded.",
+    )
+
+    # Tracking Params
+    prediction_threshold: float = Field(
+        default=0.4, 
+        description="Minimum detection confidence for it to be considered for tracking."
+    )
+    track_activation_threshold: float = Field(
+        default=0.7, 
+        description="Used to separate high and low confidence detections, per BYTETrack algorithm."
+    )
+    lost_track_buffer: int = Field(
+        default=10, 
+        description="How many frames to wait for a lost track to be reactivated before removing it."
+    )
+    high_conf_max_distance: float = Field(
+        default=0.8, 
+        description="Max distance for tracks to be matched when using high confidence detections."
+    )
+    low_conf_max_distance: float = Field(
+        default=0.5, 
+        description="Max distance for tracks to be matched when using low confidence detections."
+    )
+    unconfirmed_max_distance: float = Field(
+        default=0.8, 
+        description="Max distance for tracks to be matched when using unconfirmed detections."
+    )
+    min_consecutive_frames: int = Field(
+        default=3, 
+        description="Minimum consecutive frames for tracks to be confirmed."
+    )
+    use_only_confirmed_tracks: bool = Field(
+        default=True,
+        description="If True, only confirmed tracks are written to the output. If False, all tracks are returned."
+    )
     
     # Embedding Config
-    embedding_update_frequency: int = Field(default=5, description="Frequency (in frames) to update track embeddings")
-    embedding_quality_threshold: float = Field(default=0.6, description="Minimum detection score to trigger embedding update")
-    embedding_min_detection_confidence: float = Field(default=0.6, description="Minimum confidence for detections to be considered for embeddings")
-    
-    # Pipeline Config
-    resume_from_checkpoint: bool = Field(default=True, description="Resume from checkpoint if available")
-    
+    enable_reid: bool = Field(
+        default=True,
+        description="Enable ReID feature extraction during tracking. Required for player association later."
+    )
+    embedding_update_frequency: int = Field(
+        default=5, 
+        description="Frequency (in frames) to update track embeddings list."
+    )
+    embedding_quality_threshold: float = Field(
+        default=0.6, 
+        description="Minimum detection score to trigger embedding update."
+    )
+
+    # Cost Matrix Config
+    apply_aspect_ratio_penalty: bool = Field(
+        default=True,
+        description="Apply aspect ratio change penalty to cost matrix."
+    )
+    apply_height_gate: bool = Field(
+        default=True,
+        description="Apply height change penalty to cost matrix."
+    )
+    apply_enforce_min_distance: bool = Field(
+        default=True,
+        description="Rejects associations if the best distance is less than enforce_min_distance_threshold from the second best distance."
+    )
+    aspect_ratio_factor: float = Field(
+        default=0.6,
+        description="Factor to apply to aspect ratio change penalty."
+    )
+    height_threshold: float = Field(
+        default=0.2,
+        description="Maximum height change for association to be accepted."
+    )
+    min_distance_threshold: float = Field(
+        default=0.2,
+        description="Minimum separation for association to be accepted."
+    )
 
 
+class KalmanFilterConfig(BaseSettings):
+    """Configuration for the Kalman Filter used in tracking."""
 
-class TrackingRequest(BaseModel):
-    """Tracking request model with explicit parameter validation."""
+    std_weight_position: float = Field(
+        default=0.198,  # Obtained from actual video analysis
+        description="Standard deviation weight for position",
+    )
+    std_weight_velocity: float = Field(
+        default=0.014695, # Obtained from actual video analysis
+        description="Standard deviation weight for velocity",
+    )
 
-    tenant_id: str = Field(..., description="Tenant identifier for the tracking job")
-    custom_name: str = Field(default="track_generation_run", description="Custom name for the run")
-    tracking_params: Optional[TrackingParams] = Field(default_factory=TrackingParams, description="Tracking-specific parameters")
-    verbose: bool = Field(default=True, description="Enable verbose logging")
-
-
-class TrackingResponse(BaseModel):
-    """Tracking response model."""
-
-    task_id: str = Field(..., description="Unique identifier for the tracking task")
-    status: str = Field(..., description="Current status of the tracking task")
-    message: str = Field(..., description="Status message")
-    created_at: str = Field(..., description="Task creation timestamp")
+kalman_filter_config = KalmanFilterConfig()
 
 
-class TrackingStatus(BaseModel):
-    """Tracking status model."""
-
-    task_id: str = Field(..., description="Unique identifier for the tracking task")
-    status: str = Field(..., description="Current status of the tracking task")
-    progress: Optional[float] = Field(None, description="Tracking progress percentage (0-100)")
-    frames_processed: Optional[int] = Field(None, description="Number of frames processed")
-    total_frames: Optional[int] = Field(None, description="Total number of frames")
-    videos_processed: Optional[int] = Field(None, description="Number of videos processed")
-    total_videos: Optional[int] = Field(None, description="Total number of videos")
-    error: Optional[str] = Field(None, description="Error message if failed")
-    updated_at: str = Field(..., description="Last update timestamp")

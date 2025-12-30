@@ -1,16 +1,8 @@
 import logging
-logger = logging.getLogger(__name__)
-
-
-import threading
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
-import tempfile
-import urllib.request
 import os
+from typing import Optional
 
 import cv2
-import json
 import numpy as np
 import torch
 
@@ -20,12 +12,21 @@ from shared_libs.common.model import ReIdModel
 
 from tracker.config import TrackingParams
 from tracker.detection import DetectionModel
-from tracker.byte_tracker import BYTETracker
+from tracker.tracker import Tracker
 from tracker.cam_mvmt import calculate_transform
 from tracking_utils import emb_files
 
-ENABLE_REID = True
-DEFAULT_CONFIDENCE_THRESHOLD = 0.4
+logger = logging.getLogger(__name__)
+
+FRAMES_PER_LOG_MSG = 50
+PLAYER_CLASS_ID = 3  
+''' Classes used during RFDETR training:
+    1: goalkeeper
+    2: not_player (not used)
+    3: player
+    4: player_opposing_team (not used)
+    5: referee
+'''
 
 class TrackingController:
     """
@@ -33,42 +34,55 @@ class TrackingController:
     Handles video discovery, pipeline execution, and status reporting.
     """
 
-    def __init__(self, tracking_params: TrackingParams, wandb_run_name: Optional[str] = None):
-        self.tracking_params = tracking_params
-        self.wandb_run_name = wandb_run_name
+    def __init__(
+        self,
+        tracking_params: TrackingParams,
+    ):
+        self.params = tracking_params
         self.detector = DetectionModel()
         self.device_str = "cpu"
         self.reid_model = None
 
-        if ENABLE_REID:
+        if self.params.enable_reid:
             self.wandb_logger = wandb_logger
             self.reid_model = self.wandb_logger.load_model_from_registry(
-                        model_class=ReIdModel,
-                        collection_name=ReIdModel.model_name,
-                    alias="latest",
-                    device=self.device_str,
-                    pretrained=False
-                )
+                model_class=ReIdModel,
+                collection_name=ReIdModel.model_name,
+                alias="latest",
+                device=self.device_str,
+                pretrained=False,
+            )
             if self.reid_model is None:
                 raise ValueError("ReID model not found in registry")
             self.reid_model.eval()
         
-        self.tracker = BYTETracker(self.tracking_params, reid_model=self.reid_model)
+        self.tracker = Tracker(
+            self.params,
+            reid_model=self.reid_model,
+        )
             
 
-    def run (self, video_path: str, tracks_save_path: str, detections_save_path: Optional[str] = None, embeddings_save_path: Optional[str] = None):
+    def run(
+        self,
+        video_path: str,
+        tracks_save_path: str,
+        detections_save_path: Optional[str] = None,
+        embeddings_save_path: Optional[str] = None,
+    ):
         """
         Generates detections and tracks from a given video.
 
         Args:
             video_path: Path to the video file (URL or local path).
-            tracks_save_path: Path to the json file where the tracks will be saved.
-            detections_save_path: Path to the json file where the detections will be saved.
+            tracks_save_path: Path to the json file where the tracks will be
+                saved.
+            detections_save_path: Path to the json file where the detections
+                will be saved.
 
         Returns:
             TBD.
         """
-        logger.info(f"Starting Tracking Controller")
+        logger.info("Starting Tracking Controller")
 
         # Verify the video path is a local file
         if not os.path.exists(video_path):
@@ -92,23 +106,34 @@ class TrackingController:
 
             frame = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
-            detections_obj = self.detector.predict(frame, threshold=DEFAULT_CONFIDENCE_THRESHOLD)
+            detections_obj = self.detector.predict(
+                frame,
+                threshold=
+                tracking_controller_config.default_confidence_threshold,
+            )
 
             # Filter out non-player detections
-            player_mask = detections_obj.class_id == 3
+            player_mask = detections_obj.class_id == PLAYER_CLASS_ID
             detections_obj = detections_obj[player_mask]
             
             if len(detections_obj.xyxy) > 0:
-                 detections = np.column_stack((detections_obj.xyxy, detections_obj.confidence))
+                 detections = np.column_stack(
+                     (detections_obj.xyxy, detections_obj.confidence)
+                 )
                  
                  # Apply detection filtering pipeline (NMS + border removal)
-                 from tracking_utils.detection_filters import filter_detections_pipeline
+                 from tracking_utils.detection_filters import (
+                     filter_detections_pipeline,
+                 )
                  detections = filter_detections_pipeline(
                      detections,
-                     frame_size=(frame.shape[1], frame.shape[0]),  # (width, height)
+                     frame_size=(frame.shape[1], frame.shape[0]),
+                     # (width, height)
                      track_predictions=None,  # Will be handled in byte_tracker
-                     nms_iou_threshold=0.3,
-                     border_margin=2,
+                     nms_iou_threshold=
+                     tracking_controller_config.nms_iou_threshold,
+                     border_margin=
+                     tracking_controller_config.border_margin,
                  )
             else:
                 detections = np.empty((0, 5))
@@ -118,7 +143,12 @@ class TrackingController:
             else:
                 S, T = None, None
             
-            frame_tracks = self.tracker.assign_tracks_to_detections(detections, S, T, frame)
+            frame_tracks = self.tracker.assign_tracks_to_detections(
+                detections,
+                S,
+                T,
+                frame,
+            )
             
             all_tracks.append(frame_tracks.copy())
             if detections_save_path is not None:
@@ -128,39 +158,45 @@ class TrackingController:
             prev_frame = frame
             
             # Log progress
-            if frame_count % 50 == 0:
+            if frame_count % FRAMES_PER_LOG_MSG == 0:
                 logger.info(f"Processed {frame_count}/{ttl_frames} frames")
 
         cap.release()
         
         # Log prediction accuracy statistics
-        logger.info(f"Video processing complete. Logging prediction statistics...")
+        logger.info(
+            "Video processing complete. Logging prediction statistics..."
+        )
         self.tracker.log_prediction_statistics()
 
         # Save tracks using unified serialization module
         track_serialization.save(
             objects_per_frame=all_tracks,
-            video_source=original_video_path,
+            video_source=video_path,
             save_path=tracks_save_path
         )
         
         if detections_save_path is not None:
             track_serialization.save(
                 objects_per_frame=all_detections,
-                video_source=original_video_path,
+                video_source=video_path,
                 save_path=detections_save_path
         )
 
         if embeddings_save_path is not None:
             # Collect all tracks (deduplicated by track_id)
             # The tracker keeps track of tracked, lost, and removed.
-            # Using byte_tracker.joint_stracks to get unique objects might be useful, or manual dict.
+            # Using byte_tracker.joint_stracks to get unique objects might be
+            # useful, or manual dict.
             all_stracks = {}
             
             # Helper to add tracks
             def add_unique_tracks(tracks):
                 for t in tracks:
-                    if t.track_id not in all_stracks and t.features is not None:
+                    if (
+                        t.track_id not in all_stracks
+                        and t.features is not None
+                    ):
                         all_stracks[t.track_id] = t
             
             add_unique_tracks(self.tracker.tracked_stracks)
@@ -187,7 +223,10 @@ class TrackingController:
                     'count': t.features_count
                 }
             
-            logger.info(f"Saving {len(embeddings_dict)} track embeddings to {embeddings_save_path}")
+            logger.info(
+                f"Saving {len(embeddings_dict)} track embeddings "
+                f"to {embeddings_save_path}"
+            )
             emb_files.save_embeddings(embeddings_dict, embeddings_save_path)
             
         return True

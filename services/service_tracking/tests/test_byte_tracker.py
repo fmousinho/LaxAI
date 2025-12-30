@@ -10,18 +10,12 @@ sys.path.insert(0, service_tracking_dir)
 
 from tracker.byte_tracker import BYTETracker, STrack
 from tracker.basetrack import TrackState
-
-class MockArgs:
-    def __init__(self):
-        self.track_thresh = 0.5
-        self.track_buffer = 30
-        self.mot20 = False
-        self.match_thresh = 0.8
+from tracker.config import TrackingParams
 
 class TestBYTETracker(unittest.TestCase):
     def test_byte_tracker_update_with_cam_motion(self):
-        args = MockArgs()
-        tracker = BYTETracker(args)
+        params = TrackingParams()
+        tracker = BYTETracker(params)
         
         # 1. First Update: Initialize a track
         # Detections: Nx5 array (x1, y1, x2, y2, score)

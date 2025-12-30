@@ -2,9 +2,6 @@
 
 import copy
 import logging
-import os
-import os.path as osp
-from collections import deque
 from typing import List, Optional, Tuple
 
 import cv2
@@ -22,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 # Affine transform to track camera motion significantly improves accuracy
 COMPENSATE_CAM_MOTION = True
-REID_INPUT_SIZE = (224, 224)
 
 
 class STrack(BaseTrack):
@@ -259,7 +255,7 @@ class STrack(BaseTrack):
         )
 
 
-class BYTETracker(object):
+class Tracker(object):
     """ByteTrack multi-object tracker with ReID support."""
 
     def __init__(self, args: TrackingParams, frame_rate=30,
@@ -278,21 +274,14 @@ class BYTETracker(object):
         self.ephemeral_stracks = []  # type: list[STrack]
 
         self.frame_id = 0
+        self.params = args
 
-        self.track_activation_threshold = args.track_activation_threshold
-        self.max_match_distance = args.max_match_distance
-        self.prediction_threshold = args.prediction_threshold
-        self.min_consecutive_frames = args.min_consecutive_frames
-        self.lost_track_buffer = args.lost_track_buffer
         self.kalman_filter = KalmanFilter()
 
         self.embedding_update_frequency = args.embedding_update_frequency
         self.embedding_quality_threshold = args.embedding_quality_threshold
-        self.embedding_min_detection_confidence = (
-            args.embedding_min_detection_confidence
-        )
+
         self.reid_model = reid_model
-        self.reid_model_input_size = REID_INPUT_SIZE
 
         # Track prediction accuracy metrics
         # Store all prediction errors for variance calculation
@@ -302,7 +291,7 @@ class BYTETracker(object):
 
     def update(self, detections_array: np.ndarray,
                S_array: Optional[np.ndarray],
-               T_array: Optional[np.ndarray]) -> List[STrack]:
+               T_array: Optional[np.ndarray]):
         """Update tracker with new detections.
 
         Args:
@@ -332,7 +321,7 @@ class BYTETracker(object):
             remove_border_detections
         )
         detections = remove_border_detections(
-            detections_array, frame_size=self.frame_size, margin=2
+            detections_array, frame_size=self.frame_size, margin=self.params.border_margin
         )
 
         if detections.shape[1] >= 5:
@@ -343,14 +332,14 @@ class BYTETracker(object):
                 "[x1, y1, x2, y2, score]"
             )
 
-        remain_inds_mask = np.where(scores >= self.prediction_threshold)[0]
+        remain_inds_mask = np.where(scores >= self.params.prediction_threshold)[0]
         remain_detections = detections[remain_inds_mask]
 
         low_conf_mask = np.where(
-            remain_detections[:, 4] < self.track_activation_threshold
+            remain_detections[:, 4] < self.params.track_activation_threshold
         )[0]
         high_conf_mask = np.where(
-            remain_detections[:, 4] >= self.track_activation_threshold
+            remain_detections[:, 4] >= self.params.track_activation_threshold
         )[0]
 
         detections_high = remain_detections[high_conf_mask]
@@ -358,7 +347,7 @@ class BYTETracker(object):
 
         logger.debug(
             f"total detections: {len(remain_detections)} | "
-            f"thresh: {self.track_activation_threshold} | "
+            f"thresh: {self.params.track_activation_threshold} | "
             f"high conf: {len(high_conf_mask)} | low: {len(low_conf_mask)}"
         )
 
@@ -378,10 +367,10 @@ class BYTETracker(object):
 
             # Re-split into high and low confidence after rejection
             low_conf_mask = np.where(
-                remain_detections[:, 4] < self.track_activation_threshold
+                remain_detections[:, 4] < self.params.track_activation_threshold
             )[0]
             high_conf_mask = np.where(
-                remain_detections[:, 4] >= self.track_activation_threshold
+                remain_detections[:, 4] >= self.params.track_activation_threshold
             )[0]
             detections_high = remain_detections[high_conf_mask]
             detections_low = remain_detections[low_conf_mask]
@@ -412,7 +401,7 @@ class BYTETracker(object):
         (newly_activated_stracks, newly_refind_stracks,
          newly_pending_stracks, unmatched_stracks,
          unmatched_detections_s1) = self.association_step(
-            strack_pool, detections_high, max_match_distance=0.8
+            strack_pool, detections_high, max_match_distance=self.params.high_conf_max_distance
         )
         activated_stracks.extend(newly_activated_stracks)
         refind_stracks.extend(newly_refind_stracks)
@@ -425,7 +414,7 @@ class BYTETracker(object):
         (newly_activated_stracks, newly_refind_stracks,
          newly_pending_stracks, unmatched_stracks,
          unmatched_detections_s2) = self.association_step(
-            unmatched_stracks, detections_low, max_match_distance=0.5
+            unmatched_stracks, detections_low, max_match_distance=self.params.low_conf_max_distance
         )
         activated_stracks.extend(newly_activated_stracks)
         refind_stracks.extend(newly_refind_stracks)
@@ -448,7 +437,7 @@ class BYTETracker(object):
         (newly_activated_stracks, _, newly_pending_stracks,
          unmatched_stracks, unmatched_detections) = self.association_step(
             self.pending_stracks, unmatched_detections,
-            max_match_distance=0.8
+            max_match_distance=self.params.pending_max_distance
         )
         activated_stracks.extend(newly_activated_stracks)
         pending_stracks.extend(newly_pending_stracks)
@@ -464,11 +453,11 @@ class BYTETracker(object):
         for detection in unmatched_detections:
             bbox = bboxes_from(detection[np.newaxis, :])[0]
             score = scores_from(detection[np.newaxis, :])[0]
-            if score < self.prediction_threshold:
+            if score < self.params.prediction_threshold:
                 continue
             track = STrack(STrack.tlbr_to_tlwh(bbox), score)
             track.activate(self.kalman_filter, self.frame_id)
-            if track.score >= self.embedding_quality_threshold:
+            if track.score >= self.params.embedding_quality_threshold:
                 self.initiate_track_reid_features(track)
             pending_stracks.append(track)
             self.update_with_track(detection, track)
@@ -483,7 +472,7 @@ class BYTETracker(object):
             "=== Step 5: Update state for lost tracks ============="
         )
         for track in self.lost_stracks:
-            if self.frame_id - track.end_frame > self.lost_track_buffer:
+            if self.frame_id - track.end_frame > self.params.lost_track_buffer:
                 track.mark_removed()
                 removed_stracks.append(track)
                 pred_tlbr_str = ", ".join(
@@ -518,23 +507,16 @@ class BYTETracker(object):
                 self.update_track_reid_features(
                     track, all_tracks_for_overlap, detections
                 )
-        
-        TRACK_BY_TRACK_LOG = False
-        if (logger.getEffectiveLevel() == logging.DEBUG and
-                TRACK_BY_TRACK_LOG):
-            self.log_frame_summary()
 
-        # Return only confirmed tracks
-        output_stracks = self.tracked_stracks
 
         self.frame_id += 1
-        return output_stracks
+        return
 
     def association_step(
             self,
             strack_pool: List[STrack],
             detections: np.ndarray,
-            max_match_distance: float = 0.8,
+            max_match_distance: float
     ) -> Tuple[List[STrack], List[STrack], List[STrack],
                List[STrack], List[np.ndarray]]:
         """Perform association step: cost calculation, matching, updates.
@@ -558,10 +540,12 @@ class BYTETracker(object):
                 strack_pool,
                 detections,
                 kalman_filter_obj=None,  # Can be added later if needed
-                apply_aspect_ratio_penalty=True,
-                apply_height_gate=True,
-                aspect_ratio_factor=0.6,
-                height_threshold=0.2,
+                apply_aspect_ratio_penalty=self.params.apply_aspect_ratio_penalty,
+                apply_height_gate=self.params.apply_height_gate,
+                apply_enforce_min_distance=self.params.apply_enforce_min_distance,
+                aspect_ratio_factor=self.params.aspect_ratio_factor,
+                height_threshold=self.params.height_threshold,
+                min_distance_threshold=self.params.min_distance_threshold,
             )
             matches, u_track, u_detection = matching.linear_assignment(
                 cost_matrix, thresh=max_match_distance
@@ -653,64 +637,6 @@ class BYTETracker(object):
         else:
             return [], [], [], strack_pool, detections
 
-    def log_frame_summary(self):
-        """Log a summary of all tracks in current frame, sorted by ID."""
-        # Deduplicate tracks across lists to avoid duplicate IDs in the log
-        all_tracks = joint_stracks(
-            joint_stracks(self.tracked_stracks, self.lost_stracks),
-            self.removed_stracks
-        )
-        # Sort by track_id
-        all_tracks.sort(key=lambda x: x.track_id)
-
-        statuses_for_metrics = ["Tracked", "Pending", "Lost"]
-        logger.debug(f"=== Frame {self.frame_id} Summary ===")
-        for t in all_tracks:
-            # Determine status string
-            status = "Unknown"
-            if t.state == TrackState.Tracked:
-                if t.is_activated:
-                    status = "Tracked"
-                else:
-                    status = "Pending"
-            elif t.state == TrackState.Lost:
-                status = "Lost"
-            elif t.state == TrackState.Removed and not t.is_activated:
-                status = "Ephemeral"
-            elif t.state == TrackState.Removed and t.is_activated:
-                status = "Removed"
-            
-            if status in statuses_for_metrics or status == "Removed":
-                pred_tlbr = t.predicted_tlbr
-                curr_tlbr = t.tlbr
-                pred_str = (
-                    f"[{pred_tlbr[0]:4.0f}, {pred_tlbr[1]:3.0f}, "
-                    f"{pred_tlbr[2]:4.0f}, {pred_tlbr[3]:3.0f}]"
-                )
-                curr_str = (
-                    f"[{curr_tlbr[0]:4.0f}, {curr_tlbr[1]:3.0f}, "
-                    f"{curr_tlbr[2]:4.0f}, {curr_tlbr[3]:3.0f}]"
-                )
-                cost_str = (
-                    f"{t.match_cost:.4f}" 
-                    if t.match_cost is not None else "N/A"
-                )
-                if status == "Removed":
-                    cost_str = "REMOVED"
-                score_str = f"{t.score:.2f}"
-            else:
-                pred_str = None
-                curr_str = None
-                cost_str = None
-                score_str = None
-                pred_tlbr = None
-                curr_tlbr = None
-
-            logger.debug(
-                f"ID: {t.track_id:3d} | Status: {status:9s} | "
-                f"Score: {score_str} | Cost: {cost_str} | "
-                f"Pred TLBR: {pred_str} | TLBR: {curr_str}"
-            )
 
 
     def assign_tracks_to_detections(
@@ -749,10 +675,9 @@ class BYTETracker(object):
         # Store reference for update_with_track
         self._original_detections = detections
         
-        _ = self.update(detections, S_array, T_array)
+        self.update(detections, S_array, T_array)
 
-        confirmed_tracks_only = True
-        if confirmed_tracks_only:
+        if self.params.use_only_confirmed_tracks:
             mask = self._original_detections[:, 7] == 0
             self._original_detections[:, 5][mask] = -1 
  
@@ -913,14 +838,14 @@ class BYTETracker(object):
         
         Updates every N frames.
         """
-        if track.score < self.embedding_quality_threshold:
+        if track.score < self.params.embedding_quality_threshold:
             return
         
         if track.features is None:
             self.initiate_track_reid_features(track)
             return
         
-        if track.tracklet_len % self.embedding_update_frequency != 0:
+        if track.tracklet_len % self.params.embedding_update_frequency != 0:
             return
 
         # Overlap Check
@@ -1078,77 +1003,6 @@ def remove_duplicate_stracks(stracksa, stracksb):
     resb = [t for i, t in enumerate(stracksb) if i not in dupb]
 
 
-def remove_border_detections_from(detections: np.ndarray,
-                                  frame_size: Tuple[int, int] = (1920, 1080),
-                                  margin: int = 2) -> np.ndarray:
-    """Remove detections that touch the border to improve embedding quality.
-
-    Args:
-        detections: Array of detections with shape (N, 5).
-        frame_size: Tuple of (width, height) of the frame.
-        margin: Number of pixels to leave from the border.
-
-    Returns:
-        Filtered detections array.
-    """
-    if len(detections) > 0:
-        img_w, img_h = frame_size
-        bboxes_remain = detections[:, :4]
-        not_touching_border = (
-            (bboxes_remain[:, 0] > margin) &
-            (bboxes_remain[:, 1] > margin) &
-            (bboxes_remain[:, 2] < img_w - margin) &
-            (bboxes_remain[:, 3] < img_h - margin)
-        )
-        return detections[not_touching_border]
-
-
-def panalize_aspect_ratio_swings(cost_matrix: np.ndarray,
-                                  stracks: List[STrack],
-                                  detections: np.ndarray,
-                                  factor: float = .5):
-    """Penalize aspect ratio changes in cost matrix.
-
-    Args:
-        cost_matrix: Cost matrix to modify.
-        stracks: List of tracks.
-        detections: Detection array.
-        factor: Penalty factor for aspect ratio changes.
-
-    Raises:
-        ValueError: If dimensions don't match.
-    """
-    if (len(stracks) != cost_matrix.shape[0] or
-            len(detections) != cost_matrix.shape[1]):
-        raise ValueError(
-            "Cost matrix dimensions do not match the number of "
-            "tracks and detections"
-        )
-    cost_matrix += matching.aspect_ratio_distance(stracks, detections) * factor
-
-
-def penalize_scale_swings(cost_matrix: np.ndarray, stracks: List[STrack],
-                          detections: np.ndarray, factor: float = 1.0):
-    """Penalize scale changes in cost matrix.
-
-    Args:
-        cost_matrix: Cost matrix to modify.
-        stracks: List of tracks.
-        detections: Detection array.
-        factor: Penalty factor for scale changes.
-
-    Raises:
-        ValueError: If dimensions don't match.
-    """
-    if (len(stracks) != cost_matrix.shape[0] or
-            len(detections) != cost_matrix.shape[1]):
-        raise ValueError(
-            "Cost matrix dimensions do not match the number of "
-            "tracks and detections"
-        )
-    cost_matrix += matching.scale_distance(stracks, detections) * factor
-
-
 def bboxes_from(detections: np.ndarray) -> np.ndarray:
     """Extract bounding boxes from detections array."""
     return detections[:, :4]
@@ -1157,41 +1011,4 @@ def bboxes_from(detections: np.ndarray) -> np.ndarray:
 def scores_from(detections: np.ndarray) -> np.ndarray:
     """Extract scores from detections array."""
     return detections[:, 4]
-
-
-def gate_cost_matrix_height(cost_matrix: np.ndarray, tracks: List,
-                            detections: np.ndarray,
-                            threshold: float = 0.1) -> np.ndarray:
-    """Gate association if height change is too large.
-
-    Args:
-        cost_matrix: Cost matrix to gate.
-        tracks: List of STrack objects.
-        detections: Detections array (N, >=4) in tlbr format.
-        threshold: Maximum relative change in height.
-
-    Returns:
-        Gated cost matrix.
-    """
-    if cost_matrix.size == 0 or len(tracks) == 0 or len(detections) == 0:
-        return cost_matrix
-
-    detections_tlbr = detections[:, :4]
-    det_heights = detections_tlbr[:, 3] - detections_tlbr[:, 1]
-
-    # We use track.tlbr which computes it from mean
-    track_heights = np.array([(t.tlbr[3] - t.tlbr[1]) for t in tracks])
-
-    # Expand for broadcasting
-    # tracks: (N, 1), dets: (1, M)
-    t_h = track_heights[:, np.newaxis]
-    d_h = det_heights[np.newaxis, :]
-
-    # Check relative difference: abs(t - d) / t
-    # Add epsilon to avoid div by zero
-    diff = np.abs(t_h - d_h) / (t_h + 1e-6)
-
-    cost_matrix[diff > threshold] = np.inf
-    return cost_matrix
-
 

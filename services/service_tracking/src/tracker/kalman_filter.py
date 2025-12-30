@@ -2,6 +2,8 @@
 import numpy as np
 import scipy.linalg
 
+from config import kalman_filter_config
+
 
 """
 Table for the 0.95 quantile of the chi-square distribution with N degrees of
@@ -49,8 +51,8 @@ class KalmanFilter(object):
         # Motion and observation uncertainty are chosen relative to the current
         # state estimate. These weights control the amount of uncertainty in
         # the model. This is a bit hacky.
-        self._std_weight_position = 0.0198
-        self._std_weight_velocity = 0.014695
+        self._std_weight_position = kalman_filter_config.std_weight_position
+        self._std_weight_velocity = kalman_filter_config.std_weight_velocity
 
     def initiate(self, measurement):
         """Create track from unassociated measurement.

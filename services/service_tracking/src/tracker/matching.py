@@ -283,118 +283,6 @@ def fuse_score(cost_matrix, detections):
     fuse_cost = 1 - fuse_sim
     return fuse_cost
 
-
-def v_iou_reid_distance(
-    tracks: List, 
-    detections_bboxes: np.ndarray, 
-    embedding_func: Callable, 
-    kalman_filter_obj: Optional[kalman_filter.KalmanFilter] = None,
-    iou_thresh=0.0, 
-    reid_weight=0.7,
-) -> np.ndarray:
-    """
-    Computes a cost matrix blending IoU and ReID distance.
-    Only computes ReID distance for pairs with IoU > iou_thresh.
-    
-    :param tracks: list[STrack]
-    :param detections_bboxes: np.ndarray in tlbr format
-    :param embedding_func: callable(tlbr) -> tensor/numpy
-    :param kalman_filter_obj: KalmanFilter object
-    :param iou_thresh: lower bound for overlap to consider ReID
-    :param reid_weight: weight for ReID distance (0.0 = only IoU, 1.0 = only ReID)
-    :return: cost_matrix np.ndarray
-    """
-    if len(tracks) == 0 or len(detections_bboxes) == 0:
-        return np.empty((len(tracks), len(detections_bboxes)))
-
-    if detections_bboxes.shape[1] > 4:
-        detections_bboxes = detections_bboxes[:, :4]
-    elif detections_bboxes.shape[1] < 4:
-        raise ValueError("detections_bboxes must be of shape (N, 4)")
-        
-    # 1. Compute IoU Cost Matrix (1 - IoU)
-    cost_matrix = v_iou_distance(tracks, detections_bboxes)
-    
-    # 2. Apply spatial gating if configured
-    if kalman_filter_obj is not None:
-        cost_matrix = gate_cost_matrix(kalman_filter_obj, cost_matrix, tracks, detections_bboxes)
-    
-    # Identify candidates where we have some overlap
-    # We want similarity = 1 - cost > thresh => cost < 1 - thresh
-    # Or just check simple IoU from 1-cost
-    ious = 1.0 - cost_matrix
-    candidates_mask = ious >= iou_thresh
-    
-    if not np.any(candidates_mask):
-        return cost_matrix
-        
-    # Cache for detection embeddings to avoid re-running model for same detection
-    det_embeddings_cache = {}
-    
-    # 3. Iterate and apply ReID
-    # We'll modify the cost matrix in place for candidates
-    rows, cols = np.where(candidates_mask)
-    
-    for r, c in zip(rows, cols):
-        track = tracks[r]
-        det = detections_bboxes[c]
-        
-        # Skip if already gated
-        if cost_matrix[r, c] == np.inf:
-            continue
-        
-        # Get Track Embedding
-        # Assuming track has .features attribute which is a tensor or numpy array
-        if track.features is None:
-            continue
-            
-        track_feat = track.features
-        if hasattr(track_feat, 'cpu'):
-            track_feat = track_feat.cpu().numpy()
-        if len(track_feat.shape) == 1:
-            track_feat = track_feat.reshape(1, -1)
-            
-        # Get Detection Embedding
-        if c not in det_embeddings_cache:
-            # Assuming det is an STrack or has tlbr property
-            # Or det is the STrack associated with detection
-            bbox = det
-            feat = embedding_func(bbox)
-            if feat is None:
-                det_embeddings_cache[c] = None
-                continue
-                
-            if hasattr(feat, 'cpu'):
-                feat = feat.cpu().numpy()
-            if len(feat.shape) == 1:
-                feat = feat.reshape(1, -1)
-            det_embeddings_cache[c] = feat
-            
-        det_feat = det_embeddings_cache[c]
-        
-        if det_feat is None:
-            continue
-            
-        # Compute Cosine Distance (1 - Cosine Similarity)
-        # cdist returns distance. 'cosine' is 1 - u.v/(|u||v|)
-        # Range is [0, 2]. Normalize to [0, 1] by dividing by 2.0
-        reid_dist = cdist(track_feat, det_feat, metric='cosine')[0][0] / 2.0
-        
-        # 4. Fuse Scores
-        # Weighted average of the IoU distance and ReID distance
-        iou_d = cost_matrix[r, c]
-        
-        # Blend
-        fused_cost = (1 - reid_weight) * iou_d + reid_weight * reid_dist
-        
-        cost_matrix[r, c] = fused_cost
-
-        if logger.getEffectiveLevel() == logging.DEBUG:
-            if iou_d < 1 and reid_dist < 1:
-                logger.debug(f"Track {track.track_id} vs Detection {det.astype(int)}: IoU dist {iou_d:.4f}, ReID dist {reid_dist:.4f}, Fused dist {fused_cost:.4f}")
-        
-    return cost_matrix
-
 # ===========================================================================
 # Cost Matrix Modifiers (Penalties & Gates)
 # ===========================================================================
@@ -472,15 +360,15 @@ def enforce_min_distance(cost_matrix, tracks, detections, min_dist: float = .25)
 
 
 def compute_association_cost(
-    tracks,
-    detections,
-    kalman_filter_obj=None,
-    apply_aspect_ratio_penalty=True,
-    apply_height_gate=True,
-    apply_enforce_min_distance=True,
-    aspect_ratio_factor=0.5,
-    height_threshold=0.2,
-    enforce_min_distance_threshold=0.2,
+    tracks: List,
+    detections: np.ndarray,
+    kalman_filter_obj: Optional,
+    apply_aspect_ratio_penalty: bool,
+    apply_height_gate: bool,
+    apply_enforce_min_distance: bool,
+    aspect_ratio_factor: float,
+    height_threshold: float,
+    min_distance_threshold: float,
 ):
     """Compute full association cost matrix with all penalties and gates applied."""
     bboxes = detections[:, :4]
@@ -496,6 +384,6 @@ def compute_association_cost(
         cost_matrix = gate_cost_matrix(kalman_filter_obj, cost_matrix, tracks, detections)
     
     if apply_enforce_min_distance:
-        cost_matrix = enforce_min_distance(cost_matrix, tracks, detections)
+        cost_matrix = enforce_min_distance(cost_matrix, tracks, detections, min_distance_threshold)
     
     return cost_matrix
