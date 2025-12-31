@@ -6,9 +6,9 @@ This script processes a local video file to generate object tracks using the Byt
 handling detection, embedding extraction, and track association.
 
 Usage Example:
-    python services/service_tracking/src/scripts/generate_tracks.py \
-        --video_path "/path/to/video.mp4" \
-        --output_path "tracks.json" 
+   PYTHONPATH="services/service_tracking/src:." ./.venv/bin/python -m scripts.generate_tracks \
+  --video_path "/Users/fmousinho/Library/Mobile Documents/com~apple~CloudDocs/Documents/Stella/Lacrosse/Fall Raw Videos/summaries/BBL North 2027 vs GRIT Dallas 2027 - 9-45am_summary.mp4" \
+  --output_path "tracks.json"
 """
 
 import logging

@@ -26,7 +26,6 @@ import wandb
 WANDB_AVAILABLE = True
 
 
-
 def requires_wandb_enabled(func: Callable) -> Callable:
     """Decorator to check if wandb is enabled before executing method."""
     @wraps(func)
@@ -96,12 +95,13 @@ class WandbLogger:
     - Automatic test artifact cleanup
     """
 
-    def __init__(self, enabled: bool = wandb_config.enabled):
+    def __init__(self, enabled: bool = wandb_config.enabled, api_key: Optional[str] = None):
         """
         Initialize the wandb logger.
         
         Args:
             enabled: Override config setting for wandb logging
+            api_key: Override config setting for wandb API key
         """
         self.enabled = enabled
         self.run: Any = None
@@ -115,10 +115,23 @@ class WandbLogger:
             self.enabled = False
             logger.warning("wandb package not available, disabling wandb logging")
 
-        self.wandb_api: Any = self._login_and_get_api()
-        if not self.wandb_api:
-            self.enabled = False
-            logger.warning("Failed to login to wandb, disabling wandb logging")
+        if api_key:
+            login_success = wandb.login(key=api_key)
+        elif os.environ.get("WANDB_API_KEY", None):
+            login_success = wandb.login(key=os.environ.get("WANDB_API_KEY"))
+        else:
+            login_success = False
+
+        if login_success:
+            self.wandb_api = wandb.Api()
+        else:
+            self.wandb_api = None
+            if self.enabled:
+                # If a key was provided but login failed, that's a warning.
+                # If no key was provided at all, we'll be quiet as it might be provided later.
+                if api_key or os.environ.get("WANDB_API_KEY"):
+                    logger.warning("Failed to login to wandb with provided key, disabling wandb logging functions")
+                self.enabled = False
 
         # Single worker thread pool for async operations (preserves ordering)
         self._executor: Optional[ThreadPoolExecutor] = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wandb-async")
@@ -147,23 +160,7 @@ class WandbLogger:
 
     def exception(self, msg: str, *args, **kwargs) -> None:
         logger.exception(msg, *args, **kwargs)
-    def _get_api_key(self) -> Optional[str]:
-        """Get and validate wandb API key."""
-        api_key = os.environ.get("WANDB_API_KEY")
-        if not api_key:
-            logger.error("WANDB_API_KEY environment variable not found")
-            return None
-        return api_key
-    
-    def _login_and_get_api(self) -> Optional[object]:
-        """Login to wandb and return API object."""
-        api_key = self._get_api_key()
-        if not api_key:
-            return None
-        
-        wandb.login(key=api_key)
-        return wandb.Api()
-    
+
     def _construct_artifact_path(self, artifact_name: str, version: str = "latest") -> str:
         """Construct standardized artifact path."""
         safe_name = self._sanitize_artifact_name(artifact_name)
@@ -1222,10 +1219,6 @@ class WandbLogger:
             logger.debug(f"Sanitized artifact name: '{name}' -> '{safe}'")
         return safe
 
-
-
-# Global instance
-wandb_logger = WandbLogger()
 
 
 # --- Subprocess Script Logic ---

@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import torch
 
-from shared_libs.common.wandb_logger import wandb_logger
+from shared_libs.common.wandb_logger import WandbLogger
 from shared_libs.common import track_serialization
 from shared_libs.common.model import ReIdModel
 
@@ -44,7 +44,7 @@ class TrackingController:
         self.reid_model = None
 
         if self.params.enable_reid:
-            self.wandb_logger = wandb_logger
+            self.wandb_logger = WandbLogger(api_key=self.params.wandb_api_key)
             self.reid_model = self.wandb_logger.load_model_from_registry(
                 model_class=ReIdModel,
                 collection_name=ReIdModel.model_name,
@@ -108,8 +108,7 @@ class TrackingController:
 
             detections_obj = self.detector.predict(
                 frame,
-                threshold=
-                tracking_controller_config.default_confidence_threshold,
+                threshold=self.params.default_confidence_threshold,
             )
 
             # Filter out non-player detections
@@ -131,9 +130,9 @@ class TrackingController:
                      # (width, height)
                      track_predictions=None,  # Will be handled in byte_tracker
                      nms_iou_threshold=
-                     tracking_controller_config.nms_iou_threshold,
+                     self.params.nms_iou_threshold,
                      border_margin=
-                     tracking_controller_config.border_margin,
+                     self.params.border_margin,
                  )
             else:
                 detections = np.empty((0, 5))
@@ -184,50 +183,45 @@ class TrackingController:
         )
 
         if embeddings_save_path is not None:
-            # Collect all tracks (deduplicated by track_id)
-            # The tracker keeps track of tracked, lost, and removed.
-            # Using byte_tracker.joint_stracks to get unique objects might be
-            # useful, or manual dict.
             all_stracks = {}
-            
-            # Helper to add tracks
-            def add_unique_tracks(tracks):
-                for t in tracks:
-                    if (
-                        t.track_id not in all_stracks
-                        and t.features is not None
-                    ):
-                        all_stracks[t.track_id] = t
-            
-            add_unique_tracks(self.tracker.tracked_stracks)
-            add_unique_tracks(self.tracker.lost_stracks)
-            add_unique_tracks(self.tracker.removed_stracks)
-            
-            # Format for saving
-            embeddings_dict = {}
-            for tid, t in all_stracks.items():
-                features_list = t.features
-                if not features_list:
-                    continue
+
+            ttl_embeddings = 0
+
+            tracks_types_to_save = [
+                self.tracker.tracked_stracks,
+                self.tracker.lost_stracks,
+                self.tracker.removed_stracks,
+            ]
+
+            for tracks in tracks_types_to_save:
+                for track in tracks:
+                    features_list = track.features
+                    if not features_list:
+                        continue
                     
-                # Stack them: List[(1, D)] -> (N, D)
-                # Assumes features are (1, D) tensors
-                stacked_feats = torch.cat(features_list, dim=0).cpu()
-                
-                # Calculate mean for backward compatibility
-                mean_feat = torch.mean(stacked_feats, dim=0)
-                
-                embeddings_dict[tid] = {
-                    'mean': mean_feat,
-                    'all': stacked_feats,
-                    'count': t.features_count
-                }
+                    # Stack them: List[(1, D)] -> (N, D)
+                    # Assumes features are (1, D) tensors
+                    stacked_feats = torch.cat(features_list, dim=0).cpu()
+                    
+                    # Calculate mean for backward compatibility
+                    mean_feat = torch.mean(stacked_feats, dim=0)
+                    variance_feat = torch.var(stacked_feats, dim=0)
+                    
+                    all_stracks[track.track_id] = {
+                        'mean': mean_feat,
+                        'variance': variance_feat,
+                        'all': stacked_feats,
+                        'count': track.features_count
+                    }
+                    ttl_embeddings += track.features_count
+        
             
             logger.info(
-                f"Saving {len(embeddings_dict)} track embeddings "
+                f"Saving {len(all_stracks)} tracks "
+                f"({ttl_embeddings} total embeddings) "
                 f"to {embeddings_save_path}"
             )
-            emb_files.save_embeddings(embeddings_dict, embeddings_save_path)
+            emb_files.save_embeddings(all_stracks, embeddings_save_path)
             
         return True
 

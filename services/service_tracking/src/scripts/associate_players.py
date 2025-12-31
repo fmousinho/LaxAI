@@ -3,7 +3,7 @@
 Offline player association script.
 
 Usage:
-    python -m scripts.offline_associate_players \\
+    python -m scripts.associate_players \\
         --tracks tracks.json \\
         --embeddings embeddings.pt \\
         --output players.json \\
@@ -15,8 +15,8 @@ import json
 import logging
 from pathlib import Path
 
-from player.offline_associator import OfflinePlayerAssociator
-from player.offline_config import OfflinePlayerConfig
+from player.associator import PlayerAssociator
+from player.config import PlayerAssociatorConfig
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,8 +76,8 @@ def main():
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    # Configure
-    config = OfflinePlayerConfig(
+    # Configure 
+    config = PlayerAssociatorConfig(
         fps=args.fps,
         similarity_threshold=args.similarity_threshold,
         min_players_per_team=args.min_players,
@@ -86,7 +86,7 @@ def main():
     )
     
     # Run
-    associator = OfflinePlayerAssociator(config)
+    associator = PlayerAssociator(config)
     associator.load_data(
         str(args.tracks),
         str(args.embeddings),

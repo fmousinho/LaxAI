@@ -2,12 +2,12 @@
 Offline player association - batch processing of all tracks after tracking completes.
 """
 
-from player.offline_config import OfflinePlayerConfig
-from player.offline_associator import OfflinePlayerAssociator, TrackInfo, PlayerInfo
+from player.associator import PlayerAssociator, TrackInfo, Player
+from player.config import PlayerAssociatorConfig
 
 __all__ = [
-    'OfflinePlayerConfig',
-    'OfflinePlayerAssociator',
-    'TrackInfo',
-    'PlayerInfo',
+    'PlayerAssociatorConfig',
+    'PlayerAssociator',
+    'TrackInfo',    
+    'Player',
 ]

@@ -8,14 +8,14 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 service_tracking_dir = os.path.dirname(current_dir)
 sys.path.insert(0, service_tracking_dir)
 
-from tracker.byte_tracker import BYTETracker, STrack
+from tracker.tracker import Tracker, STrack
 from tracker.basetrack import TrackState
 from tracker.config import TrackingParams
 
 class TestBYTETracker(unittest.TestCase):
     def test_byte_tracker_update_with_cam_motion(self):
         params = TrackingParams()
-        tracker = BYTETracker(params)
+        tracker = Tracker(params)
         
         # 1. First Update: Initialize a track
         # Detections: Nx5 array (x1, y1, x2, y2, score)

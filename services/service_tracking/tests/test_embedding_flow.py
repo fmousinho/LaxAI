@@ -10,8 +10,8 @@ import os
 sys.path.append(os.path.abspath("services/service_tracking/src"))
 sys.path.append(os.path.abspath("."))
 
-from schemas.tracking import TrackingParams
-from tracker.byte_tracker import BYTETracker, STrack
+from tracker.config import TrackingParams
+from tracker.tracker import Tracker, STrack
 import logging
 
 # Configure logging
@@ -38,7 +38,7 @@ class TestEmbeddingFlow(unittest.TestCase):
             track_activation_threshold=0.6 # Ensure high confidence dets are kept
         )
         self.reid_model = MockReIdModel()
-        self.tracker = BYTETracker(self.params, reid_model=self.reid_model)
+        self.tracker = Tracker(self.params, reid_model=self.reid_model)
         # Mock frame (H, W, C)
         self.frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
 

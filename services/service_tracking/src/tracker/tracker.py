@@ -40,7 +40,6 @@ class STrack(BaseTrack):
         self.covariance: Optional[np.ndarray] = None
         self.is_activated = False
         self.features: List[torch.Tensor] = []
-        self.features_variance: Optional[torch.Tensor] = None
         self.features_count = 0
 
         self.score = score
@@ -437,7 +436,7 @@ class Tracker(object):
         (newly_activated_stracks, _, newly_pending_stracks,
          unmatched_stracks, unmatched_detections) = self.association_step(
             self.pending_stracks, unmatched_detections,
-            max_match_distance=self.params.pending_max_distance
+            max_match_distance=self.params.unconfirmed_max_distance
         )
         activated_stracks.extend(newly_activated_stracks)
         pending_stracks.extend(newly_pending_stracks)
@@ -585,7 +584,7 @@ class Tracker(object):
                         STrack(STrack.tlbr_to_tlwh(bbox), score),
                         self.frame_id
                     )
-                    if strack.tracklet_len >= self.min_consecutive_frames:
+                    if strack.tracklet_len >= self.params.min_consecutive_frames:
                         strack.is_activated = True
                         activated_stracks.append(strack)
                     else:

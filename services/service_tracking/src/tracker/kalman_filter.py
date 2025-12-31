@@ -2,7 +2,7 @@
 import numpy as np
 import scipy.linalg
 
-from config import kalman_filter_config
+from tracker.config import kalman_filter_config
 
 
 """

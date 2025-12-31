@@ -1,19 +1,20 @@
-"""
-Tracking API request/response schemas and configuration for the tracking service.
-Explicit Pydantic models that use config defaults directly.
-"""
-
 from typing import Any, Dict, List, Optional, Union
+import os
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Calculate root directory for .env location
+# Path: services/service_tracking/src/tracker/config.py -> services/service_tracking/src/tracker -> services/service_tracking/src -> services/service_tracking -> services -> root
+root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../"))
+env_path = os.path.join(root_dir, ".env")
 
 
 class DetectionModelConfig(BaseSettings):
     """Configuration for the detection model, including WandB artifact settings."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=env_path,
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
@@ -58,7 +59,7 @@ class TrackingParams(BaseSettings):
     """Tracking hyperparameters - mirrors DetectionConfig and TrackerConfig."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=env_path,
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
@@ -88,7 +89,7 @@ class TrackingParams(BaseSettings):
         description="Used to separate high and low confidence detections, per BYTETrack algorithm."
     )
     lost_track_buffer: int = Field(
-        default=10, 
+        default=3, 
         description="How many frames to wait for a lost track to be reactivated before removing it."
     )
     high_conf_max_distance: float = Field(
@@ -116,6 +117,10 @@ class TrackingParams(BaseSettings):
     enable_reid: bool = Field(
         default=True,
         description="Enable ReID feature extraction during tracking. Required for player association later."
+    )
+    wandb_api_key: Optional[str] = Field(
+        default=None,
+        description="Optional WandB API key to override environment variable."
     )
     embedding_update_frequency: int = Field(
         default=5, 
@@ -148,7 +153,7 @@ class TrackingParams(BaseSettings):
         description="Maximum height change for association to be accepted."
     )
     min_distance_threshold: float = Field(
-        default=0.2,
+        default=0.25,
         description="Minimum separation for association to be accepted."
     )
 
