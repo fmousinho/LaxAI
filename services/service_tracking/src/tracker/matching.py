@@ -319,7 +319,7 @@ def gate_height(cost_matrix, tracks, detections, threshold=0.2):
     return cost_matrix
 
 
-def enforce_min_distance(cost_matrix, tracks, detections, min_dist: float = .25):
+def enforce_min_distance(cost_matrix, min_distance: float = .25):
     """
     Gate association if best cost is not sufficiently better than second-best.
     
@@ -328,14 +328,12 @@ def enforce_min_distance(cost_matrix, tracks, detections, min_dist: float = .25)
     
     Args:
         cost_matrix: Current cost matrix (tracks x detections)
-        tracks: List of tracks
-        detections: Detection array
         min_dist: Minimum required difference between best and second-best cost
         
     Returns:
         Modified cost matrix with ambiguous matches gated
     """
-    if cost_matrix.size == 0 or len(tracks) == 0 or len(detections) == 0:
+    if cost_matrix.size == 0 or cost_matrix.shape[0] == 0 or cost_matrix.shape[1] == 0:
         return cost_matrix
     
     # For each track (row), check if best match is sufficiently better than second-best
@@ -352,7 +350,7 @@ def enforce_min_distance(cost_matrix, tracks, detections, min_dist: float = .25)
             second_best_cost = sorted_costs[1]
             
             # If margin is too small, invalidate all matches for this track
-            if (second_best_cost - best_cost) < min_dist:
+            if (second_best_cost - best_cost) < min_distance:
                 cost_matrix[track_idx, :] = np.inf
     
     return cost_matrix
@@ -384,6 +382,6 @@ def compute_association_cost(
         cost_matrix = gate_cost_matrix(kalman_filter_obj, cost_matrix, tracks, detections)
     
     if apply_enforce_min_distance:
-        cost_matrix = enforce_min_distance(cost_matrix, tracks, detections, min_distance_threshold)
+        cost_matrix = enforce_min_distance(cost_matrix, min_distance = min_distance_threshold)
     
     return cost_matrix

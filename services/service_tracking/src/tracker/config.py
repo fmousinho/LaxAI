@@ -71,7 +71,7 @@ class TrackingParams(BaseSettings):
         description="Default detection confidence threshold. Detections with lower values are discarded.",
     )
     nms_iou_threshold: float = Field(
-        default=0.3,
+        default=0.2,
         description="Detections that overlap (IoU) with each other by more than this threshold are discarded.",
     )
     border_margin: int = Field(
@@ -89,7 +89,7 @@ class TrackingParams(BaseSettings):
         description="Used to separate high and low confidence detections, per BYTETrack algorithm."
     )
     lost_track_buffer: int = Field(
-        default=3, 
+        default=0, 
         description="How many frames to wait for a lost track to be reactivated before removing it."
     )
     high_conf_max_distance: float = Field(
@@ -105,7 +105,7 @@ class TrackingParams(BaseSettings):
         description="Max distance for tracks to be matched when using unconfirmed detections."
     )
     min_consecutive_frames: int = Field(
-        default=3, 
+        default=2, 
         description="Minimum consecutive frames for tracks to be confirmed."
     )
     use_only_confirmed_tracks: bool = Field(
@@ -118,17 +118,17 @@ class TrackingParams(BaseSettings):
         default=True,
         description="Enable ReID feature extraction during tracking. Required for player association later."
     )
-    wandb_api_key: Optional[str] = Field(
-        default=None,
-        description="Optional WandB API key to override environment variable."
-    )
     embedding_update_frequency: int = Field(
         default=5, 
         description="Frequency (in frames) to update track embeddings list."
     )
     embedding_quality_threshold: float = Field(
-        default=0.6, 
+        default=0.4, 
         description="Minimum detection score to trigger embedding update."
+    )
+    wandb_api_key: Optional[str] = Field(
+        default=None,
+        description="Optional WandB API key to override environment variable."
     )
 
     # Cost Matrix Config

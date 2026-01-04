@@ -48,6 +48,10 @@ def main():
         '--embeddings_save_path', default=None,
         help='If provided, embeddings wil be saved to this path'
     )
+    parser.add_argument(
+        '--verbose', action='store_true',
+        help='Sets logging level to DEBUG'
+    )
 
     args = parser.parse_args()
 
@@ -58,6 +62,9 @@ def main():
             if v is not None and k in TrackingParams.model_fields
         }
         tracking_params = TrackingParams(**tracking_params_kwargs)
+
+        if args.verbose:
+            logging.getLogger().setLevel(logging.DEBUG)
 
         # Create and run the controller
         controller = TrackingController(

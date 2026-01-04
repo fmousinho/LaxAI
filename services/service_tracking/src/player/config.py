@@ -30,9 +30,9 @@ class PlayerAssociatorConfig(BaseSettings):
     default_players_per_team: int = Field(
         default=15, description='Default number of players per team if not auto-estimated.'
     )
-    auto_estimate_player_count: bool = Field(
-        default=True,
-        description="Use silhouette analysis to estimate player count from anchors.",
+    min_voting_confidence_for_team_assignment: float = Field(
+        default=0.7,
+        description="Minimum ratio of tracks mapped to best team for team assignment. If less than this, team is assigned to -1.",
     )
 
     # Spatial/velocity constraints
@@ -59,7 +59,7 @@ class PlayerAssociatorConfig(BaseSettings):
         description="Bottom portion of frame that IS field (1.0 = extends to bottom).",
     )
     edge_margin_ratio: float = Field(
-        default=0.03,
+        default=0.05,
         description='Portion of frame width/height considered "edge" (3% = ~60px on 1920 width).',
     )
 

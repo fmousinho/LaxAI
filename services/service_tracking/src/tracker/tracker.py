@@ -682,6 +682,7 @@ class Tracker(object):
  
         return self._original_detections[:, :6]
 
+
     def log_prediction_statistics(self):
         """Compute and log variance statistics for prediction errors.
 
@@ -838,9 +839,13 @@ class Tracker(object):
         Updates every N frames.
         """
         if track.score < self.params.embedding_quality_threshold:
+            logger.debug(
+                f"Skipping embeddings for Track {track.track_id} "
+                f"because of detection score {track.score} "
+            )
             return
         
-        if track.features is None:
+        if not track.features:
             self.initiate_track_reid_features(track)
             return
         
@@ -856,22 +861,15 @@ class Tracker(object):
                  np.ascontiguousarray(all_detections[:, :4], dtype=float), 
                  current_bbox[np.newaxis, :]
             )
-             # Filter out the detection that likely belongs to this track
-             # (highest IoU/closest)
-             # But simplistic check: if ANY other detection has
-             # IoU > 0, it's risky.
-             # Actually, we need to exclude the detection matched to
-             # THIS track.
-             # Since we don't have the matched detection index easily
-             # passed here without refactoring,
-             # we can assume "significant" overlap is bad.
-             # If IoU > 0.05 with MORE than one detection (itself),
-             # it's ambiguous.
-             # Or, since we are in `update`, the track IS associated.
-             # Let's count how many detections have IoU > 0.
-             count_overlaps = np.sum(ious_dets > 0.0)
-             if count_overlaps > 1: # Itself + another
-                 return 
+             # Count how many detections have IoU > 0.3
+             # (One of them is the detection assigned to this track)
+             count_overlaps = np.sum(ious_dets > 0.3)
+             if count_overlaps > 1: # Itself + another significant overlap
+                logger.debug(
+                    f"Skipping embeddings for Track {track.track_id} "
+                    f"because of {count_overlaps} detection(s) overlap. "
+                )
+                return 
 
         # 2. Check vs other tracks (projected)
         # We need to exclude 'self' from the list
@@ -881,13 +879,17 @@ class Tracker(object):
             ious_tracks = matching.bbox_ious(
                 other_tlbrs, current_bbox[np.newaxis, :]
             )
-            if np.any(ious_tracks > 0.0):
+            # Only reject if another track has significant overlap
+            if np.any(ious_tracks > 0.3):
+                logger.debug(
+                    f"Skipping embeddings for Track {track.track_id} "
+                    f"because of {np.sum(ious_tracks > 0.3)} track(s) overlap. "
+                )
                 return
        
         new_feat = self.get_embeddings(track.tlbr)
         
         if new_feat is not None:
-            # Append new feature to list
             track.features.append(new_feat)
             track.features_count += 1
             
@@ -896,15 +898,6 @@ class Tracker(object):
         """
         Extracts embeddings for a given bounding box (tlbr).
         """
-        # Need access to frame. We stored it in _original_detections
-        # context or need to store it in self._frame
-        # In the original file, self._frame wasn't stored in
-        # `assign_tracks_to_detections`. 
-        # I need to ensure self._frame is available. 
-        # `assign_tracks_to_detections` sets `self.frame_size` but not
-        # `self._frame`.
-        # I need to modify `assign_tracks_to_detections` to store
-        # `self._frame`.
         
         if not hasattr(self, '_frame') or self._frame is None:
              # Fallback if frame is not available (should not happen if
@@ -912,7 +905,7 @@ class Tracker(object):
              return None
              
         if self.reid_model is None:
-             return None # Can't extract
+             return None
         
         img_h, img_w = self._frame.shape[:2]
         

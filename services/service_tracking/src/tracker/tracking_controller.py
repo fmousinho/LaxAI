@@ -95,6 +95,7 @@ class TrackingController:
             return False
 
         frame_count = 0
+        frames_without_tracks = 0
         prev_frame = None
         all_tracks = []
         all_detections = []
@@ -133,7 +134,7 @@ class TrackingController:
                      self.params.nms_iou_threshold,
                      border_margin=
                      self.params.border_margin,
-                 )
+                  )
             else:
                 detections = np.empty((0, 5))
 
@@ -149,6 +150,10 @@ class TrackingController:
                 frame,
             )
             
+            # Check if frame has any valid tracks
+            if len(frame_tracks) == 0 or not np.any(frame_tracks[:, 5] > 0):
+                frames_without_tracks += 1
+
             all_tracks.append(frame_tracks.copy())
             if detections_save_path is not None:
                 all_detections.append(detections.copy())
@@ -166,6 +171,8 @@ class TrackingController:
         logger.info(
             "Video processing complete. Logging prediction statistics..."
         )
+        logger.info(f"Total frames: {frame_count}")
+        logger.info(f"Frames without matches: {frames_without_tracks}")
         self.tracker.log_prediction_statistics()
 
         # Save tracks using unified serialization module
@@ -184,8 +191,8 @@ class TrackingController:
 
         if embeddings_save_path is not None:
             all_stracks = {}
-
             ttl_embeddings = 0
+            tracks_without_embeddings = 0
 
             tracks_types_to_save = [
                 self.tracker.tracked_stracks,
@@ -197,6 +204,7 @@ class TrackingController:
                 for track in tracks:
                     features_list = track.features
                     if not features_list:
+                        tracks_without_embeddings += 1
                         continue
                     
                     # Stack them: List[(1, D)] -> (N, D)
@@ -216,11 +224,14 @@ class TrackingController:
                     ttl_embeddings += track.features_count
         
             
+            logger.info("=" * 50)
             logger.info(
                 f"Saving {len(all_stracks)} tracks "
                 f"({ttl_embeddings} total embeddings) "
                 f"to {embeddings_save_path}"
             )
+            logger.info("=" * 50)
+            logger.info(f"Tracks without embeddings: {tracks_without_embeddings}")
             emb_files.save_embeddings(all_stracks, embeddings_save_path)
             
         return True
