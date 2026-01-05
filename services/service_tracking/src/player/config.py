@@ -52,7 +52,7 @@ class PlayerAssociatorConfig(BaseSettings):
     # Birth location heuristics
     field_top_ratio: float = Field(
         default=0.2,
-        description="Top portion of frame that is NOT field (0.1 = top 10% is stands/bench).",
+        description="Top portion of frame that is NOT field (0.1 = top 10% is stands/bench). Value is auto-adjusted.",
     )
     field_bottom_ratio: float = Field(
         default=1.0,
@@ -61,6 +61,20 @@ class PlayerAssociatorConfig(BaseSettings):
     edge_margin_ratio: float = Field(
         default=0.05,
         description='Portion of frame width/height considered "edge" (3% = ~60px on 1920 width).',
+    )
+
+    # Lost player heuristics
+    lost_frames_to_out_of_view: int = Field(
+        default=600,
+        description="Number of frames a player must be lost before being marked as out of view.",
+    )
+    lost_player_margin_x: int = Field(
+        default=100,
+        description="Margin in pixels to add to player bbox edges. Used to match tracks to lost players.",
+    )
+    lost_player_margin_y: int = Field(
+        default=50,
+        description="Margin in pixels to add to player bbox edges. Used to match tracks to lost players.",
     )
 
 

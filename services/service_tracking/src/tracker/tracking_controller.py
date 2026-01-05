@@ -190,28 +190,38 @@ class TrackingController:
         )
 
         if embeddings_save_path is not None:
+            all_ids = set()
+            for frame_tracks in all_tracks:
+                ids = frame_tracks[:, 5].astype(int)
+                all_ids.update(ids[ids >= 0])
+            total_unique_tracks = len(all_ids)
+
             all_stracks = {}
             ttl_embeddings = 0
-            tracks_without_embeddings = 0
 
             tracks_types_to_save = [
                 self.tracker.tracked_stracks,
                 self.tracker.lost_stracks,
                 self.tracker.removed_stracks,
+                self.tracker.ephemeral_stracks,
+                self.tracker.pending_stracks,
             ]
 
+            processed_ids = set()
             for tracks in tracks_types_to_save:
                 for track in tracks:
+                    if track.track_id in processed_ids:
+                        continue
+                    processed_ids.add(track.track_id)
+                    
                     features_list = track.features
                     if not features_list:
-                        tracks_without_embeddings += 1
                         continue
                     
                     # Stack them: List[(1, D)] -> (N, D)
-                    # Assumes features are (1, D) tensors
                     stacked_feats = torch.cat(features_list, dim=0).cpu()
                     
-                    # Calculate mean for backward compatibility
+                    # Calculate mean and variance
                     mean_feat = torch.mean(stacked_feats, dim=0)
                     variance_feat = torch.var(stacked_feats, dim=0)
                     
@@ -223,10 +233,11 @@ class TrackingController:
                     }
                     ttl_embeddings += track.features_count
         
+            tracks_without_embeddings = total_unique_tracks - len(all_stracks)
             
             logger.info("=" * 50)
             logger.info(
-                f"Saving {len(all_stracks)} tracks "
+                f"Saving {len(all_stracks)}/{total_unique_tracks} tracks "
                 f"({ttl_embeddings} total embeddings) "
                 f"to {embeddings_save_path}"
             )

@@ -900,12 +900,10 @@ class Tracker(object):
         """
         
         if not hasattr(self, '_frame') or self._frame is None:
-             # Fallback if frame is not available (should not happen if
-             # flow is correct)
-             return None
+            raise ValueError("Frame is not available during embedding extraction")
              
         if self.reid_model is None:
-             return None
+            raise ValueError("ReID model is not available during embedding extraction")
         
         img_h, img_w = self._frame.shape[:2]
         
@@ -915,6 +913,7 @@ class Tracker(object):
         y2 = min(img_h, int(tlbr[3]))
         
         if x2 <= x1 or y2 <= y1:
+            logger.error(f"Invalid bounding box dimensions: x1={x1}, y1={y1}, x2={x2}, y2={y2}")
             return None
 
         crop = self._frame[y1:y2, x1:x2]

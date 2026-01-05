@@ -9,6 +9,7 @@ Usage Example:
    PYTHONPATH="services/service_tracking/src:." ./.venv/bin/python -m scripts.generate_tracks \
   --video_path "/Users/fmousinho/Library/Mobile Documents/com~apple~CloudDocs/Documents/Stella/Lacrosse/Fall Raw Videos/summaries/BBL North 2027 vs GRIT Dallas 2027 - 9-45am_summary.mp4" \
   --output_path "tracks.json"
+  --embeddings_save_path "emb.pt"
 """
 
 import logging
@@ -66,6 +67,9 @@ def main():
         if args.verbose:
             logging.getLogger().setLevel(logging.DEBUG)
 
+        if not args.embeddings_save_path:
+            logger.warning("!!!Embeddings save path not provided. Embeddings will not be saved.")
+
         # Create and run the controller
         controller = TrackingController(
             tracking_params=tracking_params,
@@ -73,7 +77,10 @@ def main():
 
         result = controller.run(args.video_path, args.output_path, args.detections_save_path, args.embeddings_save_path)
 
-        logger.info(f"Track generation completed with result: {result}")
+        logger.info("Track generation completed.")
+        if not args.embeddings_save_path:
+            logger.warning("Embeddings were not saved because no embeddings save path was provided.")
+
         return 0
 
     except Exception as e:

@@ -269,16 +269,16 @@ class PlayerAssociator:
                         if isinstance(embeddings, torch.Tensor):
                             embeddings = embeddings.cpu().numpy()
                         
-                        # Sanitize and normalize ALL embeddings
-                        if embeddings is not None and len(embeddings) > 0:
-                            # Handle NaNs
-                            embeddings = np.nan_to_num(embeddings, nan=0.0, posinf=0.0, neginf=0.0)
+                        # # Sanitize and normalize ALL embeddings
+                        # if embeddings is not None and len(embeddings) > 0:
+                        #     # Handle NaNs
+                        #     embeddings = np.nan_to_num(embeddings, nan=0.0, posinf=0.0, neginf=0.0)
                             
-                            # Normalize rows
-                            norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-                            # Avoid division by zero
-                            norms[norms == 0] = 1.0 
-                            embeddings = embeddings / norms
+                        #     # Normalize rows
+                        #     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+                        #     # Avoid division by zero
+                        #     norms[norms == 0] = 1.0 
+                        #     embeddings = embeddings / norms
                             
                             self.tracks[track_id].embeddings_all = embeddings
                     if 'count' in emb_data:
@@ -485,8 +485,8 @@ class PlayerAssociator:
     def _mark_lost(self, player: Player):
         player.state = 'lost'
         player.lost_frames += 1
-        margin_x = 100
-        margin_y = 50
+        margin_x = self.config.lost_player_margin_x
+        margin_y = self.config.lost_player_margin_y
         if player.track_ids:
             # Get the correct track based on process direction
             tid = player.track_ids[-1] if self.direction == "forward" else player.track_ids[0]
@@ -608,7 +608,7 @@ class PlayerAssociator:
 
     def _update_lost_player(self, player: Player):
         player.lost_frames += 1
-        if player.lost_frames >=300:
+        if player.lost_frames >= self.config.lost_frames_to_out_of_view:
             player.state = 'out_of_view'
 
 

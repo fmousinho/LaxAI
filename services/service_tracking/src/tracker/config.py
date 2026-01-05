@@ -105,12 +105,12 @@ class TrackingParams(BaseSettings):
         description="Max distance for tracks to be matched when using unconfirmed detections."
     )
     min_consecutive_frames: int = Field(
-        default=2, 
+        default=1, 
         description="Minimum consecutive frames for tracks to be confirmed."
     )
     use_only_confirmed_tracks: bool = Field(
-        default=True,
-        description="If True, only confirmed tracks are written to the output. If False, all tracks are returned."
+        default=False,
+        description="If True, unconfirmed tracks are assinged a -1 track_id. If False, all tracks numbers are returned."
     )
     
     # Embedding Config
