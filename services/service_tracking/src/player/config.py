@@ -19,8 +19,6 @@ class PlayerAssociatorConfig(BaseSettings):
         case_sensitive=False,
     )
 
-    # Team clustering
-    n_teams: int = Field(default=2, description="Number of teams to cluster (typically 2).")
 
     # Player discovery
     min_players_per_team: int = Field(default=11, description="Minimum players per team.")

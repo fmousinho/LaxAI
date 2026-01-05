@@ -10,12 +10,14 @@ with persistent player identities using:
 - Global consistency enforcement
 """
 import logging
+import warnings
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Set, Literal
 import numpy as np
 import torch
 from sklearn.cluster import KMeans, AgglomerativeClustering
 from sklearn.metrics import silhouette_samples
+from sklearn.decomposition import PCA
 from collections import defaultdict, deque
 import json
 
@@ -647,8 +649,14 @@ class PlayerAssociator:
 
 
     def _cluster_teams(self):
-        """Cluster tracks into teams using K-Means on all available embeddings."""
-        logger.info("Phase 1: Clustering tracks into teams (using all embeddings)...")
+        """
+        Cluster tracks into teams using a robust multi-stage approach:
+        1. Reduce dimensions with PCA (to ~24 dims) to de-noise.
+        2. Cluster individual embeddings using K-Means.
+        3. Identify 'core' samples (closest to centroids) to build robust team prototypes.
+        4. Assign tracks based on their Mean Embedding's distance to these prototypes.
+        """
+        logger.info("Phase 1: Clustering tracks into teams (Robust PCA + Centroids)...")
         
         all_embeddings = []
         embedding_track_map = []  # Index -> track_id
@@ -661,12 +669,9 @@ class PlayerAssociator:
                 all_embeddings.append(track.embeddings_all)
                 embedding_track_map.extend([track.track_id] * len(track.embeddings_all))
                 tracks_with_data.add(track.track_id)
-            
-            # Fallback to mean if that's all we have
-            elif track.embedding_mean is not None:
-                all_embeddings.append(track.embedding_mean.reshape(1, -1))
-                embedding_track_map.append(track.track_id)
-                tracks_with_data.add(track.track_id)
+            else:
+                logger.warning(f"Track {track.track_id} has no embeddings for team clustering")
+
         
         if len(tracks_with_data) < 2:
             logger.warning("Not enough tracks with embeddings for team clustering")
@@ -678,30 +683,114 @@ class PlayerAssociator:
         X = np.concatenate(all_embeddings)
         logger.info(f"Clustering {len(X)} total embeddings from {len(tracks_with_data)} tracks")
         
-        # 3. K-Means clustering
-        kmeans = KMeans(n_clusters=self.config.n_teams, n_init=8, random_state=42)
-        labels = kmeans.fit_predict(X)
+        # --- dimensionality reduction ---
+        # 512 dims is too high for Euclidean distance to be reliable (Curse of Dimensionality).
+        # We project down to capture the main variance (jersey colors/appearance).
+        n_components = min(24, len(X))
+        pca = PCA(n_components=n_components, random_state=42)
         
-        # 4. Voting mechanism
-        track_votes = defaultdict(lambda: defaultdict(int))
-        for i, label in enumerate(labels):
-            tid = embedding_track_map[i]
-            track_votes[tid][int(label)] += 1
+        # Suppress RuntimeWarnings (divide by zero, overflow, etc.) from sklearn internals
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            X_pca = pca.fit_transform(X)
             
-        # 5. Assign teams based on majority vote
-        for tid, votes in track_votes.items():
-            # Get key with max value
-            best_team = max(votes.items(), key=lambda x: x[1])[0]
+            # 3. K-Means clustering on reduced data
+            # Oversample clusters slightly if we were unsure, but here we assume n_teams is known (2)
+            kmeans = KMeans(n_clusters=2, n_init=15, random_state=42)
+            labels = kmeans.fit_predict(X_pca)
+        
+        # 4. Compute Robust Team Prototypes
+        # Instead of taking the simple mean of all points (which includes outliers/wrong detections),
+        # we take the mean of the "core" points closest to the cluster centers.
+        
+        team_centroids = {}
+        for team_k in range(2):
+            # Indices belonging to this team
+            indices = np.where(labels == team_k)[0]
+            if len(indices) == 0:
+                continue
+                
+            # Get samples and compute distances to raw centroid
+            samples = X_pca[indices]
+            center = kmeans.cluster_centers_[team_k]
+            dists = np.linalg.norm(samples - center, axis=1)
             
-            # Calculate confidence (for logging/debugging could be useful)
-            total_votes = sum(votes.values())
-            confidence = votes[best_team] / total_votes
+            # Select top 50% "core" samples
+            threshold_idx = max(1, int(len(dists) * 0.5))
+            # argsort returns indices that would sort the array, we take the first 50%
+            core_indices_local = np.argsort(dists)[:threshold_idx]
+            core_samples = samples[core_indices_local]
             
-            if confidence < self.config.min_voting_confidence_for_team_assignment:
-                logger.debug(f"Track {tid}: Weak team consensus ({confidence:.2f}) {dict(votes)}")
-                self.tracks[tid].team_id = -1
+            # Compute robust centroid
+            robust_centroid = np.mean(core_samples, axis=0)
+            # Normalize centroid for cosine similarity
+            robust_centroid = robust_centroid / np.linalg.norm(robust_centroid)
+            team_centroids[team_k] = robust_centroid
+            
+        logger.info(f"Computed robust centroids for {len(team_centroids)} teams")
+
+        # 5. Assign Tracks using Distance to Prototypes
+        # For each track, we project its *mean embedding* and find the closest team prototype.
+        # This leverages the "Law of Large Numbers" - the mean of a track's embeddings is 
+        # much more stable than individual embeddings.
+        
+        assigned_count = 0
+        weak_assignments = 0
+        
+        for tid, track in self.tracks.items():
+            if tid not in tracks_with_data:
+                track.team_id = -1
+                continue
+            
+            # Compute track mean in PCA space
+            # We can't just take X_pca entries because they might be scattered.
+            # Only use 'all' if available as it provides better mean.
+            if track.embeddings_all is not None:
+                # Project all, then mean
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", category=RuntimeWarning)
+                    track_cloud_pca = pca.transform(track.embeddings_all)
+                track_mean_pca = np.mean(track_cloud_pca, axis=0)
+            elif track.embedding_mean is not None:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", category=RuntimeWarning)
+                    track_mean_pca = pca.transform(track.embedding_mean.reshape(1, -1))[0]
             else:
-                self.tracks[tid].team_id = best_team
+                track.team_id = -1
+                continue
+                
+            # Normalize track mean
+            track_mean_norm = np.linalg.norm(track_mean_pca)
+            if track_mean_norm > 0:
+                track_mean_pca = track_mean_pca / track_mean_norm
+            
+            # Find closest team (Cosine Similarity)
+            best_team = -1
+            best_sim = -1.0
+            
+            for team_k, centroid in team_centroids.items():
+                # Both vectors normalized, so dot product is cosine similarity
+                sim = np.dot(track_mean_pca, centroid)
+                if sim > best_sim:
+                    best_sim = sim
+                    best_team = team_k
+            
+            # Assign
+            # We use a threshold for assignment to avoid assigning garbage tracks
+            # Since we projected via PCA, similarity should be decent for valid tracks.
+            # 0.0 is orthogonal, 1.0 is identical.
+            
+            # Heuristic: If it's very ambiguous (e.g. sim difference is small or sim is low),
+            # we might want to flag it. But usually enforcing *some* team is better than -1 for association
+            # logic, unless we really want to exclude refs/crowd.
+            
+            if best_team != -1:
+                track.team_id = best_team
+                assigned_count += 1
+            else:
+                track.team_id = -1
+                
+        logger.info(f"Assigned teams for {assigned_count} tracks")
             
     
     def _classify_birth(self, position: Tuple[int, int]) -> str:

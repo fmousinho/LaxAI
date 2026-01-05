@@ -75,7 +75,7 @@ class TrackingParams(BaseSettings):
         description="Detections that overlap (IoU) with each other by more than this threshold are discarded.",
     )
     border_margin: int = Field(
-        default=2,
+        default=1,
         description="Detections with bounding box less than border_margin from the frame's edges are discarded.",
     )
 
@@ -93,7 +93,7 @@ class TrackingParams(BaseSettings):
         description="How many frames to wait for a lost track to be reactivated before removing it."
     )
     high_conf_max_distance: float = Field(
-        default=0.8, 
+        default=0.6, 
         description="Max distance for tracks to be matched when using high confidence detections."
     )
     low_conf_max_distance: float = Field(
@@ -101,7 +101,7 @@ class TrackingParams(BaseSettings):
         description="Max distance for tracks to be matched when using low confidence detections."
     )
     unconfirmed_max_distance: float = Field(
-        default=0.8, 
+        default=0.6, 
         description="Max distance for tracks to be matched when using unconfirmed detections."
     )
     min_consecutive_frames: int = Field(
