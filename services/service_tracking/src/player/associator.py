@@ -100,6 +100,7 @@ class Player:
     embedding_bank: List[np.ndarray] = field(default_factory=list)
 
     lost_boundary: Optional[Tuple[int, int, int, int]] = None  # (x1, y1, x2, y2)
+    lost_frames: int = 0
     
     _matrix: Optional[np.ndarray] = None
     _dirty: bool = False
@@ -183,6 +184,7 @@ class PlayerAssociator:
         self.frame_size: Tuple[int, int] = (1920, 1080)  # Default, will be set
         self.total_frames: int = 0
         self.frame_tracks: Dict[int, List[int]] = {}  # frame_id -> track_ids
+        self.n_frames_processed = 0
 
         self.active_players: List[int] = []
         self.lost_players: List[int] = []
@@ -333,20 +335,19 @@ class PlayerAssociator:
             self.active_players.append(player_id) 
 
         # Phase 3: Iterate forward and backwared from anchore frame and update player dictionary
-        n_frames_processed = 0
         logger.info(f"Processing frames forward from anchor frame {anchor_frame}")  
         for frame_id in range(anchor_frame, self.total_frames):
             self._update_players_for_frame(frame_id)
-            n_frames_processed += 1
-            if n_frames_processed % FRAMES_PER_SECOND == 0:
-                logger.info(f"Processed {n_frames_processed}/{self.total_frames} frames, ttl players: {len(self.players)}")
+            self.n_frames_processed += 1
+            if self.n_frames_processed % FRAMES_PER_SECOND == 0:
+                logger.info(f"Processed {self.n_frames_processed}/{self.total_frames} frames, ttl players: {len(self.players)}")
 
         self.direction = "backward"
         for frame_id in range(anchor_frame, -1, -1):
             self._update_players_for_frame(frame_id)
-            n_frames_processed += 1
-            if n_frames_processed % FRAMES_PER_SECOND == 0:
-                logger.info(f"Processed {n_frames_processed}/{self.total_frames} frames, ttl players: {len(self.players)}")
+            self.n_frames_processed += 1
+            if self.n_frames_processed % FRAMES_PER_SECOND == 0:
+                logger.info(f"Processed {self.n_frames_processed}/{self.total_frames} frames, ttl players: {len(self.players)}")
 
 
         # Count assigned tracks
@@ -372,15 +373,6 @@ class PlayerAssociator:
 
         tracks_in_frame = [self.tracks[tid] for tid in track_ids_in_frame]
         unassigned_tracks = [track for track in tracks_in_frame if not track.player_id]
-
-        tracks_for_mid_matching = []
-        tracks_for_edge_matching = []
-        for track in unassigned_tracks:
-            center = track.first_center if self.direction == "forward" else track.last_center
-            if self._classify_birth(center) == 'edge':
-                tracks_for_edge_matching.append(track)
-            else:
-                tracks_for_mid_matching.append(track)
             
         # 2. Creates updated lists of active, lost and oov players
 
@@ -397,7 +389,7 @@ class PlayerAssociator:
                 lost_player_ids.append(player_id)
                 continue
             if player.state == 'lost':
-                self._update_lost_boundary([player_id])
+                self._update_lost_player(player)
             if player.state == 'lost':  # players may lose lost status after the update, requiring a second pass
                 lost_player_ids.append(player_id)
                 continue
@@ -417,52 +409,60 @@ class PlayerAssociator:
                 for track in unassigned_tracks:
                     logger.debug(f"Track {track.track_id} from frame {track.start_frame} to {track.end_frame}")
 
-        # 3. Try to find a match for orphan tracks in the middle of the frame (likely to be lost players)
-        unmatched_players = []
-        if len(tracks_for_mid_matching) > 0 and len(lost_player_ids) > 0:
+        # 3. Try to find a lost player for unmatched tracks
+        if len(unassigned_tracks) > 0 and len(lost_player_ids) > 0:
             lost_players = [self.players[player_id] for player_id in lost_player_ids]
             matches, u_tracks_ex, u_players_ex = self._match_tracks_to_players(
-                tracks_for_mid_matching, lost_players, threshold=.1)
+                unassigned_tracks, lost_players, threshold=.1)
             
             for m in matches:
                 track_idx, player_idx = m[0], m[1]
-                track = tracks_for_mid_matching[track_idx]
+                track = unassigned_tracks[track_idx]
                 player = lost_players[player_idx]
                 self._associate(track, player)
                 active_player_ids.append(player.player_id)
-                logger.debug(f"Matched mid track {track.track_id} to player {player.player_id}")
+                logger.debug(f"Matched track {track.track_id} to LOST player {player.player_id}")
             
-            for track_idx in u_tracks_ex:
-                tracks_for_edge_matching.append(tracks_for_mid_matching[track_idx])
-            
-            unmatched_players = [lost_players[player_idx] for player_idx in u_players_ex] + [self.players[player_id] for player_id in oov_player_ids]
-            
+            unassigned_tracks = [unassigned_tracks[track_idx] for track_idx in u_tracks_ex]
+            lost_player_ids = [lost_player_ids[player_idx] for player_idx in u_players_ex]
 
-        # 4. Try to find a match for orphan tracks in the edge of the frame
-        
-        unassigned_tracks_final = []
-        if len(tracks_for_edge_matching) > 0 and len(unmatched_players) > 0:
+        # 4. Try to find a match for out of view players coming back to view
+        unassigned_tracks_edge = []
+        unassigned_tracks_middle = []
+        for track in unassigned_tracks:
+            center = track.first_center if self.direction == "forward" else track.last_center
+            if self._classify_birth(center) == 'edge':
+                unassigned_tracks_edge.append(track)
+            else:
+                unassigned_tracks_middle.append(track)
+
+        if len(unassigned_tracks_edge) > 0 and len(oov_player_ids) > 0:
+            oov_players = [self.players[player_id] for player_id in oov_player_ids]
             matches, u_tracks_ex, u_players_ex = self._match_tracks_to_players(
-                tracks_for_edge_matching, unmatched_players, threshold=0.1)
+                unassigned_tracks_edge, oov_players, threshold=0.1)
 
             for m in matches:
                 track_idx, player_idx = m[0], m[1]
-                track = tracks_for_edge_matching[track_idx]
-                player = unmatched_players[player_idx]
+                track = unassigned_tracks_edge[track_idx]
+                player = oov_players[player_idx]
                 self._associate(track, player)
                 active_player_ids.append(player.player_id)
-                logger.debug(f"Matched edge track {track.track_id} to player {player.player_id}")
+                logger.debug(f"Matched track {track.track_id} to OOV player {player.player_id}")
             
-            for track_idx in u_tracks_ex:
-                unassigned_tracks_final.append(tracks_for_edge_matching[track_idx])
-
-            unmatched_players = [unmatched_players[i] for i in u_players_ex]
-            lost_player_ids = [player.player_id for player in unmatched_players if player.state == 'lost']
-            oov_player_ids = [player.player_id for player in unmatched_players if player.state == 'out_of_view']
-       
+            unassigned_tracks_edge = [unassigned_tracks_edge[track_idx] for track_idx in u_tracks_ex]
+            oov_player_ids = [oov_player_ids[player_idx] for player_idx in u_players_ex]   
          
-        # 5. Create new players for unassigned tracks
-        for track in unassigned_tracks_final:
+        # 5. Create new players for unassigned tracks - do not create players for tracks that do not start in edge
+        if self.n_frames_processed <= 300:
+            tracks_for_new_players = unassigned_tracks_edge + unassigned_tracks_middle
+        else:
+            tracks_for_new_players = unassigned_tracks_edge
+            if logger.getEffectiveLevel() == logging.DEBUG:
+                for track in unassigned_tracks_middle:
+                    track_center = track.first_center if self.direction == "forward" else track.last_center
+                    logger.warning(f"No player will be created for Track {track.track_id}, center: {track_center}: not starting in edge")
+        
+        for track in tracks_for_new_players:
             if track.player_id is None and track.embeddings_count > 0:
                 player_id, player = self._create_new_player(track)
                 if player_id is None:
@@ -480,13 +480,27 @@ class PlayerAssociator:
 
     def _mark_active(self, player: Player):
         player.state = 'active'
+        player.lost_frames = 0
 
     def _mark_lost(self, player: Player):
         player.state = 'lost'
+        player.lost_frames += 1
+        margin_x = 100
+        margin_y = 50
         if player.track_ids:
-            last_track = self.tracks[player.track_ids[-1]] if self.direction == "forward" else self.tracks[player.track_ids[0]]
-            bbox = last_track.last_bbox if self.direction == "forward" else last_track.first_bbox
-            player.lost_boundary = list(bbox)
+            # Get the correct track based on process direction
+            tid = player.track_ids[-1] if self.direction == "forward" else player.track_ids[0]
+            last_track = self.tracks[tid]
+            
+            # Use appropriate boundary based on direction
+            raw_bbox = last_track.last_bbox if self.direction == "forward" else last_track.first_bbox
+            # Convert to list to allow modification
+            bbox = list(raw_bbox)
+            bbox[0] -= margin_x
+            bbox[1] -= margin_y
+            bbox[2] += margin_x
+            bbox[3] += margin_y
+            player.lost_boundary = bbox
 
     def _mark_out_of_view(self, player: Player):
         player.state = 'out_of_view'
@@ -555,61 +569,6 @@ class PlayerAssociator:
         return linear_assignment(cost_matrix, threshold)
 
 
-    def _match_tracks_spatial_only(
-        self,
-        tracks: List[TrackInfo],
-        players: List[Player],
-        direction: Literal["forward", "backward"] = "forward"
-    ) -> Tuple[Dict[int, int], List[int], List[int]]:
-        """
-        Match tracks to players using only spatial proximity.
-        Used for tracks without embeddings.
-        """
-        cost_matrix = np.zeros((len(tracks), len(players)))
-        
-        for i, track in enumerate(tracks):
-            track_center = track.first_center if direction == "forward" else track.last_center
-            
-            for j, player in enumerate(players):
-                # Team ID check
-                if player.team_id != track.team_id:
-                    cost_matrix[i, j] = np.inf
-                    continue
-                
-                # Temporal overlap check
-                has_overlap = False
-                for seg in player.track_segments:
-                    if max(track.start_frame, seg[1]) <= min(track.end_frame, seg[2]):
-                        has_overlap = True
-                        break
-                
-                if has_overlap:
-                    cost_matrix[i, j] = np.inf
-                    continue
-                
-                # Spatial boundary check
-                if not self._track_is_in_player_lost_boundary(track_center, player):
-                    cost_matrix[i, j] = np.inf
-                    continue
-                
-                # Calculate spatial cost (Euclidean distance)
-                last_player_center = self._get_last_player_center(player)
-                if last_player_center is not None:
-                    distance = np.linalg.norm(
-                        np.array(track_center) - np.array(last_player_center)
-                    )
-                    # Normalize by frame diagonal for scale invariance
-                    diagonal = np.sqrt(self.frame_size[0]**2 + self.frame_size[1]**2)
-                    normalized_dist = distance / diagonal
-                    cost_matrix[i, j] = normalized_dist
-                else:
-                    # No previous position, use a default moderate cost if in boundary
-                    cost_matrix[i, j] = 0.1
-        
-        # Threshold: 15% of frame diagonal
-        return linear_assignment(cost_matrix, thresh=0.15)
-
-
     
     def _track_is_in_player_lost_boundary (self, track_center: Tuple[float, float], player: Player) -> bool:
         # If no boundary set, allow matching based on embeddings alone
@@ -646,6 +605,11 @@ class PlayerAssociator:
         self.track_to_player[track.track_id] = player_id
         
         return player_id, player
+
+    def _update_lost_player(self, player: Player):
+        player.lost_frames += 1
+        if player.lost_frames >=300:
+            player.state = 'out_of_view'
 
 
     def _update_lost_boundary(self, player_ids: List[int]):
@@ -766,13 +730,20 @@ class PlayerAssociator:
         best_frame = None
         max_embeddings_count = 0
 
+        upper_margin = self.frame_size[1]
+
         for frame_id, tracks in tracks_by_frame.items():
             embeddings_count = 0
             for track in tracks:
                 embeddings_count += track.embeddings_count if track.embeddings_count else 0
+                if track.first_bbox[1] < upper_margin:
+                    upper_margin = track.first_bbox[1]
             if embeddings_count > max_embeddings_count:
                 max_embeddings_count = embeddings_count
                 best_frame = frame_id
+                
+        margin_buffer = 100  # pixels
+        self.config.field_top_ratio = (upper_margin + margin_buffer) / self.frame_size[1]
         
         logger.info(f"Anchor frame: {best_frame} with {max_embeddings_count} embeddings")
         return best_frame
