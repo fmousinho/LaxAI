@@ -162,6 +162,11 @@ class Player:
 
         return float(topk.mean())
 
+    def track_id_for_frame(self, frame_id: int) -> Optional[int]:
+        for track_id, start, end in self.track_segments:
+            if start <= frame_id <= end:
+                return track_id
+        return None
 
     def to_dict(self) -> dict:
         return {
@@ -270,17 +275,6 @@ class PlayerAssociator:
                         embeddings = emb_data['all']
                         if isinstance(embeddings, torch.Tensor):
                             embeddings = embeddings.cpu().numpy()
-                        
-                        # # Sanitize and normalize ALL embeddings
-                        # if embeddings is not None and len(embeddings) > 0:
-                        #     # Handle NaNs
-                        #     embeddings = np.nan_to_num(embeddings, nan=0.0, posinf=0.0, neginf=0.0)
-                            
-                        #     # Normalize rows
-                        #     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-                        #     # Avoid division by zero
-                        #     norms[norms == 0] = 1.0 
-                        #     embeddings = embeddings / norms
                             
                             self.tracks[track_id].embeddings_all = embeddings
                     if 'count' in emb_data:
@@ -311,12 +305,17 @@ class PlayerAssociator:
         self._cluster_teams()
         n_tracks_team_0 = 0
         n_tracks_team_1 = 0
+        n_tracks_unassigned = 0
         for track in self.tracks.values():
             if track.team_id == 0:
                 n_tracks_team_0 += 1
             elif track.team_id == 1:
                 n_tracks_team_1 += 1
-        logger.info(f"Found {n_tracks_team_0} tracks in team 0 and {n_tracks_team_1} tracks in team 1")
+            else:
+                n_tracks_unassigned += 1
+        logger.info(
+            f"Found {n_tracks_team_0} tracks in team 0 and {n_tracks_team_1}"
+            f" tracks in team 1 and {n_tracks_unassigned} tracks unassigned")
 
         # Phase 2: Finds best frame to use to initialize players
         # Build tracks by frame map for anchor search
@@ -366,7 +365,8 @@ class PlayerAssociator:
     def _update_players_for_frame(self, frame_id: int):
         """Update players for a given frame."""
 
-        logger.debug(f"===== Frame {frame_id} ======")
+        logger.debug("=" * 50)
+        logger.debug(f"FRAME {frame_id}")
 
         # 1. Get tracks for frame
         track_ids_in_frame = self.frame_tracks.get(frame_id, None)
@@ -478,7 +478,7 @@ class PlayerAssociator:
         self.lost_players = lost_player_ids
         self.out_of_view_players = oov_player_ids
 
-        self._log_players_states()
+        self._log_players_states(frame_id)
 
     def _mark_active(self, player: Player):
         player.state = 'active'
@@ -486,7 +486,7 @@ class PlayerAssociator:
 
     def _mark_lost(self, player: Player):
         player.state = 'lost'
-        player.lost_frames += 1
+        player.lost_frames = 1
         margin_x = self.config.lost_player_margin_x
         margin_y = self.config.lost_player_margin_y
         if player.track_ids:
@@ -513,16 +513,32 @@ class PlayerAssociator:
         player.add_track(track)
         self.track_to_player[track.track_id] = player.player_id
 
-    def _log_players_states(self):
+    def _log_players_states(self, frame_id: int):
+        if logger.getEffectiveLevel() != logging.DEBUG:
+            return
+
+        logger.debug("")
         logger.debug("Active players:")
-        logger.debug(self.active_players)
+        for player_id in self.active_players:
+            player = self.players[player_id]
+            track_id = player.track_id_for_frame(frame_id)
+            track = self.tracks[track_id]
+            logger.debug(f"    Player {player_id}, team {player.team_id}, track: {track_id}, team {track.team_id}")
+
+        logger.debug("")
         logger.debug("Lost players:")
         for player_id in self.lost_players:
-            lost_boundary_str = [int(x) for x in self.players[player_id].lost_boundary]
-            logger.debug(f"Player {player_id}, lost boundary: {lost_boundary_str}")
+            player = self.players[player_id]
+            lost_boundary_str = [int(x) for x in player.lost_boundary]
+            logger.debug(f"    Player {player_id}, lost boundary: {lost_boundary_str}, lost for {player.lost_frames} frame(s)")
+
+        logger.debug("")    
         logger.debug("Out of view players:")
-        logger.debug(self.out_of_view_players)
+        for player_id in self.out_of_view_players:
+            player = self.players[player_id]
+            logger.debug(f"    Player {player_id}, team {player.team_id}")
                 
+
     def _match_tracks_to_players (
         self,
         tracks: List[TrackInfo],
@@ -533,11 +549,12 @@ class PlayerAssociator:
         cost_matrix = np.zeros((len(tracks), len(players)))
         for i, track in enumerate(tracks):
             track_center = track.first_center if self.direction == "forward" else track.last_center
-            logger.debug(f"Processing track {track.track_id}, center: {track_center}")
+            logger.debug(f"Processing track {track.track_id}, center: {track_center}, team {track.team_id}")
             for j, player in enumerate(players):
                 # 0. Team ID check. Proceed if team track is unknown.
                 if player.team_id != track.team_id and track.team_id != -1:
                     cost_matrix[i, j] = np.inf
+                    logger.debug(f" - team ID mismatch: Player {player.player_id}: team {player.team_id}")
                     continue
 
                 # 1. Temporal Constraints: Check for overlap with existing player tracks
@@ -686,7 +703,7 @@ class PlayerAssociator:
         # --- dimensionality reduction ---
         # 512 dims is too high for Euclidean distance to be reliable (Curse of Dimensionality).
         # We project down to capture the main variance (jersey colors/appearance).
-        n_components = min(24, len(X))
+        n_components = min(8, len(X))
         pca = PCA(n_components=n_components, random_state=42)
         
         # Suppress RuntimeWarnings (divide by zero, overflow, etc.) from sklearn internals
@@ -696,7 +713,7 @@ class PlayerAssociator:
             
             # 3. K-Means clustering on reduced data
             # Oversample clusters slightly if we were unsure, but here we assume n_teams is known (2)
-            kmeans = KMeans(n_clusters=2, n_init=15, random_state=42)
+            kmeans = KMeans(n_clusters=2, n_init=self.config.default_players_per_team, random_state=42)
             labels = kmeans.fit_predict(X_pca)
         
         # 4. Compute Robust Team Prototypes
@@ -729,13 +746,9 @@ class PlayerAssociator:
             
         logger.info(f"Computed robust centroids for {len(team_centroids)} teams")
 
-        # 5. Assign Tracks using Distance to Prototypes
-        # For each track, we project its *mean embedding* and find the closest team prototype.
-        # This leverages the "Law of Large Numbers" - the mean of a track's embeddings is 
-        # much more stable than individual embeddings.
-        
+        # 5. Assign Tracks using Distance to Prototypes        
         assigned_count = 0
-        weak_assignments = 0
+        unassigned_count = 0
         
         for tid, track in self.tracks.items():
             if tid not in tracks_with_data:
@@ -768,29 +781,28 @@ class PlayerAssociator:
             best_team = -1
             best_sim = -1.0
             
-            for team_k, centroid in team_centroids.items():
-                # Both vectors normalized, so dot product is cosine similarity
-                sim = np.dot(track_mean_pca, centroid)
-                if sim > best_sim:
-                    best_sim = sim
-                    best_team = team_k
+            sim_team_0 = np.dot(track_mean_pca, team_centroids[0])
+            sim_team_1 = np.dot(track_mean_pca, team_centroids[1])
+
+            margin = self.config.min_separation_for_team_assignment
+            if sim_team_0 > sim_team_1 + margin:
+                best_team = 0
+            elif sim_team_1 > sim_team_0 + margin:
+                best_team = 1
+            else:
+                logger.warning(f"Track {track.track_id} is too close to both teams ({sim_team_0:.4f}) and 1 ({sim_team_1:.4f})")
             
-            # Assign
-            # We use a threshold for assignment to avoid assigning garbage tracks
-            # Since we projected via PCA, similarity should be decent for valid tracks.
-            # 0.0 is orthogonal, 1.0 is identical.
-            
-            # Heuristic: If it's very ambiguous (e.g. sim difference is small or sim is low),
-            # we might want to flag it. But usually enforcing *some* team is better than -1 for association
-            # logic, unless we really want to exclude refs/crowd.
+            # Assign    
             
             if best_team != -1:
                 track.team_id = best_team
                 assigned_count += 1
             else:
                 track.team_id = -1
+                unassigned_count += 1
                 
         logger.info(f"Assigned teams for {assigned_count} tracks")
+        logger.info(f"Unassigned tracks: {unassigned_count}")
             
     
     def _classify_birth(self, position: Tuple[int, int]) -> str:

@@ -20,7 +20,7 @@ class PlayerAssociatorConfig(BaseSettings):
     )
 
 
-    # Player discovery
+    # Team discovery
     min_players_per_team: int = Field(default=11, description="Minimum players per team.")
     max_players_per_team: int = Field(
         default=22, description='Maximum players per team (including substitutes).'
@@ -28,10 +28,11 @@ class PlayerAssociatorConfig(BaseSettings):
     default_players_per_team: int = Field(
         default=15, description='Default number of players per team if not auto-estimated.'
     )
-    min_voting_confidence_for_team_assignment: float = Field(
-        default=0.7,
-        description="Minimum ratio of tracks mapped to best team for team assignment. If less than this, team is assigned to -1.",
+    min_separation_for_team_assignment: float = Field(
+        default=0.2,
+        description="Margin for cosine similarity for team assignment. If less than this, team is assigned to -1.",
     )
+
 
     # Spatial/velocity constraints
     fps: float = Field(default=30.0, description="Video frame rate.")

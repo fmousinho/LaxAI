@@ -18,10 +18,7 @@ from pathlib import Path
 from player.associator import PlayerAssociator
 from player.config import PlayerAssociatorConfig
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+import shared_libs.config.logging_config
 logger = logging.getLogger(__name__)
 
 
